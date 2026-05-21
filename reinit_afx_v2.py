@@ -579,6 +579,9 @@ class SessionLogger:
         # Per-phase outcomes: phase_name -> (status, note)
         # Phases that call end_phase() without set_phase_outcome() get PASS.
         self._phase_outcomes: "dict[str, tuple[str, str]]" = {}
+        # Optional indented sub-timing rows attached under a parent phase
+        # in the summary tables. phase_name -> list[(label, elapsed_seconds)].
+        self._phase_subtimings: "dict[str, list[tuple[str, float]]]" = {}
 
         self._write_header()
         print(f"📝 Session log: {self.log_file}")
@@ -748,6 +751,32 @@ class SessionLogger:
         with self._lock:
             self._phase_outcomes[phase_name] = (status, note)
 
+    def record_phase(self, phase_name: str, elapsed: float,
+                     outcome: str = "PASS", note: str = ""):
+        """Record a phase with a precomputed elapsed time, without using the
+        ``start_phase``/``end_phase`` wall-clock pair. Useful when the real
+        boundaries of a phase are determined inside worker threads and have
+        to be reconstructed after the fact (e.g. the mode-3 parallel peer
+        add, where option-4 and node-join sub-phases overlap in time).
+        """
+        with self._lock:
+            self._phase_times[phase_name] = float(elapsed)
+            self._phase_outcomes[phase_name] = (outcome, note)
+            self._file.write(
+                f"[{self._ts_with_elapsed()}] [PHASE] ⏹ Recorded: "
+                f"{phase_name} ({elapsed:.1f}s) [{outcome}]\n"
+            )
+
+    def add_phase_subtiming(self, phase_name: str, label: str, elapsed: float):
+        """Attach an indented timing row that will be rendered under
+        ``phase_name`` in both the inline and standalone summary tables.
+        Safe to call from worker threads.
+        """
+        with self._lock:
+            self._phase_subtimings.setdefault(phase_name, []).append(
+                (label, float(elapsed))
+            )
+
     def set_outcome(self, status: str, note: str = ""):
         """Set the overall session outcome ("PASS", "FAIL", or
         "PASSED (WITH ERRORS)"). Should be called before ``close()``.
@@ -876,6 +905,11 @@ class SessionLogger:
                 self._file.write(
                     f"  {phase:<45} {elapsed:>7.1f}s ({minutes:.1f}m){ph_col}\n"
                 )
+                for sub_label, sub_elapsed in self._phase_subtimings.get(phase, []):
+                    self._file.write(
+                        f"     - {sub_label:<41} {sub_elapsed:>7.1f}s "
+                        f"({sub_elapsed/60:.1f}m)\n"
+                    )
             self._file.write(f"  {'─' * 55}\n")
             self._file.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
             if self._step_times:
@@ -947,6 +981,11 @@ class SessionLogger:
                         ph_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(ph_status, "  ")
                         ph_col = f"  {ph_icon} {ph_status}" if ph_status else ""
                         sf.write(f"  {phase:<45} {elapsed:>7.1f}s ({minutes:.1f}m){ph_col}\n")
+                        for sub_label, sub_elapsed in self._phase_subtimings.get(phase, []):
+                            sf.write(
+                                f"     - {sub_label:<41} {sub_elapsed:>7.1f}s "
+                                f"({sub_elapsed/60:.1f}m)\n"
+                            )
                     sf.write(f"  {'─' * 55}\n")
                     sf.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
 
@@ -4494,9 +4533,21 @@ def _wait_and_send(channel, trigger, response, label, timeout=900, hide_in_log=F
     time.sleep(0.5)
 
 
-def _auto_answer_disk_erase_prompts(channel, node_log=None, label=""):
-    """Auto-answer the three disk-zero/erase/confirm prompts after option 4."""
-    _node_add = (_operation_mode == 2)
+def _auto_answer_disk_erase_prompts(channel, node_log=None, label="", is_node_add=None):
+    """Auto-answer the three disk-zero/erase/confirm prompts after option 4.
+
+    ``is_node_add`` controls the progress messaging:
+      * ``True``  -> peer is joining an existing cluster (mode 2a/2b, mode 3
+                     peer-add phase, mode 2c resume).
+      * ``False`` -> primary node is creating a new cluster (mode 1a/1b, mode
+                     3 primary phase).
+      * ``None``  -> fall back to the legacy ``_operation_mode == 2`` check.
+                     This preserves prior behavior for any caller that hasn't
+                     been updated yet, but new call sites should pass an
+                     explicit value because ``_operation_mode == 3`` is
+                     ambiguous (both primary init and peer add run under it).
+    """
+    _node_add = (_operation_mode == 2) if is_node_add is None else bool(is_node_add)
     if _node_add:
         _lbl = f" [{label}]" if label else ""
         print(f"\n⏳{_lbl} Resetting configuration and rebooting.")
@@ -4510,18 +4561,22 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label=""):
          "type-yes confirmation"),
     ):
         if lbl == "type-yes confirmation":
-            if not _node_add:
-                _log_path = _session_log.log_file if _session_log else "the log file"
-                _boot_action = "cluster creation"
-                print(f"\n⏳ Waiting for node to boot and begin {_boot_action}.")
-                print(f"   For details, see log at:\n   {_log_path}\n   (open in a separate SSH session)")
-                _cc_done_ev = threading.Event()
-                _cc_t0 = time.monotonic()
-                def _cc_reporter(_ev=_cc_done_ev, _t0=_cc_t0):
-                    while not _ev.wait(60):
-                        elapsed = int(time.monotonic() - _t0)
-                        print(f"   ⏳ Still waiting for cluster creation... ({elapsed}s elapsed)")
-                threading.Thread(target=_cc_reporter, daemon=True).start()
+            _log_path = _session_log.log_file if _session_log else "the log file"
+            if _node_add:
+                _boot_action = "join the cluster"
+                _still_waiting_msg = "Still waiting for cluster join"
+            else:
+                _boot_action = "begin cluster creation"
+                _still_waiting_msg = "Still waiting for cluster creation"
+            print(f"\n⏳ Waiting for node to boot and {_boot_action}.")
+            print(f"   For details, see log at:\n   {_log_path}\n   (open in a separate SSH session)")
+            _cc_done_ev = threading.Event()
+            _cc_t0 = time.monotonic()
+            def _cc_reporter(_ev=_cc_done_ev, _t0=_cc_t0, _msg=_still_waiting_msg):
+                while not _ev.wait(60):
+                    elapsed = int(time.monotonic() - _t0)
+                    print(f"   ⏳ {_msg}... ({elapsed}s elapsed)")
+            threading.Thread(target=_cc_reporter, daemon=True).start()
         elif not _node_add:
             print(f"\n⏳ Waiting for {lbl} (auto-answer '{resp}')...")
         _slog(f"Waiting for {lbl}")
@@ -9332,7 +9387,8 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         _session_log.log("Mode 2b automated join starting after option 4 sent")
 
     # Yes confirmations after option 4.
-    _auto_answer_disk_erase_prompts(channel, label=bmc_host or sp_host or "")
+    _auto_answer_disk_erase_prompts(channel, label=bmc_host or sp_host or "",
+                                    is_node_add=True)
 
     # Node mgmt config (from per-BMC pre-collection).
     cfg = _resolve_node_mgmt_config(bmc_host)
@@ -9830,19 +9886,33 @@ def _wait_for_cluster_node_count(channel, target_count, timeout=1800):
 def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                           admin_password, expected_count_after,
                           join_barrier=None, join_proceed_events=None,
-                          join_index=0, final_cluster_count=0):
+                          join_index=0, final_cluster_count=0,
+                          timings_record=None, barrier_release_box=None,
+                          timings_lock=None):
     """Run a full add-node automation against a single peer BMC.
 
     All peer threads run LOADER/format in parallel. When each thread
     finishes setup it waits at `join_barrier` until every node is ready,
     then joins in `peer_bmcs` list order (index 0 first) via the
     `join_proceed_events` chain.
+
+    If ``timings_record`` is provided, this thread records its split
+    timing (option-4/format prep vs. node-join wall time) into
+    ``timings_record[peer_bmc]`` under ``timings_lock`` so the caller
+    can render a per-node breakdown in the session summary. The first
+    thread to clear ``join_barrier`` also stamps ``barrier_release_box[0]``
+    with the shared barrier-release timestamp.
     """
     label = f"peer/{peer_bmc}"
     print(f"\n🧵 [{label}] Starting peer auto-add thread...")
     if _session_log:
         _session_log.log(f"[{label}] thread starting (expected count after = "
                          f"{expected_count_after})")
+
+    # Per-thread timing anchors. Using monotonic so the deltas are not
+    # affected by wall-clock adjustments.
+    _t_thread_start = time.monotonic()
+    _t_barrier_pass = None
 
     # Open per-node log file.
     _nf_log_dir = (_session_log.log_dir
@@ -9971,7 +10041,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         ch.send("4\r"); time.sleep(2)
 
         # Yes confirmations + node mgmt + join wizard.
-        _auto_answer_disk_erase_prompts(ch, node_log=node_file, label=peer_bmc)
+        _auto_answer_disk_erase_prompts(ch, node_log=node_file, label=peer_bmc,
+                                        is_node_add=True)
 
         cfg = _resolve_node_mgmt_config(peer_bmc)
         _mgmt_residual = _auto_answer_node_mgmt(ch, cfg, node_log=node_file) or ""
@@ -10004,6 +10075,21 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 print(f"   ❌ [{label}] Join barrier broken (a peer likely failed); aborting.")
                 _slog(f"[{label}] join barrier broken", prefix="ERROR")
                 return False
+        # Record the exact moment this thread cleared the barrier; the first
+        # thread to set this also fixes the shared barrier-release timestamp
+        # used by the caller to split the option-4 phase from the join phase.
+        _t_barrier_pass = time.monotonic()
+        if barrier_release_box is not None:
+            try:
+                if timings_lock is not None:
+                    with timings_lock:
+                        if barrier_release_box[0] is None:
+                            barrier_release_box[0] = _t_barrier_pass
+                else:
+                    if barrier_release_box[0] is None:
+                        barrier_release_box[0] = _t_barrier_pass
+            except Exception:
+                pass
         print(f"\n✅ [{label}] All nodes ready. Joining in list order (position {join_index + 1})...")
 
         # ── Ordered join ─────────────────────────────────────────────────────
@@ -10135,6 +10221,24 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             print(f"\n✅ [{label}] Signaling node {join_index + 2} to proceed with join...")
             _slog(f"[{label}] setting join_proceed_events[{join_index + 1}]")
             join_proceed_events[join_index + 1].set()
+
+        # Record per-node split timing for the session summary.
+        if timings_record is not None and _t_barrier_pass is not None:
+            _t_done = time.monotonic()
+            _entry = {
+                "option4": _t_barrier_pass - _t_thread_start,
+                "join": _t_done - _t_barrier_pass,
+                "node_name": (_node_cfg_for(peer_bmc) or {}).get("name") or "",
+                "ok": True,
+            }
+            try:
+                if timings_lock is not None:
+                    with timings_lock:
+                        timings_record[peer_bmc] = _entry
+                else:
+                    timings_record[peer_bmc] = _entry
+            except Exception:
+                pass
 
         return True
     except Exception as e:
@@ -10545,8 +10649,15 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
     print(f"  🚀 Mode 3: parallel auto-add for {len(peer_bmcs)} peer node(s)")
     print("=" * 60)
     print(f"  Peers: {', '.join(peer_bmcs)}")
+    # Track split timings: option-4 (parallel format/LOADER prep up to the
+    # join barrier) vs. the sequential node-join wall time. The threads
+    # populate _m3_peer_timings keyed by BMC IP; the barrier-release timestamp
+    # is captured by the first thread to clear the barrier.
+    _m3_peer_timings: "dict[str, dict]" = {}
+    _m3_barrier_release_box = [None]
+    _m3_timings_lock = threading.Lock()
+    _t_mode3_start = time.monotonic()
     if _session_log:
-        _session_log.start_phase("Parallel Peer Auto-Add (mode 3)")
         _session_log.log(f"Spawning auto-add threads for: {peer_bmcs}")
 
     # Login to primary cluster shell so we can run `cluster show` for join
@@ -10602,6 +10713,9 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
                     _addr, _u, _p, primary_channel, admin_password, _exp,
                     _join_barrier3, _join_proceed3, _ri,
                     final_cluster_count=_m3_total + 1,
+                    timings_record=_m3_peer_timings,
+                    barrier_release_box=_m3_barrier_release_box,
+                    timings_lock=_m3_timings_lock,
                 )
             t = threading.Thread(
                 target=_run_m3,
@@ -10636,7 +10750,39 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
         _m3_pending = _m3_failed
 
     if _session_log:
-        _session_log.end_phase()
+        _t_mode3_end = time.monotonic()
+        _barrier_release = _m3_barrier_release_box[0]
+        if _barrier_release is not None:
+            _option4_wall = max(0.0, _barrier_release - _t_mode3_start)
+            _joins_wall = max(0.0, _t_mode3_end - _barrier_release)
+        else:
+            # No node ever cleared the barrier (all failed during option-4).
+            _option4_wall = max(0.0, _t_mode3_end - _t_mode3_start)
+            _joins_wall = 0.0
+
+        _any_failed = any(r is False for r in (_m3_results or []))
+        _opt4_outcome = "PASSED (WITH ERRORS)" if _any_failed and _barrier_release is None else "PASS"
+        _join_outcome = "PASSED (WITH ERRORS)" if _any_failed and _barrier_release is not None else "PASS"
+
+        _session_log.record_phase(
+            "Parallel Peer Option 4 (mode 3)", _option4_wall, outcome=_opt4_outcome,
+        )
+        _session_log.record_phase(
+            "Node join total", _joins_wall, outcome=_join_outcome,
+        )
+        # Per-node join breakdown (only nodes that reached the join phase
+        # populated _m3_peer_timings).
+        for _bmc in peer_bmcs:
+            _t = _m3_peer_timings.get(_bmc)
+            if not _t:
+                continue
+            _nm = _t.get("node_name") or ""
+            _node_label = (
+                f"Node [{_nm} - {_bmc}]" if _nm else f"Node [{_bmc}]"
+            )
+            _session_log.add_phase_subtiming(
+                "Node join total", _node_label, _t.get("join", 0.0),
+            )
     print("\n✅ Parallel peer auto-add complete.")
 
 
@@ -10706,7 +10852,8 @@ def auto_complete_initialization(channel, bmc_host=None):
     time.sleep(2)
 
     # 3) Yes confirmations.
-    _auto_answer_disk_erase_prompts(channel, label=bmc_host or "")
+    _auto_answer_disk_erase_prompts(channel, label=bmc_host or "",
+                                    is_node_add=False)
 
     # 4) Node management config.
     cfg = _resolve_node_mgmt_config(bmc_host)
