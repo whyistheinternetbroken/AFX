@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+# OPT (phase 2): PEP 563 deferred evaluation of annotations. Lets us add
+# type hints freely without paying runtime cost, and without worrying about
+# forward references to names defined later in the module. Must precede any
+# real imports per Python's __future__-statement rules.
+from __future__ import annotations
+
 # ---------------------------------------------------------------------------
 # Suppress CryptographyDeprecationWarning BEFORE any other imports
 # ---------------------------------------------------------------------------
@@ -28,7 +34,7 @@ import argparse
 import platform
 import socket
 from datetime import datetime
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
 # OPT: compile LOADER prompt regex once at module level instead of per-iteration
 _LOADER_PROMPT_RE = re.compile(r'LOADER-\w+>')
@@ -207,7 +213,7 @@ accepted for backward compatibility.
 '''
 
 
-def load_config_file(path):
+def load_config_file(path: str) -> dict:
     """Load and validate a JSON configuration file. Returns dict on success,
     raises ValueError with a friendly message on failure.
     """
@@ -351,7 +357,7 @@ def _discover_and_prompt_config():
     return config_path
 
 
-def _node_cfg_for(bmc):
+def _node_cfg_for(bmc: str) -> dict:
     """Return the node entry from the config that matches `bmc`, or {}.
     Searches primary_node, secondary_nodes, and legacy nodes[].
     """
@@ -370,7 +376,7 @@ def _node_cfg_for(bmc):
     return {}
 
 
-def _config_primary_node():
+def _config_primary_node() -> dict:
     """Return the primary node dict from config (new or legacy format), or {}."""
     pn = _config_data.get("primary_node")
     if isinstance(pn, dict) and pn.get("bmc"):
@@ -382,7 +388,7 @@ def _config_primary_node():
     return {}
 
 
-def _config_secondary_nodes():
+def _config_secondary_nodes() -> list:
     """Return the list of secondary (peer) node dicts from config, or []."""
     # New format
     sn = _config_data.get("secondary_nodes")
@@ -1645,9 +1651,12 @@ def configure_transport(client):
             pass
 
 
-def _ssh_connect_with_retry(host, username, password, label="BMC",
-                            max_attempts=5, interactive=True,
-                            fallback_passwords=None):
+def _ssh_connect_with_retry(host: str, username: str, password: str,
+                            label: str = "BMC",
+                            max_attempts: int = 5,
+                            interactive: bool = True,
+                            fallback_passwords: "list[str] | None" = None
+                            ) -> "tuple[paramiko.SSHClient, str, str]":
     """Open an SSH client to `host` with retry-on-auth-failure.
 
     On `paramiko.AuthenticationException` (or any failure mentioning
@@ -3843,18 +3852,29 @@ def _is_valid_port(value):
     return bool(value) and bool(_PORT_RE.match(value.strip()))
 
 
-def _is_valid_ipv4(value):
+def _is_valid_ipv4(value: str | None) -> bool:
+    """Return True iff ``value`` is a dotted-quad IPv4 address with no
+    leading-zero octets. Delegates to :mod:`ipaddress` for the core
+    validation and adds the leading-zero check (which
+    ``ipaddress.IPv4Address`` accepts in Python <3.9 but rejects later).
+    """
     if not value:
         return False
-    parts = value.strip().split(".")
+    s = value.strip()
+    parts = s.split(".")
     if len(parts) != 4:
         return False
+    # Reject leading-zero octets ("01.2.3.4") explicitly so behavior is
+    # consistent across Python versions.
     for p in parts:
-        if not p.isdigit() or not (0 <= int(p) <= 255):
+        if not p.isdigit():
             return False
-        # Disallow leading zeros like "01" – not strictly required but tidy.
         if len(p) > 1 and p[0] == "0":
             return False
+    try:
+        ipaddress.IPv4Address(s)
+    except (ipaddress.AddressValueError, ValueError):
+        return False
     return True
 
 
@@ -3877,7 +3897,7 @@ def _prompt_validated(label, default, validator, error_hint):
         print(f"    \u26A0\uFE0F  Invalid value '{value}'. {error_hint}")
 
 
-def _first_ipv4_in(text):
+def _first_ipv4_in(text: str | None) -> str | None:
     """Return the first valid IPv4 address found in `text`, or None."""
     if not text:
         return None
@@ -6833,8 +6853,8 @@ def _run_4b_standalone(log):
             if log:
                 log.log(f"[{ip}] boot menu not seen for option 6 (timeout)", prefix="WARN")
             if _nf6:
-                try: _nf6.close()
-                except Exception: pass
+                with suppress(Exception):
+                    _nf6.close()
             return
 
         # ── Node already running ONTAP (login: before boot menu) ────────
@@ -6845,8 +6865,8 @@ def _run_4b_standalone(log):
             with connect_lock:
                 _opt6_login_nodes.add(ip)
             if _nf6:
-                try: _nf6.close()
-                except Exception: pass
+                with suppress(Exception):
+                    _nf6.close()
             return
 
         # ── Phase 2: if we matched an early-warning sig, keep draining
@@ -6874,8 +6894,8 @@ def _run_4b_standalone(log):
             if log:
                 log.log(f"[{ip}] channel closed before option 6: {exc}", prefix="ERROR")
             if _nf6:
-                try: _nf6.close()
-                except Exception: pass
+                with suppress(Exception):
+                    _nf6.close()
             return
 
         # ── Phase 3: wait for confirmation prompt ──────────────────────
@@ -6904,8 +6924,8 @@ def _run_4b_standalone(log):
                 ch.send("6\r")
             except OSError:
                 if _nf6:
-                    try: _nf6.close()
-                    except Exception: pass
+                    with suppress(Exception):
+                        _nf6.close()
                 return
             _m2 = _drain(30, ["are you sure you want to continue"])
             if _m2:
@@ -6923,16 +6943,16 @@ def _run_4b_standalone(log):
                 if log:
                     log.log(f"[{ip}] option 6 confirmation not seen (retry timeout)", prefix="WARN")
                 if _nf6:
-                    try: _nf6.close()
-                    except Exception: pass
+                    with suppress(Exception):
+                        _nf6.close()
                 return
         else:
             _status(f"  ⚠️  [{ip}] Option 6 confirmation not seen.")
             if log:
                 log.log(f"[{ip}] option 6 confirmation not seen (timeout)", prefix="WARN")
             if _nf6:
-                try: _nf6.close()
-                except Exception: pass
+                with suppress(Exception):
+                    _nf6.close()
             return
 
         # ── Phase 4: wait for login: prompt OR second boot menu ────────
@@ -6999,15 +7019,15 @@ def _run_4b_standalone(log):
                     if _vldb_prompt():
                         _status(f"  ✅ [{ip}] Proceeding to reinitialization.")
                         if _nf6:
-                            try: _nf6.close()
-                            except Exception: pass
+                            with suppress(Exception):
+                                _nf6.close()
                         return
                     else:
                         _status(f"  ❌ [{ip}] Operator chose to exit after VLDB timeout.")
                         _shutdown_event.set()
                         if _nf6:
-                            try: _nf6.close()
-                            except Exception: pass
+                            with suppress(Exception):
+                                _nf6.close()
                         return
                 # NVRAM sysid mismatch – node cannot complete boot; proceed to reinit.
                 if "nvram changed on this node" in _boot_buf_lower:
@@ -7015,8 +7035,8 @@ def _run_4b_standalone(log):
                     if log:
                         log.log(f"[{ip}] NVRAM changed / sysid mismatch seen; skipping boot wait", prefix="WARN")
                     if _nf6:
-                        try: _nf6.close()
-                        except Exception: pass
+                        with suppress(Exception):
+                            _nf6.close()
                     return
                 for _sig in _all_boot_sigs_lower:
                     if _sig in _boot_buf_lower:
@@ -7075,15 +7095,15 @@ def _run_4b_standalone(log):
             if _boot_ans == "y":
                 _status(f"  ✅ [{ip}] Proceeding to reinitialization after boot timeout.")
                 if _nf6:
-                    try: _nf6.close()
-                    except Exception: pass
+                    with suppress(Exception):
+                        _nf6.close()
                 return
             else:
                 _status(f"  ❌ [{ip}] Operator chose to exit after boot timeout.")
                 _shutdown_event.set()
                 if _nf6:
-                    try: _nf6.close()
-                    except Exception: pass
+                    with suppress(Exception):
+                        _nf6.close()
                 return
 
         # If a boot menu appeared (node can't boot normally), send option 4.
@@ -7198,8 +7218,8 @@ def _run_4b_standalone(log):
                             if log:
                                 log.log(f"[{ip}] NVRAM changed / sysid mismatch seen during option 4 boot; proceeding to reinit", prefix="WARN")
                             if _nf6:
-                                try: _nf6.close()
-                                except Exception: pass
+                                with suppress(Exception):
+                                    _nf6.close()
                             return
                         else:
                             break
@@ -7216,15 +7236,15 @@ def _run_4b_standalone(log):
             if _vldb_prompt():
                 _status(f"  ✅ [{ip}] Proceeding to reinitialization.")
                 if _nf6:
-                    try: _nf6.close()
-                    except Exception: pass
+                    with suppress(Exception):
+                        _nf6.close()
                 return
             else:
                 _status(f"  ❌ [{ip}] Operator chose not to proceed. Exiting.")
                 _shutdown_event.set()
                 if _nf6:
-                    try: _nf6.close()
-                    except Exception: pass
+                    with suppress(Exception):
+                        _nf6.close()
                 return
 
         if not (_m3 and "login:" in _m3):
@@ -7466,12 +7486,12 @@ def _run_4b_standalone(log):
                 log.set_outcome("PASS", "install complete; operator chose not to reinit")
             # Clean up channels and return success (install worked fine).
             for _cip in list(loader_channels.keys()):
-                try: loader_channels[_cip].close()
-                except Exception: pass
+                with suppress(Exception):
+                    loader_channels[_cip].close()
             loader_channels.clear()
             for _cip in list(loader_clients.keys()):
-                try: loader_clients[_cip].close()
-                except Exception: pass
+                with suppress(Exception):
+                    loader_clients[_cip].close()
             loader_clients.clear()
             return True
 
