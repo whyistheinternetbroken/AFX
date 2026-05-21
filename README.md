@@ -627,6 +627,10 @@ Then re-run with `--screen`.
 
 ## Changelog
 
+See [CHANGELOG.md](CHANGELOG.md) for the full revision history. The table
+below summarizes released versions; the changelog file also tracks the
+current `[Unreleased]` working set.
+
 | Version | Date | Description |
 |---|---|---|
 | v2 | May 15, 2026 | Added `--screen` flag: auto-launches the script inside a detached GNU screen session to protect against SSH disconnections and terminal timeouts. Implies `--bg`. Detects existing screen sessions via `STY` env var to prevent recursion. |
