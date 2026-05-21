@@ -19,6 +19,7 @@ import time
 import re
 import json
 import importlib  # OPT: use importlib.import_module instead of __import__
+import ipaddress
 import getpass
 import logging
 import threading
@@ -27,7 +28,6 @@ import argparse
 import platform
 import socket
 from datetime import datetime
-from collections import OrderedDict
 from contextlib import contextmanager
 
 # OPT: compile LOADER prompt regex once at module level instead of per-iteration
@@ -35,6 +35,11 @@ _LOADER_PROMPT_RE = re.compile(r'LOADER-\w+>')
 
 # Cluster shell prompt: e.g. "clustername::>" (admin) or "clustername::*>" (diag)
 _CLUSTER_PROMPT_RE = re.compile(r'\S+::\*?>\s*$')
+
+# Loose cluster shell prompt (matches anywhere in tail buffer, not anchored).
+# Used by parallel shell command helpers; hoisted to module scope so the
+# regex is compiled once instead of on every helper invocation.
+_SHELL_PROMPT_RE = re.compile(r"::\*?>")
 
 # Boot-menu detection signatures shared by all wait-for-boot-menu callers.
 _BOOT_MENU_SIGS = [
@@ -431,8 +436,13 @@ def _restore_terminal():
     # the saved snapshot pre-dates a getpass/paramiko raw-mode transition.
     try:
         if sys.platform != "win32":
-            os.system("stty sane 2>/dev/null")  # noqa: S605
-    except Exception:
+            subprocess.run(
+                ["stty", "sane"],
+                stderr=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                check=False,
+            )
+    except (FileNotFoundError, OSError):
         pass
 
 
@@ -539,8 +549,10 @@ class SessionLogger:
         # summary table can collapse repeated work (e.g. multiple peer SSH
         # connects) into one row.
         self._step_stack = []   # list of dicts: {name, start}
-        self._step_times = OrderedDict()  # name -> total seconds
-        self._step_counts = OrderedDict()  # name -> int
+        # Plain dicts are insertion-ordered as of Python 3.7+, which the
+        # script requires.  OrderedDict is no longer needed here.
+        self._step_times = {}  # name -> total seconds
+        self._step_counts = {}  # name -> int
 
         # Tracks the timestamp of the previous log entry so each line can
         # show the delta since the previous one.
@@ -2760,7 +2772,7 @@ def _parse_matching_gateway(output, clus_mgmt_ip=None):
     there is no subnet match or when *clus_mgmt_ip* is None/blank.
     Returns None if no usable gateway is found.
     """
-    import ipaddress as _ipa
+    _ipa = ipaddress  # local alias preserves existing references below
 
     # Resolve the cluster-mgmt IP object once so we can test containment.
     _mgmt_addr = None
@@ -8274,24 +8286,34 @@ def _run_ontap_upgrade(log):
             # collected into a per-thread local buffer; nothing is written
             # to shared sys.stdout during the send/recv loop, eliminating
             # the interleaving that plagued earlier exec_command attempts.
-            _PROMPT_RE_PAR = re.compile(r"::\*?>")
+            # Prompt regex is now module-level (_SHELL_PROMPT_RE) so it is
+            # compiled once at import time, not on every parallel update.
 
             def _shell_run_cmd(cl, cmd, timeout=960):
                 """Open an invoke_shell on `cl`, wait for ::>, send `cmd`,
                 collect output until the next ::> prompt, return the output.
                 Raises RuntimeError on failure.
+
+                Polling uses adaptive sleep: 10 ms while data is actively
+                flowing, 100 ms while idle.  This trims ~90 ms of latency
+                from each prompt match without spinning the CPU when the
+                cluster is quiet.
                 """
                 ch = cl.invoke_shell(width=220, height=50)
                 ch.settimeout(0)
                 buf = ""
                 deadline = time.monotonic() + 30
+                got_prompt = False
                 while time.monotonic() < deadline:
                     if ch.recv_ready():
                         buf += ch.recv(4096).decode("utf-8", errors="replace")
-                        if _PROMPT_RE_PAR.search(buf[-200:]):
+                        if _SHELL_PROMPT_RE.search(buf[-200:]):
+                            got_prompt = True
                             break
-                    time.sleep(0.1)
-                else:
+                        time.sleep(0.01)
+                    else:
+                        time.sleep(0.1)
+                if not got_prompt:
                     ch.close()
                     raise RuntimeError("Cluster prompt not seen after login")
                 buf = ""
@@ -8300,12 +8322,14 @@ def _run_ontap_upgrade(log):
                 while time.monotonic() < deadline:
                     if ch.recv_ready():
                         buf += ch.recv(4096).decode("utf-8", errors="replace")
-                        if _PROMPT_RE_PAR.search(buf[-200:]):
+                        if _SHELL_PROMPT_RE.search(buf[-200:]):
                             time.sleep(0.3)
                             while ch.recv_ready():
                                 buf += ch.recv(4096).decode("utf-8", errors="replace")
                             break
-                    time.sleep(0.1)
+                        time.sleep(0.01)
+                    else:
+                        time.sleep(0.1)
                 ch.close()
                 return buf
 
