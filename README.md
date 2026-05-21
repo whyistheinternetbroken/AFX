@@ -6,6 +6,10 @@
 
 ---
 
+> **Disclaimer:** This script is an independent, unofficial tool and is **not sanctioned, endorsed, or provided by NetApp, Inc.** It is not an official NetApp product and is not covered by any NetApp support agreement. Use it at your own risk. NetApp bears no responsibility for any data loss, system downtime, or other consequences resulting from its use. Always validate procedures in a non-production environment before running them against production systems.
+
+---
+
 ## Overview
 
 Starting with ONTAP 9.19.1, Storage Availability Zones (SAZs) support 96-bit filesystem semantics, enabling storage capacity larger than 16 PB per single zone. To gain the benefits of the new 96-bit SAZ, the existing 64-bit SAZ must be destroyed (along with any data it contains) and the entire cluster reinitialized. There is no way to simply convert the existing SAZ in-place.
