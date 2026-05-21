@@ -12,9 +12,7 @@
 
 ## Overview
 
-Starting with ONTAP 9.19.1, Storage Availability Zones (SAZs) support 96-bit filesystem semantics, enabling storage capacity larger than 16 PB per single zone. To gain the benefits of the new 96-bit SAZ, the existing 64-bit SAZ must be destroyed (along with any data it contains) and the entire cluster reinitialized. There is no way to simply convert the existing SAZ in-place.
-
-This process involves many sequential and parallel steps — including wait times between operations — that benefit greatly from automation to reduce human error and minimize hands-on time.
+Reinitalizing an ONTAP AFX cluster involves many sequential and parallel steps — including wait times between operations — that benefit greatly from automation to reduce human error and minimize hands-on time.
 
 `reinit_afx_v2.py` is an automated console management script that assists NetApp field engineers and storage administrators with reinitializing NetApp AFX cluster nodes via the BMC (Baseboard Management Controller) / Service Processor (SP) console. It is the second-generation rewrite of the original `afx_reinit_v1.py`.
 
