@@ -5338,6 +5338,43 @@ def _classify_auth_failure(exc: BaseException) -> str:
     return str(exc) or exc.__class__.__name__
 
 
+def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
+                                  max_attempts=3, retry_pause=5):
+    """Verify a list of BMCs via `_verify_bmc_ip`, retrying any that fail
+    up to `max_attempts` times (default 3). Returns True if every BMC
+    eventually verified, False otherwise. Only the still-failing IPs are
+    re-attempted on each retry.
+    """
+    pending = list(bmc_ips)
+    for _attempt in range(1, max_attempts + 1):
+        if _attempt == 1:
+            print("\n  Verifying BMC IP addresses via 'bmc status'...")
+        else:
+            print(
+                f"\n  ↻ Retrying verification for {len(pending)} BMC(s) "
+                f"(attempt {_attempt}/{max_attempts})..."
+            )
+            # Brief pause between attempts so a transient BMC blip can clear.
+            time.sleep(retry_pause)
+
+        next_pending = []
+        for _ip in pending:
+            ok, _ = _verify_bmc_ip(_ip, bmc_user, bmc_passwords[_ip])
+            if ok:
+                print(f"  ✅ {_ip} verified.")
+            else:
+                print(f"  ❌ {_ip} verification failed.")
+                next_pending.append(_ip)
+        pending = next_pending
+        if not pending:
+            return True
+    print(
+        f"\n  ⚠️  {len(pending)} BMC(s) still failed verification after "
+        f"{max_attempts} attempts: {', '.join(pending)}"
+    )
+    return False
+
+
 def _verify_bmc_ip(ip, username, password):
     """SSH to `ip` and run 'bmc status', then confirm the reported IP Address
     matches what was entered. Returns (ok: bool, reported_ip: str|None).
@@ -5630,16 +5667,10 @@ def _collect_netboot_bmcs():
                     if _override_p:
                         _bmc_passwords[_ip] = _override_p
 
-            # Verify
-            print("\n  Verifying BMC IP addresses via 'bmc status'...")
-            all_ok = True
-            for _ip in _bmc_ips:
-                ok, _ = _verify_bmc_ip(_ip, _bmc_user, _bmc_passwords[_ip])
-                if ok:
-                    print(f"  ✅ {_ip} verified.")
-                else:
-                    print(f"  ❌ {_ip} verification failed.")
-                    all_ok = False
+            # Verify (auto-retries each failing BMC up to 3 times before prompting).
+            all_ok = _verify_bmc_list_with_retries(
+                _bmc_ips, _bmc_user, _bmc_passwords, max_attempts=3,
+            )
 
             if all_ok:
                 return _bmc_ips, _bmc_user, _bmc_passwords
@@ -5699,16 +5730,10 @@ def _collect_netboot_bmcs():
             for ip in bmc_ips:
                 bmc_passwords[ip] = getpass.getpass(f"  Password for {ip}: ")
 
-        # ── Verification ───────────────────────────────────────────────────
-        print("\n  Verifying BMC IP addresses via 'bmc status'...")
-        all_ok = True
-        for ip in bmc_ips:
-            ok, reported = _verify_bmc_ip(ip, bmc_user, bmc_passwords[ip])
-            if ok:
-                print(f"  ✅ {ip} verified.")
-            else:
-                print(f"  ❌ {ip} verification failed.")
-                all_ok = False
+        # ── Verification (auto-retries each failing BMC up to 3 times) ─────
+        all_ok = _verify_bmc_list_with_retries(
+            bmc_ips, bmc_user, bmc_passwords, max_attempts=3,
+        )
 
         if all_ok:
             return bmc_ips, bmc_user, bmc_passwords
