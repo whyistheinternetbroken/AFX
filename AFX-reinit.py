@@ -1741,6 +1741,103 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
         except Exception as e:
             last_exc = e
             msg = str(e).lower()
+            # ── BMC SSH temporarily not responding ────────────────────
+            # When the BMC briefly drops SSH (post-reboot, BMC service
+            # restart, transient network blip) paramiko surfaces
+            # "Connection reset by peer" or a ConnectionResetError. In
+            # those cases the BMC usually recovers in 1–5 minutes, so
+            # notify the operator and retry every 2 minutes for up to
+            # 10 minutes (5 retries) before giving up entirely.
+            if (isinstance(e, ConnectionResetError)
+                    or "connection reset" in msg
+                    or "reset by peer" in msg):
+                _reset_max = 5
+                _reset_interval = 120  # seconds
+                print(
+                    f"\n   ⚠️  [{label}] SSH to {host} is currently not "
+                    f"responding (connection reset by peer)."
+                )
+                print(
+                    f"      Will retry every {_reset_interval // 60} minute(s) "
+                    f"for up to {(_reset_max * _reset_interval) // 60} minutes "
+                    f"before the script exits."
+                )
+                if _session_log:
+                    _session_log.log(
+                        f"[{label}] {host} SSH not responding "
+                        f"(connection reset); retrying up to {_reset_max} "
+                        f"times at {_reset_interval}s intervals",
+                        prefix="WARN",
+                    )
+                _reset_done = False
+                for _r in range(1, _reset_max + 1):
+                    print(
+                        f"   ⏳ [{label}] waiting {_reset_interval}s before "
+                        f"retry {_r}/{_reset_max}..."
+                    )
+                    _waited = 0
+                    while _waited < _reset_interval:
+                        if _shutdown_event.is_set():
+                            raise last_exc
+                        time.sleep(1)
+                        _waited += 1
+                    try:
+                        client = paramiko.SSHClient()
+                        client.set_missing_host_key_policy(
+                            paramiko.AutoAddPolicy())
+                        print(
+                            f"   🔌 [{label}] retrying SSH to {host} as "
+                            f"{username} (reset retry {_r}/{_reset_max})..."
+                        )
+                        if _session_log:
+                            _session_log.log(
+                                f"[{label}] SSH reset retry {_r}/{_reset_max} "
+                                f"to {host} as {username}"
+                            )
+                        client.connect(
+                            hostname=host, username=username,
+                            password=password, timeout=45,
+                            banner_timeout=60, auth_timeout=45,
+                            disabled_algorithms={"pubkeys": ["ssh-dss"]},
+                        )
+                        configure_transport(client)
+                        return client, username, password
+                    except Exception as e2:
+                        last_exc = e2
+                        msg2 = str(e2).lower()
+                        if (isinstance(e2, ConnectionResetError)
+                                or "connection reset" in msg2
+                                or "reset by peer" in msg2):
+                            print(
+                                f"   ⚠️  [{label}] {host} still not "
+                                f"responding (connection reset)."
+                            )
+                            continue
+                        # Different failure (auth, banner, etc.) — break
+                        # out and let the outer logic handle/raise it.
+                        print(
+                            f"   ⚠️  [{label}] retry surfaced a different "
+                            f"error: {e2}"
+                        )
+                        _reset_done = True
+                        break
+                if not _reset_done:
+                    print(
+                        f"   ❌ [{label}] {host} SSH did not recover after "
+                        f"{(_reset_max * _reset_interval) // 60} minutes; "
+                        "aborting."
+                    )
+                    if _session_log:
+                        _session_log.log(
+                            f"[{label}] {host} SSH never recovered after "
+                            f"{_reset_max} reset retries; aborting",
+                            prefix="ERROR",
+                        )
+                    raise last_exc
+                # _reset_done True → fall through to normal handling
+                # below using last_exc for the new (non-reset) failure.
+                e = last_exc
+                msg = str(e).lower()
             # Map paramiko's noisy "Error reading SSH protocol banner" to a
             # clearer one-liner. The BMC is usually just slow to start its
             # SSH daemon (post-reboot, BMC busy serving console, etc.).
