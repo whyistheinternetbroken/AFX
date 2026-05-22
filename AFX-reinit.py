@@ -5341,15 +5341,84 @@ def _classify_auth_failure(exc: BaseException) -> str:
 def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                                   max_attempts=3, retry_pause=5):
     """Verify a list of BMCs via `_verify_bmc_ip`, retrying any that fail
-    up to `max_attempts` times (default 3). Returns True if every BMC
-    eventually verified, False otherwise. Only the still-failing IPs are
-    re-attempted on each retry.
+    up to `max_attempts` times (default 3). Returns (ok, bmc_user) — ok
+    is True if every BMC eventually verified, and bmc_user reflects any
+    new shared username the operator entered while re-credentialing.
+    Only the still-failing IPs are re-attempted on each retry, and if
+    failures look like auth errors the operator is asked to re-enter
+    credentials for those IPs before the next attempt (rather than
+    silently retrying with the same bad password).
+
+    `bmc_passwords` is updated in place as the operator enters new
+    passwords for failing IPs.
     """
     pending = list(bmc_ips)
+    # Reasons (per IP) from the most recent attempt — used to decide
+    # whether to re-prompt for credentials before the next retry.
+    last_reasons: "dict[str, str]" = {}
+
+    def _is_auth_reason(reason):
+        if not reason:
+            return False
+        r = reason.lower()
+        return ("permission denied" in r
+                or "incorrect username" in r
+                or "incorrect password" in r
+                or "authentication" in r)
+
     for _attempt in range(1, max_attempts + 1):
         if _attempt == 1:
             print("\n  Verifying BMC IP addresses via 'bmc status'...")
         else:
+            # ── Credential re-prompt for auth failures ────────────────
+            _auth_ips = [ip for ip in pending
+                         if _is_auth_reason(last_reasons.get(ip))]
+            if _auth_ips:
+                print(
+                    f"\n  🔐 {len(_auth_ips)} BMC(s) failed with an "
+                    "auth/permission error. Re-enter credentials before "
+                    "retrying:"
+                )
+                # Offer to share a single new (user, password) across all
+                # the auth-failing BMCs to keep the prompt short.
+                try:
+                    _same = input(
+                        "    Use the same new username/password for all "
+                        "failing BMCs? [Y/n]: "
+                    ).strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    _same = "n"
+                if _same != "n":
+                    _new_user = input(
+                        f"    BMC username [{bmc_user}] (blank to keep): "
+                    ).strip() or bmc_user
+                    _new_pass = getpass.getpass(
+                        f"    BMC password for {_new_user}: "
+                    )
+                    if _new_pass:
+                        bmc_user = _new_user
+                        for _ip in _auth_ips:
+                            bmc_passwords[_ip] = _new_pass
+                else:
+                    for _ip in _auth_ips:
+                        print(f"    Credentials for {_ip}:")
+                        _u = input(
+                            f"      Username [{bmc_user}] (blank to keep): "
+                        ).strip() or bmc_user
+                        _p = getpass.getpass(
+                            f"      Password for {_u}@{_ip}: "
+                        )
+                        if _p:
+                            # Per-IP username override is not supported
+                            # downstream; warn if the operator changes it.
+                            if _u != bmc_user:
+                                print(
+                                    f"      ℹ️  Note: a single username is "
+                                    f"used for all BMCs. '{_u}' will replace "
+                                    f"'{bmc_user}' for every BMC."
+                                )
+                                bmc_user = _u
+                            bmc_passwords[_ip] = _p
             print(
                 f"\n  ↻ Retrying verification for {len(pending)} BMC(s) "
                 f"(attempt {_attempt}/{max_attempts})..."
@@ -5358,26 +5427,30 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
             time.sleep(retry_pause)
 
         next_pending = []
+        last_reasons = {}
         for _ip in pending:
-            ok, _ = _verify_bmc_ip(_ip, bmc_user, bmc_passwords[_ip])
+            ok, _, reason = _verify_bmc_ip(_ip, bmc_user, bmc_passwords[_ip])
             if ok:
                 print(f"  ✅ {_ip} verified.")
             else:
                 print(f"  ❌ {_ip} verification failed.")
                 next_pending.append(_ip)
+                last_reasons[_ip] = reason or "unknown failure"
         pending = next_pending
         if not pending:
-            return True
+            return True, bmc_user
     print(
         f"\n  ⚠️  {len(pending)} BMC(s) still failed verification after "
         f"{max_attempts} attempts: {', '.join(pending)}"
     )
-    return False
+    return False, bmc_user
 
 
 def _verify_bmc_ip(ip, username, password):
     """SSH to `ip` and run 'bmc status', then confirm the reported IP Address
-    matches what was entered. Returns (ok: bool, reported_ip: str|None).
+    matches what was entered. Returns (ok: bool, reported_ip: str|None,
+    reason: str|None). `reason` is None on success, otherwise an
+    operator-friendly description of why verification failed.
     """
     try:
         client = paramiko.SSHClient()
@@ -5391,12 +5464,12 @@ def _verify_bmc_ip(ip, username, password):
         if m:
             reported = m.group(1)
             if reported == ip:
-                return True, reported
+                return True, reported, None
             print(f"    ⚠️  IP mismatch: entered {ip}, BMC reports {reported}")
-            return False, reported
+            return False, reported, f"IP mismatch (BMC reports {reported})"
         print(f"    ⚠️  'IP Address:' not found in 'bmc status' output for {ip}.")
         print(f"       Output snippet: {output[:300].strip()!r}")
-        return False, None
+        return False, None, "'IP Address:' not found in 'bmc status' output"
     except Exception as exc:
         _reason = _classify_auth_failure(exc)
         print(f"    ⚠️  Cannot reach {ip}: {_reason}")
@@ -5405,7 +5478,7 @@ def _verify_bmc_ip(ip, username, password):
                 f"[BMC verify] {ip} failed: {_reason} (raw: {exc})",
                 prefix="ERROR",
             )
-        return False, None
+        return False, None, _reason
 
 
 def _collect_netboot_bmcs():
@@ -5668,7 +5741,7 @@ def _collect_netboot_bmcs():
                         _bmc_passwords[_ip] = _override_p
 
             # Verify (auto-retries each failing BMC up to 3 times before prompting).
-            all_ok = _verify_bmc_list_with_retries(
+            all_ok, _bmc_user = _verify_bmc_list_with_retries(
                 _bmc_ips, _bmc_user, _bmc_passwords, max_attempts=3,
             )
 
@@ -5731,7 +5804,7 @@ def _collect_netboot_bmcs():
                 bmc_passwords[ip] = getpass.getpass(f"  Password for {ip}: ")
 
         # ── Verification (auto-retries each failing BMC up to 3 times) ─────
-        all_ok = _verify_bmc_list_with_retries(
+        all_ok, bmc_user = _verify_bmc_list_with_retries(
             bmc_ips, bmc_user, bmc_passwords, max_attempts=3,
         )
 
