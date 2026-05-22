@@ -2,7 +2,6 @@
 
 **Latest version:** `reinit_afx_v2.py`  
 **Updated:** 5/20/2026  
-**Previous version:** `reinit_afx_v1.py`
 
 ---
 
