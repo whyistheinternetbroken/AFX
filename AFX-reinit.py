@@ -1838,6 +1838,88 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                 # below using last_exc for the new (non-reset) failure.
                 e = last_exc
                 msg = str(e).lower()
+            # ── BMC SSH banner not received ───────────────────────────
+            # The BMC SSH daemon is slow to start (post-reboot, busy
+            # serving console, etc.). Wait 30s and retry, up to 2
+            # minutes total (4 retries), before falling through to the
+            # normal failure path.
+            if "banner" in msg:
+                _bnr_max = 4
+                _bnr_interval = 30  # seconds
+                print(
+                    f"   ⚠️  [{label}] BMC SSH banner not received from "
+                    f"{host} (BMC may still be starting up). Waiting "
+                    f"{_bnr_interval}s and retrying (up to "
+                    f"{(_bnr_max * _bnr_interval) // 60} minutes total)..."
+                )
+                if _session_log:
+                    _session_log.log(
+                        f"[{label}] banner timeout for {host}; retrying "
+                        f"up to {_bnr_max} times at {_bnr_interval}s "
+                        "intervals",
+                        prefix="WARN",
+                    )
+                _bnr_done = False
+                for _b in range(1, _bnr_max + 1):
+                    _waited = 0
+                    while _waited < _bnr_interval:
+                        if _shutdown_event.is_set():
+                            raise last_exc
+                        time.sleep(1)
+                        _waited += 1
+                    try:
+                        client = paramiko.SSHClient()
+                        client.set_missing_host_key_policy(
+                            paramiko.AutoAddPolicy())
+                        print(
+                            f"   🔌 [{label}] retrying SSH to {host} as "
+                            f"{username} (banner retry {_b}/{_bnr_max})..."
+                        )
+                        if _session_log:
+                            _session_log.log(
+                                f"[{label}] SSH banner retry {_b}/{_bnr_max} "
+                                f"to {host} as {username}"
+                            )
+                        client.connect(
+                            hostname=host, username=username,
+                            password=password, timeout=45,
+                            banner_timeout=60, auth_timeout=45,
+                            disabled_algorithms={"pubkeys": ["ssh-dss"]},
+                        )
+                        configure_transport(client)
+                        return client, username, password
+                    except Exception as eb:
+                        last_exc = eb
+                        msg_b = str(eb).lower()
+                        if "banner" in msg_b:
+                            print(
+                                f"   ⚠️  [{label}] {host} still not "
+                                "responding to SSH (banner timeout)."
+                            )
+                            continue
+                        # Different failure — let outer logic handle it.
+                        print(
+                            f"   ⚠️  [{label}] retry surfaced a different "
+                            f"error: {eb}"
+                        )
+                        _bnr_done = True
+                        break
+                if not _bnr_done:
+                    print(
+                        f"   ❌ [{label}] {host} SSH banner never arrived "
+                        f"after {(_bnr_max * _bnr_interval) // 60} minutes."
+                    )
+                    if _session_log:
+                        _session_log.log(
+                            f"[{label}] {host} SSH banner never arrived "
+                            f"after {_bnr_max} retries; aborting",
+                            prefix="ERROR",
+                        )
+                    raise last_exc
+                # _bnr_done True → a non-banner failure surfaced; fall
+                # through to normal handling with the new exception.
+                e = last_exc
+                msg = str(e).lower()
             # Map paramiko's noisy "Error reading SSH protocol banner" to a
             # clearer one-liner. The BMC is usually just slow to start its
             # SSH daemon (post-reboot, BMC busy serving console, etc.).
