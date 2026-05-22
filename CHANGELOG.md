@@ -17,6 +17,12 @@ revision labels rather than strict [SemVer](https://semver.org/).
   `- Node [<name> - <BMC IP>]   <secs>s (<mins>m)`. Node name is taken from
   the matching `secondary_nodes[].name` entry in the config (falls back to
   just the BMC IP when not present).
+- **Join → all-nodes-healthy wall time (mode 3).** A new indented sub-row
+  is appended under `Node join total` reporting the wall-clock elapsed
+  from the moment the first peer sends `join` to the moment the last
+  peer's `cluster show` health check confirms the final cluster size with
+  all nodes healthy. Rendered as
+  `- Join → all nodes healthy   <secs>s (<mins>m)`.
 - `SessionLogger.record_phase(name, elapsed, outcome=, note=)` — records a
   phase with a precomputed elapsed time (used when the real boundaries are
   determined inside worker threads).

@@ -5851,6 +5851,19 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     menu_detected = False
     netboot_failed = False
     netboot_fail_reason = ""
+
+    # Discard the contents of NVRAM on the next boot so the netboot install
+    # starts from a clean slate (required for 4b reinit; safe to set as it
+    # only affects the next boot).
+    _status(f"\n  [{node_label}] Setting LOADER env: setenv nvram_discard 1")
+    if log:
+        log.log(f"[{node_label}] setenv nvram_discard 1")
+    if nf:
+        _par_send(channel, nf, "setenv nvram_discard 1")
+        _par_recv_until(channel, nf, ["LOADER", "loader"], timeout=15)
+    else:
+        direct_send_and_wait(channel, "setenv nvram_discard 1", "LOADER", timeout=15)
+
     for _nb_attempt in range(1, _NETBOOT_MAX_ATTEMPTS + 1):
         if _nb_attempt == 1:
             _status(f"\n  [{node_label}] Starting netboot: {pkg_url}")
@@ -9908,7 +9921,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                           join_barrier=None, join_proceed_events=None,
                           join_index=0, final_cluster_count=0,
                           timings_record=None, barrier_release_box=None,
-                          timings_lock=None):
+                          timings_lock=None, first_join_sent_box=None):
     """Run a full add-node automation against a single peer BMC.
 
     All peer threads run LOADER/format in parallel. When each thread
@@ -9921,7 +9934,10 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
     ``timings_record[peer_bmc]`` under ``timings_lock`` so the caller
     can render a per-node breakdown in the session summary. The first
     thread to clear ``join_barrier`` also stamps ``barrier_release_box[0]``
-    with the shared barrier-release timestamp.
+    with the shared barrier-release timestamp. The first thread to send
+    "join" stamps ``first_join_sent_box[0]`` so the caller can compute
+    the wall-clock time from the first cluster-join send to the last
+    node's health confirmation.
     """
     label = f"peer/{peer_bmc}"
     print(f"\n🧵 [{label}] Starting peer auto-add thread...")
@@ -10124,6 +10140,21 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
 
         print(f"\n🔗 [{label}] Join turn {join_index + 1}: sending 'join'...")
         _slog(f"[{label}] join turn {join_index + 1}: proceeding")
+        # Stamp the moment this peer is about to send "join". The first
+        # peer to reach this point also fixes the shared "first join sent"
+        # timestamp used by the caller to compute join→all-healthy wall time.
+        _t_join_sent = time.monotonic()
+        if first_join_sent_box is not None:
+            try:
+                if timings_lock is not None:
+                    with timings_lock:
+                        if first_join_sent_box[0] is None:
+                            first_join_sent_box[0] = _t_join_sent
+                else:
+                    if first_join_sent_box[0] is None:
+                        first_join_sent_box[0] = _t_join_sent
+            except Exception:
+                pass
         _wait_and_send(ch, "do you want to create a new cluster or join",
                        "join", f"[{label}] -> join", timeout=900,
                        node_log=node_file)
@@ -10226,6 +10257,10 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             total_timeout=600, poll_interval=120, label=label,
             final_count=final_cluster_count if final_cluster_count else None,
         )
+        # Stamp the moment cluster-show verification finished (regardless
+        # of ok/timeout). Used both per-node (join→healthy) and aggregate
+        # (first-join → last-healthy) in the session summary.
+        _t_healthy_done = time.monotonic()
         if ok:
             print(f"\n✅ [{label}] Node added (cluster show confirmed all healthy).")
             _slog(f"[{label}] node added (verified, all-true)")
@@ -10248,6 +10283,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             _entry = {
                 "option4": _t_barrier_pass - _t_thread_start,
                 "join": _t_done - _t_barrier_pass,
+                "join_to_healthy": _t_healthy_done - _t_join_sent,
+                "healthy_done_mono": _t_healthy_done,
                 "node_name": (_node_cfg_for(peer_bmc) or {}).get("name") or "",
                 "ok": True,
             }
@@ -10672,9 +10709,12 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
     # Track split timings: option-4 (parallel format/LOADER prep up to the
     # join barrier) vs. the sequential node-join wall time. The threads
     # populate _m3_peer_timings keyed by BMC IP; the barrier-release timestamp
-    # is captured by the first thread to clear the barrier.
+    # is captured by the first thread to clear the barrier. _m3_first_join_box
+    # is stamped by the first thread to send "join" so we can report the
+    # wall-clock time from first cluster-join to all-nodes-healthy.
     _m3_peer_timings: "dict[str, dict]" = {}
     _m3_barrier_release_box = [None]
+    _m3_first_join_box = [None]
     _m3_timings_lock = threading.Lock()
     _t_mode3_start = time.monotonic()
     if _session_log:
@@ -10736,6 +10776,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
                     timings_record=_m3_peer_timings,
                     barrier_release_box=_m3_barrier_release_box,
                     timings_lock=_m3_timings_lock,
+                    first_join_sent_box=_m3_first_join_box,
                 )
             t = threading.Thread(
                 target=_run_m3,
@@ -10802,6 +10843,20 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
             )
             _session_log.add_phase_subtiming(
                 "Node join total", _node_label, _t.get("join", 0.0),
+            )
+
+        # Aggregate: wall-clock time from the first peer's "join" send to
+        # the moment the last peer's cluster-show health check completed.
+        _first_join = _m3_first_join_box[0]
+        _last_healthy = max(
+            (_t.get("healthy_done_mono") or 0.0)
+            for _t in _m3_peer_timings.values()
+        ) if _m3_peer_timings else 0.0
+        if _first_join is not None and _last_healthy > _first_join:
+            _session_log.add_phase_subtiming(
+                "Node join total",
+                "Join → all nodes healthy",
+                _last_healthy - _first_join,
             )
     print("\n✅ Parallel peer auto-add complete.")
 
