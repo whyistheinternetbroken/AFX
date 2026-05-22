@@ -5302,6 +5302,42 @@ def _apply_license(channel):
 # Mode 42 (4b): Netboot and install ONTAP
 # ---------------------------------------------------------------------------
 
+def _classify_auth_failure(exc: BaseException) -> str:
+    """Return an operator-friendly description of why a BMC SSH auth/verify
+    attempt failed. Recognized categories:
+
+      * "Ping failed (host unreachable / no route / timed out)"
+      * "SSH connection reset by peer (BMC SSH temporarily not responding)"
+      * "Incorrect username or password (permission denied)"
+      * "SSH banner not received (BMC SSH may still be starting up)"
+      * Otherwise: the underlying exception text.
+    """
+    msg = str(exc).lower()
+    # Auth-specific errors first (paramiko surfaces these explicitly).
+    if isinstance(exc, paramiko.AuthenticationException):
+        return "Incorrect username or password (permission denied)"
+    if ("authentication" in msg or "permission denied" in msg
+            or "bad authentication" in msg or "auth failed" in msg):
+        return "Incorrect username or password (permission denied)"
+    # Connection reset → BMC SSH temporarily offline.
+    if (isinstance(exc, ConnectionResetError)
+            or "connection reset" in msg or "reset by peer" in msg):
+        return "SSH connection reset by peer (BMC SSH temporarily not responding)"
+    # Host unreachable / ping-style failures.
+    if isinstance(exc, (socket.gaierror, socket.timeout, TimeoutError)):
+        return "Ping failed (host unreachable / DNS / timeout)"
+    if ("timed out" in msg or "timeout" in msg or "unreachable" in msg
+            or "no route" in msg or "connection refused" in msg
+            or "name or service not known" in msg
+            or "could not resolve" in msg or "host is down" in msg):
+        return "Ping failed (host unreachable / no route / timed out)"
+    # SSH banner errors.
+    if "banner" in msg:
+        return "SSH banner not received (BMC SSH may still be starting up)"
+    # Fallback to raw exception text.
+    return str(exc) or exc.__class__.__name__
+
+
 def _verify_bmc_ip(ip, username, password):
     """SSH to `ip` and run 'bmc status', then confirm the reported IP Address
     matches what was entered. Returns (ok: bool, reported_ip: str|None).
@@ -5325,7 +5361,13 @@ def _verify_bmc_ip(ip, username, password):
         print(f"       Output snippet: {output[:300].strip()!r}")
         return False, None
     except Exception as exc:
-        print(f"    ⚠️  Cannot reach {ip}: {exc}")
+        _reason = _classify_auth_failure(exc)
+        print(f"    ⚠️  Cannot reach {ip}: {_reason}")
+        if _session_log:
+            _session_log.log(
+                f"[BMC verify] {ip} failed: {_reason} (raw: {exc})",
+                prefix="ERROR",
+            )
         return False, None
 
 
@@ -12878,12 +12920,12 @@ def main():
                     status = "FAIL"
                     detail = "could not parse IP from 'bmc status' output"
 
-            except paramiko.AuthenticationException:
+            except paramiko.AuthenticationException as _ex47a:
                 status = "FAIL"
-                detail = f"authentication failed ({_ip_user47}@{ip})"
+                detail = _classify_auth_failure(_ex47a)
             except Exception as _ex47:
                 status = "FAIL"
-                detail = str(_ex47)
+                detail = _classify_auth_failure(_ex47)
             finally:
                 try:
                     if ch47:
