@@ -6712,7 +6712,13 @@ def _run_4b_standalone(log):
     connect_lock = threading.Lock()
     connect_errors = []
 
-    def _connect_worker(ip):
+    def _connect_worker(ip, stagger_idx=0):
+        # Stagger connection attempts by 2s per node index to avoid
+        # hammering all BMCs simultaneously — simultaneous SSH handshakes
+        # can exhaust the BMC daemon's connection limit and cause banner
+        # timeout errors.
+        if stagger_idx > 0:
+            time.sleep(stagger_idx * 2)
         nf = _node_files.get(ip)
         try:
             _status(f"  ⏳ [{ip}] Connecting to BMC...")
@@ -6753,8 +6759,8 @@ def _run_4b_standalone(log):
             if log:
                 log.log(f"[{ip}] BMC connect failed: {exc}", prefix="ERROR")
 
-    threads = [threading.Thread(target=_connect_worker, args=(ip,), daemon=True)
-               for ip in bmc_ips]
+    threads = [threading.Thread(target=_connect_worker, args=(ip, idx), daemon=True)
+               for idx, ip in enumerate(bmc_ips)]
     for t in threads:
         t.start()
     for t in threads:
