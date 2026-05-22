@@ -6979,7 +6979,8 @@ def _run_4b_standalone(log):
         ]
         # Primary node (per config) gets more time; peers are expected faster.
         _primary_bmc_ip = _config_primary_node().get("bmc", "")
-        _boot_timeout = 1800 if ip == _primary_bmc_ip else 900
+        # Each node waits up to 30 min after option 6 for the boot to complete.
+        _boot_timeout = 1800
         _boot_timeout_min = _boot_timeout // 60
         _status(f"  ⏳ [{ip}] Option 6 confirmed – waiting for node to boot (up to {_boot_timeout_min} min)...")
         if log:
