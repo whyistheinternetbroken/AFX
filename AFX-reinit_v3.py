@@ -11725,7 +11725,7 @@ def auto_complete_initialization(channel, bmc_host=None):
     _slog(f"Node mgmt config to use: {cfg}")
     _auto_answer_node_mgmt(channel, cfg)
 
-    print("\n✅ Mode 1b auto-init complete; remaining prompts will be interactive.")
+    print("\n✅ Mode 1b auto-init complete; driving cluster setup wizard...")
     if _session_log:
         _session_log.log("Auto-init phase complete; transitioning to wizard automation")
         _session_log.end_phase()
@@ -11866,7 +11866,13 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         _session_log.end_phase()  # End Boot Menu Selection
 
     if _auto_setup:
+        # Mode 1b / 3: auto_complete_initialization drives the full cluster
+        # setup wizard (and, for mode 3, parallel peer auto-add) internally.
+        # Nothing remains for an interactive session, so return without
+        # entering InteractiveSession (which would print the misleading
+        # "Session is now fully interactive" banner mid-boot).
         auto_complete_initialization(channel, bmc_host=sp_host)
+        return
     elif _auto_add:
         auto_complete_join(channel, client, sp_host, sp_user, sp_pass,
                            bmc_host=sp_host)
