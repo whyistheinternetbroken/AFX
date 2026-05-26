@@ -187,6 +187,72 @@ class CheckpointManager:
             if v.get("done")
         ]
 
+    def summary(self) -> str:
+        """Return a human-readable description of the loaded checkpoint.
+
+        Lists run metadata (mode, created/updated timestamps, log dir, config
+        path), every global phase recorded, and per-node phase completion
+        keyed by BMC IP. Intended for the ``--checkpoint-status`` CLI flag so
+        an operator can see exactly where a previous run left off without
+        opening the JSON file by hand.
+        """
+        if not self._data:
+            return f"No checkpoint loaded (file: {self._path})."
+
+        lines = []
+        lines.append(f"Checkpoint file : {self._path}")
+        lines.append(f"Mode            : {self._data.get('mode', '?')}")
+        lines.append(f"Created         : {self._data.get('created', '?')}")
+        lines.append(f"Updated         : {self._data.get('updated', '?')}")
+        try:
+            created_dt = datetime.fromisoformat(self._data.get("created", ""))
+            age_min = int((datetime.now() - created_dt).total_seconds() // 60)
+            lines.append(f"Age             : {age_min} minute(s)")
+        except Exception:
+            pass
+        if self._data.get("log_dir"):
+            lines.append(f"Log directory   : {self._data['log_dir']}")
+        if self._data.get("config_path"):
+            lines.append(f"Config path     : {self._data['config_path']}")
+        bmc_ips = self._data.get("bmc_ips") or []
+        if bmc_ips:
+            lines.append(f"BMC IPs         : {', '.join(bmc_ips)}")
+
+        phases = self._data.get("phases") or {}
+        lines.append("")
+        lines.append("Global phases:")
+        if not phases:
+            lines.append("  (none recorded)")
+        else:
+            for name, meta in phases.items():
+                mark = "✅" if meta.get("done") else "  "
+                ts = meta.get("ts", "")
+                lines.append(f"  {mark} {name}  {ts}")
+
+        node_phases = self._data.get("node_phases") or {}
+        lines.append("")
+        lines.append("Per-node phases:")
+        if not node_phases:
+            lines.append("  (none recorded)")
+        else:
+            # Build a phase x ip matrix so each node's progress is easy to scan.
+            all_ips = sorted({
+                ip for per_ip in node_phases.values() for ip in per_ip.keys()
+            } | set(bmc_ips))
+            phase_names = list(node_phases.keys())
+            for ip in all_ips:
+                completed = [
+                    p for p in phase_names
+                    if node_phases.get(p, {}).get(ip, {}).get("done")
+                ]
+                pending = [p for p in phase_names if p not in completed]
+                lines.append(f"  [{ip}]")
+                lines.append(f"      done    : {', '.join(completed) or '(none)'}")
+                if pending:
+                    lines.append(f"      pending : {', '.join(pending)}")
+
+        return "\n".join(lines)
+
     # ── Accessors ───────────────────────────────────────────────────────────
 
     @property
@@ -2878,6 +2944,11 @@ def parse_args():
                              "checkpoint (afx_checkpoint.json). Skips phases "
                              "already completed so you do not have to restart "
                              "from scratch after a failure.")
+    parser.add_argument("--checkpoint-status", action="store_true", default=False,
+                        help="Print a summary of the saved checkpoint "
+                             "(afx_checkpoint.json) showing exactly where the "
+                             "last run left off, then exit. Does not modify "
+                             "the checkpoint file.")
     args = parser.parse_args()
     if args.help:
         _print_man_page()
@@ -12656,6 +12727,14 @@ def main():
 
     if args.config_example:
         print(_CONFIG_FILE_EXAMPLE)
+        sys.exit(0)
+
+    if args.checkpoint_status:
+        _cp = CheckpointManager()
+        if not _cp.load():
+            print(f"No valid checkpoint found at {_cp._path}.")
+            sys.exit(1)
+        print(_cp.summary())
         sys.exit(0)
 
     _bg_mode = args.bg
