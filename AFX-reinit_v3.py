@@ -886,6 +886,12 @@ def _discover_and_prompt_config(ctx):
 
     Returns the config path that was loaded, or None.
     """
+    # Pull current globals into ctx so the final apply_to_globals() does not
+    # clobber fields that legacy code (e.g. 4b's reinit-mode selection that
+    # set _operation_mode / _auto_setup / _auto_add) updated since the ctx
+    # was last snapshotted.
+    ctx.refresh_from_globals()
+
     detected_configs = _find_config_files(deep_scan=True)
     config_path = _select_config_path_interactive(detected_configs)
 
@@ -5268,6 +5274,10 @@ def _collect_license_config(ctx):
     ``_license_mode`` / ``_license_keys`` / ``_license_file_path`` globals
     so existing readers (e.g. ``_apply_license``) continue to work.
     """
+    # Pull current globals into ctx so the trailing apply_to_globals() calls
+    # don't clobber fields (e.g. _operation_mode, _auto_setup) that legacy
+    # code updated since the ctx was last snapshotted.
+    ctx.refresh_from_globals()
     _print_banner("\U0001f4dc ONTAP License")
     ans = _prompt(
         "\n  Add an ONTAP license (key or file) after cluster setup? [y/N]: "
@@ -11430,6 +11440,9 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
     global so downstream callers that still read the global see the new
     value. Calls ``sys.exit(0)`` if the operator aborts.
     """
+    # Refresh ctx from globals first so the trailing apply_to_globals() call
+    # only overwrites the field we actually mutated (ctx.checkpoint).
+    ctx.refresh_from_globals()
     session_log = ctx.session_log
 
     prior = CheckpointManager()
