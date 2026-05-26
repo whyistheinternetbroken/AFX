@@ -1,6 +1,6 @@
 # AFX Cluster Reinit Script
 
-**Latest version:** `AFX-reinit.py`  
+**Latest version:** `AFX-reinit_v3.py`  
 **Updated:** 5/22/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
@@ -14,7 +14,7 @@
 
 Reinitalizing an ONTAP AFX cluster involves many sequential and parallel steps — including wait times between operations — that benefit greatly from automation to reduce human error and minimize hands-on time.
 
-`AFX-reinit.py` is an automated console management script that assists NetApp field engineers and storage administrators with reinitializing NetApp AFX cluster nodes via the BMC (Baseboard Management Controller) / Service Processor (SP) console. It is the second-generation rewrite of the original v1 script, which is preserved under `Archive/AFX-reinit.py`.
+`AFX-reinit_v3.py` is an automated console management script that assists NetApp field engineers and storage administrators with reinitializing NetApp AFX cluster nodes via the BMC (Baseboard Management Controller) / Service Processor (SP) console. It is the second-generation rewrite of the original v1 script, which is preserved under `Archive/AFX-reinit.py`.
 
 The script automates the following core tasks:
 
@@ -202,7 +202,7 @@ The following filenames are recognized: `reinit-config.json`, `reinit_config.jso
 You can also specify the path explicitly:
 
 ```bash
-python3 AFX-reinit.py --config /path/to/myconfig.json
+python3 AFX-reinit_v3.py --config /path/to/myconfig.json
 ```
 
 ### Config File Schema
@@ -256,7 +256,7 @@ python3 AFX-reinit.py --config /path/to/myconfig.json
 Print a ready-to-edit example config at any time:
 
 ```bash
-python3 AFX-reinit.py --config-example
+python3 AFX-reinit_v3.py --config-example
 ```
 
 The `primary_node` is the node used to initialize the cluster (options 1a/1b/3). `secondary_nodes` are nodes added to the cluster (options 2a/2b and the node-add phase of option 3). The primary node must not be included in `secondary_nodes`.
@@ -299,7 +299,7 @@ The script presents a menu at startup. Enter the number corresponding to the des
 ## Command-Line Reference
 
 ```
-python3 AFX-reinit.py [OPTIONS]
+python3 AFX-reinit_v3.py [OPTIONS]
 ```
 
 | Option | Short | Description |
@@ -317,12 +317,12 @@ python3 AFX-reinit.py [OPTIONS]
 
 ### Step 1: Download and Place the Script
 
-Place `AFX-reinit.py` on the client machine that has network access to all BMC/SP addresses and the cluster management IP.
+Place `AFX-reinit_v3.py` on the client machine that has network access to all BMC/SP addresses and the cluster management IP.
 
 ```bash
 # Recommended: create a dedicated directory
 mkdir ~/afx-reinit
-cp AFX-reinit.py ~/afx-reinit/
+cp AFX-reinit_v3.py ~/afx-reinit/
 cd ~/afx-reinit
 ```
 
@@ -332,7 +332,7 @@ For automated or multi-node runs, create a `reinit-config.json` in the same dire
 
 ```bash
 # Print the example format
-python3 AFX-reinit.py --config-example > configs/reinit-config.json
+python3 AFX-reinit_v3.py --config-example > configs/reinit-config.json
 # Edit with your cluster and node details
 vi configs/reinit-config.json
 ```
@@ -341,20 +341,20 @@ vi configs/reinit-config.json
 
 ```bash
 # Standard interactive run
-python3 AFX-reinit.py
+python3 AFX-reinit_v3.py
 
 # With explicit config file
-python3 AFX-reinit.py --config configs/reinit-config.json
+python3 AFX-reinit_v3.py --config configs/reinit-config.json
 
 # With debug output
-python3 AFX-reinit.py --debug
+python3 AFX-reinit_v3.py --debug
 
 # Auto-launch in screen (recommended for remote/SSH sessions)
-python3 AFX-reinit.py --screen --config configs/reinit-config.json
+python3 AFX-reinit_v3.py --screen --config configs/reinit-config.json
 # Reattach later with: screen -r afx-reinit
 
 # In background via nohup (alternative to --screen)
-nohup python3 AFX-reinit.py --bg --config configs/reinit-config.json > nohup.out 2>&1 &
+nohup python3 AFX-reinit_v3.py --bg --config configs/reinit-config.json > nohup.out 2>&1 &
 ```
 
 What happens at startup:
@@ -478,7 +478,7 @@ In debug mode:
 Useful for diagnosing unexpected hangs, mismatched prompt patterns, or SSH authentication issues.
 
 ```bash
-python3 AFX-reinit.py --debug
+python3 AFX-reinit_v3.py --debug
 ```
 
 ---
@@ -492,14 +492,14 @@ When `--screen` is specified the script checks whether it is already running ins
 1. Verifies that `screen` is installed (exits with install instructions if missing)
 2. Strips `--screen` from the argument list to prevent recursion
 3. Appends `--bg` so the log is flushed cleanly on detach
-4. Spawns: `screen -dmS afx-reinit python3 AFX-reinit.py --bg [other args]`
+4. Spawns: `screen -dmS afx-reinit python3 AFX-reinit_v3.py --bg [other args]`
 5. Prints the reattach command and exits the outer process
 
 The script then runs entirely inside the screen session. If your SSH connection drops, the run continues uninterrupted. Reconnect to the host and reattach:
 
 ```bash
 # Launch in screen
-python3 AFX-reinit.py --screen --config configs/reinit-config.json
+python3 AFX-reinit_v3.py --screen --config configs/reinit-config.json
 
 # Reattach after reconnecting
 screen -r afx-reinit
@@ -523,10 +523,10 @@ Registers a SIGHUP handler so the session log is flushed and closed cleanly when
 
 ```bash
 # Using nohup
-nohup python3 AFX-reinit.py --bg --config configs/reinit-config.json > nohup.out 2>&1 &
+nohup python3 AFX-reinit_v3.py --bg --config configs/reinit-config.json > nohup.out 2>&1 &
 
 # Manually launching inside screen
-screen -S afx-reinit python3 AFX-reinit.py --bg --config configs/reinit-config.json
+screen -S afx-reinit python3 AFX-reinit_v3.py --bg --config configs/reinit-config.json
 # Detach with Ctrl+A, D
 # Reattach with: screen -r afx-reinit
 ```
