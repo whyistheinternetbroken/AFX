@@ -7105,6 +7105,14 @@ def _run_4b_standalone(log, resuming: bool = False):
             if log:
                 log.log(f"4b: passwordless SSH requested: {_setup_passwordless_ssh}")
 
+            # License: collect key(s) or validate the license file path now,
+            # before the BMC reinit/install begins, so the operator can fix
+            # issues early. Direct mode 1/3 does this in main(); the 4b path
+            # dispatches before that block so we ask here instead.
+            _collect_license_config(_run_context)
+            if log and _license_mode:
+                log.log(f"4b: ONTAP license configured (mode={_license_mode})")
+
     # ── Static vs DHCP ifconfig in LOADER ─────────────────────────────────
     global _netboot_static_ip
     _sip_ans = _prompt(
