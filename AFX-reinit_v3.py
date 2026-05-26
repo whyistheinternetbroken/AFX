@@ -8229,6 +8229,8 @@ def _run_4b_standalone(log, resuming: bool = False):
                             _status(f"  ✅ [{ip}] Option 6 complete – login prompt seen after {_elapsed_str}.")
                             if log:
                                 log.log(f"[{ip}] option 6 complete; final login prompt seen in {_elapsed_str}")
+                            with connect_lock:
+                                _opt6_login_nodes.add(ip)
                         else:
                             _status(f"  ⚠️  [{ip}] Final login prompt not seen after {_elapsed_str}; node may still be booting.")
                             if log:
@@ -8237,6 +8239,8 @@ def _run_4b_standalone(log, resuming: bool = False):
                         _status(f"  ✅ [{ip}] Option 6 complete – node is at login prompt.")
                         if log:
                             log.log(f"[{ip}] option 6 complete; login prompt confirmed (no further reboot)")
+                        with connect_lock:
+                            _opt6_login_nodes.add(ip)
 
             if _nf6:
                 try:
