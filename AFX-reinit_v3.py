@@ -3354,7 +3354,6 @@ def _parse_sp_addresses(output):
     can later be promoted into the per-BMC config. Returns a list of
     SP/BMC IP strings (preserving discovery order).
     """
-    global _retained_sp_to_node
     headers = None
     dashes_seen = False
     addresses = []
@@ -6095,12 +6094,12 @@ def _collect_netboot_bmcs():
                 _all_node_entries.append(_pn)
             _all_node_entries.extend(n for n in (_data.get("secondary_nodes") or []) if isinstance(n, dict))
             _all_node_entries.extend(n for n in (_data.get("nodes") or []) if isinstance(n, dict))
-            _first_user = _first_pass = None
+            _first_user = None
             for _n in _all_node_entries:
                 _u = _n.get("bmc_user", "")
                 _p = _n.get("bmc_password", "")
                 if _first_user is None:
-                    _first_user, _first_pass = _u, _p
+                    _first_user = _u
                 _bmc_ip = str(_n.get("bmc", ""))
                 if _bmc_ip and _u:
                     _bmc_passwords[_bmc_ip] = _p
@@ -7115,9 +7114,6 @@ def _run_4b_standalone(log, resuming: bool = False):
     pkg_url = ""
     httpd = None
     first_ip = bmc_ips[0]
-    first_ch = None
-    first_cl = None
-    first_nf = None
 
     if not _skip_install:
         # ── Step 2: SSH to all BMCs in parallel, verify BMC prompt ────────────
@@ -7367,9 +7363,6 @@ def _run_4b_standalone(log, resuming: bool = False):
 
         # ── Step 6: Transition to reinit ──────────────────────────────────────
         first_ip = bmc_ips[0]
-        first_ch = loader_channels.get(first_ip)
-        first_cl = loader_clients.get(first_ip)
-        first_nf = _node_files.get(first_ip)
 
         if log:
             log.log(f"4b: netboot install complete on {len(bmc_ips)} node(s)")
@@ -7707,8 +7700,6 @@ def _run_4b_standalone(log, resuming: bool = False):
                 "starting autoboot", "press ctrl-c", "loader>",
                 "autoboot in", "selection (1-", "normal boot is prohibited",
             ]
-            # Primary node (per config) gets more time; peers are expected faster.
-            _primary_bmc_ip = _config_primary_node().get("bmc", "")
             # Each node waits up to 30 min after option 6 for the boot to complete.
             _boot_timeout = 1800
             _boot_timeout_min = _boot_timeout // 60
@@ -8967,7 +8958,7 @@ def _run_ontap_upgrade(log):
             # handles internally; if it returned False we need manual creds.
             print("  \u26a0\ufe0f  Cluster prompt not detected; prompting for cluster credentials...")
             try:
-                cl_user = input("  Cluster admin username [admin]: ").strip() or "admin"
+                input("  Cluster admin username [admin]: ").strip()
                 cl_pass = getpass.getpass(f"  Cluster admin password: ")
             except (EOFError, KeyboardInterrupt):
                 return False
@@ -9540,8 +9531,8 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
 
     # 1. Remove stale known_hosts entry.
     try:
-        _kh_result = subprocess.run(["ssh-keygen", "-R", mgmt_ip],
-                                    check=False, capture_output=True)
+        subprocess.run(["ssh-keygen", "-R", mgmt_ip],
+                       check=False, capture_output=True)
         print(f"  🗑️  Removed existing known_hosts entries for {mgmt_ip}.")
         _slog(f"Removed known_hosts entries for {mgmt_ip}")
     except FileNotFoundError:
@@ -10064,7 +10055,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     through the final `login:` line, then asks the operator whether to add
     another node.
     """
-    global _add_another_node_request, _2b_processed_bmcs
+    global _add_another_node_request
     print("\n🤖 Mode 2b: automated node-add in progress...")
     if _session_log:
         _session_log.start_phase("Auto Join (2b)")
@@ -10165,9 +10156,10 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
             return
         if "login:" in _matched.lower():
             break
-        # ONTAP asked "Add another node to the cluster? [Y/N]" –
-        # auto-respond using the answer pre-collected at function start.
-        _ontap_ans_str = "yes" if _auto_ontap_add else "no"
+        # ONTAP asked "Add another node to the cluster? [Y/N]" – always
+        # answer 'no' here. This function only drives one join; the outer
+        # loop below offers add-another via stdin after login: is reached.
+        _ontap_ans_str = "no"
         print(f"\n✅ ONTAP: 'Add another node to the cluster?' – auto-answering '{_ontap_ans_str}'")
         channel.send(_ontap_ans_str + "\r")
         if _session_log:
@@ -10444,7 +10436,6 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=600,
                 print(f"\n   ❌ {prefix}{msg}")
                 _slog(f"{prefix}{msg}", prefix="ERROR")
             return False
-        msg_count = max(count, 0)
         if _session_log:
             _session_log.log(
                 f"{prefix}cluster show retry: count={count}, "
@@ -11987,7 +11978,7 @@ def _make_session_log(label: str) -> "SessionLogger":
     Replaces the 5× near-identical boilerplate blocks that previously
     appeared inline in each mode section of ``main()``.
     """
-    global _session_log, _bg_mode
+    global _session_log
     _session_log = SessionLogger(bg_mode=_bg_mode)
 
     def _atexit_close():
@@ -12170,7 +12161,6 @@ def _run_2c_resume():
 
     Returns True on success, False on abort or hard failure.
     """
-    global _peer_bmc_creds, _node_mgmt_by_bmc, _cluster_config
     _make_session_log("Mode 2c: resume node additions")
     _print_banner("↩️   2c: Resume node additions")
 
@@ -12180,7 +12170,6 @@ def _run_2c_resume():
     except NameError:
         script_dir = os.getcwd()
     configs_dir = os.path.join(script_dir, "configs")
-    logs_dir    = os.path.join(script_dir, "logs")
     pointer_path = os.path.join(configs_dir, "last_node_add_manifest.json")
 
     manifest_candidates = []
@@ -12624,9 +12613,9 @@ def _run_2c_resume():
 # ---------------------------------------------------------------------------
 
 def main():
-    global _session_log, _operation_mode, _auto_setup, _auto_add, _config_data
+    global _operation_mode, _auto_setup, _auto_add, _config_data
     global _add_another_node_request, _bg_mode, _debug_console
-    global _primary_bmc_user, _primary_bmc_password, _cluster_config
+    global _primary_bmc_user, _primary_bmc_password
     global _checkpoint, _run_context
 
     args = parse_args()
@@ -13568,7 +13557,6 @@ def main():
     # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
     if _operation_mode == 45:
         import pathlib
-        import shutil
 
         _print_banner("\U0001f511 Setting up passwordless SSH to cluster management")
 
