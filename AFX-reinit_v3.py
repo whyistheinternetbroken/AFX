@@ -2411,12 +2411,12 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                 msg = str(e).lower()
             # ── BMC SSH banner not received ───────────────────────────
             # The BMC SSH daemon is slow to start (post-reboot, busy
-            # serving console, etc.). Wait 30s and retry, up to 2
-            # minutes total (4 retries), before falling through to the
+            # serving console, etc.). Wait 60s and retry, up to 5
+            # minutes total (5 retries), before falling through to the
             # normal failure path.
             if "banner" in msg:
-                _bnr_max = 4
-                _bnr_interval = 30  # seconds
+                _bnr_max = 5
+                _bnr_interval = 60  # seconds
                 print(
                     f"   ⚠️  [{label}] BMC SSH banner not received from "
                     f"{host} (BMC may still be starting up). Waiting "
@@ -6383,7 +6383,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
         client, username, password = _ssh_connect_with_retry(
             host, username, password, label=f"BMC/{host}",
             max_attempts=max(3, 1 + len(fallback_passwords or [])),
-            interactive=True, fallback_passwords=fallback_passwords,
+            interactive=False, fallback_passwords=fallback_passwords,
         )
     except Exception as exc:
         print(f"  ❌ [{host}] SSH failed: {exc}")
@@ -8449,6 +8449,10 @@ def _run_4b_standalone(log, resuming: bool = False):
             with _reconnect_lock:
                 _reconnect_errors.append(ip)
             _status(f"  ❌ [{ip}] Reconnect to LOADER failed.")
+            _status(
+                "     ℹ️  Re-run this script and accept the checkpoint "
+                "to continue."
+            )
             return
         # From LOADER send the configured boot commands (ends with boot_ontap menu).
         for cmd in get_loader_commands():
