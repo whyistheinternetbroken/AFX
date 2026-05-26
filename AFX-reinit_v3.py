@@ -578,6 +578,26 @@ def _prompt(prompt: str, default: str = "") -> str:
         return default
 
 
+def _print_banner(title: str, *, width: int = 60) -> None:
+    """Print a ``"=" * width`` divider, a ``"  <title>"`` line, then another
+    divider. Equivalent to the common 3-line banner block sprinkled across
+    the script.
+    """
+    bar = "=" * width
+    print("\n" + bar)
+    print(f"  {title}")
+    print(bar)
+
+
+def _open_shell(client, **kwargs):
+    """``client.invoke_shell(**kwargs)`` with ``settimeout(0)`` already
+    applied. Returns the channel.
+    """
+    ch = client.invoke_shell(**kwargs)
+    ch.settimeout(0)
+    return ch
+
+
 def load_config_file(path: str) -> dict:
     """Load and validate a JSON configuration file. Returns dict on success,
     raises ValueError with a friendly message on failure.
@@ -1523,9 +1543,7 @@ def select_operation_mode():
     """
     global _setup_passwordless_ssh, _netboot_before_reinit, _physical_zeroing
     while True:
-        print("\n" + "=" * 60)
-        print("  NetApp AFX BMC Console Automation 🤖")
-        print("=" * 60)
+        _print_banner("NetApp AFX BMC Console Automation 🤖")
         print("\n  What do you want to do?\n")
         print("  1.  Initial cluster creation")
         print("    1a. Format first node in cluster. Use interactive configuration.")
@@ -1550,9 +1568,7 @@ def select_operation_mode():
         choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4f, or 5): ").strip().lower()
 
         if choice == "1a":
-            print("\n" + "=" * 60)
-            print("  ⚠️  WARNING ⚠️")
-            print("=" * 60)
+            _print_banner("⚠️  WARNING ⚠️")
             print("")
             print("  You will be destroying the storage availability zone on")
             print("  this cluster, deleting all data and reinitializing the")
@@ -1586,9 +1602,7 @@ def select_operation_mode():
             continue
 
         if choice == "1b":
-            print("\n" + "=" * 60)
-            print("  ⚠️  WARNING ⚠️")
-            print("=" * 60)
+            _print_banner("⚠️  WARNING ⚠️")
             print("")
             print("  1b will FULLY AUTOMATE first-node initialization, format,")
             print("  and cluster setup. The script will auto-answer:")
@@ -1626,9 +1640,7 @@ def select_operation_mode():
             continue
 
         if choice == "2a":
-            print("\n" + "=" * 60)
-            print("  ⚠️  NOTICE ⚠️")
-            print("=" * 60)
+            _print_banner("⚠️  NOTICE ⚠️")
             print("")
             print("  " + "*" * 58)
             print("  * CAUTION: 2a FORMATS AND JOINS AN AFX NODE TO AN     *")
@@ -1651,9 +1663,7 @@ def select_operation_mode():
             continue
 
         if choice == "2b":
-            print("\n" + "=" * 60)
-            print("  ⚠️  NOTICE ⚠️")
-            print("=" * 60)
+            _print_banner("⚠️  NOTICE ⚠️")
             print("")
             print("  2b will FULLY AUTOMATE adding a node to an existing")
             print("  cluster. The script auto-answers zero/erase/yes prompts,")
@@ -1684,9 +1694,7 @@ def select_operation_mode():
             return 26, False, False
 
         if choice == "3":
-            print("\n" + "=" * 60)
-            print("  ⚠️  WARNING ⚠️")
-            print("=" * 60)
+            _print_banner("⚠️  WARNING ⚠️")
             print("")
             print("  Option 3: End-to-end auto initialize.")
             print("    1) Format + setup the FIRST node automatically (1b).")
@@ -1721,9 +1729,7 @@ def select_operation_mode():
         if choice in ("4", "4a", "4b", "4c", "4d", "4e", "4f"):
             if choice == "4":
                 # Show the sub-menu and re-prompt.
-                print("\n" + "=" * 60)
-                print("  \U0001f4e6 Install/Manage ONTAP")
-                print("=" * 60)
+                _print_banner("\U0001f4e6 Install/Manage ONTAP")
                 print("\n  4a. Upgrade ONTAP (rolling takeover/giveback)")
                 print("  4b. Netboot and install ONTAP")
                 print("  4c. Install license file only")
@@ -1737,9 +1743,7 @@ def select_operation_mode():
                     continue
 
             if choice == "4a":
-                print("\n" + "=" * 60)
-                print("  \U0001f4e6 4a: Upgrade ONTAP")
-                print("=" * 60)
+                _print_banner("\U0001f4e6 4a: Upgrade ONTAP")
                 print("")
                 print("  Performs a rolling upgrade via storage failover")
                 print("  takeover/giveback. Only upgrades are supported.")
@@ -1755,9 +1759,7 @@ def select_operation_mode():
 
             if choice == "4b":
                 # 4b: Netboot and install ONTAP
-                print("\n" + "=" * 60)
-                print("  \U0001f4e6 4b: Netboot and install ONTAP")
-                print("=" * 60)
+                _print_banner("\U0001f4e6 4b: Netboot and install ONTAP")
                 print("")
                 print("  You are about to netboot the nodes in this cluster.")
                 print("  This is intended for use with new or reinitializing")
@@ -1776,9 +1778,7 @@ def select_operation_mode():
                 continue
 
             if choice == "4c":
-                print("\n" + "=" * 60)
-                print("  \U0001f4dc 4c: Install license file only")
-                print("=" * 60)
+                _print_banner("\U0001f4dc 4c: Install license file only")
                 print("")
                 print("  Connects to the BMC, enters the system console, logs in")
                 print("  to the cluster shell, and applies a pre-staged license")
@@ -1793,9 +1793,7 @@ def select_operation_mode():
                 continue
 
             if choice == "4d":
-                print("\n" + "=" * 60)
-                print("  \U0001f511 4d: Set up passwordless SSH to cluster management")
-                print("=" * 60)
+                _print_banner("\U0001f511 4d: Set up passwordless SSH to cluster management")
                 print("")
                 print("  Generates an RSA-4096 key pair on this host (if needed),")
                 print("  then configures the cluster to accept public-key login")
@@ -1810,9 +1808,7 @@ def select_operation_mode():
                 continue
 
             if choice == "4e":
-                print("\n" + "=" * 60)
-                print("  \U0001f4be 4e: Create backup cluster configuration")
-                print("=" * 60)
+                _print_banner("\U0001f4be 4e: Create backup cluster configuration")
                 print("")
                 print("  Connects to the primary node BMC and reads the current")
                 print("  cluster configuration, then writes it to a local")
@@ -1826,9 +1822,7 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
             if choice == "4f":
-                print("\n" + "=" * 60)
-                print("  \U0001f50d 4f: Verify BMC authentication")
-                print("=" * 60)
+                _print_banner("\U0001f50d 4f: Verify BMC authentication")
                 print("")
                 print("  Loads BMC IP addresses from BMC_IP.json (or prompts),")
                 print("  attempts SSH login to each BMC, runs 'bmc status', and")
@@ -2470,8 +2464,7 @@ def reconnect_to_sp(host, username, password):
         print(f"❌ Could not reconnect: {e}")
         _slog(f"All reconnection attempts failed: {e}", prefix="ERROR")
         return None, None
-    channel = client.invoke_shell()
-    channel.settimeout(0)
+    channel = _open_shell(client)
     print("✅ Reconnected!")
     _slog("Reconnected successfully")
     with _client_lock:
@@ -3459,9 +3452,7 @@ def _parse_matching_gateway(output, clus_mgmt_ip=None):
 
 
 def _print_retain_summary(cluster_name, net_rows, peer_addresses=None):
-    print("\n" + "=" * 60)
-    print("  📝 Retained Configuration Summary")
-    print("=" * 60)
+    _print_banner("📝 Retained Configuration Summary")
     if cluster_name:
         print(f"\n  Cluster name: {cluster_name}")
     if net_rows:
@@ -3735,8 +3726,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
         # Persist the (possibly updated) credentials so downstream steps
         # in this run reuse the working values for this BMC.
         _peer_bmc_creds[host] = {"user": username, "password": password}
-        ch = client.invoke_shell()
-        ch.settimeout(0)
+        ch = _open_shell(client)
 
         # Reach BMC '>' prompt, taking over an existing session if needed.
         out, matched = direct_read_until_any(ch, ["y/n", ">"], timeout=15,
@@ -4122,9 +4112,7 @@ def _verify_boot_dna(channel):
         _slog(f"Boot DNA verified: {dna_value}")
         return True
 
-    print("\n" + "=" * 60)
-    print("  ❌ UNSUPPORTED BOOT DNA")
-    print("=" * 60)
+    _print_banner("❌ UNSUPPORTED BOOT DNA")
     if dna_value is None:
         print("  Could not determine the boot DNA from 'printenv bootarg.init.dna'.")
     else:
@@ -4660,9 +4648,7 @@ def collect_node_mgmt_per_bmc(primary_bmc, peer_bmcs):
 
     all_bmcs = [primary_bmc] + [b for b in peer_bmcs if b and b != primary_bmc]
 
-    print("\n" + "=" * 60)
-    print("  \U0001F310 Node Management Network Configuration")
-    print("=" * 60)
+    _print_banner("\U0001F310 Node Management Network Configuration")
     print("\n  Enter node-management network details for each BMC.")
     print("  These will be auto-answered during cluster setup (mode 1b).")
     print("  Press Enter to accept the [default] shown in brackets.")
@@ -4765,9 +4751,7 @@ def collect_cluster_config():
     """
     cc_cfg = _config_data.get("cluster") or {}
 
-    print("\n" + "=" * 60)
-    print("  \U0001F3DB\uFE0F  Cluster Setup Configuration")
-    print("=" * 60)
+    _print_banner("\U0001F3DB\uFE0F  Cluster Setup Configuration")
     print("\n  These values will be used to drive the cluster setup wizard")
     print("  after option 4 (mode 1b only). Press Enter to accept defaults.")
 
@@ -5184,9 +5168,7 @@ def _collect_license_config(ctx):
     ``_license_mode`` / ``_license_keys`` / ``_license_file_path`` globals
     so existing readers (e.g. ``_apply_license``) continue to work.
     """
-    print("\n" + "=" * 60)
-    print("  \U0001f4dc ONTAP License")
-    print("=" * 60)
+    _print_banner("\U0001f4dc ONTAP License")
     ans = _prompt(
         "\n  Add an ONTAP license (key or file) after cluster setup? [y/N]: "
     , "n").lower()
@@ -5322,9 +5304,7 @@ def _apply_license(channel):
 
     admin_password = _cluster_config.get("admin_password") or ""
 
-    print("\n" + "=" * 60)
-    print("  \U0001f4dc Applying ONTAP License")
-    print("=" * 60)
+    _print_banner("\U0001f4dc Applying ONTAP License")
     if _session_log:
         _session_log.start_phase("License Application")
         _session_log.log(f"License mode: {_license_mode}")
@@ -6280,8 +6260,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
         return None, None
 
     try:
-        ch = client.invoke_shell()
-        ch.settimeout(0)
+        ch = _open_shell(client)
 
         # Reach BMC '>' prompt.
         out, matched = direct_read_until_any(ch, ["y/n", ">"], timeout=15,
@@ -7169,8 +7148,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                     label=f"BMC/{ip}", max_attempts=len(_fallbacks) + 1,
                     interactive=False, fallback_passwords=_fallbacks,
                 )
-                ch = client.invoke_shell()
-                ch.settimeout(0)
+                ch = _open_shell(client)
                 # Wait for BMC prompt – output goes to node file only.
                 out, matched = _par_recv_until(ch, nf, ["y/n", ">"], timeout=15)
                 if matched and "y/n" in matched.lower():
@@ -7515,8 +7493,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                     _new_cl.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     _new_cl.connect(ip, username=bmc_user, password=_pw,
                                     timeout=20, allow_agent=False, look_for_keys=False)
-                    _new_ch = _new_cl.invoke_shell()
-                    _new_ch.settimeout(0)
+                    _new_ch = _open_shell(_new_cl)
                     # Drain the BMC banner, then enter system console.
                     time.sleep(1)
                     _nb = ""
@@ -8913,9 +8890,7 @@ def _run_ontap_upgrade(log):
     `log` is a SessionLogger instance (may be None in tests).
     Returns True on success, False on any fatal error.
     """
-    print("\n" + "=" * 60)
-    print("  \U0001f4e6 ONTAP Software Upgrade (4a)")
-    print("=" * 60)
+    _print_banner("\U0001f4e6 ONTAP Software Upgrade (4a)")
     print("\n  Note: only upgrades are supported (not downgrades).\n")
 
     # ── Step 1: locate upgrade package ─────────────────────────────────────
@@ -8971,8 +8946,7 @@ def _run_ontap_upgrade(log):
             if log:
                 log.log(f"BMC connection failed: {e}", prefix="ERROR")
             return False
-        channel_41 = client_41.invoke_shell()
-        channel_41.settimeout(0)
+        channel_41 = _open_shell(client_41)
         if log:
             log.end_phase()
 
@@ -9101,8 +9075,7 @@ def _run_ontap_upgrade(log):
                 from each prompt match without spinning the CPU when the
                 cluster is quiet.
                 """
-                ch = cl.invoke_shell(width=220, height=50)
-                ch.settimeout(0)
+                ch = _open_shell(cl, width=220, height=50)
                 buf = ""
                 deadline = time.monotonic() + 30
                 got_prompt = False
@@ -9562,9 +9535,7 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
     """
     import pathlib
 
-    print("\n" + "=" * 60)
-    print("  \U0001f511 Configuring passwordless SSH")
-    print("=" * 60)
+    _print_banner("\U0001f511 Configuring passwordless SSH")
     _slog(f"Setting up passwordless SSH for {ssh_user}@{mgmt_ip}")
 
     # 1. Remove stale known_hosts entry.
@@ -9971,9 +9942,7 @@ def _run_cluster_setup_wizard(channel):
 
     if ans != "y":
         mgmt_ip = cc.get("mgmt_ip") or "<cluster-management-ip>"
-        print("\n" + "=" * 60)
-        print("  ✅ Configuration complete.")
-        print("=" * 60)
+        _print_banner("✅ Configuration complete.")
         print(f"  To login to the cluster, SSH to {mgmt_ip} or use a web")
         print(f"  browser to access https://{mgmt_ip}")
         print("=" * 60)
@@ -9994,9 +9963,7 @@ def _run_cluster_setup_wizard(channel):
         print("\n✅ Mode 3: auto-selecting 2b (automatic node add).")
         _slog("Mode 3: auto-selected 2b for node add")
     else:
-        print("\n" + "=" * 60)
-        print("  ➕ Add Nodes")
-        print("=" * 60)
+        _print_banner("➕ Add Nodes")
         print("")
         print("  2a. Add nodes interactively  (manual prompts at each step)")
         print("  2b. Add nodes automatically  (auto-answer all prompts)")
@@ -10654,8 +10621,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             return False
         # Persist any updated credentials so subsequent steps reuse them.
         _peer_bmc_creds[peer_bmc] = {"user": peer_user, "password": peer_password}
-        ch = client.invoke_shell()
-        ch.settimeout(0)
+        ch = _open_shell(client)
 
         # BMC takeover – accept if another session is active.
         out, matched = direct_read_until_any(ch, ["y/n", ">"], timeout=15,
@@ -11238,8 +11204,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     mgmt_ip, _cm_user, _cm_pass,
                     label=f"cluster/{mgmt_ip}", max_attempts=1, interactive=False,
                 )
-                _pch = primary_client.invoke_shell()
-                _pch.settimeout(0)
+                _pch = _open_shell(primary_client)
                 if _login_primary_cluster_shell(_pch, _cm_pass):
                     primary_channel = _pch
                     _admin_user = _cm_user
@@ -11391,9 +11356,7 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
         prior_primary = prior.is_done("primary_setup_done")
         prior_joined = prior.nodes_done_for("peer_joined")
         prior_complete = prior.is_done("option3_complete")
-        print("\n" + "=" * 60)
-        print("  🔖 Prior option-3 checkpoint found")
-        print("=" * 60)
+        _print_banner("🔖 Prior option-3 checkpoint found")
         print(f"     Mode          : {prior.mode}")
         print(f"     BMC IPs       : {', '.join(prior.bmc_ips)}")
         if prior_primary:
@@ -11467,9 +11430,7 @@ def _option3_finalize(ctx, cluster_mgmt_ip):
         except Exception:
             pass
     mgmt_ip = cluster_mgmt_ip or "<cluster-management-ip>"
-    print("\n" + "=" * 60)
-    print("  ✅ End-to-end configuration complete.")
-    print("=" * 60)
+    _print_banner("✅ End-to-end configuration complete.")
     print(f"  To login to the cluster, SSH to {mgmt_ip} or use a web")
     print(f"  browser to access https://{mgmt_ip}")
     print("=" * 60)
@@ -11522,9 +11483,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
                     _session_log.log("checkpoint resume: all peers already joined")
                 return
 
-    print("\n" + "=" * 60)
-    print(f"  🚀 Mode 3: parallel auto-add for {len(peer_bmcs)} peer node(s)")
-    print("=" * 60)
+    _print_banner(f"🚀 Mode 3: parallel auto-add for {len(peer_bmcs)} peer node(s)")
     print(f"  Peers: {', '.join(peer_bmcs)}")
     # Track split timings: option-4 (parallel format/LOADER prep up to the
     # join barrier) vs. the sequential node-join wall time. The threads
@@ -12213,9 +12172,7 @@ def _run_2c_resume():
     """
     global _peer_bmc_creds, _node_mgmt_by_bmc, _cluster_config
     _make_session_log("Mode 2c: resume node additions")
-    print("\n" + "=" * 60)
-    print("  ↩️   2c: Resume node additions")
-    print("=" * 60)
+    _print_banner("↩️   2c: Resume node additions")
 
     # ── 1. Locate manifest ────────────────────────────────────────────────
     try:
@@ -12469,8 +12426,7 @@ def _run_2c_resume():
             )
             cluster_admin_user    = _cu
             cluster_admin_password = _cp
-            _pch = primary_client.invoke_shell()
-            _pch.settimeout(0)
+            _pch = _open_shell(primary_client)
             if _login_primary_cluster_shell(_pch, cluster_admin_password):
                 primary_channel = _pch
                 print("  ✅ Connected to cluster shell.")
@@ -12716,9 +12672,7 @@ def main():
 
     # Mode 4 (4b/4c): not yet implemented placeholders.
     if _operation_mode == 4:
-        print("\n" + "=" * 60)
-        print("  \U0001f4e6 This ONTAP install sub-option is not yet implemented.")
-        print("=" * 60)
+        _print_banner("\U0001f4e6 This ONTAP install sub-option is not yet implemented.")
         print("  Please check back in a future release.")
         sys.exit(0)
 
@@ -12838,8 +12792,7 @@ def main():
         # Connect to BMC.
         _session_log.start_phase("SSH Connection")
         client_44, sp_user, sp_pass = connect_to_sp(sp_host, sp_user, sp_pass)
-        channel_44 = client_44.invoke_shell()
-        channel_44.settimeout(0)
+        channel_44 = _open_shell(client_44)
         keepalive_thread_44 = threading.Thread(
             target=keepalive_loop, args=(client_44,), daemon=True
         )
@@ -12886,9 +12839,7 @@ def main():
 
     # ── Mode 46 (4e): create backup cluster configuration ──────────────────
     if _operation_mode == 46:
-        print("\n" + "=" * 60)
-        print("  \U0001f4be 4e: Create backup cluster configuration")
-        print("=" * 60)
+        _print_banner("\U0001f4be 4e: Create backup cluster configuration")
         print("")
         _make_session_log("Mode 4e: backup cluster configuration")
 
@@ -12973,8 +12924,7 @@ def main():
                 _cluster_config["admin_user"] = sp_user46
             if not _cluster_config.get("admin_password"):
                 _cluster_config["admin_password"] = sp_pass46
-            _ch46 = _client46.invoke_shell()
-            _ch46.settimeout(0)
+            _ch46 = _open_shell(_client46)
             _kt46 = threading.Thread(target=keepalive_loop, args=(_client46,), daemon=True)
             _kt46.start()
             _session_log.end_phase()
@@ -13171,8 +13121,7 @@ def main():
                 if not _cluster_config.get("admin_password"):
                     _cluster_config["admin_password"] = _b_ppw
 
-                _bch46 = _bclient46.invoke_shell()
-                _bch46.settimeout(0)
+                _bch46 = _open_shell(_bclient46)
                 _bkt46 = threading.Thread(target=keepalive_loop, args=(_bclient46,), daemon=True)
                 _bkt46.start()
                 _session_log.end_phase()
@@ -13420,9 +13369,7 @@ def main():
 
     # ── Mode 47 (4f): verify BMC authentication ────────────────────────────
     if _operation_mode == 47:
-        print("\n" + "=" * 60)
-        print("  \U0001f50d 4f: Verify BMC authentication")
-        print("=" * 60)
+        _print_banner("\U0001f50d 4f: Verify BMC authentication")
         print("")
 
         # ── Locate BMC IP list ────────────────────────────────────────────
@@ -13514,8 +13461,7 @@ def main():
                     timeout=20, banner_timeout=30, auth_timeout=20,
                     disabled_algorithms={"pubkeys": ["ssh-dss"]},
                 )
-                ch47 = client47.invoke_shell()
-                ch47.settimeout(0)
+                ch47 = _open_shell(client47)
 
                 # Wait for BMC prompt
                 _buf47 = ""
@@ -13624,9 +13570,7 @@ def main():
         import pathlib
         import shutil
 
-        print("\n" + "=" * 60)
-        print("  \U0001f511 Setting up passwordless SSH to cluster management")
-        print("=" * 60)
+        _print_banner("\U0001f511 Setting up passwordless SSH to cluster management")
 
         # Gather target details.
         mgmt_ip = input("\n  Cluster management IP address: ").strip()
@@ -13698,8 +13642,7 @@ def main():
 
         _session_log.start_phase("SSH Connection (BMC)")
         client_45, sp_user_45, sp_pass_45 = connect_to_sp(sp_host_45, sp_user_45, sp_pass_45)
-        ch_45 = client_45.invoke_shell()
-        ch_45.settimeout(0)
+        ch_45 = _open_shell(client_45)
         threading.Thread(target=keepalive_loop, args=(client_45,), daemon=True).start()
         _session_log.end_phase()
 
@@ -13951,9 +13894,7 @@ def main():
             _run_context.apply_to_globals()
 
     if not config_path and _operation_mode in (1, 3):
-        print("\n" + "=" * 60)
-        print("  💾 No config file in use — reuse existing cluster config?")
-        print("=" * 60)
+        _print_banner("💾 No config file in use — reuse existing cluster config?")
         print("\n  If this BMC's node is part of a running cluster, the script")
         print("  can pull the existing cluster name and management/network IPs")
         print("  from it and use them as the new configuration so you don't")
@@ -14074,8 +14015,7 @@ def main():
     # Phase: SSH Connection
     _session_log.start_phase("SSH Connection")
     client, sp_user, sp_pass = connect_to_sp(sp_host, sp_user, sp_pass)
-    channel = client.invoke_shell()
-    channel.settimeout(0)
+    channel = _open_shell(client)
 
     keepalive_thread = threading.Thread(
         target=keepalive_loop, args=(client,), daemon=True
@@ -14143,9 +14083,7 @@ def main():
                     f"creds={retain_creds}"
                 )
         else:
-            print("\n" + "=" * 60)
-            print("  💾 Retain Existing Cluster Configuration?")
-            print("=" * 60)
+            _print_banner("💾 Retain Existing Cluster Configuration?")
             ans1 = input("\n  Do you want to retain the cluster name? [Y/N]: ").strip().lower()
             _session_log.log_user_input(f"Retain cluster name? {ans1}")
             retain_name = (ans1 == "y")
@@ -14415,9 +14353,7 @@ def main():
             return val or (default or "")
 
         while True:
-            print("\n" + "=" * 60)
-            print("  📋 Cluster node summary")
-            print("=" * 60)
+            _print_banner("📋 Cluster node summary")
             print(f"  BMC of first node in the cluster : {sp_host} (user={sp_user})")
             if other_sps:
                 print(f"  Nodes to add after cluster init  ({len(other_sps)}):")
@@ -14503,9 +14439,7 @@ def main():
             collect_cluster_config()
 
         if other_sps:
-            print("\n" + "=" * 60)
-            print("  🔐 Peer BMC SSH Credentials")
-            print("=" * 60)
+            _print_banner("🔐 Peer BMC SSH Credentials")
             print("\n  Provide SSH credentials for each peer BMC. Press Enter")
             print(f"  to reuse the primary BMC username '{sp_user}' / password.")
             for addr in other_sps:
@@ -14582,9 +14516,7 @@ def main():
         # peers parked at LOADER before the primary runs option 9 / before
         # the mode 3 parallel auto-add kicks in).
         if other_sps:
-            print("\n" + "=" * 60)
-            print(f"  🔁 Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
-            print("=" * 60)
+            _print_banner(f"🔁 Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
             print(f"  Peer BMCs: {', '.join(other_sps)}")
             _session_log.start_phase("Peer Node Reset to LOADER")
             _session_log.log(f"Peer BMCs to reset: {other_sps}")
@@ -14648,9 +14580,7 @@ def main():
             cfg_cluster_2 = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
             _pre_mgmt_ip = cfg_cluster_2.get("clus_mgmt_address") or ""
             if not _pre_mgmt_ip:
-                print("\n" + "=" * 60)
-                print("  \U0001f4e1 Existing Cluster Details")
-                print("=" * 60)
+                _print_banner("\U0001f4e1 Existing Cluster Details")
                 try:
                     print("  " + "─" * 58)
                     _pre_mgmt_ip = input(
@@ -14676,9 +14606,7 @@ def main():
                 sp_pass  # BMC creds are always a fallback candidate
             )
             if not _has_creds:
-                print("\n" + "=" * 60)
-                print("  \U0001f510 Existing Cluster Admin Credentials")
-                print("=" * 60)
+                _print_banner("\U0001f510 Existing Cluster Admin Credentials")
                 print("\n  These are needed to look up the cluster-network IP")
                 print("  during the join wizard. Enter blank to use the BMC")
                 print("  credentials as a fallback.")
@@ -14852,9 +14780,7 @@ def main():
         _add_another_node_request = None
         _shutdown_event.clear()
 
-        print("\n" + "=" * 60)
-        print(f"  ▶️  Adding next node: {next_host}")
-        print("=" * 60)
+        _print_banner(f"▶️  Adding next node: {next_host}")
         _slog(f"Switching to next node: {next_host}")
 
         try:
@@ -14870,8 +14796,7 @@ def main():
 
         _session_log.start_phase(f"SSH Connection ({sp_host})")
         client, sp_user, sp_pass = connect_to_sp(sp_host, sp_user, sp_pass)
-        channel = client.invoke_shell()
-        channel.settimeout(0)
+        channel = _open_shell(client)
         threading.Thread(
             target=keepalive_loop, args=(client,), daemon=True
         ).start()
