@@ -2183,6 +2183,26 @@ def _check_bmc_reachable(host):
     return ok
 
 
+def _prompt_bmc_host(prompt_text="  BMC hostname/IP: ", allow_blank=False):
+    """Prompt for a BMC hostname/IP and re-prompt until it is reachable.
+
+    Calls :func:`_check_bmc_reachable` after each entry; on failure the user
+    is asked again. Blank input re-prompts unless ``allow_blank`` is True,
+    in which case an empty string is returned so the caller can treat blank
+    as a cancel sentinel.
+    """
+    while True:
+        host = input(prompt_text).strip()
+        if not host:
+            if allow_blank:
+                return ""
+            print("  ⚠️  A BMC hostname or IP address is required.")
+            continue
+        if _check_bmc_reachable(host):
+            return host
+        print("  ⚠️  Please enter a valid, reachable BMC hostname or IP address.\n")
+
+
 def configure_transport(client):
     transport = client.get_transport()
     if transport is None:
@@ -12893,8 +12913,13 @@ def main():
             if nl and isinstance(nl[0], dict):
                 primary_node_44 = nl[0]
 
-        sp_host = _cfg_str(primary_node_44.get("bmc")) or input("  BMC hostname/IP: ").strip()
-        _check_bmc_reachable(sp_host)
+        sp_host = _cfg_str(primary_node_44.get("bmc"))
+        if sp_host:
+            _check_bmc_reachable(sp_host)
+        else:
+            sp_host = _prompt_bmc_host(
+                "  Enter BMC hostname/IP or cluster management IP address: "
+            )
         sp_user = _cfg_str(primary_node_44.get("bmc_user")) or input("  BMC username: ").strip()
         if "bmc_password" in primary_node_44 and isinstance(primary_node_44["bmc_password"], str):
             sp_pass = primary_node_44["bmc_password"]
@@ -13003,11 +13028,14 @@ def main():
                      else ((_cfg46.get("nodes") or [None])[0]
                            if isinstance(_cfg46.get("nodes"), list) else None)) or {}
 
-            sp_host46 = _cfg_str(_pn46.get("bmc")) or input("  BMC hostname/IP: ").strip()
+            sp_host46 = _cfg_str(_pn46.get("bmc"))
+            if sp_host46:
+                _check_bmc_reachable(sp_host46)
+            else:
+                sp_host46 = _prompt_bmc_host(allow_blank=True)
             if not sp_host46:
                 print("  No BMC address entered. Exiting.")
                 sys.exit(0)
-            _check_bmc_reachable(sp_host46)
             sp_user46 = _cfg_str(_pn46.get("bmc_user")) or input("  BMC username [admin]: ").strip() or "admin"
             if "bmc_password" in _pn46 and isinstance(_pn46["bmc_password"], str):
                 sp_pass46 = _pn46["bmc_password"]
@@ -13125,9 +13153,7 @@ def main():
                 print("\n" + "─" * 60)
                 print("  Primary node BMC")
                 print("─" * 60)
-                _b_pbmc  = input("  BMC hostname/IP: ").strip()
-                if _b_pbmc:
-                    _check_bmc_reachable(_b_pbmc)
+                _b_pbmc = _prompt_bmc_host()
                 _b_puser = input("  BMC username [admin]: ").strip() or "admin"
                 _b_ppw   = getpass.getpass("  BMC password (blank = none): ")
                 _b_pport = input("  Node management port [e0M]: ").strip() or "e0M"
@@ -13196,12 +13222,12 @@ def main():
                 if _b_pbmc_default:
                     print(f"  \U0001f4c4 BMC from config: {_b_pbmc_default}")
                     _b_pbmc = _b_pbmc_default
+                    _check_bmc_reachable(_b_pbmc)
                 else:
-                    _b_pbmc = input("  BMC hostname/IP: ").strip()
+                    _b_pbmc = _prompt_bmc_host(allow_blank=True)
                 if not _b_pbmc:
                     print("  No BMC address entered. Exiting.")
                     sys.exit(0)
-                _check_bmc_reachable(_b_pbmc)
 
                 _b_puser_default = _cfg_str(_pn46a.get("bmc_user"))
                 if _b_puser_default:
@@ -13743,8 +13769,11 @@ def main():
             if nl_45 and isinstance(nl_45[0], dict):
                 primary_node_45 = nl_45[0]
 
-        sp_host_45 = _cfg_str(primary_node_45.get("bmc")) or input("  BMC hostname/IP: ").strip()
-        _check_bmc_reachable(sp_host_45)
+        sp_host_45 = _cfg_str(primary_node_45.get("bmc"))
+        if sp_host_45:
+            _check_bmc_reachable(sp_host_45)
+        else:
+            sp_host_45 = _prompt_bmc_host()
         sp_user_45 = _cfg_str(primary_node_45.get("bmc_user")) or input("  BMC username: ").strip()
         if "bmc_password" in primary_node_45 and isinstance(primary_node_45["bmc_password"], str):
             sp_pass_45 = primary_node_45["bmc_password"]
@@ -14108,8 +14137,11 @@ def main():
             return getpass.getpass(prompt_label)
         return input(prompt_label)
 
-    sp_host = _cfg_str(primary_node.get("bmc")) or input("Enter SP hostname/IP: ")
-    _check_bmc_reachable(sp_host)
+    sp_host = _cfg_str(primary_node.get("bmc"))
+    if sp_host:
+        _check_bmc_reachable(sp_host)
+    else:
+        sp_host = _prompt_bmc_host("Enter SP hostname/IP: ")
     sp_user = _cfg_str(primary_node.get("bmc_user")) or input("Enter SP username: ")
     sp_pass = _cfg_get_or_prompt("bmc_password", "Enter SP password: ", hidden=True)
     if primary_node.get("bmc"):
