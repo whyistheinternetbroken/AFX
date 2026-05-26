@@ -5280,7 +5280,7 @@ def _collect_license_config(ctx):
     ctx.refresh_from_globals()
     _print_banner("\U0001f4dc ONTAP License")
     ans = _prompt(
-        "\n  Add an ONTAP license (key or file) after cluster setup? [y/N]: "
+        "\n  Add an ONTAP license (key or file)? [y/N]: "
     , "n").lower()
     if ans not in ("y", "yes"):
         return
