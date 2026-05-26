@@ -8447,14 +8447,57 @@ def _run_4b_standalone(log, resuming: bool = False):
         # Use the pre-opened unified log; do not open or close it here.
         _rl_nf = _node_reinit_logs.get(ip)
         _fb = _bmc_fallback_passwords(ip, bmc_passwords)
-        cl, ch = _bmc_reach_loader(ip, bmc_user, bmc_passwords.get(ip, ""),
-                                    node_log=_rl_nf, fallback_passwords=_fb)
+
+        # _bmc_reach_loader can fail transiently (BMC busy with a stale
+        # console session, network blip, prompt detection race). Retry the
+        # whole reach-LOADER sequence a few times before giving up so a
+        # single transient failure does not abort the reinit.
+        _reach_max = 3
+        _reach_interval = 60  # seconds between attempts
+        cl = ch = None
+        for _attempt in range(1, _reach_max + 1):
+            if _shutdown_event.is_set():
+                break
+            if _attempt > 1:
+                _status(
+                    f"  \U0001f501 [{ip}] Retrying reach-LOADER "
+                    f"(attempt {_attempt}/{_reach_max}) after {_reach_interval}s..."
+                )
+                _waited = 0
+                while _waited < _reach_interval:
+                    if _shutdown_event.is_set():
+                        break
+                    time.sleep(1)
+                    _waited += 1
+                if _shutdown_event.is_set():
+                    break
+            cl, ch = _bmc_reach_loader(
+                ip, bmc_user, bmc_passwords.get(ip, ""),
+                node_log=_rl_nf, fallback_passwords=_fb,
+            )
+            if cl is not None and ch is not None:
+                break
+            if _attempt < _reach_max:
+                _status(
+                    f"  \u26a0\ufe0f  [{ip}] reach-LOADER attempt "
+                    f"{_attempt}/{_reach_max} failed; will retry."
+                )
+                if log:
+                    log.log(
+                        f"[{ip}] reach-LOADER attempt {_attempt}/{_reach_max} "
+                        "failed; retrying",
+                        prefix="WARN",
+                    )
+
         if cl is None or ch is None:
             with _reconnect_lock:
                 _reconnect_errors.append(ip)
-            _status(f"  ❌ [{ip}] Reconnect to LOADER failed.")
             _status(
-                "     ℹ️  Re-run this script and accept the checkpoint "
+                f"  \u274c [{ip}] Reconnect to LOADER failed after "
+                f"{_reach_max} attempts."
+            )
+            _status(
+                "     \u2139\ufe0f  Re-run this script and accept the checkpoint "
                 "to continue."
             )
             return
