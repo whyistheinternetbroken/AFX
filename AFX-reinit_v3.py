@@ -850,45 +850,57 @@ def _discover_and_prompt_config(ctx):
     return config_path
 
 
-def _node_cfg_for(bmc: str) -> dict:
+def _cd(ctx=None) -> dict:
+    """Resolve the active config-data dict.
+
+    Preference order: explicit ``ctx`` argument → module-level
+    ``_run_context`` → legacy ``_config_data`` global. Returns ``{}`` if all
+    three are absent. Keeps callers decoupled from the global as helpers
+    migrate toward ctx-style parameters.
+    """
+    if ctx is not None:
+        return ctx.config_data or {}
+    if _run_context is not None:
+        return _run_context.config_data or {}
+    return _config_data or {}
+
+
+def _node_cfg_for(bmc: str, ctx=None) -> dict:
     """Return the node entry from the config that matches `bmc`, or {}.
     Searches primary_node, secondary_nodes, and legacy nodes[].
     """
-    # New format: primary_node
-    pn = _config_data.get("primary_node")
+    cd = _cd(ctx)
+    pn = cd.get("primary_node")
     if isinstance(pn, dict) and pn.get("bmc") == bmc:
         return pn
-    # New format: secondary_nodes
-    for node in (_config_data.get("secondary_nodes") or []):
+    for node in (cd.get("secondary_nodes") or []):
         if isinstance(node, dict) and node.get("bmc") == bmc:
             return node
-    # Legacy format: nodes[]
-    for node in (_config_data.get("nodes") or []):
+    for node in (cd.get("nodes") or []):
         if isinstance(node, dict) and node.get("bmc") == bmc:
             return node
     return {}
 
 
-def _config_primary_node() -> dict:
+def _config_primary_node(ctx=None) -> dict:
     """Return the primary node dict from config (new or legacy format), or {}."""
-    pn = _config_data.get("primary_node")
+    cd = _cd(ctx)
+    pn = cd.get("primary_node")
     if isinstance(pn, dict) and pn.get("bmc"):
         return pn
-    # Legacy: first entry in nodes[]
-    nodes = _config_data.get("nodes") or []
+    nodes = cd.get("nodes") or []
     if nodes and isinstance(nodes[0], dict):
         return nodes[0]
     return {}
 
 
-def _config_secondary_nodes() -> list:
+def _config_secondary_nodes(ctx=None) -> list:
     """Return the list of secondary (peer) node dicts from config, or []."""
-    # New format
-    sn = _config_data.get("secondary_nodes")
+    cd = _cd(ctx)
+    sn = cd.get("secondary_nodes")
     if isinstance(sn, list):
         return [n for n in sn if isinstance(n, dict)]
-    # Legacy: nodes[1:]
-    nodes = _config_data.get("nodes") or []
+    nodes = cd.get("nodes") or []
     return [n for n in nodes[1:] if isinstance(n, dict)]
 
 # ---------------------------------------------------------------------------
