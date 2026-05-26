@@ -598,6 +598,28 @@ def _open_shell(client, **kwargs):
     return ch
 
 
+def _reach_bmc_prompt(ch, *, timeout=15, node_log=None, takeover_msg=None):
+    """Read until the BMC ``'>'`` prompt, transparently answering ``y`` to a
+    ``y/n`` takeover prompt if another session is active.
+
+    Returns ``True`` if the ``'>'`` prompt was reached (immediately or after
+    takeover), ``False`` if no prompt was observed within *timeout*. When a
+    takeover happens and *takeover_msg* is non-empty, it is forwarded to
+    ``_slog`` so the operator sees a single consistent log line.
+    """
+    _out, matched = direct_read_until_any(
+        ch, ["y/n", ">"], timeout=timeout, node_log=node_log,
+    )
+    if matched and "y/n" in matched.lower():
+        if takeover_msg:
+            _slog(takeover_msg)
+        ch.send("y\r")
+        time.sleep(2)
+        direct_read_until(ch, ">", timeout=timeout, node_log=node_log)
+        return True
+    return bool(matched and ">" in matched)
+
+
 def load_config_file(path: str) -> dict:
     """Load and validate a JSON configuration file. Returns dict on success,
     raises ValueError with a friendly message on failure.
@@ -1938,8 +1960,8 @@ def install_required_modules():
                 importlib.import_module(module_name)
                 continue
             except ImportError:
-                print(f"⚠️  System package installed but module still not importable. "
-                      f"Falling back to pip.")
+                print("⚠️  System package installed but module still not importable. "
+                      "Falling back to pip.")
         answer = input(
             f"⚠️  Python module '{module_name}' is not installed.\n"
             f"   Install it now via pip? [Y/N]: "
@@ -2898,9 +2920,9 @@ def _relaunch_in_screen():
         print(f"❌  screen exited with code {exc.returncode}.")
         sys.exit(exc.returncode)
 
-    print(f"\n✅  Script is running in the background.")
+    print("\n✅  Script is running in the background.")
     print(f"    Reattach with : screen -r {session_name}")
-    print(f"    List sessions : screen -ls")
+    print("    List sessions : screen -ls")
     return True
 
 
@@ -3728,14 +3750,10 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
         ch = _open_shell(client)
 
         # Reach BMC '>' prompt, taking over an existing session if needed.
-        out, matched = direct_read_until_any(ch, ["y/n", ">"], timeout=15,
-                                              node_log=node_log)
-        if matched and "y/n" in matched.lower():
-            _slog(f"[{host}] taking over existing BMC session")
-            ch.send("y\r")
-            time.sleep(2)
-            direct_read_until(ch, ">", timeout=15, node_log=node_log)
-        elif not matched:
+        if not _reach_bmc_prompt(
+            ch, node_log=node_log,
+            takeover_msg=f"[{host}] taking over existing BMC session",
+        ):
             _tprint(f"   ⚠️  [{host}] No BMC prompt; aborting peer reset.")
             _slog(f"[{host}] no BMC prompt; aborting", prefix="WARN")
             return False
@@ -4935,7 +4953,7 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None):
 
     while pending:
         if time.monotonic() - _overall_start > _overall_timeout:
-            print(f"\n  ⚠️  Timed out waiting for node management prompts.")
+            print("\n  ⚠️  Timed out waiting for node management prompts.")
             _slog("Timed out in _auto_answer_node_mgmt", prefix="WARN")
             break
 
@@ -5283,7 +5301,7 @@ def _collect_license_config(ctx):
         else:
             # No .txt / .nlf files in the ONTAP folder.
             print(
-                f"\n  \u274c No valid license file found."
+                "\n  \u274c No valid license file found."
             )
             _prompt_custom_path()
 
@@ -6029,7 +6047,7 @@ def _collect_netboot_bmcs():
             print("\n  Found existing BMC config file(s):")
             for _i, (_fpath, _data, _ips) in enumerate(_candidates, 1):
                 print(f"    {_i}. {_fpath}  ({len(_ips)} node(s): {', '.join(_ips)})")
-            print(f"    0. Enter BMC addresses manually")
+            print("    0. Enter BMC addresses manually")
             print("")
             while True:
                 try:
@@ -6082,7 +6100,7 @@ def _collect_netboot_bmcs():
                                if isinstance(n, dict) and n.get("bmc")]
                 if _legacy_all:
                     _bmc_ips = [_legacy_all[0]]
-                    print(f"\n  ℹ️  Mode 1: using primary node only from config.")
+                    print("\n  ℹ️  Mode 1: using primary node only from config.")
 
             # Try to pull credentials from the file.
             _bmc_user = None
@@ -6262,13 +6280,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
         ch = _open_shell(client)
 
         # Reach BMC '>' prompt.
-        out, matched = direct_read_until_any(ch, ["y/n", ">"], timeout=15,
-                                             node_log=node_log)
-        if matched and "y/n" in matched.lower():
-            ch.send("y\r")
-            time.sleep(2)
-            direct_read_until(ch, ">", timeout=15, node_log=node_log)
-        elif not matched:
+        if not _reach_bmc_prompt(ch, node_log=node_log):
             print(f"  ❌ [{host}] No BMC prompt received.")
             ch.close()
             client.close()
@@ -6933,7 +6945,7 @@ def _run_4b_standalone(log, resuming: bool = False):
         log.end_phase()
 
     # ── Step 1c: Reinit questions (ask now, before operations begin) ───────
-    print(f"\n  ✅ Package selected. Now collecting all setup information upfront.")
+    print("\n  ✅ Package selected. Now collecting all setup information upfront.")
     reinit_ans = input(
         "\n  Would you like to reinit the cluster after the ONTAP installation? [y/N]: "
     ).strip().lower()
@@ -7335,7 +7347,7 @@ def _run_4b_standalone(log, resuming: bool = False):
 
         # All install threads are now running in parallel.  Print a single
         # status block so the operator knows where to follow progress.
-        _real_stdout.write(f"\n  ⏳ Nodes installing — check logs for details:\n")
+        _real_stdout.write("\n  ⏳ Nodes installing — check logs for details:\n")
         for _ip in bmc_ips:
             _nf = _node_files.get(_ip)
             _log_path = _nf.name if _nf else "(no log file)"
@@ -8920,7 +8932,7 @@ def _run_ontap_upgrade(log):
         if not bmc_host:
             print("  No BMC specified. Exiting.")
             return False
-        bmc_user = input(f"  BMC username [admin]: ").strip() or "admin"
+        bmc_user = input("  BMC username [admin]: ").strip() or "admin"
         bmc_pass = getpass.getpass(f"  BMC password for {bmc_user}@{bmc_host}: ")
 
         # ── Step 3: SSH to BMC ──────────────────────────────────────────────
@@ -8959,7 +8971,7 @@ def _run_ontap_upgrade(log):
             print("  \u26a0\ufe0f  Cluster prompt not detected; prompting for cluster credentials...")
             try:
                 input("  Cluster admin username [admin]: ").strip()
-                cl_pass = getpass.getpass(f"  Cluster admin password: ")
+                cl_pass = getpass.getpass("  Cluster admin password: ")
             except (EOFError, KeyboardInterrupt):
                 return False
             if not _login_primary_cluster_shell(channel_41, cl_pass):
@@ -9037,7 +9049,7 @@ def _run_ontap_upgrade(log):
         if log:
             log.log(f"Image update mode: {'parallel via {_cl_mgmt_ip}' if _parallel_update else 'sequential via console'}")
 
-        print(f"\n  \U0001f4e4 Installing upgrade package to all nodes...")
+        print("\n  \U0001f4e4 Installing upgrade package to all nodes...")
 
         # Build flat list of (nodename, replace_img) tasks in group order.
         _update_tasks = []
@@ -9100,7 +9112,7 @@ def _run_ontap_upgrade(log):
                 return buf
 
             # ── Parallel validation ────────────────────────────────────────
-            print(f"\n  \U0001f504 Running validation on all nodes in parallel...")
+            print("\n  \U0001f504 Running validation on all nodes in parallel...")
             if log:
                 log.log(f"Starting parallel validation on: {[t[0] for t in _update_tasks]}")
             _val_results = {}
@@ -9239,7 +9251,7 @@ def _run_ontap_upgrade(log):
                 for e in install_errors:
                     print(e)
                 return False
-            print(f"\n  \u2705 All parallel installs complete.")
+            print("\n  \u2705 All parallel installs complete.")
             if log:
                 log.log("All parallel image installs complete")
 
@@ -9264,7 +9276,7 @@ def _run_ontap_upgrade(log):
                     print(f"\n  \u274c Validation failed for {nodename}:\n{out_val}")
                     if log:
                         log.log(f"Validation failed for {nodename}: {out_val[-500:]}", prefix="ERROR")
-                    ans = _prompt(f"\n  Validation failed; continue with upgrade? [y/N]: ", "n").lower()
+                    ans = _prompt("\n  Validation failed; continue with upgrade? [y/N]: ", "n").lower()
                     if log:
                         log.log(f"User chose to {'continue' if ans == 'y' else 'stop'} after validation failure")
                     if ans != "y":
@@ -9274,7 +9286,7 @@ def _run_ontap_upgrade(log):
                     print(f"  \u2705 Validation passed for {nodename}.")
                     if log:
                         log.log(f"Validation passed for {nodename}")
-                    ans = _prompt(f"\n  Validation succeeded; continue with upgrade? [Y/n]: ", "n").lower()
+                    ans = _prompt("\n  Validation succeeded; continue with upgrade? [Y/n]: ", "n").lower()
                     if log:
                         log.log(f"User chose to {'continue' if ans != 'n' else 'stop'} after validation success")
                     if ans == "n":
@@ -9377,7 +9389,7 @@ def _run_ontap_upgrade(log):
             paired.add(node)
             paired.add(partner)
 
-        print(f"\n  Rolling upgrade order:")
+        print("\n  Rolling upgrade order:")
         print(f"    Phase 1 (partner group): {partner_group}")
         print(f"    Phase 2 (main group)   : {main_group}")
         if log:
@@ -9460,7 +9472,7 @@ def _run_ontap_upgrade(log):
                          if l.strip() and "::" not in l
                          and not l.strip().lower().startswith("system image")]
         print(f"\n  Running version  : {running_ver or '(parse failed)'}")
-        print(f"  Image show output:\n    " + "\n    ".join(img_ver_lines[-10:]))
+        print("  Image show output:\n    " + "\n    ".join(img_ver_lines[-10:]))
 
         if running_ver:
             # Check that every non-blank version token in image show contains
@@ -9760,8 +9772,8 @@ def _run_cluster_setup_wizard(channel):
     # outside the management interface's subnet.
     _gw_to_send = cc.get("mgmt_gateway") or ""
     while True:
-        print(f"\n⏳ Waiting for: Cluster mgmt gateway...")
-        _slog(f"Waiting for: cluster management interface default gateway")
+        print("\n⏳ Waiting for: Cluster mgmt gateway...")
+        _slog("Waiting for: cluster management interface default gateway")
         direct_send_and_wait(
             channel, "", "cluster management interface default gateway",
             timeout=600, check_bmc_drop=True,
@@ -10615,12 +10627,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         ch = _open_shell(client)
 
         # BMC takeover – accept if another session is active.
-        out, matched = direct_read_until_any(ch, ["y/n", ">"], timeout=15,
-                                             node_log=node_file)
-        if matched and "y/n" in matched.lower():
-            ch.send("y\r"); time.sleep(2)
-            direct_read_until(ch, ">", timeout=15, node_log=node_file)
-        elif not matched:
+        if not _reach_bmc_prompt(ch, node_log=node_file):
             print(f"   ⚠️  [{label}] no BMC prompt; aborting.")
             return False
 
@@ -11022,7 +11029,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             _primary_p = (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password") or ""
             if _primary_p:
                 _shared_pw = _primary_p
-                print(f"  ✅ Using primary node BMC password for all nodes.")
+                print("  ✅ Using primary node BMC password for all nodes.")
             else:
                 try:
                     _shared_pw = getpass.getpass("  BMC password for all nodes: ")
@@ -14280,7 +14287,7 @@ def main():
                 for _pbi, (_pb_fpath, _, _pb_peers) in enumerate(_pb_candidates, 1):
                     print(f"    {_pbi}. {_pb_fpath}  "
                           f"({len(_pb_peers)} peer(s): {', '.join(_pb_peers)})")
-                print(f"    0. Enter peer BMC addresses manually")
+                print("    0. Enter peer BMC addresses manually")
                 print("")
                 while True:
                     _pb_sel = _prompt("  Load peers from a file? [1] or 0 for manual: ", "0")
@@ -14600,10 +14607,10 @@ def main():
                 print("  credentials as a fallback.")
                 try:
                     _pre_cl_user = input(
-                        f"\n  Cluster admin username [admin]: "
+                        "\n  Cluster admin username [admin]: "
                     ).strip() or "admin"
                     _pre_cl_pass = getpass.getpass(
-                        f"  Cluster admin password (blank = use BMC password): "
+                        "  Cluster admin password (blank = use BMC password): "
                     )
                 except (EOFError, KeyboardInterrupt):
                     _pre_cl_user = "admin"
