@@ -8242,6 +8242,12 @@ def _run_4b_standalone(log, resuming: bool = False):
                             log.log(f"[{ip}] VLDB online timeout seen during option 6 boot wait", prefix="WARN")
                         if _vldb_prompt():
                             _status(f"  ✅ [{ip}] Proceeding to reinitialization.")
+                            # Image is installed at this point — record
+                            # install_done so --resume can skip Steps 2–6a
+                            # and jump straight to the reinit reconnect.
+                            with connect_lock:
+                                _opt6_login_nodes.add(ip)
+                            _mark_install_done(ip)
                             if _nf6:
                                 with suppress(Exception):
                                     _nf6.close()
@@ -8258,6 +8264,11 @@ def _run_4b_standalone(log, resuming: bool = False):
                         _status(f"  ⚠️  [{ip}] NVRAM sysid mismatch detected – proceeding directly to reinitialization.")
                         if log:
                             log.log(f"[{ip}] NVRAM changed / sysid mismatch seen; skipping boot wait", prefix="WARN")
+                        # Image is installed at this point — record install_done
+                        # so a failed reinit reconnect does not force a re-install.
+                        with connect_lock:
+                            _opt6_login_nodes.add(ip)
+                        _mark_install_done(ip)
                         if _nf6:
                             with suppress(Exception):
                                 _nf6.close()
@@ -8459,6 +8470,12 @@ def _run_4b_standalone(log, resuming: bool = False):
                 _status(f"  ⚠️  [{ip}] VLDB online timeout detected.")
                 if _vldb_prompt():
                     _status(f"  ✅ [{ip}] Proceeding to reinitialization.")
+                    # Image is installed at this point — mark install_done
+                    # so a failed reconnect does not force a re-install on
+                    # resume.
+                    with connect_lock:
+                        _opt6_login_nodes.add(ip)
+                    _mark_install_done(ip)
                     if _nf6:
                         with suppress(Exception):
                             _nf6.close()
@@ -8509,6 +8526,12 @@ def _run_4b_standalone(log, resuming: bool = False):
                             _status(f"  \u26a0\ufe0f  [{ip}] VLDB online timeout detected (post-login wait).")
                             if _vldb_prompt():
                                 _status(f"  \u2705 [{ip}] Proceeding to reinitialization.")
+                                # Image is installed at this point — mark
+                                # install_done so resume skips install on
+                                # restart even if the reconnect later fails.
+                                with connect_lock:
+                                    _opt6_login_nodes.add(ip)
+                                _mark_install_done(ip)
                                 _varfs_seen = False  # skip further waits
                             else:
                                 _status(f"  \u274c [{ip}] Operator chose not to proceed. Exiting.")
