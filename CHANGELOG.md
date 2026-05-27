@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `reinit_afx_v2.py` are documented in this file.
+All notable changes to `AFX_reinit.py` are documented in this file.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project versioning follows the script's internal `v1`/`v2`/`v2a`/...
@@ -9,6 +9,38 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Script renamed `AFX-reinit_v3.py` → `AFX_reinit.py`.** All documentation,
+  embedded help (`--help` man page), and examples updated to the new name.
+  Use `git log --follow AFX_reinit.py` to trace history across the rename.
+- **Checkpoint & resume for mode 4b.** A new `CheckpointManager`
+  persists run progress to `afx_checkpoint.json` (alongside the script,
+  72 h TTL) so an interrupted 4b run — Ctrl+C, network blip, BMC banner
+  stall — can be resumed without re-running destructive steps.
+  Phases tracked: `install_done` (per node), `reinit_loader` (per node),
+  `cluster_formed`, `primary_setup_done`, `peer_joined` (per peer, mode 3),
+  `option3_complete`. The file is deleted automatically on successful
+  completion.
+- `--resume` CLI flag. Loads `afx_checkpoint.json`, displays the summary,
+  and resumes mode 4b from the first unfinished phase. When every BMC IP
+  is marked `install_done` the run skips Steps 2–6a (SSH / reset /
+  netboot / install / option-6 boot menu) and jumps straight to Step 6b
+  (reconnect to LOADER + `boot_ontap menu`). Peers already in
+  `peer_joined` are skipped during the parallel mode-3 auto-add loop.
+  When `primary_setup_done` / `option3_complete` is set from a prior
+  run, the resume prompt warns that re-running will destroy the existing
+  cluster and asks for explicit confirmation.
+- `--checkpoint-status` CLI flag. Prints a human-readable summary of the
+  saved checkpoint — absolute file path, run mode, created/updated
+  timestamps, age, log directory, config path, BMC IPs, completed
+  global phases, and completed per-node phases keyed by BMC IP — then
+  exits. Does not modify the checkpoint file.
+- `_collect_license_config(ctx)` now runs from mode 4b for auto-setup
+  flows (mode 1b / 3), not just from direct mode 1/3 entry points.
+- `_prompt_bmc_host(prompt_text, allow_blank=False)` helper — single
+  source of truth for BMC hostname/IP prompts. Retries on
+  `_check_bmc_reachable` failure instead of immediately aborting.
+  Reused by all six BMC-prompt entry points (4b, 4c, 4d, 4e, 4f, and
+  the standalone reinit path).
 - **Per-node join timing breakdown (mode 3).** The session summary now
   splits the old `Parallel Peer Auto-Add (mode 3)` phase into two phases —
   `Parallel Peer Option 4 (mode 3)` (parallel LOADER/format/option-4 work
@@ -72,6 +104,32 @@ revision labels rather than strict [SemVer](https://semver.org/).
     surface and is portable to non-`/bin/sh` environments.
 
 ### Fixed
+- **Mode 4b `install_done` checkpoint missed on real completion paths.**
+  `_opt6_login_nodes.add(ip)` (which drives the `install_done` checkpoint
+  write) only ran on the "already at login" skip branch. The two real
+  option-6 completion branches (reboot-then-login and direct-to-login)
+  did not record progress, so `--resume` always re-ran Steps 2–6a.
+  All three completion branches now record the marker under
+  `connect_lock`.
+- **Mode 4b Step 6b reconnect-to-LOADER fragile.** `_reconnect_worker`
+  now wraps `_bmc_reach_loader` in a 3-attempt × 60 s backoff retry
+  loop honoring `_shutdown_event`. Failure now reports
+  "Reconnect to LOADER failed after 3 attempts." instead of bailing on
+  the first banner timeout.
+- **BMC banner retry too aggressive.** `_bmc_reach_loader` banner retry
+  extended from 2 × 60 s to 5 × 60 s (matches real-cluster recovery
+  windows) and stops re-prompting for credentials mid-reconnect by
+  calling `_ssh_connect_with_retry(..., interactive=False)`.
+- **Mode 4b dropped into `InteractiveSession` instead of running auto
+  setup.** Root cause: `apply_to_globals()` was clobbering recent
+  global writes made by legacy in-flow code. Helpers
+  `_discover_and_prompt_config`, `_collect_license_config`, and
+  `_option3_init_checkpoint` now call `ctx.refresh_from_globals()` on
+  entry so the ctx mirror matches the current globals before any
+  writes happen.
+- **BMC reachability prompts aborted on a single failure.** All six
+  BMC-prompt entry points now route through `_prompt_bmc_host`, which
+  re-prompts until the host responds or the user cancels.
 - **Mode 3 node-add status messages.** During parallel peer auto-add
   (option 3), the `Waiting for cluster creation` / `Still waiting for
   cluster creation...` messages incorrectly fired because

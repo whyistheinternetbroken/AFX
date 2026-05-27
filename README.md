@@ -1,6 +1,6 @@
 # AFX Cluster Reinit Script
 
-**Latest version:** `AFX-reinit_v3.py`  
+**Latest version:** `AFX_reinit.py`  
 **Updated:** 5/22/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
@@ -14,7 +14,7 @@
 
 Reinitalizing an ONTAP AFX cluster involves many sequential and parallel steps — including wait times between operations — that benefit greatly from automation to reduce human error and minimize hands-on time.
 
-`AFX-reinit_v3.py` is an automated console management script that assists NetApp field engineers and storage administrators with reinitializing NetApp AFX cluster nodes via the BMC (Baseboard Management Controller) / Service Processor (SP) console. It is the second-generation rewrite of the original v1 script, which is preserved under `Archive/AFX-reinit.py`.
+`AFX_reinit.py` is an automated console management script that assists NetApp field engineers and storage administrators with reinitializing NetApp AFX cluster nodes via the BMC (Baseboard Management Controller) / Service Processor (SP) console. It is the second-generation rewrite of the original v1 script, which is preserved under `Archive/AFX-reinit.py`.
 
 The script automates the following core tasks:
 
@@ -202,7 +202,7 @@ The following filenames are recognized: `reinit-config.json`, `reinit_config.jso
 You can also specify the path explicitly:
 
 ```bash
-python3 AFX-reinit_v3.py --config /path/to/myconfig.json
+python3 AFX_reinit.py --config /path/to/myconfig.json
 ```
 
 ### Config File Schema
@@ -256,7 +256,7 @@ python3 AFX-reinit_v3.py --config /path/to/myconfig.json
 Print a ready-to-edit example config at any time:
 
 ```bash
-python3 AFX-reinit_v3.py --config-example
+python3 AFX_reinit.py --config-example
 ```
 
 The `primary_node` is the node used to initialize the cluster (options 1a/1b/3). `secondary_nodes` are nodes added to the cluster (options 2a/2b and the node-add phase of option 3). The primary node must not be included in `secondary_nodes`.
@@ -286,6 +286,77 @@ The script presents a menu at startup. Enter the number corresponding to the des
 
 ---
 
+## Checkpoint & Resume (mode 4b)
+
+Mode **4b** (and the end-to-end variant **4b + reinit mode 3**) persist
+progress to a checkpoint file so an interrupted run — Ctrl+C, network
+blip, BMC banner stall, power loss on the jump host — can be resumed
+without re-running destructive steps.
+
+### Where the checkpoint lives
+
+A single JSON file named **`afx_checkpoint.json`** is written to the same
+directory as the script (next to `AFX_reinit.py`). Checkpoints older than
+**72 hours** are ignored on load.
+
+### How to inspect it
+
+Use the dedicated CLI flag — no need to open the JSON by hand:
+
+```bash
+python3 AFX_reinit.py --checkpoint-status
+```
+
+This prints the absolute checkpoint path, the run mode (e.g. `4b-3`),
+created/updated timestamps, age in minutes, log directory, config path,
+BMC IPs, every completed global phase, and every per-node phase keyed by
+BMC IP — then exits without modifying the file.
+
+The same summary is also printed automatically at startup whenever a
+valid checkpoint is found, immediately before the resume / discard
+prompt.
+
+### How to resume
+
+```bash
+python3 AFX_reinit.py --resume
+```
+
+On startup the script loads `afx_checkpoint.json`, shows the summary,
+and resumes mode 4b from the first unfinished phase. Completed work is
+skipped:
+
+- All BMC IPs marked `install_done` → Steps 2–6a (SSH / reset / netboot /
+  install / boot menu option 6) are skipped; the run jumps straight to
+  Step 6b (reconnect to LOADER and boot ONTAP).
+- Peers marked `peer_joined` (mode 3 only) are skipped during the
+  parallel peer auto-add phase.
+- `cluster_formed`, `primary_setup_done`, and `option3_complete` gate
+  the cluster-setup wizard, license/SSH steps, and the finalize banner.
+
+If `option3_complete` or `primary_setup_done` is set from a prior run,
+the resume prompt warns that re-running will destroy the existing
+cluster and asks for explicit confirmation.
+
+### Phase glossary
+
+| Phase | Scope | Set when |
+|---|---|---|
+| `install_done` | per-node | Option 6 (Update flash from backup config) succeeds and the node reaches the post-install `login:` prompt. |
+| `reinit_loader` | per-node | Reconnect-to-LOADER succeeds and `boot_ontap menu` has been sent. |
+| `cluster_formed` | global | `cluster create` succeeds on the primary node and the prompt reaches `::>`. |
+| `primary_setup_done` | global | The primary cluster-setup wizard returns successfully. |
+| `peer_joined` | per-node | A peer completes the join wizard and the primary's `cluster show` confirms it. |
+| `option3_complete` | global | The end-to-end mode-3 finalize banner has been printed. The checkpoint file is then deleted. |
+
+### Clearing the checkpoint
+
+The script removes `afx_checkpoint.json` automatically on successful
+completion of mode 4b. To discard a stale checkpoint manually, delete
+the file or answer **no** at the resume prompt.
+
+---
+
 ## LOADER Commands Reference
 
 | Mode | LOADER Commands |
@@ -299,7 +370,7 @@ The script presents a menu at startup. Enter the number corresponding to the des
 ## Command-Line Reference
 
 ```
-python3 AFX-reinit_v3.py [OPTIONS]
+python3 AFX_reinit.py [OPTIONS]
 ```
 
 | Option | Short | Description |
@@ -309,6 +380,8 @@ python3 AFX-reinit_v3.py [OPTIONS]
 | `--debug` | `-d` | Enable debug mode: print all raw console I/O to the screen. Also enables verbose Paramiko SSH logging. |
 | `--bg` | | Background mode: handle SIGHUP so the log is closed cleanly when the terminal closes. Use with `nohup` or `screen`. |
 | `--screen` | | Re-launch the script inside a detached GNU screen session. Keeps the run alive if your SSH connection drops or times out. Implies `--bg`. Use `screen -r afx-reinit` to reattach. No-op if already running inside screen. |
+| `--resume` | | Mode 4b only. Resume the previous 4b run from its saved checkpoint (`afx_checkpoint.json`). Skips phases already completed so you do not have to restart from scratch after a failure or Ctrl+C. See **Checkpoint & Resume** below. |
+| `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, age, BMC IPs, completed global phases, completed per-node phases — then exit. Does not modify the checkpoint file. |
 | `--help` / `-h` | | Show a short man page about the script's options. |
 
 ---
@@ -317,12 +390,12 @@ python3 AFX-reinit_v3.py [OPTIONS]
 
 ### Step 1: Download and Place the Script
 
-Place `AFX-reinit_v3.py` on the client machine that has network access to all BMC/SP addresses and the cluster management IP.
+Place `AFX_reinit.py` on the client machine that has network access to all BMC/SP addresses and the cluster management IP.
 
 ```bash
 # Recommended: create a dedicated directory
 mkdir ~/afx-reinit
-cp AFX-reinit_v3.py ~/afx-reinit/
+cp AFX_reinit.py ~/afx-reinit/
 cd ~/afx-reinit
 ```
 
@@ -332,7 +405,7 @@ For automated or multi-node runs, create a `reinit-config.json` in the same dire
 
 ```bash
 # Print the example format
-python3 AFX-reinit_v3.py --config-example > configs/reinit-config.json
+python3 AFX_reinit.py --config-example > configs/reinit-config.json
 # Edit with your cluster and node details
 vi configs/reinit-config.json
 ```
@@ -341,20 +414,20 @@ vi configs/reinit-config.json
 
 ```bash
 # Standard interactive run
-python3 AFX-reinit_v3.py
+python3 AFX_reinit.py
 
 # With explicit config file
-python3 AFX-reinit_v3.py --config configs/reinit-config.json
+python3 AFX_reinit.py --config configs/reinit-config.json
 
 # With debug output
-python3 AFX-reinit_v3.py --debug
+python3 AFX_reinit.py --debug
 
 # Auto-launch in screen (recommended for remote/SSH sessions)
-python3 AFX-reinit_v3.py --screen --config configs/reinit-config.json
+python3 AFX_reinit.py --screen --config configs/reinit-config.json
 # Reattach later with: screen -r afx-reinit
 
 # In background via nohup (alternative to --screen)
-nohup python3 AFX-reinit_v3.py --bg --config configs/reinit-config.json > nohup.out 2>&1 &
+nohup python3 AFX_reinit.py --bg --config configs/reinit-config.json > nohup.out 2>&1 &
 ```
 
 What happens at startup:
@@ -478,7 +551,7 @@ In debug mode:
 Useful for diagnosing unexpected hangs, mismatched prompt patterns, or SSH authentication issues.
 
 ```bash
-python3 AFX-reinit_v3.py --debug
+python3 AFX_reinit.py --debug
 ```
 
 ---
@@ -492,14 +565,14 @@ When `--screen` is specified the script checks whether it is already running ins
 1. Verifies that `screen` is installed (exits with install instructions if missing)
 2. Strips `--screen` from the argument list to prevent recursion
 3. Appends `--bg` so the log is flushed cleanly on detach
-4. Spawns: `screen -dmS afx-reinit python3 AFX-reinit_v3.py --bg [other args]`
+4. Spawns: `screen -dmS afx-reinit python3 AFX_reinit.py --bg [other args]`
 5. Prints the reattach command and exits the outer process
 
 The script then runs entirely inside the screen session. If your SSH connection drops, the run continues uninterrupted. Reconnect to the host and reattach:
 
 ```bash
 # Launch in screen
-python3 AFX-reinit_v3.py --screen --config configs/reinit-config.json
+python3 AFX_reinit.py --screen --config configs/reinit-config.json
 
 # Reattach after reconnecting
 screen -r afx-reinit
@@ -523,10 +596,10 @@ Registers a SIGHUP handler so the session log is flushed and closed cleanly when
 
 ```bash
 # Using nohup
-nohup python3 AFX-reinit_v3.py --bg --config configs/reinit-config.json > nohup.out 2>&1 &
+nohup python3 AFX_reinit.py --bg --config configs/reinit-config.json > nohup.out 2>&1 &
 
 # Manually launching inside screen
-screen -S afx-reinit python3 AFX-reinit_v3.py --bg --config configs/reinit-config.json
+screen -S afx-reinit python3 AFX_reinit.py --bg --config configs/reinit-config.json
 # Detach with Ctrl+A, D
 # Reattach with: screen -r afx-reinit
 ```

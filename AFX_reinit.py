@@ -2804,10 +2804,10 @@ def _print_man_page():
     page = f"""
 {rule}
 NAME
-    reinit_afx_v2.py — NetApp AFX cluster reinitialization automation script
+    AFX_reinit.py — NetApp AFX cluster reinitialization automation script
 
 SYNOPSIS
-    python3 reinit_afx_v2.py [OPTIONS]
+    python3 AFX_reinit.py [OPTIONS]
 
 DESCRIPTION
     Automated BMC/SP console management tool for reinitializing NetApp AFX
@@ -2845,7 +2845,7 @@ OPTIONS
         Print an annotated example configuration file to stdout and exit.
         Redirect to a file to create a starting template:
 
-            python3 reinit_afx_v2.py --config-example > reinit-config.json
+            python3 AFX_reinit.py --config-example > reinit-config.json
 
     -d, --debug
         Debug mode.  Prints all raw BMC/SP and ONTAP console I/O directly
@@ -2887,25 +2887,25 @@ OPTIONS
 
 EXAMPLES
     Interactive run (prompts for all values):
-        python3 reinit_afx_v2.py
+        python3 AFX_reinit.py
 
     Automated run with config file:
-        python3 reinit_afx_v2.py --config configs/reinit-config.json
+        python3 AFX_reinit.py --config configs/reinit-config.json
 
     Print config file template:
-        python3 reinit_afx_v2.py --config-example > configs/reinit-config.json
+        python3 AFX_reinit.py --config-example > configs/reinit-config.json
 
     Debug a failed run:
-        python3 reinit_afx_v2.py --debug --config configs/reinit-config.json
+        python3 AFX_reinit.py --debug --config configs/reinit-config.json
 
     Protected remote run (auto screen session):
-        python3 reinit_afx_v2.py --screen --config configs/reinit-config.json
+        python3 AFX_reinit.py --screen --config configs/reinit-config.json
 
     Reattach to a running screen session:
         screen -r afx-reinit
 
     Manual nohup background run:
-        nohup python3 reinit_afx_v2.py --bg --config configs/reinit-config.json \\
+        nohup python3 AFX_reinit.py --bg --config configs/reinit-config.json \\
               > nohup.out 2>&1 &
 
 FILES
