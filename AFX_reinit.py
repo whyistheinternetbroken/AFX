@@ -398,6 +398,20 @@ _primary_shell_lock = threading.Lock()
 # don't compete for stdin when multiple BMCs auth-fail concurrently.
 _stdin_lock = threading.Lock()
 
+# ── Stale BMC SSH session tracking ───────────────────────────────────────
+# Registry of every paramiko SSHClient we have opened to a BMC, keyed by
+# host. Populated by _register_bmc_client() on successful connect; drained
+# by _drop_bmc_clients_for() when we hit a banner timeout and suspect the
+# BMC's tiny session pool may be exhausted by our own leaked clients.
+_bmc_clients_by_host: "dict[str, list]" = {}
+_bmc_clients_lock = threading.Lock()
+
+# Set by --auto-clear-stale-bmc at startup. When True, the banner-retry
+# helper will (a) scan for local TCP sockets to <bmc>:22 owned by other
+# python processes and SIGTERM them, and (b) call 'ipmitool sol deactivate'
+# if ipmitool is on PATH and IPMI creds are available.
+_auto_clear_stale_bmc = False
+
 # Loaded configuration data (from --config or the interactive prompt). Empty
 # dict when not provided. Schema described in _CONFIG_FILE_EXAMPLE below.
 _config_data = {}
@@ -2239,6 +2253,240 @@ def configure_transport(client):
             pass
 
 
+# ── Stale BMC SSH session helpers ────────────────────────────────────────
+# These are called by the banner-retry block in _ssh_connect_with_retry to
+# free up BMC SSH session slots before the next retry attempt.
+
+def _register_bmc_client(host: str, client) -> None:
+    """Remember `client` as an open SSH client to `host` so the banner-retry
+    helper can forcibly close it later if the BMC's session pool stalls."""
+    if not host or client is None:
+        return
+    with _bmc_clients_lock:
+        _bmc_clients_by_host.setdefault(host, []).append(client)
+
+
+def _unregister_bmc_client(host: str, client) -> None:
+    """Drop `client` from the registry (call from explicit close paths)."""
+    if not host or client is None:
+        return
+    with _bmc_clients_lock:
+        lst = _bmc_clients_by_host.get(host)
+        if not lst:
+            return
+        with suppress(ValueError):
+            lst.remove(client)
+        if not lst:
+            _bmc_clients_by_host.pop(host, None)
+
+
+def _drop_bmc_clients_for(host: str, log=None) -> int:
+    """Force-close every registered paramiko SSHClient for `host`.
+
+    Returns the count of clients dropped. The transport is closed rudely
+    (no SSH_MSG_DISCONNECT) so a hung remote sshd cannot block us. Safe to
+    call concurrently with other threads using those clients — they will
+    see EOF and surface their own errors, which the banner retry logic
+    already handles.
+    """
+    with _bmc_clients_lock:
+        clients = _bmc_clients_by_host.pop(host, [])
+    if not clients:
+        return 0
+    for c in clients:
+        with suppress(Exception):
+            t = c.get_transport()
+            if t is not None:
+                t.close()
+        with suppress(Exception):
+            c.close()
+    if log is not None:
+        with suppress(Exception):
+            log.log(
+                f"[{host}] banner-retry: closed {len(clients)} registered "
+                "in-process SSH client(s) to free BMC session slot",
+                prefix="WARN",
+            )
+    return len(clients)
+
+
+def _find_stale_sockets_to(host: str, port: int = 22):
+    """Return a list of (pid, proc_name, laddr) tuples for ESTABLISHED TCP
+    sockets from this host to `host`:`port`. Requires psutil; returns []
+    if psutil is unavailable or the lookup fails.
+    """
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return []
+    out = []
+    with suppress(Exception):
+        for c in psutil.net_connections(kind="tcp"):
+            try:
+                if (c.status == "ESTABLISHED"
+                        and c.raddr
+                        and c.raddr.ip == host
+                        and c.raddr.port == port):
+                    pname = ""
+                    if c.pid:
+                        with suppress(Exception):
+                            pname = psutil.Process(c.pid).name()
+                    out.append((c.pid, pname, c.laddr))
+            except Exception:
+                continue
+    return out
+
+
+def _kill_stale_local_pids_for(host: str, log=None) -> int:
+    """Find ESTABLISHED TCP sockets from this host to <host>:22 owned by
+    *other* python processes (likely prior AFX_reinit runs that died
+    without cleaning up) and SIGTERM them.
+
+    Skips our own PID (those are handled by _drop_bmc_clients_for) and
+    non-python processes (sshd, scp, the operator's interactive ssh, etc.)
+    to avoid harming unrelated work.
+
+    Returns the count of PIDs signalled. No-op if psutil unavailable.
+    """
+    socks = _find_stale_sockets_to(host, 22)
+    if not socks:
+        return 0
+    our_pid = os.getpid()
+    seen: "set[int]" = set()
+    killed = 0
+    for pid, pname, _laddr in socks:
+        if not pid or pid == our_pid or pid in seen:
+            continue
+        seen.add(pid)
+        # Only act on python processes — these are the realistic candidates
+        # for a stale prior run of this script. Other binaries are left
+        # alone so we don't disrupt the operator's own SSH or unrelated
+        # automation.
+        if "python" not in (pname or "").lower():
+            if log is not None:
+                with suppress(Exception):
+                    log.log(
+                        f"[{host}] banner-retry: stale socket from "
+                        f"pid={pid} ({pname or 'unknown'}); leaving alone "
+                        "(not a python process)",
+                    )
+            continue
+        with suppress(Exception):
+            print(
+                f"   🧹 [{host}] sending SIGTERM to stale pid={pid} "
+                f"({pname}) holding an SSH session to the BMC..."
+            )
+        if log is not None:
+            with suppress(Exception):
+                log.log(
+                    f"[{host}] banner-retry: SIGTERM pid={pid} ({pname}) "
+                    "(stale SSH socket to BMC)",
+                    prefix="WARN",
+                )
+        try:
+            if hasattr(signal, "SIGTERM"):
+                os.kill(pid, signal.SIGTERM)
+            killed += 1
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            with suppress(Exception):
+                print(
+                    f"   ⚠️  [{host}] no permission to signal pid={pid}; "
+                    "skipping."
+                )
+        except Exception as _kex:
+            with suppress(Exception):
+                print(f"   ⚠️  [{host}] could not signal pid={pid}: {_kex}")
+    return killed
+
+
+def _ipmi_sol_deactivate(host: str, username: str, password: str,
+                         log=None) -> bool:
+    """Call `ipmitool sol deactivate` to free any stuck SOL session on the
+    BMC. Returns True if ipmitool ran (regardless of exit code), False if
+    ipmitool is not available or could not be invoked. Best-effort; any
+    error is swallowed.
+    """
+    ipmi_bin = shutil.which("ipmitool")
+    if not ipmi_bin:
+        return False
+    if not host or not username or password is None:
+        return False
+    cmd = [
+        ipmi_bin, "-I", "lanplus",
+        "-H", host, "-U", username, "-P", password,
+        "sol", "deactivate",
+    ]
+    try:
+        # Short timeout — if ipmitool hangs the BMC is unreachable anyway.
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15,
+        )
+        rc = result.returncode
+        tail = (result.stderr or result.stdout or "").strip().splitlines()[-1:] or [""]
+        if log is not None:
+            with suppress(Exception):
+                log.log(
+                    f"[{host}] banner-retry: ipmitool sol deactivate "
+                    f"rc={rc} ({tail[0][:120]})",
+                )
+        with suppress(Exception):
+            if rc == 0:
+                print(f"   🧹 [{host}] ipmitool: SOL session deactivated.")
+            else:
+                # rc != 0 is common (no session to deactivate); just log.
+                print(
+                    f"   ℹ️  [{host}] ipmitool sol deactivate rc={rc} "
+                    "(likely no active SOL session)."
+                )
+        return True
+    except subprocess.TimeoutExpired:
+        if log is not None:
+            with suppress(Exception):
+                log.log(
+                    f"[{host}] banner-retry: ipmitool sol deactivate timed out",
+                    prefix="WARN",
+                )
+        return True
+    except Exception as _iex:
+        if log is not None:
+            with suppress(Exception):
+                log.log(
+                    f"[{host}] banner-retry: ipmitool sol deactivate failed: {_iex}",
+                    prefix="WARN",
+                )
+        return False
+
+
+def _clear_stale_bmc_sessions(host: str, username: str, password: str,
+                              log=None) -> None:
+    """Best-effort sweep called from the banner-retry block before each
+    retry sleep. Always closes in-process SSH clients to `host` (safe).
+    When `--auto-clear-stale-bmc` is set, additionally scans for stale
+    local PIDs and runs `ipmitool sol deactivate`.
+    """
+    # (1) Always safe: drop our own registered clients to this host.
+    _drop_bmc_clients_for(host, log=log)
+    # (2) Always safe: ipmitool sol deactivate. Cheap; clears a frequent
+    # offender (a hung SOL session keeping the BMC's session pool full).
+    with suppress(Exception):
+        _ipmi_sol_deactivate(host, username, password, log=log)
+    # (3) Opt-in only: signal stale prior-run python PIDs that hold a TCP
+    # socket to <host>:22. Skipped by default because it can kill the
+    # operator's own concurrent script invocation.
+    if _auto_clear_stale_bmc:
+        with suppress(Exception):
+            socks = _find_stale_sockets_to(host, 22)
+            if socks:
+                with suppress(Exception):
+                    print(
+                        f"   🔍 [{host}] found {len(socks)} local TCP "
+                        "socket(s) to BMC:22; checking for stale prior runs..."
+                    )
+            _kill_stale_local_pids_for(host, log=log)
+
+
 def _ssh_connect_with_retry(host: str, username: str, password: str,
                             label: str = "BMC",
                             max_attempts: int = 5,
@@ -2291,6 +2539,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                             timeout=45, banner_timeout=60, auth_timeout=45,
                             disabled_algorithms={"pubkeys": ["ssh-dss"]})
             configure_transport(client)
+            _register_bmc_client(host, client)
             return client, username, password
         except paramiko.AuthenticationException as e:
             last_exc = e
@@ -2389,6 +2638,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                             disabled_algorithms={"pubkeys": ["ssh-dss"]},
                         )
                         configure_transport(client)
+                        _register_bmc_client(host, client)
                         return client, username, password
                     except Exception as e2:
                         last_exc = e2
@@ -2449,6 +2699,17 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                     )
                 _bnr_done = False
                 for _b in range(1, _bnr_max + 1):
+                    # Before each retry sleep, try to free up a BMC SSH
+                    # session slot: close any in-process clients we still
+                    # hold to this host, run 'ipmitool sol deactivate'
+                    # (cheap, often unblocks a stuck SOL session), and
+                    # — when --auto-clear-stale-bmc is set — SIGTERM
+                    # prior-run python PIDs that still hold a TCP socket
+                    # to <host>:22.
+                    with suppress(Exception):
+                        _clear_stale_bmc_sessions(
+                            host, username, password, log=_session_log,
+                        )
                     _waited = 0
                     while _waited < _bnr_interval:
                         if _shutdown_event.is_set():
@@ -2475,6 +2736,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                             disabled_algorithms={"pubkeys": ["ssh-dss"]},
                         )
                         configure_transport(client)
+                        _register_bmc_client(host, client)
                         return client, username, password
                     except Exception as eb:
                         last_exc = eb
@@ -3026,6 +3288,16 @@ def parse_args():
                              "(afx_checkpoint.json) showing exactly where the "
                              "last run left off, then exit. Does not modify "
                              "the checkpoint file.")
+    parser.add_argument("--auto-clear-stale-bmc", action="store_true",
+                        default=False,
+                        help="When a BMC SSH banner timeout is hit, scan for "
+                             "ESTABLISHED TCP sockets to <bmc>:22 from OTHER "
+                             "python processes on this host and SIGTERM them "
+                             "(prior AFX_reinit runs that died without "
+                             "closing their SSH sessions are the usual "
+                             "culprits). Always-on cleanup (closing this "
+                             "process's own SSH clients + ipmitool sol "
+                             "deactivate) runs regardless of this flag.")
     args = parser.parse_args()
     if args.help:
         _print_man_page()
@@ -12943,6 +13215,7 @@ def main():
     global _add_another_node_request, _bg_mode, _debug_console
     global _primary_bmc_user, _primary_bmc_password
     global _checkpoint, _run_context
+    global _auto_clear_stale_bmc
 
     args = parse_args()
 
@@ -12968,6 +13241,10 @@ def main():
         sys.exit(0)
 
     _bg_mode = args.bg
+    _auto_clear_stale_bmc = args.auto_clear_stale_bmc
+    if _auto_clear_stale_bmc:
+        print("🧹 --auto-clear-stale-bmc enabled: banner retries will SIGTERM "
+              "stale prior-run python PIDs holding sockets to <bmc>:22.")
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
