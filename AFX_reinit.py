@@ -2885,6 +2885,28 @@ OPTIONS
         Note: GNU screen is available on Linux and macOS only.  On Windows
         use WSL or a Linux jump host for equivalent functionality.
 
+    --resume
+        Mode 4b only.  Resume the previous 4b run from its saved
+        checkpoint (afx_checkpoint.json, located alongside this script).
+        Phases already completed are skipped — when every BMC IP is
+        marked install_done the run jumps straight to Step 6b
+        (reconnect to LOADER + boot_ontap menu); peers marked
+        peer_joined are skipped during the mode-3 parallel auto-add.
+
+        If primary_setup_done or option3_complete is set from a prior
+        run, the resume prompt warns that re-running will destroy the
+        existing cluster and asks for explicit confirmation.
+
+        Checkpoints older than 72 hours are ignored.  The file is
+        deleted automatically on successful completion of mode 4b.
+
+    --checkpoint-status
+        Print a summary of the saved checkpoint (afx_checkpoint.json)
+        and exit.  Shows the absolute file path, run mode, created /
+        updated timestamps, age in minutes, log directory, config
+        path, BMC IPs, every completed global phase, and every per-node
+        phase keyed by BMC IP.  Does not modify the checkpoint file.
+
 EXAMPLES
     Interactive run (prompts for all values):
         python3 AFX_reinit.py
@@ -2908,6 +2930,12 @@ EXAMPLES
         nohup python3 AFX_reinit.py --bg --config configs/reinit-config.json \\
               > nohup.out 2>&1 &
 
+    Inspect a saved 4b checkpoint:
+        python3 AFX_reinit.py --checkpoint-status
+
+    Resume an interrupted 4b run:
+        python3 AFX_reinit.py --resume --config configs/reinit-config.json
+
 FILES
     reinit-config.json
         Default configuration file name.  Searched in ./configs/, the script
@@ -2919,6 +2947,12 @@ FILES
     logs/YYYYMMDD_HHMMSS/summary_<label>.log
         Human-readable summary: result (PASS/FAIL/WARN), phase and step
         timing, warnings inventory, and errors inventory.
+
+    afx_checkpoint.json
+        Mode 4b resume checkpoint.  Written alongside this script; deleted
+        automatically on successful completion.  Inspect with
+        --checkpoint-status; resume with --resume.  Ignored if older than
+        72 hours.
 
 ENVIRONMENT
     STY     Set by GNU screen for all child processes.  When present,
