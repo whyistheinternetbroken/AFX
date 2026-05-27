@@ -7920,24 +7920,26 @@ def _run_4b_standalone(log, resuming: bool = False):
                 return None
 
             # ── VLDB online timeout detection ──────────────────────────────────
-            # Helper: prompt the operator and return True if they want to proceed
-            # to reinit, False if they want to exit for manual troubleshooting.
-            # Defined here (before first use) to avoid UnboundLocalError.
+            # When VLDB fails to come online after option 6 the script used to
+            # prompt the operator (y/n) to proceed to reinit. That made the
+            # 4b run block indefinitely on stdin in --bg / screen sessions
+            # and almost always got "y" anyway, so we now auto-answer "y"
+            # and log it.
             def _vldb_prompt():
                 with _stdout_lock:
                     _real_stdout.write(
                         f"\n  ⚠️  [{ip}] Warning: Timed out waiting for VLDB online detected.\n"
                         f"  Cluster node not coming online after option 6. "
-                        f"Proceed immediately to reinitialization process? (y/n): "
+                        f"Auto-proceeding to reinitialization process (y).\n"
                     )
                     _real_stdout.flush()
-                    try:
-                        _ans = sys.stdin.readline().strip().lower()
-                    except (EOFError, KeyboardInterrupt):
-                        _ans = "n"
-                if _session_log:
-                    log.log(f"[{ip}] VLDB timeout prompt answered: {_ans}")
-                return _ans == "y"
+                if log:
+                    log.log(
+                        f"[{ip}] VLDB timeout: auto-answered 'y' "
+                        "(proceed to reinit)",
+                        prefix="WARN",
+                    )
+                return True
 
             # ── Phase 1: wait for any boot-menu indicator ──────────────────
             # The warning text ("Normal Boot is prohibited") appears a few
