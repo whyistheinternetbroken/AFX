@@ -286,12 +286,13 @@ The script presents a menu at startup. Enter the number corresponding to the des
 
 ---
 
-## Checkpoint & Resume (mode 4b)
+## Checkpoint & Resume (modes 4b and 3)
 
-Mode **4b** (and the end-to-end variant **4b + reinit mode 3**) persist
-progress to a checkpoint file so an interrupted run — Ctrl+C, network
-blip, BMC banner stall, power loss on the jump host — can be resumed
-without re-running destructive steps.
+Mode **4b** (including the end-to-end variant **4b + reinit mode 3**)
+and the standalone end-to-end mode **3** persist progress to a
+checkpoint file so an interrupted run — Ctrl+C, network blip, BMC
+banner stall, power loss on the jump host — can be resumed without
+re-running destructive steps.
 
 ### Where the checkpoint lives
 
@@ -344,9 +345,11 @@ cluster and asks for explicit confirmation.
 |---|---|---|
 | `install_done` | per-node | Option 6 (Update flash from backup config) succeeds and the node reaches the post-install `login:` prompt. |
 | `reinit_loader` | per-node | Reconnect-to-LOADER succeeds and `boot_ontap menu` has been sent. |
+| `primary_bootmenu_done` | global | The primary node clears the ONTAP boot menu (option 9 for mode 1b/3, option 4 for mode 2). Cluster setup wizard is about to begin. |
 | `cluster_formed` | global | `cluster create` succeeds on the primary node and the prompt reaches `::>`. |
 | `primary_setup_done` | global | The primary cluster-setup wizard returns successfully. |
-| `peer_joined` | per-node | A peer completes the join wizard and the primary's `cluster show` confirms it. |
+| `peer_option4_done` | per-peer (mode 3) | A peer clears boot menu option 4, finishes format, and reaches the join barrier. Recorded once per peer so the option-4 / format work can be reasoned about on resume. |
+| `peer_joined` | per-peer (mode 3) | A peer completes the join wizard and the primary's `cluster show` confirms it. |
 | `option3_complete` | global | The end-to-end mode-3 finalize banner has been printed. The checkpoint file is then deleted. |
 
 ### Clearing the checkpoint

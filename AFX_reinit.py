@@ -57,11 +57,28 @@ class CheckpointManager:
     completed phase rather than starting over from scratch.
 
     Phases tracked (per-node unless noted):
-      ``bmc_connected``     — BMC SSH shell established
-      ``at_loader``         — Node reached LOADER prompt
-      ``install_done``      — Netboot + option 6 complete; node at ONTAP login
-      ``reinit_loader``     — Reconnected to BMC for reinit; back at LOADER
-      ``cluster_formed``    — (global) cluster setup wizard completed
+      ``bmc_connected``       — BMC SSH shell established
+      ``at_loader``           — Node reached LOADER prompt
+      ``install_done``        — Netboot + option 6 complete; node at ONTAP login
+      ``reinit_loader``       — Reconnected to BMC for reinit; back at LOADER
+      ``primary_bootmenu_done`` — (global) primary node has cleared the
+                                  ONTAP boot menu (option 9 for mode 1b/3,
+                                  option 4 for mode 2). Cluster setup
+                                  wizard is about to begin.
+      ``cluster_formed``      — (global) ``cluster create`` succeeded;
+                                cluster shell ``::>`` reachable.
+      ``primary_setup_done``  — (global) primary cluster-setup wizard
+                                returned successfully (license / SSH
+                                post-steps may still be pending).
+      ``peer_option4_done``   — (per-peer, mode 3) peer cleared boot
+                                menu option 4, finished format, and
+                                reached the join barrier. Format work
+                                does not need to be re-run on resume.
+      ``peer_joined``         — (per-peer, mode 3) peer joined the
+                                cluster and ``cluster show`` confirmed
+                                membership.
+      ``option3_complete``    — (global) mode 3 finalize banner printed;
+                                the checkpoint file is then deleted.
 
     Passwords are intentionally NOT saved; the operator will be asked to
     re-enter them on resume.
@@ -7225,6 +7242,8 @@ def _run_4b_standalone(log, resuming: bool = False):
     if resuming and _checkpoint:
         _install_done_ips = _checkpoint.nodes_done_for("install_done")
         _reinit_done_ips  = _checkpoint.nodes_done_for("reinit_loader")
+        _opt4_done_ips    = _checkpoint.nodes_done_for("peer_option4_done")
+        _joined_ips       = _checkpoint.nodes_done_for("peer_joined")
         print("\n  🔖 Resume status from checkpoint:")
         for _ip in bmc_ips:
             _flags = []
@@ -7232,14 +7251,28 @@ def _run_4b_standalone(log, resuming: bool = False):
                 _flags.append("install_done")
             if _ip in _reinit_done_ips:
                 _flags.append("reinit_loader")
+            if _ip in _opt4_done_ips:
+                _flags.append("peer_option4_done")
+            if _ip in _joined_ips:
+                _flags.append("peer_joined")
             print(f"     [{_ip}] {', '.join(_flags) if _flags else '(no prior progress)'}")
+        if _checkpoint.is_done("primary_bootmenu_done"):
+            print("     primary_bootmenu_done : ✅ (primary cleared boot menu)")
         if _checkpoint.is_done("cluster_formed"):
-            print("     cluster_formed: ✅ (prior run completed cluster setup)")
+            print("     cluster_formed        : ✅ (prior run completed cluster setup)")
+        if _checkpoint.is_done("primary_setup_done"):
+            print("     primary_setup_done    : ✅ (primary wizard finished)")
+        if _checkpoint.is_done("option3_complete"):
+            print("     option3_complete      : ✅")
         if log:
             log.log(
                 "4b resume: prior progress — install_done="
                 f"{_install_done_ips}, reinit_loader={_reinit_done_ips}, "
-                f"cluster_formed={_checkpoint.is_done('cluster_formed')}"
+                f"peer_option4_done={_opt4_done_ips}, "
+                f"peer_joined={_joined_ips}, "
+                f"primary_bootmenu_done={_checkpoint.is_done('primary_bootmenu_done')}, "
+                f"cluster_formed={_checkpoint.is_done('cluster_formed')}, "
+                f"primary_setup_done={_checkpoint.is_done('primary_setup_done')}"
             )
 
     # Open per-node log files.
@@ -8590,6 +8623,15 @@ def _run_4b_standalone(log, resuming: bool = False):
             log.log(f"[{first_ip}] boot menu not seen for primary reinit", prefix="WARN")
     if log:
         log.end_phase()
+
+    # Checkpoint: primary cleared the ONTAP boot menu; wizard about to begin.
+    if _checkpoint:
+        try:
+            _checkpoint.mark_done("primary_bootmenu_done")
+            if log:
+                log.log("4b: checkpoint: primary_bootmenu_done saved")
+        except Exception:
+            pass
 
     # ── Run primary init wizard ────────────────────────────────────────────
     # Install _NodeLogWriter on sys.stdout so all wizard/auto_complete output
@@ -10096,6 +10138,17 @@ def _run_cluster_setup_wizard(channel):
         _session_log.log("Cluster creation complete (login: prompt observed)")
         _session_log.end_phase()
 
+    # Checkpoint: cluster create has succeeded and the primary is at the
+    # ONTAP login prompt. Mode 4b's standalone wrapper writes this same
+    # marker at its own completion point; writing it here covers the
+    # direct mode-1b / mode-3 entry path that uses _run_cluster_setup_wizard.
+    if _checkpoint:
+        try:
+            _checkpoint.mark_done("cluster_formed")
+            _slog("checkpoint: cluster_formed saved")
+        except Exception:
+            pass
+
     # Apply any pre-configured ONTAP license(s).
     if _license_mode:
         if _login_primary_cluster_shell(channel, cc.get("admin_password")):
@@ -10948,6 +11001,18 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         # as the peer_bmcs list, not arbitrary lock-acquisition order.
         print(f"\n⏳ [{label}] Format complete – waiting for all nodes to reach the join phase...")
         _slog(f"[{label}] reached join phase (index {join_index}); waiting at barrier")
+
+        # Checkpoint: this peer has cleared boot-menu option 4 and the
+        # disk/format work is done; it is now waiting at the join
+        # barrier. On resume we know the option-4/format step does not
+        # need to be repeated for this peer.
+        if _checkpoint:
+            try:
+                _checkpoint.mark_node_done("peer_option4_done", peer_bmc)
+                _slog(f"[{label}] checkpoint: peer_option4_done saved")
+            except Exception:
+                pass
+
         if join_barrier is not None:
             try:
                 join_barrier.wait(timeout=1800)
@@ -11563,15 +11628,24 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
         prior_primary = prior.is_done("primary_setup_done")
         prior_joined = prior.nodes_done_for("peer_joined")
         prior_complete = prior.is_done("option3_complete")
+        prior_bootmenu = prior.is_done("primary_bootmenu_done")
+        prior_cluster = prior.is_done("cluster_formed")
+        prior_opt4 = prior.nodes_done_for("peer_option4_done")
         _print_banner("🔖 Prior option-3 checkpoint found")
         print(f"     Mode          : {prior.mode}")
         print(f"     BMC IPs       : {', '.join(prior.bmc_ips)}")
+        if prior_bootmenu:
+            print("     primary_bootmenu_done : ✅ (primary cleared boot menu)")
+        if prior_cluster:
+            print("     cluster_formed        : ✅ (cluster create succeeded)")
         if prior_primary:
-            print("     primary_setup_done : ✅ (cluster already created)")
+            print("     primary_setup_done    : ✅ (cluster already created)")
+        if prior_opt4:
+            print(f"     peer_option4_done     : {', '.join(prior_opt4)}")
         if prior_joined:
-            print(f"     peer_joined        : {', '.join(prior_joined)}")
+            print(f"     peer_joined           : {', '.join(prior_joined)}")
         if prior_complete:
-            print("     option3_complete   : ✅")
+            print("     option3_complete      : ✅")
         print("=" * 60)
 
         if prior_primary and not prior_complete:
@@ -12061,6 +12135,17 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
 
     if _session_log:
         _session_log.end_phase()  # End Boot Menu Selection
+
+    # Checkpoint: primary cleared the ONTAP boot menu (option 9 for mode
+    # 1b/3, option 4 for mode 2). Wizard is about to begin. Mode 3 init
+    # always creates a checkpoint at L14952; other modes only have one
+    # if --resume was supplied.
+    if _checkpoint:
+        try:
+            _checkpoint.mark_done("primary_bootmenu_done")
+            _slog("checkpoint: primary_bootmenu_done saved")
+        except Exception:
+            pass
 
     if _auto_setup:
         # Mode 1b / 3: auto_complete_initialization drives the full cluster
@@ -12921,17 +13006,29 @@ def main():
                     pass
                 _install_done_ips = _cp.nodes_done_for("install_done")
                 _reinit_done_ips  = _cp.nodes_done_for("reinit_loader")
+                _opt4_done_ips    = _cp.nodes_done_for("peer_option4_done")
+                _joined_ips       = _cp.nodes_done_for("peer_joined")
                 print("\n" + "=" * 60)
                 print("  🔖 Checkpoint found" + _cp_age)
                 print(f"     Mode    : {_cp.mode}")
                 print(f"     BMC IPs : {', '.join(_cp.bmc_ips)}")
                 print(f"     Log dir : {_cp.log_dir}")
                 if _install_done_ips:
-                    print(f"     install_done  : {', '.join(_install_done_ips)}")
+                    print(f"     install_done          : {', '.join(_install_done_ips)}")
                 if _reinit_done_ips:
-                    print(f"     reinit_loader : {', '.join(_reinit_done_ips)}")
+                    print(f"     reinit_loader         : {', '.join(_reinit_done_ips)}")
+                if _opt4_done_ips:
+                    print(f"     peer_option4_done     : {', '.join(_opt4_done_ips)}")
+                if _joined_ips:
+                    print(f"     peer_joined           : {', '.join(_joined_ips)}")
+                if _cp.is_done("primary_bootmenu_done"):
+                    print("     primary_bootmenu_done : ✅")
                 if _cp.is_done("cluster_formed"):
-                    print("     cluster_formed: ✅")
+                    print("     cluster_formed        : ✅")
+                if _cp.is_done("primary_setup_done"):
+                    print("     primary_setup_done    : ✅")
+                if _cp.is_done("option3_complete"):
+                    print("     option3_complete      : ✅")
                 print("=" * 60)
                 _resume_ans = _prompt(
                     "\n  Resume from checkpoint? [Y/n]: "

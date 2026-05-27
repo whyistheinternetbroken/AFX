@@ -9,6 +9,30 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Mode 3 checkpoint coverage expanded.** Three additional phases are
+  now recorded for the standalone end-to-end mode 3 (and reused by
+  mode 4b+3 where they apply):
+  - `primary_bootmenu_done` (global) — set when the primary node
+    clears the ONTAP boot menu (option 9 for mode 1b/3, option 4 for
+    mode 2) and the cluster setup wizard is about to begin. Written
+    from both the direct `main()` boot-menu path and from
+    `_run_4b_standalone`.
+  - `cluster_formed` (global) — was already recorded by mode 4b at
+    the end of `_run_4b_standalone`; now also recorded by the shared
+    `_run_cluster_setup_wizard` post-create path so direct mode 1b /
+    mode 3 runs from `main()` capture the same milestone.
+  - `peer_option4_done` (per-peer, mode 3) — set in
+    `_add_peer_node_thread` after the peer clears boot menu option 4,
+    finishes format, and reaches the join barrier. The marker is the
+    natural "destructive work is done" boundary for each peer and is
+    intended to drive resume-skip wiring (deferred to a follow-up
+    change so the marker timing can be observed on a real cluster
+    first).
+- Resume banners (mode 4b at startup and `_option3_init_checkpoint`
+  for direct mode 3) display the new phases alongside the existing
+  install_done / reinit_loader / peer_joined / cluster_formed lines.
+- `CheckpointManager` class docstring updated to list every phase the
+  script writes today.
 - **Script renamed `AFX-reinit_v3.py` → `AFX_reinit.py`.** All documentation,
   embedded help (`--help` man page), and examples updated to the new name.
   Use `git log --follow AFX_reinit.py` to trace history across the rename.
