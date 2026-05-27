@@ -12957,7 +12957,35 @@ def main():
     if _bg_mode and hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, signal_handler)
 
-    _operation_mode, _auto_setup, _auto_add = select_operation_mode()
+    # ── --resume: auto-dispatch from checkpoint, skip the start menu ──────
+    # When --resume is explicit and a valid checkpoint exists, infer the
+    # operation mode from the checkpoint and bypass select_operation_mode()
+    # so the operator does not have to re-pick the same menu option.
+    _resume_autodispatch = False
+    _resume_cp: "CheckpointManager | None" = None
+    if args.resume:
+        _resume_cp = CheckpointManager()
+        if _resume_cp.load():
+            _cp_mode = (_resume_cp.mode or "").strip()
+            if _cp_mode.startswith("4b"):
+                # Mode 4b (optionally with a reinit sub-mode like "4b-3").
+                _operation_mode = 42
+                _auto_setup = False
+                _auto_add = False
+                _resume_autodispatch = True
+                print(f"\n  🔖 --resume: auto-dispatching to mode 4b "
+                      f"from checkpoint (mode={_cp_mode}).")
+            else:
+                print(f"\n  ⚠️  --resume: checkpoint mode {_cp_mode!r} cannot "
+                      "be auto-dispatched; falling back to the start menu.")
+                _resume_cp = None
+        else:
+            print(f"\n  ⚠️  --resume: no valid checkpoint found at "
+                  f"{_resume_cp._path}; falling back to the start menu.")
+            _resume_cp = None
+
+    if not _resume_autodispatch:
+        _operation_mode, _auto_setup, _auto_add = select_operation_mode()
     # Remember the mode the operator explicitly chose at startup.  Mid-run
     # transitions (e.g. 1b → add nodes) change _operation_mode but leave
     # _initial_operation_mode intact so mode-specific up-front prompts only
@@ -12991,9 +13019,17 @@ def main():
     # ── Mode 42 (4b): Netboot and install ONTAP ────────────────────────────
     if _operation_mode == 42:
         # ── Resume detection ──────────────────────────────────────────────
-        _cp = CheckpointManager()
+        # Reuse the checkpoint already loaded by the --resume auto-dispatch
+        # path so we do not re-read the file or re-prompt for confirmation.
+        _cp = _resume_cp or CheckpointManager()
         _resuming = False
-        if args.resume or (not args.resume and _cp.load()):
+        if _resume_autodispatch and _resume_cp is not None:
+            # --resume + valid checkpoint: skip the confirmation prompt and
+            # resume directly. Operator already opted in via the CLI flag.
+            _resuming = True
+            _checkpoint = _cp
+            print("\n  ✅ Resuming from checkpoint (--resume).")
+        elif args.resume or (not args.resume and _cp.load()):
             # If --resume was explicit, or a checkpoint file auto-detected,
             # confirm with the operator before using it.
             if _cp.load():
