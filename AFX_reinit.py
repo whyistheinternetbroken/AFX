@@ -7600,6 +7600,20 @@ def _run_4b_standalone(log, resuming: bool = False):
         # Populated by _select_option6; checked after all workers join.
         _opt6_login_nodes = set()
 
+        def _mark_install_done(ip):
+            """Persist install_done for *ip* immediately so a kill mid-run
+            does not lose per-node progress. Safe to call concurrently:
+            CheckpointManager._save atomically replaces the JSON file."""
+            if _checkpoint is None:
+                return
+            try:
+                with connect_lock:
+                    _checkpoint.mark_node_done("install_done", ip)
+                if log:
+                    log.log(f"[{ip}] checkpoint: install_done saved")
+            except Exception:
+                pass
+
         def _select_option6(ip, ch):
             if ch is None:
                 _status(f"  ⚠️  [{ip}] No channel – skipping option 6.")
@@ -7800,6 +7814,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                     log.log(f"[{ip}] reached login: without boot menu; skipping option 6")
                 with connect_lock:
                     _opt6_login_nodes.add(ip)
+                _mark_install_done(ip)
                 if _nf6:
                     with suppress(Exception):
                         _nf6.close()
@@ -8298,6 +8313,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                                 log.log(f"[{ip}] option 6 complete; final login prompt seen in {_elapsed_str}")
                             with connect_lock:
                                 _opt6_login_nodes.add(ip)
+                            _mark_install_done(ip)
                         else:
                             _status(f"  ⚠️  [{ip}] Final login prompt not seen after {_elapsed_str}; node may still be booting.")
                             if log:
@@ -8308,6 +8324,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                             log.log(f"[{ip}] option 6 complete; login prompt confirmed (no further reboot)")
                         with connect_lock:
                             _opt6_login_nodes.add(ip)
+                        _mark_install_done(ip)
 
             if _nf6:
                 try:
@@ -8332,11 +8349,13 @@ def _run_4b_standalone(log, resuming: bool = False):
             t.join()
 
         # ── Checkpoint: mark install_done for every node that reached login ─
-        # _opt6_login_nodes contains every IP that reached the ONTAP login
-        # prompt either directly (already booted) or via option 6. That is
-        # the correct semantic boundary for "install complete on this node".
+        # Per-node marks are already written inside _select_option6 as soon
+        # as each node reaches login, so a kill mid-run preserves progress.
+        # This post-join sweep is a belt-and-suspenders idempotent backstop.
         if _checkpoint:
             for _ip_ok in _opt6_login_nodes:
+                if _checkpoint.is_node_done("install_done", _ip_ok):
+                    continue
                 try:
                     _checkpoint.mark_node_done("install_done", _ip_ok)
                     if log:
