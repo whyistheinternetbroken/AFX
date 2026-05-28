@@ -9904,30 +9904,122 @@ def _run_ontap_upgrade(log):
         _cl_mgmt_ip = None
         _cl_admin_user = "admin"
         _cl_admin_pass = ""
+        # Map of ontap-nodename -> mgmt IP used for the parallel SSH session.
+        # Empty when sequential mode is selected.
+        _node_ssh_targets = {}
         if _parallel_update:
-            # Prefer a value already known from config / earlier discovery
-            # so the operator isn't asked for something we have on disk.
+            # Prefer per-node management IPs from the picked reinit config so
+            # each parallel worker hits its own node instead of funneling
+            # every session through the cluster-mgmt LIF. Falls back to the
+            # cluster-mgmt IP when no node entries are available.
             _cfg_cluster = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
-            _default_mgmt = (_cluster_config.get("mgmt_ip")
-                             or _cfg_cluster.get("clus_mgmt_address")
-                             or "")
-            if _default_mgmt:
-                _ans = _prompt(
-                    f"  Cluster management IP [{_default_mgmt}]: ", _default_mgmt
-                )
-                _cl_mgmt_ip = _ans or _default_mgmt
-                print(f"  \U0001f4cd Using cluster management IP: {_cl_mgmt_ip}")
+            _node_mgmt_pool = []  # ordered list of mgmt IPs from config
+            if isinstance(_config_data, dict):
+                _pn_cfg = _config_data.get("primary_node") or {}
+                if isinstance(_pn_cfg, dict) and _pn_cfg.get("node_mgmt_ip"):
+                    _node_mgmt_pool.append(str(_pn_cfg["node_mgmt_ip"]))
+                for _sn in (_config_data.get("secondary_nodes") or []):
+                    if isinstance(_sn, dict) and _sn.get("node_mgmt_ip"):
+                        _node_mgmt_pool.append(str(_sn["node_mgmt_ip"]))
+                if not _node_mgmt_pool:
+                    for _n in (_config_data.get("nodes") or []):
+                        if isinstance(_n, dict) and _n.get("node_mgmt_ip"):
+                            _node_mgmt_pool.append(str(_n["node_mgmt_ip"]))
+
+            _cl_admin_user = bmc_user
+            _cl_admin_pass = bmc_pass
+
+            if _node_mgmt_pool:
+                print(f"\n  \U0001f4cd Using {len(_node_mgmt_pool)} node management "
+                      f"IP(s) from config for parallel SSH:")
+                for _ip in _node_mgmt_pool:
+                    print(f"     • {_ip}")
                 if log:
-                    log.log(f"4a: cluster mgmt IP from config: {_cl_mgmt_ip}")
+                    log.log(f"4a: node mgmt IPs from config: {_node_mgmt_pool}")
+                _validate_targets = list(_node_mgmt_pool)
             else:
-                _cl_mgmt_ip = _prompt("  Cluster management IP: ")
-            if not _cl_mgmt_ip:
-                print("  No cluster management IP entered; falling back to sequential.")
-                _parallel_update = False
-            else:
-                _cl_admin_user = bmc_user
-                _cl_admin_pass = bmc_pass
-                print(f"  Using BMC credentials ({bmc_user}) for cluster SSH sessions.")
+                _default_mgmt = (_cluster_config.get("mgmt_ip")
+                                 or _cfg_cluster.get("clus_mgmt_address")
+                                 or "")
+                if _default_mgmt:
+                    _ans = _prompt(
+                        f"  Cluster management IP [{_default_mgmt}]: ", _default_mgmt
+                    )
+                    _cl_mgmt_ip = _ans or _default_mgmt
+                else:
+                    _cl_mgmt_ip = _prompt("  Cluster management IP: ")
+                if not _cl_mgmt_ip:
+                    print("  No cluster management IP entered; falling back to sequential.")
+                    _parallel_update = False
+                else:
+                    print(f"  \U0001f4cd Using cluster management IP: {_cl_mgmt_ip}")
+                    if log:
+                        log.log(f"4a: cluster mgmt IP fallback: {_cl_mgmt_ip}")
+                _validate_targets = [_cl_mgmt_ip] if _cl_mgmt_ip else []
+
+            # Ping + auth validation: confirm every target is reachable and
+            # accepts the BMC credentials BEFORE starting the long-running
+            # parallel update. A single unreachable LIF here is much easier
+            # to fix now than mid-install.
+            if _parallel_update and _validate_targets:
+                print(f"\n  \U0001f50d Validating reachability and authentication "
+                      f"({_cl_admin_user}) on {len(_validate_targets)} target(s)...")
+                _bad = []
+                for _t in _validate_targets:
+                    # Quick TCP/22 probe first (3s) so unreachable LIFs fail
+                    # fast without the multi-attempt SSH retry storm.
+                    _reach_ok = False
+                    try:
+                        _s = socket.create_connection((_t, 22), timeout=3)
+                        _s.close()
+                        _reach_ok = True
+                    except Exception as _re:
+                        _bad.append((_t, f"TCP/22 unreachable: {_re}"))
+                        print(f"     \u274c {_t:<18} not reachable on TCP/22 ({_re})")
+                        continue
+                    # Auth check via a one-shot SSH connect.
+                    try:
+                        _vcl, _, _ = _ssh_connect_with_retry(
+                            _t, _cl_admin_user, _cl_admin_pass,
+                            label=f"validate/{_t}", max_attempts=1,
+                            interactive=False,
+                        )
+                        try:
+                            _vcl.close()
+                        except Exception:
+                            pass
+                        print(f"     \u2705 {_t:<18} reachable; auth OK")
+                    except Exception as _ae:
+                        _bad.append((_t, f"SSH auth failed: {_ae}"))
+                        print(f"     \u274c {_t:<18} SSH auth failed ({_ae})")
+
+                if _bad:
+                    print(f"\n  \u26a0\ufe0f  {len(_bad)} target(s) failed validation:")
+                    for _ip, _why in _bad:
+                        print(f"     • {_ip}: {_why}")
+                    if log:
+                        log.log(f"4a: parallel target validation failures: {_bad}",
+                                prefix="ERROR")
+                    _ans = _prompt(
+                        "  Proceed anyway with only the healthy target(s)? "
+                        "[y/N]: ", "n"
+                    ).lower()
+                    if _ans != "y":
+                        print("  Falling back to sequential mode via system console.")
+                        _parallel_update = False
+                    else:
+                        _validate_targets = [_t for _t in _validate_targets
+                                             if _t not in [b[0] for b in _bad]]
+                        if not _validate_targets:
+                            print("  No healthy targets; falling back to sequential.")
+                            _parallel_update = False
+
+            # Build the per-node SSH target mapping by round-robin assigning
+            # the surviving targets to the ONTAP update tasks. Any single
+            # node-mgmt IP can issue `system image update -node <nn>`, so the
+            # mapping just spreads load across reachable LIFs. Built once
+            # _update_tasks is known (below); stash the survivor list here.
+            _ssh_target_pool = list(_validate_targets) if _parallel_update else []
         if log:
             log.log(f"Image update mode: {'parallel via {_cl_mgmt_ip}' if _parallel_update else 'sequential via console'}")
 
@@ -9939,6 +10031,15 @@ def _run_ontap_upgrade(log):
             replace_img = "image2" if current_img == "image1" else "image1"
             for nodename in group_nodes:
                 _update_tasks.append((nodename, replace_img, current_img))
+
+        # Round-robin assign the validated SSH targets to the update tasks
+        # so each parallel worker hits a different node-mgmt LIF when
+        # multiple are available. Deferred until _update_tasks is built.
+        if _parallel_update and _ssh_target_pool:
+            for _i, (nodename, _, _) in enumerate(_update_tasks):
+                _node_ssh_targets[nodename] = _ssh_target_pool[_i % len(_ssh_target_pool)]
+            if log:
+                log.log(f"4a: per-node SSH target map: {_node_ssh_targets}")
 
         if _parallel_update:
             # ── Parallel helper ────────────────────────────────────────────
@@ -10002,9 +10103,10 @@ def _run_ontap_upgrade(log):
             for nodename, replace_img, _ci in _update_tasks:
                 def _val_worker(nn=nodename, ri=replace_img, rd=_val_results):
                     label_v = f"validate/{nn}"
+                    _target = _node_ssh_targets.get(nn, _cl_mgmt_ip)
                     try:
                         clv, _, _ = _ssh_connect_with_retry(
-                            _cl_mgmt_ip, _cl_admin_user, _cl_admin_pass,
+                            _target, _cl_admin_user, _cl_admin_pass,
                             label=label_v, max_attempts=3, interactive=False,
                         )
                     except Exception as ev:
@@ -10077,9 +10179,10 @@ def _run_ontap_upgrade(log):
 
                 def _par_worker(nn=nodename, ri=replace_img, rd=_par_results):
                     label2 = f"upgrade/{nn}"
+                    _target = _node_ssh_targets.get(nn, _cl_mgmt_ip)
                     try:
                         cl2, _, _ = _ssh_connect_with_retry(
-                            _cl_mgmt_ip, _cl_admin_user, _cl_admin_pass,
+                            _target, _cl_admin_user, _cl_admin_pass,
                             label=label2, max_attempts=3, interactive=False,
                         )
                     except Exception as e2:
