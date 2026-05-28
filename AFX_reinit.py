@@ -3802,8 +3802,9 @@ def _run_cluster_command(channel, cmd, timeout=60):
         if channel.recv_ready():
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
             output += chunk
-            sys.stdout.write(chunk)
-            sys.stdout.flush()
+            if not _console_quiet:
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
             if _session_log:
                 _session_log.log_console(chunk)
             if _CLUSTER_PROMPT_RE.search(output[-200:]):
@@ -3812,8 +3813,9 @@ def _run_cluster_command(channel, cmd, timeout=60):
                 while channel.recv_ready():
                     extra = channel.recv(4096).decode("utf-8", errors="replace")
                     output += extra
-                    sys.stdout.write(extra)
-                    sys.stdout.flush()
+                    if not _console_quiet:
+                        sys.stdout.write(extra)
+                        sys.stdout.flush()
                     if _session_log:
                         _session_log.log_console(extra)
                 return output
@@ -9855,11 +9857,12 @@ def _run_ontap_upgrade(log):
         if log:
             log.start_phase("Upgrade Workflow")
         print("\n  \U0001f50d Querying current images per node...")
-        out_img = _run_cluster_command(
-            channel_41,
-            "set advanced -c off; system image show -iscurrent true -fields image",
-            timeout=60,
-        )
+        with _suppress_console():
+            out_img = _run_cluster_command(
+                channel_41,
+                "set advanced -c off; system image show -iscurrent true -fields image",
+                timeout=60,
+            )
         node_image = _parse_image_show(out_img)
         if not node_image:
             print("  \u274c Could not parse 'system image show' output. Exiting.")
@@ -9885,11 +9888,12 @@ def _run_ontap_upgrade(log):
             print(f"  \u27a1\ufe0f  promoted-dev-update: {nodename}...")
             if log:
                 log.log(f"Running promoted-dev-update on {nodename}")
-            _run_cluster_command(
-                channel_41,
-                f"set diag -c off; system node image promoted-dev-update -node {nodename}",
-                timeout=120,
-            )
+            with _suppress_console():
+                _run_cluster_command(
+                    channel_41,
+                    f"set diag -c off; system node image promoted-dev-update -node {nodename}",
+                    timeout=120,
+                )
             print(f"  \u2705 promoted-dev-update complete for {nodename}.")
             if log:
                 log.log(f"promoted-dev-update complete for {nodename}")
@@ -10256,7 +10260,8 @@ def _run_ontap_upgrade(log):
                     f"-validate-only true"
                 )
                 print(f"  \U0001f50e Validating update on {nodename}...")
-                out_val = _run_cluster_command(channel_41, vcmd, timeout=300)
+                with _suppress_console():
+                    out_val = _run_cluster_command(channel_41, vcmd, timeout=300)
                 if "error" in out_val.lower() or "failed" in out_val.lower():
                     print(f"\n  \u274c Validation failed for {nodename}:\n{out_val}")
                     if log:
@@ -10286,7 +10291,8 @@ def _run_ontap_upgrade(log):
                     f"-setdefault true"
                 )
                 print(f"  \U0001f4e5 Downloading/installing image on {nodename} (may take several minutes)...")
-                out_upd = _run_cluster_command(channel_41, ucmd, timeout=900)
+                with _suppress_console():
+                    out_upd = _run_cluster_command(channel_41, ucmd, timeout=900)
                 if "error" in out_upd.lower() or "failed" in out_upd.lower():
                     print(f"\n  \u274c Image update failed for {nodename}:\n{out_upd}")
                     if log:
@@ -10306,11 +10312,12 @@ def _run_ontap_upgrade(log):
 
         # ── Step 9: verify default image ────────────────────────────────────
         print("\n  \U0001f50d Verifying default image setting...")
-        out_def = _run_cluster_command(
-            channel_41,
-            "set advanced -c off; system image show -isdefault true -fields image",
-            timeout=60,
-        )
+        with _suppress_console():
+            out_def = _run_cluster_command(
+                channel_41,
+                "set advanced -c off; system image show -isdefault true -fields image",
+                timeout=60,
+            )
         default_images = _parse_image_show(out_def)
         upgrade_errors = []
         for nodename, current_img in node_image.items():
@@ -10333,9 +10340,10 @@ def _run_ontap_upgrade(log):
 
         # ── Step 9: storage failover readiness ──────────────────────────────
         print("\n  \U0001f4e1 Checking storage failover readiness...")
-        out_fo = _run_cluster_command(
-            channel_41, "storage failover show", timeout=60
-        )
+        with _suppress_console():
+            out_fo = _run_cluster_command(
+                channel_41, "storage failover show", timeout=60
+            )
         fo_rows = _parse_failover_show(out_fo)
         if not fo_rows:
             print("  \u274c Could not parse 'storage failover show' output. Exiting.")
@@ -10389,12 +10397,13 @@ def _run_ontap_upgrade(log):
             print(f"\n  \U0001f504 Takeover: {takeover_by} takes over {takeover_node}...")
             if log:
                 log.log(f"Initiating takeover of {takeover_node} by {takeover_by}")
-            _run_cluster_command(
-                channel_41,
-                f"storage failover takeover -ofnode {takeover_node} "
-                f"-option normal -override-vetoes true",
-                timeout=60,
-            )
+            with _suppress_console():
+                _run_cluster_command(
+                    channel_41,
+                    f"storage failover takeover -ofnode {takeover_node} "
+                    f"-option normal -override-vetoes true",
+                    timeout=60,
+                )
             print(f"  \u23f3 Waiting for {takeover_node} to reach 'waiting for giveback'...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "waiting for giveback",
@@ -10408,12 +10417,13 @@ def _run_ontap_upgrade(log):
             print(f"  \U0001f501 Giving back {takeover_node}...")
             if log:
                 log.log(f"Issuing giveback for {takeover_node}")
-            _run_cluster_command(
-                channel_41,
-                f"storage failover giveback -ofnode {takeover_node} "
-                f"-override-vetoes true",
-                timeout=60,
-            )
+            with _suppress_console():
+                _run_cluster_command(
+                    channel_41,
+                    f"storage failover giveback -ofnode {takeover_node} "
+                    f"-override-vetoes true",
+                    timeout=60,
+                )
             print(f"  \u23f3 Waiting for {takeover_node} to reconnect...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "connected to",
@@ -10442,12 +10452,13 @@ def _run_ontap_upgrade(log):
 
         # ── Step 12: verify version ─────────────────────────────────────────
         print("\n  \U0001f50d Verifying ONTAP version post-upgrade...")
-        out_ver = _run_cluster_command(channel_41, "version", timeout=30)
-        out_img2 = _run_cluster_command(
-            channel_41,
-            "set advanced -c off; system image show -fields version",
-            timeout=60,
-        )
+        with _suppress_console():
+            out_ver = _run_cluster_command(channel_41, "version", timeout=30)
+            out_img2 = _run_cluster_command(
+                channel_41,
+                "set advanced -c off; system image show -fields version",
+                timeout=60,
+            )
         # Extract the version string from the 'version' command output
         ver_match = re.search(r"NetApp Release\s+([\d\.]+[^\s:;]+)", out_ver, re.IGNORECASE)
         running_ver = ver_match.group(1).strip() if ver_match else None
