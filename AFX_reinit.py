@@ -9568,6 +9568,135 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=600,
     return False
 
 
+def _pick_bmc_from_existing_config():
+    """4a helper: scan for known config / BMC files and let the operator
+    pick a single BMC (with its stored credentials) instead of typing the
+    hostname.
+
+    Returns (bmc_host, bmc_user, bmc_pass) when a BMC is chosen, or
+    (None, None, None) when no usable config file was found or the
+    operator opts for manual entry.
+    """
+    import json as _json
+
+    # Build candidate list: reinit-style configs first, then any BMC_IP.json
+    # / *.json containing netboot_bmcs or a nodes/primary_node section.
+    _candidates = []  # list of (path, data, [(label, ip, user, pw), ...])
+    _seen = set()
+
+    def _entries_from(data):
+        ents = []
+        _pn = data.get("primary_node")
+        if isinstance(_pn, dict) and _pn.get("bmc"):
+            ents.append(("primary", str(_pn["bmc"]),
+                         _pn.get("bmc_user") or "admin",
+                         _pn.get("bmc_password") or ""))
+        for _sn in (data.get("secondary_nodes") or []):
+            if isinstance(_sn, dict) and _sn.get("bmc"):
+                ents.append(("secondary", str(_sn["bmc"]),
+                             _sn.get("bmc_user") or "admin",
+                             _sn.get("bmc_password") or ""))
+        if not ents and isinstance(data.get("nodes"), list):
+            for _i, _n in enumerate(data["nodes"]):
+                if isinstance(_n, dict) and _n.get("bmc"):
+                    role = "primary" if _i == 0 else "secondary"
+                    ents.append((role, str(_n["bmc"]),
+                                 _n.get("bmc_user") or "admin",
+                                 _n.get("bmc_password") or ""))
+        if not ents and isinstance(data.get("netboot_bmcs"), list):
+            for _ip in data["netboot_bmcs"]:
+                if _ip:
+                    ents.append(("bmc", str(_ip), "", ""))
+        return ents
+
+    # First pass: canonical reinit-config filenames anywhere on the path.
+    for p in _find_config_files(deep_scan=True):
+        ap = os.path.abspath(p)
+        if ap in _seen:
+            continue
+        try:
+            with open(p, "r", encoding="utf-8") as _f:
+                _d = _json.load(_f)
+        except Exception:
+            continue
+        if not isinstance(_d, dict):
+            continue
+        _ents = _entries_from(_d)
+        if _ents:
+            _candidates.append((p, _d, _ents))
+            _seen.add(ap)
+
+    # Second pass: any other *.json in the standard search dirs with a
+    # BMC list (covers BMC_IP.json, custom names, etc.).
+    for d in _default_config_search_dirs():
+        if not os.path.isdir(d):
+            continue
+        try:
+            _names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for _fn in _names:
+            if not _fn.lower().endswith(".json"):
+                continue
+            p = os.path.join(d, _fn)
+            ap = os.path.abspath(p)
+            if ap in _seen or not os.path.isfile(p):
+                continue
+            try:
+                with open(p, "r", encoding="utf-8") as _f:
+                    _d = _json.load(_f)
+            except Exception:
+                continue
+            if not isinstance(_d, dict):
+                continue
+            _ents = _entries_from(_d)
+            if _ents:
+                _candidates.append((p, _d, _ents))
+                _seen.add(ap)
+
+    if not _candidates:
+        return None, None, None
+
+    # Pick which file to use.
+    if len(_candidates) == 1:
+        _path, _data, _ents = _candidates[0]
+        print(f"\n  📄 Using BMC list from {_path}")
+    else:
+        print("\n  📄 Found multiple config file(s) with BMC entries:")
+        for _i, (_p, _, _e) in enumerate(_candidates, 1):
+            print(f"    {_i}. {_p}  ({len(_e)} BMC(s))")
+        print("    0. Enter BMC address manually")
+        while True:
+            _sel = _prompt("  Select config file [1]: ", "1")
+            if _sel == "0":
+                return None, None, None
+            if _sel.isdigit() and 1 <= int(_sel) <= len(_candidates):
+                _path, _data, _ents = _candidates[int(_sel) - 1]
+                print(f"  ✅ Loaded {_path}")
+                break
+            print("  ⚠️  Invalid selection.")
+
+    # Pick which BMC from the chosen file.
+    print("\n  Select the BMC to use for this upgrade:")
+    for _i, (_role, _ip, _u, _pw) in enumerate(_ents, 1):
+        _cred_note = f"  (user={_u or 'admin'}{', pwd from file' if _pw else ''})"
+        print(f"    {_i}. {_ip:<18} [{_role}]{_cred_note}")
+    print("    0. Enter BMC address manually")
+    while True:
+        _sel = _prompt(f"  Select BMC [1-{len(_ents)}, or 0]: ", "1")
+        if _sel == "0":
+            return None, None, None
+        if _sel.isdigit() and 1 <= int(_sel) <= len(_ents):
+            _role, _ip, _u, _pw = _ents[int(_sel) - 1]
+            _u = _u or "admin"
+            if not _pw:
+                _pw = getpass.getpass(f"  BMC password for {_u}@{_ip}: ")
+            else:
+                print(f"  🔑 Using password from config for {_u}@{_ip}.")
+            return _ip, _u, _pw
+        print("  ⚠️  Invalid selection.")
+
+
 def _run_ontap_upgrade(log):
     """Full ONTAP upgrade workflow (mode 41 / option 4a).
 
@@ -9609,12 +9738,19 @@ def _run_ontap_upgrade(log):
         # ── Step 2: BMC credentials ─────────────────────────────────────────
         print("")
         print("  " + "\u2500" * 58)
-        bmc_host = input("  BMC hostname / IP: ").strip()
+        # Prefer an existing BMC/reinit config file (numbered list) over
+        # asking the operator to type the address. Falls back to the manual
+        # prompts when nothing usable is on disk or the operator declines.
+        bmc_host, bmc_user, bmc_pass = _pick_bmc_from_existing_config()
         if not bmc_host:
-            print("  No BMC specified. Exiting.")
-            return False
-        bmc_user = input("  BMC username [admin]: ").strip() or "admin"
-        bmc_pass = getpass.getpass(f"  BMC password for {bmc_user}@{bmc_host}: ")
+            bmc_host = input("  BMC hostname / IP: ").strip()
+            if not bmc_host:
+                print("  No BMC specified. Exiting.")
+                return False
+            bmc_user = input("  BMC username [admin]: ").strip() or "admin"
+            bmc_pass = getpass.getpass(f"  BMC password for {bmc_user}@{bmc_host}: ")
+        if log:
+            log.log(f"4a: BMC selected: {bmc_user}@{bmc_host}")
 
         # ── Step 3: SSH to BMC ──────────────────────────────────────────────
         if log:
@@ -9648,18 +9784,28 @@ def _run_ontap_upgrade(log):
         # ── Step 5: cluster shell login ─────────────────────────────────────
         if not _wait_for_cluster_prompt(channel_41, timeout=60):
             # Fell through to a login: prompt that _wait_for_cluster_prompt
-            # handles internally; if it returned False we need manual creds.
-            print("  \u26a0\ufe0f  Cluster prompt not detected; prompting for cluster credentials...")
-            try:
-                input("  Cluster admin username [admin]: ").strip()
-                cl_pass = getpass.getpass("  Cluster admin password: ")
-            except (EOFError, KeyboardInterrupt):
-                return False
-            if not _login_primary_cluster_shell(channel_41, cl_pass):
-                print("  \u274c Cluster shell login failed. Exiting.")
-                if log:
-                    log.log("Cluster shell login failed", prefix="ERROR")
-                return False
+            # handles internally; if it returned False we need creds. Reuse
+            # the BMC credentials we already collected so the operator
+            # doesn't have to type them again — fall back to interactive
+            # entry only if reuse fails.
+            print(f"  ℹ️  Cluster prompt not detected; trying BMC credentials "
+                  f"({bmc_user}) for cluster login...")
+            if log:
+                log.log(f"Cluster login: reusing BMC credentials ({bmc_user})")
+            if not _login_primary_cluster_shell(channel_41, bmc_pass):
+                print("  ⚠️  Cluster login with BMC credentials failed; "
+                      "prompting for cluster admin password...")
+                try:
+                    cl_pass = getpass.getpass(
+                        f"  Cluster admin password for {bmc_user}: "
+                    )
+                except (EOFError, KeyboardInterrupt):
+                    return False
+                if not _login_primary_cluster_shell(channel_41, cl_pass):
+                    print("  \u274c Cluster shell login failed. Exiting.")
+                    if log:
+                        log.log("Cluster shell login failed", prefix="ERROR")
+                    return False
         if log:
             log.end_phase()
 
