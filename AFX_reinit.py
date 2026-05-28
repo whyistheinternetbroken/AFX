@@ -731,6 +731,29 @@ def _tracked_input(prompt=""):
 _builtins.input = _tracked_input
 
 
+# ── Console echo suppression ────────────────────────────────────────────────
+# When True, _recv_loop / drain_channel skip writing raw BMC/cluster console
+# chunks to stdout. They still forward chunks to the session log file via
+# _session_log.log_console, so nothing is lost — just hidden from the
+# operator's terminal during noisy stages (e.g. system console hand-off and
+# cluster login probing).
+_console_quiet = False
+
+
+@contextmanager
+def _suppress_console():
+    """Temporarily silence raw console echo to stdout while leaving session
+    log capture intact. Restored on exit even if the block raises.
+    """
+    global _console_quiet
+    _prev = _console_quiet
+    _console_quiet = True
+    try:
+        yield
+    finally:
+        _console_quiet = _prev
+
+
 def _print_banner(title: str, *, width: int = 60) -> None:
     """Print a ``"=" * width`` divider, a ``"  <title>"`` line, then another
     divider. Equivalent to the common 3-line banner block sprinkled across
@@ -3072,7 +3095,7 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                 output_lower = output_lower[-8192:]
             if node_log:
                 _par_write(node_log, chunk)
-            else:
+            elif not _console_quiet:
                 sys.stdout.write(chunk)
                 sys.stdout.flush()
             if _session_log:
@@ -3142,7 +3165,7 @@ def drain_channel(channel, seconds=2, node_log=None):
             output += chunk
             if node_log:
                 _par_write(node_log, chunk)
-            else:
+            elif not _console_quiet:
                 sys.stdout.write(chunk)
                 sys.stdout.flush()
             if _session_log:
@@ -9626,33 +9649,25 @@ def _pick_bmc_from_existing_config():
             _candidates.append((p, _d, _ents))
             _seen.add(ap)
 
-    # Second pass: any other *.json in the standard search dirs with a
-    # BMC list (covers BMC_IP.json, custom names, etc.).
+    # Second pass: BMC_IP.json (the address-only file produced by 4f /
+    # _collect_netboot_bmcs). Restricted to that exact filename so we
+    # don't surface arbitrary unrelated JSONs in the picker.
     for d in _default_config_search_dirs():
-        if not os.path.isdir(d):
+        p = os.path.join(d, "BMC_IP.json")
+        ap = os.path.abspath(p)
+        if ap in _seen or not os.path.isfile(p):
             continue
         try:
-            _names = sorted(os.listdir(d))
-        except OSError:
+            with open(p, "r", encoding="utf-8") as _f:
+                _d = _json.load(_f)
+        except Exception:
             continue
-        for _fn in _names:
-            if not _fn.lower().endswith(".json"):
-                continue
-            p = os.path.join(d, _fn)
-            ap = os.path.abspath(p)
-            if ap in _seen or not os.path.isfile(p):
-                continue
-            try:
-                with open(p, "r", encoding="utf-8") as _f:
-                    _d = _json.load(_f)
-            except Exception:
-                continue
-            if not isinstance(_d, dict):
-                continue
-            _ents = _entries_from(_d)
-            if _ents:
-                _candidates.append((p, _d, _ents))
-                _seen.add(ap)
+        if not isinstance(_d, dict):
+            continue
+        _ents = _entries_from(_d)
+        if _ents:
+            _candidates.append((p, _d, _ents))
+            _seen.add(ap)
 
     if not _candidates:
         return None, None, None
@@ -9767,6 +9782,13 @@ def _run_ontap_upgrade(log):
                 log.log(f"BMC connection failed: {e}", prefix="ERROR")
             return False
         channel_41 = _open_shell(client_41)
+        # Publish the BMC credentials as the "primary" creds so the silent
+        # cluster-login candidates (_candidate_cluster_logins) can reuse them
+        # when the console hits a `login:` prompt; otherwise the operator
+        # would be re-prompted for username/password they already supplied.
+        global _primary_bmc_user, _primary_bmc_password
+        _primary_bmc_user = bmc_user
+        _primary_bmc_password = bmc_pass
         if log:
             log.end_phase()
 
@@ -9779,15 +9801,23 @@ def _run_ontap_upgrade(log):
 
         if log:
             log.start_phase("Cluster Shell Login")
-        enter_system_console(channel_41)
+        # Suppress raw BMC/console echo while we walk through `system console`
+        # and the cluster login prompt — the chunks ("system console", "Type
+        # Ctrl-D to exit.", "login:", etc.) are still captured in the session
+        # log, but the operator's terminal stays readable.
+        print("  \U0001f4fa Entering system console (output suppressed; "
+              "see log file)...")
+        with _suppress_console():
+            enter_system_console(channel_41)
 
         # ── Step 5: cluster shell login ─────────────────────────────────────
-        if not _wait_for_cluster_prompt(channel_41, timeout=60):
-            # Fell through to a login: prompt that _wait_for_cluster_prompt
-            # handles internally; if it returned False we need creds. Reuse
-            # the BMC credentials we already collected so the operator
-            # doesn't have to type them again — fall back to interactive
-            # entry only if reuse fails.
+        # _attempt_console_cluster_login (invoked from inside
+        # _wait_for_cluster_prompt when a `login:` prompt appears) will try
+        # _primary_bmc_user/_primary_bmc_password automatically, so the
+        # operator should not see a prompt at all in the common case.
+        with _suppress_console():
+            _cluster_up = _wait_for_cluster_prompt(channel_41, timeout=60)
+        if not _cluster_up:
             print(f"  ℹ️  Cluster prompt not detected; trying BMC credentials "
                   f"({bmc_user}) for cluster login...")
             if log:
