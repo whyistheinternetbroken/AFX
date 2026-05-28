@@ -7456,6 +7456,21 @@ def _run_4b_standalone(log, resuming: bool = False):
             if log and _license_mode:
                 log.log(f"4b: ONTAP license configured (mode={_license_mode})")
 
+        # Physical disk zeroing applies to every reinit sub-mode (1a/1b/3);
+        # it is set by the LOADER stage on the primary node. The direct
+        # mode 1/3 menu entries prompt for this up-front, so 4b's reinit
+        # path must do the same to avoid silently skipping the option.
+        global _physical_zeroing
+        print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
+        _pz_q = _prompt(
+            "  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: "
+        , "n").lower()
+        _physical_zeroing = (_pz_q == "y")
+        if _physical_zeroing:
+            print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+        if log:
+            log.log(f"4b: physical disk zeroing requested: {_physical_zeroing}")
+
     # ── Static vs DHCP ifconfig in LOADER ─────────────────────────────────
     global _netboot_static_ip
     _sip_ans = _prompt(
