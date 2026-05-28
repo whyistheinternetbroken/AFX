@@ -9708,6 +9708,16 @@ def _pick_bmc_from_existing_config():
                 _pw = getpass.getpass(f"  BMC password for {_u}@{_ip}: ")
             else:
                 print(f"  🔑 Using password from config for {_u}@{_ip}.")
+            # Stash the picked config so downstream lookups (e.g. cluster
+            # management IP for parallel image updates) can default from it
+            # without re-prompting. Only promote reinit-style configs that
+            # carry a `cluster` block; BMC_IP.json files have none.
+            if isinstance(_data, dict) and _data.get("cluster"):
+                global _config_data
+                _config_data = _data
+                _cl_mgmt = (_data.get("cluster") or {}).get("clus_mgmt_address")
+                if _cl_mgmt:
+                    _cluster_config.setdefault("mgmt_ip", _cl_mgmt)
             return _ip, _u, _pw
         print("  ⚠️  Invalid selection.")
 
@@ -9895,7 +9905,22 @@ def _run_ontap_upgrade(log):
         _cl_admin_user = "admin"
         _cl_admin_pass = ""
         if _parallel_update:
-            _cl_mgmt_ip = _prompt("  Cluster management IP: ")
+            # Prefer a value already known from config / earlier discovery
+            # so the operator isn't asked for something we have on disk.
+            _cfg_cluster = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
+            _default_mgmt = (_cluster_config.get("mgmt_ip")
+                             or _cfg_cluster.get("clus_mgmt_address")
+                             or "")
+            if _default_mgmt:
+                _ans = _prompt(
+                    f"  Cluster management IP [{_default_mgmt}]: ", _default_mgmt
+                )
+                _cl_mgmt_ip = _ans or _default_mgmt
+                print(f"  \U0001f4cd Using cluster management IP: {_cl_mgmt_ip}")
+                if log:
+                    log.log(f"4a: cluster mgmt IP from config: {_cl_mgmt_ip}")
+            else:
+                _cl_mgmt_ip = _prompt("  Cluster management IP: ")
             if not _cl_mgmt_ip:
                 print("  No cluster management IP entered; falling back to sequential.")
                 _parallel_update = False
