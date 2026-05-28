@@ -675,6 +675,62 @@ def _prompt(prompt: str, default: str = "") -> str:
         return default
 
 
+# ── Interactive-prompt wait-time tracker ────────────────────────────────────
+# Wraps the builtin ``input`` once at import time so every blocking prompt
+# (whether it goes through ``_prompt`` or calls ``input`` directly) is
+# measured. The accumulated wait time is surfaced in the run summary so that
+# operator idle time at prompts can be distinguished from real work time and
+# the unaccounted-time gap between phase totals and wall-clock runtime is
+# explained.
+import builtins as _builtins
+
+_prompt_wait_seconds = 0.0
+_prompt_wait_count = 0
+_prompt_wait_lock = threading.Lock()
+_prompt_wait_max = 0.0
+_prompt_wait_max_label = ""
+# Threshold (seconds) above which a single prompt is considered an
+# "extended" operator wait worth flagging in the summary.
+_PROMPT_WAIT_EXTENDED_THRESHOLD = 60.0
+_prompt_wait_extended = []  # list[(label, seconds)]
+
+_orig_input = _builtins.input
+
+
+def _tracked_input(prompt=""):
+    """Drop-in replacement for the builtin ``input`` that records how long
+    the operator spent at each prompt. Behaves identically otherwise; raised
+    exceptions (EOFError/KeyboardInterrupt) are re-raised after the wait
+    time is still recorded so the totals include aborted prompts.
+    """
+    global _prompt_wait_seconds, _prompt_wait_count
+    global _prompt_wait_max, _prompt_wait_max_label
+    _start = time.monotonic()
+    try:
+        return _orig_input(prompt)
+    finally:
+        _elapsed = time.monotonic() - _start
+        # Strip ANSI/whitespace from the label so the summary stays readable.
+        try:
+            _label = re.sub(r"\x1b\[[0-9;]*m", "", str(prompt))
+            _label = _label.strip().splitlines()[-1] if _label.strip() else ""
+            if len(_label) > 60:
+                _label = _label[:57] + "..."
+        except Exception:
+            _label = ""
+        with _prompt_wait_lock:
+            _prompt_wait_seconds += _elapsed
+            _prompt_wait_count += 1
+            if _elapsed > _prompt_wait_max:
+                _prompt_wait_max = _elapsed
+                _prompt_wait_max_label = _label
+            if _elapsed >= _PROMPT_WAIT_EXTENDED_THRESHOLD:
+                _prompt_wait_extended.append((_label, _elapsed))
+
+
+_builtins.input = _tracked_input
+
+
 def _print_banner(title: str, *, width: int = 60) -> None:
     """Print a ``"=" * width`` divider, a ``"  <title>"`` line, then another
     divider. Equivalent to the common 3-line banner block sprinkled across
@@ -1526,6 +1582,31 @@ class SessionLogger:
                     )
             self._file.write(f"  {'─' * 55}\n")
             self._file.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
+            # Operator idle time at interactive prompts plus the
+            # unaccounted gap (anything not covered by tracked phases or
+            # prompt waits) so the wall-clock vs. phase-sum discrepancy
+            # is visible at a glance.
+            _pw = float(_prompt_wait_seconds)
+            _phase_sum = sum(self._phase_times.values()) if self._phase_times else 0.0
+            _unaccounted = max(0.0, total_elapsed - _phase_sum - _pw)
+            self._file.write(
+                f"  {'Time waiting for prompts (x' + str(_prompt_wait_count) + ')':<45} "
+                f"{_pw:>7.1f}s ({_pw/60:.1f}m)\n"
+            )
+            if _prompt_wait_max > 0:
+                _lbl = _prompt_wait_max_label or "(no label)"
+                self._file.write(
+                    f"     - longest single wait: {_prompt_wait_max:.1f}s "
+                    f"({_prompt_wait_max/60:.1f}m) at: {_lbl}\n"
+                )
+            for _ext_lbl, _ext_sec in _prompt_wait_extended:
+                self._file.write(
+                    f"     - extended wait {_ext_sec:>6.1f}s "
+                    f"({_ext_sec/60:.1f}m) at: {_ext_lbl or '(no label)'}\n"
+                )
+            self._file.write(
+                f"  {'Unaccounted time':<45} {_unaccounted:>7.1f}s ({_unaccounted/60:.1f}m)\n"
+            )
             if self._step_times:
                 self._file.write(f"\n{'─' * 70}\n")
                 self._file.write("Step Timing Summary\n")
@@ -1602,6 +1683,27 @@ class SessionLogger:
                             )
                     sf.write(f"  {'─' * 55}\n")
                     sf.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
+                    _pw = float(_prompt_wait_seconds)
+                    _phase_sum = sum(self._phase_times.values()) if self._phase_times else 0.0
+                    _unaccounted = max(0.0, total_elapsed - _phase_sum - _pw)
+                    sf.write(
+                        f"  {'Time waiting for prompts (x' + str(_prompt_wait_count) + ')':<45} "
+                        f"{_pw:>7.1f}s ({_pw/60:.1f}m)\n"
+                    )
+                    if _prompt_wait_max > 0:
+                        _lbl = _prompt_wait_max_label or "(no label)"
+                        sf.write(
+                            f"     - longest single wait: {_prompt_wait_max:.1f}s "
+                            f"({_prompt_wait_max/60:.1f}m) at: {_lbl}\n"
+                        )
+                    for _ext_lbl, _ext_sec in _prompt_wait_extended:
+                        sf.write(
+                            f"     - extended wait {_ext_sec:>6.1f}s "
+                            f"({_ext_sec/60:.1f}m) at: {_ext_lbl or '(no label)'}\n"
+                        )
+                    sf.write(
+                        f"  {'Unaccounted time':<45} {_unaccounted:>7.1f}s ({_unaccounted/60:.1f}m)\n"
+                    )
 
                 # ---- Step Timing ----
                 if self._step_times:
