@@ -9710,11 +9710,17 @@ def _pick_bmc_from_existing_config():
                 _pw = getpass.getpass(f"  BMC password for {_u}@{_ip}: ")
             else:
                 print(f"  🔑 Using password from config for {_u}@{_ip}.")
-            # Stash the picked config so downstream lookups (e.g. cluster
-            # management IP for parallel image updates) can default from it
-            # without re-prompting. Only promote reinit-style configs that
-            # carry a `cluster` block; BMC_IP.json files have none.
-            if isinstance(_data, dict) and _data.get("cluster"):
+            # Stash the picked config so downstream lookups (e.g. per-node
+            # management IPs for parallel image updates) can default from
+            # it without re-prompting. Promote any reinit-style file —
+            # node entries are useful even without a top-level `cluster`
+            # block.
+            if isinstance(_data, dict) and (
+                _data.get("primary_node")
+                or _data.get("secondary_nodes")
+                or _data.get("nodes")
+                or _data.get("cluster")
+            ):
                 global _config_data
                 _config_data = _data
                 _cl_mgmt = (_data.get("cluster") or {}).get("clus_mgmt_address")
@@ -9914,52 +9920,80 @@ def _run_ontap_upgrade(log):
         if _parallel_update:
             # Prefer per-node management IPs from the picked reinit config so
             # each parallel worker hits its own node instead of funneling
-            # every session through the cluster-mgmt LIF. Falls back to the
-            # cluster-mgmt IP when no node entries are available.
+            # every session through the cluster-mgmt LIF. Falls back to
+            # scanning every reinit config on disk, then finally to a
+            # manual prompt.
+            import json as _json_pool
             _cfg_cluster = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
             _node_mgmt_pool = []  # ordered list of mgmt IPs from config
-            if isinstance(_config_data, dict):
-                _pn_cfg = _config_data.get("primary_node") or {}
-                if isinstance(_pn_cfg, dict) and _pn_cfg.get("node_mgmt_ip"):
-                    _node_mgmt_pool.append(str(_pn_cfg["node_mgmt_ip"]))
-                for _sn in (_config_data.get("secondary_nodes") or []):
+            _seen_ips = set()
+
+            def _harvest_pool(_d):
+                if not isinstance(_d, dict):
+                    return
+                _pn = _d.get("primary_node") or {}
+                if isinstance(_pn, dict) and _pn.get("node_mgmt_ip"):
+                    _ip = str(_pn["node_mgmt_ip"]).strip()
+                    if _ip and _ip not in _seen_ips:
+                        _seen_ips.add(_ip)
+                        _node_mgmt_pool.append(_ip)
+                for _sn in (_d.get("secondary_nodes") or []):
                     if isinstance(_sn, dict) and _sn.get("node_mgmt_ip"):
-                        _node_mgmt_pool.append(str(_sn["node_mgmt_ip"]))
-                if not _node_mgmt_pool:
-                    for _n in (_config_data.get("nodes") or []):
-                        if isinstance(_n, dict) and _n.get("node_mgmt_ip"):
-                            _node_mgmt_pool.append(str(_n["node_mgmt_ip"]))
+                        _ip = str(_sn["node_mgmt_ip"]).strip()
+                        if _ip and _ip not in _seen_ips:
+                            _seen_ips.add(_ip)
+                            _node_mgmt_pool.append(_ip)
+                for _n in (_d.get("nodes") or []):
+                    if isinstance(_n, dict) and _n.get("node_mgmt_ip"):
+                        _ip = str(_n["node_mgmt_ip"]).strip()
+                        if _ip and _ip not in _seen_ips:
+                            _seen_ips.add(_ip)
+                            _node_mgmt_pool.append(_ip)
+
+            _harvest_pool(_config_data if isinstance(_config_data, dict) else None)
+            if not _node_mgmt_pool:
+                # The picked file may have been a BMC_IP.json with no node
+                # mgmt info; widen the search to every reinit config on
+                # disk so we still find node_mgmt_ip values without
+                # prompting the operator.
+                for _p in _find_config_files(deep_scan=True):
+                    try:
+                        with open(_p, "r", encoding="utf-8") as _f:
+                            _harvest_pool(_json_pool.load(_f))
+                    except Exception:
+                        continue
 
             _cl_admin_user = bmc_user
             _cl_admin_pass = bmc_pass
 
             if _node_mgmt_pool:
                 print(f"\n  \U0001f4cd Using {len(_node_mgmt_pool)} node management "
-                      f"IP(s) from config for parallel SSH:")
+                      f"IP(s) from reinit config for parallel SSH:")
                 for _ip in _node_mgmt_pool:
                     print(f"     • {_ip}")
                 if log:
                     log.log(f"4a: node mgmt IPs from config: {_node_mgmt_pool}")
                 _validate_targets = list(_node_mgmt_pool)
             else:
-                _default_mgmt = (_cluster_config.get("mgmt_ip")
-                                 or _cfg_cluster.get("clus_mgmt_address")
-                                 or "")
-                if _default_mgmt:
-                    _ans = _prompt(
-                        f"  Cluster management IP [{_default_mgmt}]: ", _default_mgmt
-                    )
-                    _cl_mgmt_ip = _ans or _default_mgmt
-                else:
-                    _cl_mgmt_ip = _prompt("  Cluster management IP: ")
-                if not _cl_mgmt_ip:
-                    print("  No cluster management IP entered; falling back to sequential.")
+                # No node mgmt IPs anywhere on disk — last-resort manual
+                # entry. Operator can still type a single LIF (cluster or
+                # node mgmt) to drive all parallel sessions.
+                print("\n  \u26a0\ufe0f  No node management IPs found in any reinit "
+                      "config on disk.")
+                _manual_ip = _prompt(
+                    "  Enter a node (or cluster) management IP to use "
+                    "for all parallel sessions: "
+                )
+                if not _manual_ip:
+                    print("  No address entered; falling back to sequential.")
                     _parallel_update = False
+                    _validate_targets = []
                 else:
-                    print(f"  \U0001f4cd Using cluster management IP: {_cl_mgmt_ip}")
+                    _cl_mgmt_ip = _manual_ip
+                    print(f"  \U0001f4cd Using management IP: {_cl_mgmt_ip}")
                     if log:
-                        log.log(f"4a: cluster mgmt IP fallback: {_cl_mgmt_ip}")
-                _validate_targets = [_cl_mgmt_ip] if _cl_mgmt_ip else []
+                        log.log(f"4a: parallel SSH fallback IP: {_cl_mgmt_ip}")
+                    _validate_targets = [_cl_mgmt_ip]
 
             # Ping + auth validation: confirm every target is reachable and
             # accepts the BMC credentials BEFORE starting the long-running
