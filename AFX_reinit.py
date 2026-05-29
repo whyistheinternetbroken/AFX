@@ -6465,12 +6465,63 @@ def _classify_auth_failure(exc: BaseException) -> str:
     return str(exc) or exc.__class__.__name__
 
 
+def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords):
+    """Interactive offer: when BMC verification fails and the operator
+    declines to re-enter addresses, ask whether to run the stale-SSH
+    diagnostic (and optional ipmitool sol deactivate cleanup) against
+    each failing BMC. Safe / read-only by default; the cleanup pass is
+    explicitly confirmed before running.
+    """
+    if not failing_ips:
+        return
+    try:
+        ans = input(
+            "\n  Run diagnostics/fix SSH issues that may be causing this?"
+            " [y/N]: "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if ans != "y":
+        return
+
+    for _ip in failing_ips:
+        print(f"\n  🔍 Diagnosing SSH state for {_ip}...")
+        with suppress(Exception):
+            _diagnose_stale_bmc_sessions(_ip, log=_session_log)
+
+    try:
+        fix_ans = input(
+            "\n  Attempt to clear stale SSH sessions for these BMC(s)?"
+            "\n    • drop in-process SSH clients we still hold"
+            "\n    • run 'ipmitool sol deactivate' (if ipmitool is installed)"
+            f"\n    • SIGTERM other-python PIDs only if --auto-clear-stale-bmc was given"
+            f" (currently: {'ON' if _auto_clear_stale_bmc else 'OFF'})"
+            "\n  Proceed? [y/N]: "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if fix_ans != "y":
+        return
+
+    for _ip in failing_ips:
+        _pw = (bmc_passwords or {}).get(_ip, "") if isinstance(bmc_passwords, dict) else ""
+        print(f"\n  🧹 Cleaning stale SSH sessions for {_ip}...")
+        with suppress(Exception):
+            _clear_stale_bmc_sessions(_ip, bmc_user, _pw, log=_session_log)
+    print(
+        "\n  ✅ Cleanup pass complete. Re-run the script (or the same"
+        " option) to retry BMC verification."
+    )
+
+
 def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                                   max_attempts=3, retry_pause=5):
     """Verify a list of BMCs via `_verify_bmc_ip`, retrying any that fail
-    up to `max_attempts` times (default 3). Returns (ok, bmc_user) — ok
-    is True if every BMC eventually verified, and bmc_user reflects any
-    new shared username the operator entered while re-credentialing.
+    up to `max_attempts` times (default 3). Returns
+    (ok, bmc_user, failing_ips) — ok is True if every BMC eventually
+    verified, bmc_user reflects any new shared username the operator
+    entered while re-credentialing, and failing_ips lists the IPs that
+    never verified (empty on success).
     Only the still-failing IPs are re-attempted on each retry, and if
     failures look like auth errors the operator is asked to re-enter
     credentials for those IPs before the next attempt (rather than
@@ -6562,12 +6613,12 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                 last_reasons[_ip] = reason or "unknown failure"
         pending = next_pending
         if not pending:
-            return True, bmc_user
+            return True, bmc_user, []
     print(
         f"\n  ⚠️  {len(pending)} BMC(s) still failed verification after "
         f"{max_attempts} attempts: {', '.join(pending)}"
     )
-    return False, bmc_user
+    return False, bmc_user, list(pending)
 
 
 def _verify_bmc_ip(ip, username, password):
@@ -6865,7 +6916,7 @@ def _collect_netboot_bmcs():
                         _bmc_passwords[_ip] = _override_p
 
             # Verify (auto-retries each failing BMC up to 3 times before prompting).
-            all_ok, _bmc_user = _verify_bmc_list_with_retries(
+            all_ok, _bmc_user, _failing = _verify_bmc_list_with_retries(
                 _bmc_ips, _bmc_user, _bmc_passwords, max_attempts=3,
             )
 
@@ -6880,6 +6931,9 @@ def _collect_netboot_bmcs():
                 if retry == "y":
                     break  # fall through to manual entry
                 if retry == "n" or retry == "":
+                    _offer_bmc_ssh_diagnostic(
+                        _failing, _bmc_user, _bmc_passwords,
+                    )
                     return None, None, None
         # end if _candidates
 
@@ -6928,7 +6982,7 @@ def _collect_netboot_bmcs():
                 bmc_passwords[ip] = getpass.getpass(f"  Password for {ip}: ")
 
         # ── Verification (auto-retries each failing BMC up to 3 times) ─────
-        all_ok, bmc_user = _verify_bmc_list_with_retries(
+        all_ok, bmc_user, failing_ips = _verify_bmc_list_with_retries(
             bmc_ips, bmc_user, bmc_passwords, max_attempts=3,
         )
 
@@ -6941,6 +6995,9 @@ def _collect_netboot_bmcs():
             if retry == "y":
                 break  # re-collect
             if retry == "n" or retry == "":
+                _offer_bmc_ssh_diagnostic(
+                    failing_ips, bmc_user, bmc_passwords,
+                )
                 return None, None, None
 
 
