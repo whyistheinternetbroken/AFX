@@ -9551,42 +9551,51 @@ def _parse_failover_show(output):
     return rows
 
 
-def _wait_for_failover_state(channel, node, target_substr, total_timeout=600,
-                             poll_interval=20, log=None):
+def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
+                             poll_interval=180, log=None, phase_label=None):
     """Poll 'storage failover show -fields node,state-description' until
     the row whose first column is exactly `node` contains `target_substr`
     (case-insensitive) in the state-description column.
     Returns True on success, False on timeout.
+
+    Console output is suppressed during the poll — the raw cluster command
+    echo and full state row land in the session log only. The operator
+    sees a single recurring "Waiting for ..." line with elapsed/remaining
+    seconds.
     """
     import time as _time
+    label = phase_label or f"failover state '{target_substr}'"
     start = _time.monotonic()
-    while _time.monotonic() - start < total_timeout:
-        out = _run_cluster_command(
-            channel,
-            "set advanced -c off; storage failover show -fields node,state-description",
-            timeout=30,
-        )
+    while True:
+        elapsed = _time.monotonic() - start
+        if elapsed >= total_timeout:
+            break
+        remaining = total_timeout - elapsed
+        with _suppress_console():
+            out = _run_cluster_command(
+                channel,
+                "set advanced -c off; storage failover show -fields node,state-description",
+                timeout=30,
+            )
+        matched_row = None
         for line in out.splitlines():
-            # Only match the row where the node name is the first token
-            # (first column). This avoids false matches on lines where the
-            # node name appears in another node's state description, e.g.
-            # "Connected to rtp-afx1k-c01-01".
             stripped = line.strip()
             if not stripped:
                 continue
             first_token = stripped.split()[0].lower()
             if first_token != node.lower():
                 continue
-            state_lower = stripped.lower()
-            if target_substr.lower() in state_lower:
+            matched_row = stripped
+            if target_substr.lower() in stripped.lower():
                 if log:
                     log.log(f"Failover state for {node}: matched '{target_substr}'")
                 return True
-            print(f"  ⏳ [{node}] state: {stripped}")
-            if log:
-                log.log(f"Failover state for {node}: {stripped}")
             break   # only one row per node; no need to keep scanning
-        _time.sleep(poll_interval)
+        if log and matched_row:
+            log.log(f"Failover state for {node}: {matched_row}")
+        print(f"  \u23f3 Waiting for {label} on {node}  "
+              f"(elapsed {int(elapsed)}s / remaining {int(remaining)}s)")
+        _time.sleep(min(poll_interval, max(1, remaining)))
     if log:
         log.log(f"Timeout waiting for failover state '{target_substr}' on {node}",
                 prefix="WARN")
@@ -10441,7 +10450,8 @@ def _run_ontap_upgrade(log):
             print(f"  \u23f3 Waiting for {takeover_node} to reach 'waiting for giveback'...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "waiting for giveback",
-                total_timeout=600, poll_interval=20, log=log,
+                total_timeout=1800, poll_interval=180, log=log,
+                phase_label="takeover/giveback",
             ):
                 print(f"  \u274c Timed out waiting for giveback state on {takeover_node}.")
                 if log:
@@ -10461,7 +10471,8 @@ def _run_ontap_upgrade(log):
             print(f"  \u23f3 Waiting for {takeover_node} to reconnect...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "connected to",
-                total_timeout=600, poll_interval=20, log=log,
+                total_timeout=1800, poll_interval=180, log=log,
+                phase_label="node reconnect",
             ):
                 print(f"  \u274c Timed out waiting for {takeover_node} to reconnect.")
                 if log:
