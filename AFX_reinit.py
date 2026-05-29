@@ -60,6 +60,13 @@ class CheckpointManager:
       ``bmc_connected``       — BMC SSH shell established
       ``at_loader``           — Node reached LOADER prompt
       ``install_done``        — Netboot + option 6 complete; node at ONTAP login
+      ``option6_done``        — Boot menu option 6 confirmation accepted.
+                                Marked as soon as the 'y' confirmation
+                                is sent so that failures during the
+                                post-option-6 boot wait (where most
+                                runs die) do not force a re-install on
+                                resume. Treated as install-equivalent
+                                by the resume skip logic.
       ``reinit_loader``       — Reconnected to BMC for reinit; back at LOADER
       ``primary_bootmenu_done`` — (global) primary node has cleared the
                                   ONTAP boot menu (option 9 for mode 1b/3,
@@ -7660,6 +7667,7 @@ def _run_4b_standalone(log, resuming: bool = False):
     # future improvement — the operator can re-confirm progress visually.)
     if resuming and _checkpoint:
         _install_done_ips = _checkpoint.nodes_done_for("install_done")
+        _opt6_done_ips    = _checkpoint.nodes_done_for("option6_done")
         _reinit_done_ips  = _checkpoint.nodes_done_for("reinit_loader")
         _opt4_done_ips    = _checkpoint.nodes_done_for("peer_option4_done")
         _joined_ips       = _checkpoint.nodes_done_for("peer_joined")
@@ -7668,6 +7676,8 @@ def _run_4b_standalone(log, resuming: bool = False):
             _flags = []
             if _ip in _install_done_ips:
                 _flags.append("install_done")
+            if _ip in _opt6_done_ips:
+                _flags.append("option6_done")
             if _ip in _reinit_done_ips:
                 _flags.append("reinit_loader")
             if _ip in _opt4_done_ips:
@@ -7686,7 +7696,8 @@ def _run_4b_standalone(log, resuming: bool = False):
         if log:
             log.log(
                 "4b resume: prior progress — install_done="
-                f"{_install_done_ips}, reinit_loader={_reinit_done_ips}, "
+                f"{_install_done_ips}, option6_done={_opt6_done_ips}, "
+                f"reinit_loader={_reinit_done_ips}, "
                 f"peer_option4_done={_opt4_done_ips}, "
                 f"peer_joined={_joined_ips}, "
                 f"primary_bootmenu_done={_checkpoint.is_done('primary_bootmenu_done')}, "
@@ -7704,25 +7715,35 @@ def _run_4b_standalone(log, resuming: bool = False):
             _node_files[ip] = None
 
     # ── Decide whether to skip the install phase (Steps 2–6a) ────────────
-    # On a resumed run where every BMC IP already has install_done recorded,
-    # the install is complete and we can jump straight to Step 6b (reinit
-    # reconnect). install_done is recorded at the end of Step 6a (option 6)
-    # only after a node reaches the ONTAP login prompt, so it is the correct
-    # signal that the destructive install work is finished.
+    # On a resumed run where every BMC IP already has install_done OR
+    # option6_done recorded, the destructive install work is complete and
+    # we can jump straight to Step 6b (reinit reconnect). option6_done is
+    # written the moment the boot-menu 'y' confirmation is accepted (which
+    # is much earlier than install_done, which waits for login: after the
+    # post-option-6 reboot). Most observed failures happen in that
+    # boot-wait window, so option6_done is the safer skip trigger.
     _install_done_ips_set = (
         set(_checkpoint.nodes_done_for("install_done")) if _checkpoint else set()
     )
+    _opt6_done_ips_set = (
+        set(_checkpoint.nodes_done_for("option6_done")) if _checkpoint else set()
+    )
+    _install_equiv_ips = _install_done_ips_set | _opt6_done_ips_set
     _skip_install = bool(
-        resuming and _install_done_ips_set
-        and all(ip in _install_done_ips_set for ip in bmc_ips)
+        resuming and _install_equiv_ips
+        and all(ip in _install_equiv_ips for ip in bmc_ips)
     )
     if _skip_install:
         print(
             f"\n  🔖 Checkpoint: all {len(bmc_ips)} node(s) have install_done "
-            "— skipping Steps 2–6a (BMC connect / reset / netboot / option 6)."
+            "or option6_done — skipping Steps 2–6a (BMC connect / reset / "
+            "netboot / option 6)."
         )
         if log:
-            log.log("4b resume: skipping install phase — install_done for all nodes")
+            log.log(
+                "4b resume: skipping install phase — install_done/option6_done "
+                "for all nodes"
+            )
 
     # Initialise variables used after the install block so the skip path
     # does not NameError downstream.
@@ -8033,6 +8054,23 @@ def _run_4b_standalone(log, resuming: bool = False):
             except Exception:
                 pass
 
+        def _mark_option6_done(ip):
+            """Persist option6_done for *ip* the moment the boot-menu
+            option 6 confirmation ('y') is accepted by the node. This is
+            earlier than install_done (which waits for login: after the
+            post-option-6 reboot loop). Most observed failures happen in
+            that boot-wait window, so recording option6_done here lets
+            --resume skip Steps 2–6a even when the boot wait dies."""
+            if _checkpoint is None:
+                return
+            try:
+                with connect_lock:
+                    _checkpoint.mark_node_done("option6_done", ip)
+                if log:
+                    log.log(f"[{ip}] checkpoint: option6_done saved")
+            except Exception:
+                pass
+
         def _select_option6(ip, ch):
             if ch is None:
                 _status(f"  ⚠️  [{ip}] No channel – skipping option 6.")
@@ -8284,6 +8322,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                     ch.send("y\r")
                 except OSError:
                     pass
+                _mark_option6_done(ip)
             elif _m and "selection (1-" in _m:
                 # Menu reappeared – retry once.
                 _status(f"  ↻ [{ip}] Resending option 6 (menu reappeared)...")
@@ -8310,6 +8349,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                         ch.send("y\r")
                     except OSError:
                         pass
+                    _mark_option6_done(ip)
                 else:
                     _status(f"  ⚠️  [{ip}] Option 6 confirmation not seen after retry.")
                     if log:
