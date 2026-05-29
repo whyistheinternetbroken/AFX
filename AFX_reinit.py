@@ -299,6 +299,22 @@ class CheckpointManager:
     def created(self) -> str:
         return self._data.get("created", "")
 
+    def set_param(self, key: str, value) -> None:
+        """Store an arbitrary non-sensitive run parameter. Saved immediately."""
+        self._data.setdefault("params", {})[key] = value
+        self._save()
+
+    def get_param(self, key: str, default=None):
+        """Retrieve a stored run parameter, or *default* if not present."""
+        return self._data.get("params", {}).get(key, default)
+
+    def resume_run(self, mode: str, log_dir: str = "") -> None:
+        """Update metadata for a resumed run without clearing phase data."""
+        self._data["mode"] = mode
+        if log_dir:
+            self._data["log_dir"] = log_dir
+        self._save()
+
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _save(self) -> None:
@@ -7685,26 +7701,42 @@ def _run_4b_standalone(log, resuming: bool = False):
     # ── Step 1b: Package selection (ask now, before operations begin) ──────
     if log:
         log.start_phase("4b – Package Selection")
-    print("\n  Select the ONTAP package to netboot-install:")
-    src_type, src_value = _find_upgrade_package()
-    if src_type is None:
-        print("  No package selected. Aborting.")
+    _cp_src_type  = _checkpoint.get_param("netboot_src_type")  if (resuming and _checkpoint) else None
+    _cp_src_value = _checkpoint.get_param("netboot_src_value") if (resuming and _checkpoint) else None
+    if resuming and _cp_src_type is not None:
+        src_type  = _cp_src_type
+        src_value = _cp_src_value
+        print(f"\n  🔖 Resuming: using saved package: {src_value}")
         if log:
-            log.end_phase(outcome="FAIL", note="no package selected")
-        return False
-    if log:
-        log.end_phase()
+            log.end_phase(note=f"resumed from checkpoint: {src_value}")
+    else:
+        print("\n  Select the ONTAP package to netboot-install:")
+        src_type, src_value = _find_upgrade_package()
+        if src_type is None:
+            print("  No package selected. Aborting.")
+            if log:
+                log.end_phase(outcome="FAIL", note="no package selected")
+            return False
+        if log:
+            log.end_phase()
 
     # ── Step 1c: Reinit questions (ask now, before operations begin) ───────
-    print("\n  ✅ Package selected. Now collecting all setup information upfront.")
-    reinit_ans = input(
-        "\n  Would you like to reinit the cluster after the ONTAP installation? [y/N]: "
-    ).strip().lower()
+    _cp_do_reinit  = _checkpoint.get_param("do_reinit")   if (resuming and _checkpoint) else None
+    _cp_mode_sel   = _checkpoint.get_param("reinit_mode") if (resuming and _checkpoint) else None
 
-    _do_reinit = reinit_ans == "y"
-    _mode_sel = None
+    if resuming and _cp_do_reinit is not None:
+        _do_reinit = _cp_do_reinit
+        _mode_sel  = _cp_mode_sel
+        print(f"\n  🔖 Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
+    else:
+        print("\n  ✅ Package selected. Now collecting all setup information upfront.")
+        reinit_ans = input(
+            "\n  Would you like to reinit the cluster after the ONTAP installation? [y/N]: "
+        ).strip().lower()
+        _do_reinit = reinit_ans == "y"
+        _mode_sel = None
 
-    if _do_reinit:
+    if _do_reinit and _mode_sel is None and not resuming:
         print("\n  Select reinit mode:")
         print("    1a. Format first node (interactive)")
         print("    1b. Format first node + cluster setup (automatic)")
@@ -7716,6 +7748,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                 break
             print("  ⚠️  Invalid choice.")
 
+    if _do_reinit:
         global _operation_mode, _auto_setup, _auto_add
         if _mode_sel == "1a":
             _operation_mode = 1
@@ -7776,22 +7809,30 @@ def _run_4b_standalone(log, resuming: bool = False):
         # mode 1/3 menu entries prompt for this up-front, so 4b's reinit
         # path must do the same to avoid silently skipping the option.
         global _physical_zeroing
-        print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
-        _pz_q = _prompt(
-            "  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: "
-        , "n").lower()
-        _physical_zeroing = (_pz_q == "y")
-        if _physical_zeroing:
-            print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+        if resuming and _checkpoint and _checkpoint.get_param("physical_zeroing") is not None:
+            _physical_zeroing = _checkpoint.get_param("physical_zeroing")
+            print(f"\n  🔖 Resuming: physical zeroing={'enabled' if _physical_zeroing else 'disabled'}.")
+        else:
+            print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
+            _pz_q = _prompt(
+                "  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: "
+            , "n").lower()
+            _physical_zeroing = (_pz_q == "y")
+            if _physical_zeroing:
+                print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
         if log:
             log.log(f"4b: physical disk zeroing requested: {_physical_zeroing}")
 
     # ── Static vs DHCP ifconfig in LOADER ─────────────────────────────────
     global _netboot_static_ip
-    _sip_ans = _prompt(
-        "\n  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: "
-    , "n").lower()
-    _netboot_static_ip = (_sip_ans == "y")
+    if resuming and _checkpoint and _checkpoint.get_param("netboot_static_ip") is not None:
+        _netboot_static_ip = _checkpoint.get_param("netboot_static_ip")
+        print(f"  🔖 Resuming: static LOADER ifconfig={'enabled' if _netboot_static_ip else 'disabled'}.")
+    else:
+        _sip_ans = _prompt(
+            "\n  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: "
+        , "n").lower()
+        _netboot_static_ip = (_sip_ans == "y")
     if _netboot_static_ip:
         # Seed _node_mgmt_by_bmc from the config for any BMC not already
         # populated (e.g. when reinit was not requested so
@@ -7825,16 +7866,31 @@ def _run_4b_standalone(log, resuming: bool = False):
         log.log(f"4b: all upfront questions answered; do_reinit={_do_reinit}, mode={_mode_sel}")
 
     # ── Initialise / update checkpoint ────────────────────────────────────
-    if not resuming or _checkpoint is None:
-        _checkpoint = CheckpointManager()
-    _checkpoint.init_run(
-        mode=f"4b-{_mode_sel or 'no-reinit'}",
-        bmc_ips=bmc_ips,
-        log_dir=_log_dir,
-        config_path=getattr(log, "log_file", "") or "",
-    )
+    if resuming and _checkpoint is not None:
+        # On resume: update metadata only — do NOT call init_run(), which
+        # would wipe all the install_done/option6_done phase data we loaded.
+        _checkpoint.resume_run(
+            mode=f"4b-{_mode_sel or 'no-reinit'}",
+            log_dir=_log_dir,
+        )
+    else:
+        if _checkpoint is None:
+            _checkpoint = CheckpointManager()
+        _checkpoint.init_run(
+            mode=f"4b-{_mode_sel or 'no-reinit'}",
+            bmc_ips=bmc_ips,
+            log_dir=_log_dir,
+            config_path=getattr(log, "log_file", "") or "",
+        )
+        # Persist run params so a future --resume can skip these prompts.
+        _checkpoint.set_param("netboot_src_type",  src_type)
+        _checkpoint.set_param("netboot_src_value", src_value)
+        _checkpoint.set_param("do_reinit",         _do_reinit)
+        _checkpoint.set_param("reinit_mode",       _mode_sel)
+        _checkpoint.set_param("physical_zeroing",  _physical_zeroing)
+        _checkpoint.set_param("netboot_static_ip", _netboot_static_ip)
     if log:
-        log.log(f"4b: checkpoint initialised at {_checkpoint._path}")
+        log.log(f"4b: checkpoint {'resumed' if resuming else 'initialised'} at {_checkpoint._path}")
 
     # ── Resume status display ────────────────────────────────────────────
     # The checkpoint records each phase as it completes; on a resumed run
