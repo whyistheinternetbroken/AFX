@@ -9020,6 +9020,62 @@ def _run_4b_standalone(log, resuming: bool = False):
                     )
 
         if cl is None or ch is None:
+            # BMC passwords can get reset (typically to blank) by some
+            # service-processor resets / firmware events. Try a blank
+            # password silently, then prompt the operator for a new one
+            # if blank still fails. The retry uses the same reach-LOADER
+            # path so a success here unblocks the worker without aborting
+            # the whole parallel run.
+            _status(
+                f"  \U0001f510 [{ip}] Reconnect failed after {_reach_max} "
+                f"attempts; trying blank BMC password (post-reset fallback)..."
+            )
+            if log:
+                log.log(f"[{ip}] reach-LOADER fallback: trying blank password",
+                        prefix="WARN")
+            cl, ch = _bmc_reach_loader(
+                ip, bmc_user, "", node_log=_rl_nf, fallback_passwords=[],
+            )
+            if cl is not None and ch is not None:
+                _status(f"  \u2705 [{ip}] Blank BMC password accepted; continuing.")
+                bmc_passwords[ip] = ""
+                if log:
+                    log.log(f"[{ip}] reach-LOADER recovered with blank password")
+            else:
+                # Last resort: ask the operator for an updated password.
+                # Serialize across worker threads so prompts don't tangle.
+                _new_pw = None
+                with _stdin_lock:
+                    _status(
+                        f"  \u26a0\ufe0f  [{ip}] Blank BMC password also failed."
+                    )
+                    try:
+                        _new_pw = getpass.getpass(
+                            f"  Enter updated BMC password for "
+                            f"{bmc_user}@{ip} (blank to skip): "
+                        )
+                    except (EOFError, KeyboardInterrupt):
+                        _new_pw = None
+                if _new_pw:
+                    if log:
+                        log.log(f"[{ip}] reach-LOADER fallback: operator-supplied password")
+                    cl, ch = _bmc_reach_loader(
+                        ip, bmc_user, _new_pw,
+                        node_log=_rl_nf, fallback_passwords=[],
+                    )
+                    if cl is not None and ch is not None:
+                        _status(
+                            f"  \u2705 [{ip}] Operator-supplied password "
+                            f"accepted; continuing."
+                        )
+                        bmc_passwords[ip] = _new_pw
+                        if log:
+                            log.log(
+                                f"[{ip}] reach-LOADER recovered with "
+                                f"operator-supplied password"
+                            )
+
+        if cl is None or ch is None:
             with _reconnect_lock:
                 _reconnect_errors.append(ip)
             _status(
