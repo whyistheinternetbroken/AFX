@@ -2123,6 +2123,8 @@ def get_loader_commands():
         ]
         if _physical_zeroing:
             cmds.append("setenv raid.use-physical-zeroing? true")
+        else:
+            cmds.append("setenv raid.use-physical-zeroing? false")
         cmds += ["saveenv", "boot_ontap menu"]
         return cmds
     else:
@@ -2135,6 +2137,8 @@ def get_loader_commands():
         # up with consistent raid.use-physical-zeroing? behaviour.
         if _physical_zeroing:
             cmds.append("setenv raid.use-physical-zeroing? true")
+        else:
+            cmds.append("setenv raid.use-physical-zeroing? false")
         cmds += ["saveenv", "boot_ontap menu"]
         return cmds
 
@@ -12018,6 +12022,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         _peer_loader_cmds = ["set-defaults", "setenv AUTO_FW_UPDATE false"]
         if _physical_zeroing:
             _peer_loader_cmds.append("setenv raid.use-physical-zeroing? true")
+        else:
+            _peer_loader_cmds.append("setenv raid.use-physical-zeroing? false")
         _peer_loader_cmds += ["saveenv", "boot_ontap menu"]
         for cmd in _peer_loader_cmds:
             if cmd != "boot_ontap menu":
