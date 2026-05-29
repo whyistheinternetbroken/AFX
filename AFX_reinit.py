@@ -15003,6 +15003,27 @@ def main():
                 _fail_count47 += 1
         print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
         print(f"\n  {_pass_count47} PASS  /  {_fail_count47} FAIL  (of {len(_bmc_ips47)} tested)\n")
+
+        # ── Offer SSH diagnostic for any failing BMC(s) ──────────────────
+        # Reuses the same helper as the netboot-BMC verification flow so
+        # an operator can identify stale local SSH sockets (and optionally
+        # clean them) without leaving 4f.
+        _failing47 = [
+            _ip for _ip in _bmc_ips47
+            if _results47.get(_ip, {}).get("status") != "PASS"
+        ]
+        if _failing47:
+            # Build a {ip: password} map from per-IP creds for the helper.
+            _pw_map47 = {_ip: _creds47.get(_ip, ("", ""))[1] for _ip in _failing47}
+            # Pick a representative username; the helper only uses it for
+            # ipmitool sol deactivate, which expects a single (user, pass).
+            _rep_user47 = next(
+                (_creds47[_ip][0] for _ip in _failing47 if _ip in _creds47),
+                "admin",
+            )
+            with suppress(Exception):
+                _offer_bmc_ssh_diagnostic(_failing47, _rep_user47, _pw_map47)
+
         sys.exit(0)
 
     # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
