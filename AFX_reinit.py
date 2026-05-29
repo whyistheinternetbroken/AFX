@@ -2119,12 +2119,17 @@ def get_loader_commands():
         cmds += ["saveenv", "boot_ontap menu"]
         return cmds
     else:
-        return [
+        cmds = [
             "set-defaults",
             "setenv AUTO_FW_UPDATE false",
-            "saveenv",
-            "boot_ontap menu"
         ]
+        # Physical zeroing is a per-node LOADER setting; apply it to
+        # peers too when the operator opted in so the whole cluster ends
+        # up with consistent raid.use-physical-zeroing? behaviour.
+        if _physical_zeroing:
+            cmds.append("setenv raid.use-physical-zeroing? true")
+        cmds += ["saveenv", "boot_ontap menu"]
+        return cmds
 
 
 def get_boot_menu_option():
@@ -11734,7 +11739,14 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             return False
 
         # LOADER commands (NO destroy storage pods – this node is JOINING).
-        for cmd in ("set-defaults", "setenv AUTO_FW_UPDATE false", "saveenv", "boot_ontap menu"):
+        # Physical zeroing, if requested, is set on every node so the
+        # whole cluster ends up with consistent raid.use-physical-zeroing?
+        # behaviour.
+        _peer_loader_cmds = ["set-defaults", "setenv AUTO_FW_UPDATE false"]
+        if _physical_zeroing:
+            _peer_loader_cmds.append("setenv raid.use-physical-zeroing? true")
+        _peer_loader_cmds += ["saveenv", "boot_ontap menu"]
+        for cmd in _peer_loader_cmds:
             if cmd != "boot_ontap menu":
                 direct_send_and_wait(ch, cmd, "LOADER", timeout=15,
                                      node_log=node_file)
