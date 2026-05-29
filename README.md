@@ -275,7 +275,7 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **2b** | Add Node to Cluster (automated) | Same as 2a, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel. |
 | **2c** | Resume Node Additions | Resumes interrupted node-join operations from the last successful checkpoint. Use when a previous mode 2b or mode 3 run was interrupted before all secondary nodes completed. |
 | **3** | End-to-End Auto Reinit | Runs mode 1b on the primary node, then runs mode 2b on all secondary nodes in parallel. Fully unattended with a config file. |
-| **4a** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. |
+| **4a** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. See [Why 4a uses the BMC](#why-4a-uses-the-bmc). |
 | **4b** | Netboot Install | Boots a node via the network and installs a new ONTAP image from a netboot server. |
 | **4c** | License Install | Installs ONTAP licenses on an existing cluster. |
 | **4d** | SSH Key Setup | Configures passwordless SSH from the script host to the cluster management interface. |
@@ -283,6 +283,44 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **4f** | BMC Auth Verify | Tests BMC SSH authentication for all nodes defined in the config file and reports pass/fail. |
 
 > **Warning:** Options 1a and 1b destroy all storage on the target node and reinitialize the cluster. If a cluster already exists, use option 2 instead.
+
+---
+
+### Why 4a uses the BMC
+
+The upgrade workflow drives the cluster through the BMC console rather
+than a plain SSH session to a cluster management LIF. The BMC is the
+only path that survives every phase of the upgrade:
+
+1. **Console session is reboot / takeover / giveback proof.** `system console`
+   over the BMC is serial-over-LAN, so the session stays attached to a
+   node's CPU even when its management LIF migrates to the partner, the
+   node reboots into the new image, or it stops at the `LOADER>` prompt.
+   An SSH session to a cluster-mgmt LIF would drop the instant the LIF
+   moved or the hosting node rebooted — exactly when visibility matters
+   most.
+2. **Visibility into LOADER and panics.** If a new image fails to boot,
+   the LOADER (or panic) prompt only appears on the console. Network
+   management is gone at that point.
+3. **Cluster login bootstrap.** When the script first attaches, the
+   cluster LIFs may be unreachable (pre-reinit, post-reboot, mid-
+   takeover). The BMC always answers, and the cluster shell can be
+   reached through `system console` without depending on cluster
+   networking being healthy.
+4. **Free credential reuse.** The reinit workflow already collected BMC
+   credentials and stored them in the reinit config file. 4a picks those
+   up from the file via a numbered picker and reuses the same
+   user/password for the cluster login, eliminating extra prompts in the
+   common case.
+
+The parallel image-install path added in this version is an
+optimization layered on top: once the cluster shell is up and the
+node-management LIFs are reachable, the actual `system image update`
+commands are plain cluster CLI calls that parallelize well over a
+direct SSH to each node's management IP (pulled from the reinit
+config). The BMC remains the lifeline for login,
+`promoted-dev-update`, and the rolling takeover/giveback steps where
+the cluster LIF is in flux.
 
 ---
 
@@ -709,6 +747,7 @@ current `[Unreleased]` working set.
 
 | Version | Date | Description |
 |---|---|---|
+| v2 (unreleased) | May 28, 2026 | 4a ONTAP upgrade overhaul: BMC picker from existing reinit config / `BMC_IP.json`; cluster login reuses BMC credentials; parallel image install fans out across per-node management IPs (round-robin) with TCP/22 + SSH-auth pre-flight validation; raw cluster command echo suppressed from console (still in log); failover wait polls every 3 min for up to 30 min with live elapsed / remaining status. Interactive prompt-wait telemetry added to session summary (count, total, longest, ≥60 s extended waits, and `Unaccounted time` line). 4b reinit-type-3 now prompts for physical-disk zeroing. |
 | v2 | May 15, 2026 | Added `--screen` flag: auto-launches the script inside a detached GNU screen session to protect against SSH disconnections and terminal timeouts. Implies `--bg`. Detects existing screen sessions via `STY` env var to prevent recursion. |
 | v2b | Apr 7, 2026 | Parallel peer node operations; end-to-end mode (3); ONTAP upgrade (4a); netboot install (4b); license install (4c); SSH key setup (4d); config backup (4e); BMC auth verify (4f); JSON config file support; background mode; session log with phase/step timing, warnings, and errors inventory. |
 | v2a | Apr 7, 2026 | Session logging with timing and summary; warning/error collection in summary; `_recv_loop` + thin wrapper architecture; module-level `_peer_reinit_worker`. |

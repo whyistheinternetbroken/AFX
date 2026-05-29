@@ -9,6 +9,73 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **4a ONTAP upgrade — BMC picker from existing config.** When a reinit
+  config (`primary_node.bmc` / `secondary_nodes[].bmc`) or `BMC_IP.json`
+  is on disk, 4a presents a numbered picker (file → BMC) instead of
+  asking the operator to type the BMC address. The selected file is
+  promoted to the run-wide `_config_data` whenever it carries
+  `primary_node` / `secondary_nodes` / `nodes` / `cluster`, so
+  downstream steps can default from it without re-prompting.
+- **4a cluster login reuses BMC credentials.** After the BMC SSH
+  succeeds, the chosen `bmc_user` / `bmc_password` are published as
+  `_primary_bmc_user` / `_primary_bmc_password` and tried automatically
+  by `_attempt_console_cluster_login` when the `system console` reaches
+  a `login:` prompt. If that fails, the script falls back to a one-shot
+  `Cluster admin password for {bmc_user}:` prompt rather than asking for
+  both fields.
+- **4a parallel image install over per-node management IPs.** When the
+  operator chooses parallel mode, the script harvests every
+  `node_mgmt_ip` from the picked reinit config (and, when the picked
+  file is BMC-only, scans every other reinit config on disk via
+  `_find_config_files(deep_scan=True)`) and round-robin assigns the
+  surviving IPs to the per-node update tasks. Each parallel worker
+  SSHes to its assigned LIF instead of funneling every session through
+  a single cluster-mgmt LIF.
+- **4a parallel pre-flight validation.** Before launching the parallel
+  storm, every candidate IP is probed with a 3 s TCP/22 connect plus a
+  one-shot SSH authentication using the cluster credentials. A per-IP
+  ✅ / ❌ table is printed. On any failure the operator is asked
+  whether to proceed with only the healthy targets or fall back to the
+  sequential console path.
+- **4a failover wait — long-haul defaults and live ETA.**
+  `_wait_for_failover_state` now polls every **3 minutes** for up to
+  **30 minutes** (was 20 s × 10 min) and prints a single recurring
+  `⏳ Waiting for {phase_label} on {node}  (elapsed Xs / remaining Ys)`
+  status line. Phase labels (`takeover/giveback`, `node reconnect`) are
+  passed from `_do_takeover_giveback`.
+- **Interactive prompt-wait telemetry.** A `_tracked_input` wrapper on
+  `builtins.input` records the cumulative wall-clock time the script
+  spent blocked at interactive prompts, the count of prompts, the
+  longest single wait, and any individual waits over 60 s. The session
+  summary and standalone summary file emit:
+  - `Time waiting for prompts (xN)  Ts (Mm)`
+  - longest single wait,
+  - one line per extended (≥ 60 s) wait, and
+  - `Unaccounted time = max(0, total_elapsed − phase_sum − prompt_wait)`
+  so multi-hour gaps where an admin walked away from a prompt no longer
+  show up as unexplained drift in the per-phase report.
+
+### Changed
+- **4a console output suppression.** `_run_cluster_command` now respects
+  a new module-level `_console_quiet` flag, and `_recv_loop` /
+  `drain_channel` only write chunks to `sys.stdout` when not quiet. The
+  full output still streams to the session log via
+  `_session_log.log_console`. Every cluster-CLI invocation inside
+  `_run_ontap_upgrade()` (image show, `promoted-dev-update`, validate /
+  install, default-image verify, `storage failover show`, takeover,
+  giveback, post-upgrade `version`) and `_wait_for_failover_state`'s
+  polling loop is wrapped in `_suppress_console()`. The operator now
+  sees decorative status lines only; the raw command echo, table rows,
+  and `cluster::*>` prompts land in the log.
+- **4a "Cluster management IP" prompt removed.** Replaced by the
+  per-node mgmt-IP pool described above. A manual prompt only appears
+  as a last resort when no `node_mgmt_ip` is found in any reinit
+  config on disk.
+- **4b reinit sub-mode parity.** Selecting reinit type 3 from 4b now
+  prompts for physical-disk zeroing (matching the behaviour of direct
+  1a / 1b / 3).
+
+### Added (earlier in [Unreleased])
 - **Mode 3 checkpoint coverage expanded.** Three additional phases are
   now recorded for the standalone end-to-end mode 3 (and reused by
   mode 4b+3 where they apply):
