@@ -10250,11 +10250,15 @@ def _run_ontap_upgrade(log):
                         )
                         print(f"  [{nn}] \U0001f4e5 Installing image...")
                         out_u2 = _shell_run_cmd(cl2, ucmd2, timeout=960)
-                        print(f"  [{nn}] Output:\n{out_u2[-800:]}")
+                        # Full installer output (tar listings, MD5 / firmware
+                        # progress, prompts) is verbose; log it but keep the
+                        # console to a one-line status per node.
+                        if log:
+                            log.log(f"[{nn}] image install output (tail):\n{out_u2[-2000:]}")
                         upd_failed2 = "error" in out_u2.lower() or "failed" in out_u2.lower()
                         if upd_failed2:
                             rd[nn] = (False, out_u2[-500:])
-                            print(f"  [{nn}] \u274c Install failed.")
+                            print(f"  [{nn}] \u274c Install failed (see log for details).")
                         else:
                             rd[nn] = (True, "")
                             print(f"  [{nn}] \u2705 Image installed.")
