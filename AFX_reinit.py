@@ -9261,14 +9261,15 @@ def _run_4b_standalone(log, resuming: bool = False):
                     _status(
                         f"  \u26a0\ufe0f  [{ip}] Blank BMC password also failed."
                     )
+                    _SKIP_SENTINEL = "SKIP"
                     try:
                         _new_pw = getpass.getpass(
                             f"  Enter updated BMC password for "
-                            f"{bmc_user}@{ip} (blank to skip): "
+                            f"{bmc_user}@{ip} (type SKIP to skip): "
                         )
                     except (EOFError, KeyboardInterrupt):
-                        _new_pw = None
-                if _new_pw:
+                        _new_pw = _SKIP_SENTINEL
+                if _new_pw != _SKIP_SENTINEL:
                     if log:
                         log.log(f"[{ip}] reach-LOADER fallback: operator-supplied password")
                     cl, ch = _bmc_reach_loader(
