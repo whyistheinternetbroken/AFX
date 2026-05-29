@@ -2818,7 +2818,12 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
             # serving console, etc.). Wait 60s and retry, up to 5
             # minutes total (5 retries), before falling through to the
             # normal failure path.
-            if "banner" in msg:
+            # paramiko surfaces a slow/half-open transport as the bare
+            # SSHException "No existing session" (raised from
+            # auth_password when Transport.active is False). Treat it
+            # the same as a banner timeout — the BMC just isn't ready
+            # to authenticate yet.
+            if "banner" in msg or "no existing session" in msg:
                 _bnr_max = 5
                 _bnr_interval = 60  # seconds
                 print(
@@ -2878,7 +2883,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                     except Exception as eb:
                         last_exc = eb
                         msg_b = str(eb).lower()
-                        if "banner" in msg_b:
+                        if "banner" in msg_b or "no existing session" in msg_b:
                             print(
                                 f"   ⚠️  [{label}] {host} still not "
                                 "responding to SSH (banner timeout)."
@@ -2910,7 +2915,9 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
             # Map paramiko's noisy "Error reading SSH protocol banner" to a
             # clearer one-liner. The BMC is usually just slow to start its
             # SSH daemon (post-reboot, BMC busy serving console, etc.).
-            if "banner" in msg:
+            # "No existing session" surfaces from auth_password when the
+            # transport never came up; same underlying cause, same fix.
+            if "banner" in msg or "no existing session" in msg:
                 friendly = ("BMC SSH banner not received in time "
                             "(BMC may still be starting up)")
                 print(f"   ⚠️  [{label}] connect attempt {attempt} failed: {friendly}")
@@ -6344,7 +6351,7 @@ def _classify_auth_failure(exc: BaseException) -> str:
             or "could not resolve" in msg or "host is down" in msg):
         return "Ping failed (host unreachable / no route / timed out)"
     # SSH banner errors.
-    if "banner" in msg:
+    if "banner" in msg or "no existing session" in msg:
         return "SSH banner not received (BMC SSH may still be starting up)"
     # Fallback to raw exception text.
     return str(exc) or exc.__class__.__name__
