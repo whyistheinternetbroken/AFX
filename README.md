@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 5/22/2026  
+**Updated:** 5/29/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
 ---
@@ -54,6 +54,7 @@ All session activity is captured in a timestamped log directory with a human-rea
 | Screen Mode | `--screen` flag: automatically re-launches the script inside a detached GNU screen session. Protects against SSH disconnections and terminal timeouts. Implies `--bg`. |
 | Node add resume | Resumes interrupted node add processes. |
 | Physical disk zeroing | Adds option to physically zero disks rather than fast zero (which helps ensure performance consistency). |
+| BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 4f offers an interactive cleanup pass when BMC verification fails. |
 
 ---
 
@@ -423,6 +424,7 @@ python3 AFX_reinit.py [OPTIONS]
 | `--screen` | | Re-launch the script inside a detached GNU screen session. Keeps the run alive if your SSH connection drops or times out. Implies `--bg`. Use `screen -r afx-reinit` to reattach. No-op if already running inside screen. |
 | `--resume` | | Mode 4b only. Resume the previous 4b run from its saved checkpoint (`afx_checkpoint.json`). Skips phases already completed so you do not have to restart from scratch after a failure or Ctrl+C. See **Checkpoint & Resume** below. |
 | `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, age, BMC IPs, completed global phases, completed per-node phases — then exit. Does not modify the checkpoint file. |
+| `--auto-clear-stale-bmc` | | On banner-timeout retries, scan for `ESTABLISHED` TCP sockets to each BMC's port 22 owned by other Python processes on this host and `SIGTERM` them. The "always-on" cleanup (close own SSH clients + `ipmitool sol deactivate`) runs regardless of this flag. See [BMC SSH Stale Session Diagnostics](#bmc-ssh-stale-session-diagnostics). |
 | `--help` / `-h` | | Show a short man page about the script's options. |
 
 ---
@@ -651,6 +653,87 @@ screen -S afx-reinit python3 AFX_reinit.py --bg --config configs/reinit-config.j
 
 ---
 
+## BMC SSH Stale Session Diagnostics
+
+BMC controllers limit the number of concurrent SSH sessions (typically four). If a previous run crashed or was killed without closing its connections, those "ghost" sessions keep slots occupied and cause new connection attempts to fail with a banner-timeout error.
+
+The script has a multi-layer automatic and interactive system to detect and clear these stale sessions.
+
+### Automatic cleanup (always on)
+
+On every banner-retry attempt (up to 5 retries, 60 s apart), the script automatically:
+
+1. **Diagnoses** — scans local TCP state and prints a report of which processes hold open connections to the BMC's port 22 (stale Python PIDs, operator SSH sessions, etc.)
+2. **Closes own clients** — drops any `paramiko` SSH clients that *this* process still holds open to the affected BMC
+3. **Runs `ipmitool sol deactivate`** — if `ipmitool` is on `PATH` and BMC credentials are available, deactivates any stuck SOL (Serial-over-LAN) session; a hung SOL session is one of the most common BMC session-slot consumers
+
+### `--auto-clear-stale-bmc` (optional, more aggressive)
+
+```bash
+python3 AFX_reinit.py --auto-clear-stale-bmc
+```
+
+When this flag is set, the banner-retry cleanup additionally:
+
+- Scans for `ESTABLISHED` TCP sockets to `<bmc>:22` owned by **other Python processes** on this host (prior AFX_reinit runs that died without releasing connections)
+- Sends `SIGTERM` to those PIDs to force-close their connections
+
+> **Caution:** This can terminate a concurrent script invocation run by another operator on the same jump host. Use it only when you are certain no other active run shares the same host.
+
+### Interactive cleanup (mode 4f)
+
+When **mode 4f** (BMC Auth Verify) reports failures and you decline to re-enter addresses, the script offers an interactive diagnostic and cleanup pass:
+
+```
+  🔍 Diagnosing SSH state for 192.168.2.10...
+
+  Attempt to clear stale SSH sessions for these BMC(s)?
+    • drop in-process SSH clients we still hold
+    • run 'ipmitool sol deactivate' (if ipmitool is installed)
+    • SIGTERM other-python PIDs only if --auto-clear-stale-bmc was given (currently: OFF)
+  Proceed? [y/N]:
+```
+
+Answering `y` runs the same cleanup pass as the automatic retry path, then instructs you to re-run the script.
+
+### Example diagnostic output
+
+During a banner-timeout retry:
+
+```
+⚠️  [node01] BMC SSH banner not received from 192.168.2.10 (BMC may still be starting up). Waiting 60s and retrying (up to 5 retries)...
+  🔍 [192.168.2.10] stale-session diagnosis:
+      In-process SSH clients (this script): 1
+      Other python PIDs with open sockets to BMC:22: 2
+          - pid=12345 (python3)
+          - pid=12346 (python3)
+      💡 Re-run with --auto-clear-stale-bmc to SIGTERM these prior runs automatically.
+  🧹 [192.168.2.10] ipmitool: SOL session deactivated.
+```
+
+If no stale local sockets are found but the banner timeout persists, the script prints:
+
+```
+  🔍 [192.168.2.10] stale-session diagnosis: no stale local SSH sockets to BMC:22 found.
+      BMC slot pool is likely starved server-side (try ipmitool sol deactivate).
+```
+
+In that case the BMC's session pool is likely full from sessions opened by other hosts or devices. Manually running `ipmitool sol deactivate` from the jump host (or rebooting the BMC) may be necessary.
+
+### `ipmitool` installation
+
+`ipmitool` is optional. If it is not installed, the SOL-deactivate step is silently skipped.
+
+```bash
+# Ubuntu/Debian
+sudo apt install ipmitool
+
+# RHEL/CentOS/Fedora
+sudo dnf install ipmitool
+```
+
+---
+
 ## Known Issues and Gotchas
 
 - **BMC session timeout:** Some BMC firmware versions disconnect idle sessions after 5–10 minutes. If the script appears to hang waiting for the LOADER prompt after a long delay, try re-running with a fresh BMC session.
@@ -668,6 +751,16 @@ screen -S afx-reinit python3 AFX_reinit.py --bg --config configs/reinit-config.j
 ---
 
 ## Troubleshooting
+
+### BMC SSH banner timeout (session pool full)
+
+If the script repeatedly fails to connect with a banner-timeout error even after a node has fully booted:
+
+- The BMC's SSH session pool is likely exhausted by stale connections from prior runs
+- Watch the automatic diagnostic output printed before each retry — it lists which local PIDs hold open sockets to the BMC
+- If stale Python PIDs are listed, re-run with `--auto-clear-stale-bmc` to terminate them automatically
+- If no local stale sockets are found, the sessions may be held by other hosts; run `ipmitool sol deactivate` manually against the BMC, or reboot the BMC via its web interface
+- See [BMC SSH Stale Session Diagnostics](#bmc-ssh-stale-session-diagnostics) for the full explanation
 
 ### `ModuleNotFoundError: No module named 'paramiko'`
 
@@ -747,6 +840,7 @@ current `[Unreleased]` working set.
 
 | Version | Date | Description |
 |---|---|---|
+| v2 (unreleased) | May 29, 2026 | BMC SSH stale session diagnostics: automatic diagnosis + `ipmitool sol deactivate` on every banner-retry; `--auto-clear-stale-bmc` flag SIGTERMs other-Python PIDs holding sockets to the BMC; interactive cleanup offer added to mode 4f when BMC verification fails. |
 | v2 (unreleased) | May 28, 2026 | 4a ONTAP upgrade overhaul: BMC picker from existing reinit config / `BMC_IP.json`; cluster login reuses BMC credentials; parallel image install fans out across per-node management IPs (round-robin) with TCP/22 + SSH-auth pre-flight validation; raw cluster command echo suppressed from console (still in log); failover wait polls every 3 min for up to 30 min with live elapsed / remaining status. Interactive prompt-wait telemetry added to session summary (count, total, longest, ≥60 s extended waits, and `Unaccounted time` line). 4b reinit-type-3 now prompts for physical-disk zeroing. |
 | v2 | May 15, 2026 | Added `--screen` flag: auto-launches the script inside a detached GNU screen session to protect against SSH disconnections and terminal timeouts. Implies `--bg`. Detects existing screen sessions via `STY` env var to prevent recursion. |
 | v2b | Apr 7, 2026 | Parallel peer node operations; end-to-end mode (3); ONTAP upgrade (4a); netboot install (4b); license install (4c); SSH key setup (4d); config backup (4e); BMC auth verify (4f); JSON config file support; background mode; session log with phase/step timing, warnings, and errors inventory. |
