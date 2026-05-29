@@ -7988,8 +7988,26 @@ def _run_4b_standalone(log, resuming: bool = False):
     first_ip = bmc_ips[0]
 
     if not _skip_install:
+        # On a partial resume (some nodes done, not all), skip already-completed
+        # nodes rather than re-running their destructive install steps.
+        _install_bmc_ips = [
+            ip for ip in bmc_ips if ip not in _install_equiv_ips
+        ] if (resuming and _install_equiv_ips) else list(bmc_ips)
+        if resuming and len(_install_bmc_ips) < len(bmc_ips):
+            _skipped = [ip for ip in bmc_ips if ip not in _install_bmc_ips]
+            print(
+                f"\n  🔖 Checkpoint: {len(_skipped)} node(s) already have "
+                f"install_done/option6_done — skipping their install: "
+                f"{', '.join(_skipped)}"
+            )
+            if log:
+                log.log(f"4b resume: skipping install for {_skipped}; "
+                        f"re-running for {_install_bmc_ips}")
+        else:
+            _install_bmc_ips = list(bmc_ips)
+
         # ── Step 2: SSH to all BMCs in parallel, verify BMC prompt ────────────
-        print(f"\n  Connecting to {len(bmc_ips)} BMC(s) in parallel...")
+        print(f"\n  Connecting to {len(_install_bmc_ips)} BMC(s) in parallel...")
         if log:
             log.start_phase("4b – BMC SSH Connections")
 
@@ -8040,7 +8058,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                 if log:
                     log.log(f"[{ip}] BMC connect failed: {exc}", prefix="ERROR")
 
-        _run_parallel(bmc_ips, _connect_worker, with_index=True)
+        _run_parallel(_install_bmc_ips, _connect_worker, with_index=True)
 
         if connect_errors:
             print(f"\n  ❌ Failed to connect to {len(connect_errors)} BMC(s):")
@@ -8054,7 +8072,7 @@ def _run_4b_standalone(log, resuming: bool = False):
             log.end_phase()
 
         # ── Step 3: Simultaneously reset all nodes and reach LOADER ──────────
-        print(f"\n  Resetting {len(bmc_ips)} node(s) to LOADER (output → per-node logs)...")
+        print(f"\n  Resetting {len(_install_bmc_ips)} node(s) to LOADER (output → per-node logs)...")
         if log:
             log.start_phase("4b – Reset to LOADER")
 
@@ -8147,7 +8165,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                 if log:
                     log.log(f"[{ip}] reset error: {exc}", prefix="ERROR")
 
-        _run_parallel(bmc_ips, _reset_worker)
+        _run_parallel(_install_bmc_ips, _reset_worker)
 
         if loader_errors:
             print(f"\n  ❌ {len(loader_errors)} node(s) did not reach LOADER:")
@@ -8176,7 +8194,7 @@ def _run_4b_standalone(log, resuming: bool = False):
             log.end_phase()
 
         # ── Step 5: ifconfig + netboot on all nodes in parallel ────────────────
-        print(f"\n  Starting netboot-install on {len(bmc_ips)} node(s) in parallel"
+        print(f"\n  Starting netboot-install on {len(_install_bmc_ips)} node(s) in parallel"
               f" (output → per-node logs)...")
         if log:
             log.start_phase("4b – Netboot Install")
@@ -8201,14 +8219,14 @@ def _run_4b_standalone(log, resuming: bool = False):
             # login — not just the netboot transfer.
 
         threads = [threading.Thread(target=_install_worker, args=(ip,), daemon=True)
-                   for ip in bmc_ips]
+                   for ip in _install_bmc_ips]
         for t in threads:
             t.start()
 
         # All install threads are now running in parallel.  Print a single
         # status block so the operator knows where to follow progress.
         _real_stdout.write("\n  ⏳ Nodes installing — check logs for details:\n")
-        for _ip in bmc_ips:
+        for _ip in _install_bmc_ips:
             _nf = _node_files.get(_ip)
             _log_path = _nf.name if _nf else "(no log file)"
             _real_stdout.write(f"    [{_ip}] {_log_path}\n")
@@ -8237,9 +8255,9 @@ def _run_4b_standalone(log, resuming: bool = False):
         first_ip = bmc_ips[0]
 
         if log:
-            log.log(f"4b: netboot install complete on {len(bmc_ips)} node(s)")
+            log.log(f"4b: netboot install complete on {len(_install_bmc_ips)} node(s)")
 
-        print(f"\n  ✅ Netboot complete on all {len(bmc_ips)} node(s).")
+        print(f"\n  ✅ Netboot complete on all {len(_install_bmc_ips)} node(s).")
         # (_do_reinit and _mode_sel were collected upfront before operations began)
 
         # Close and log all node files now (before option 6 and init take over).
@@ -9057,7 +9075,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                 args=(ip, loader_channels.get(ip)),
                 daemon=True,
             )
-            for ip in bmc_ips
+            for ip in _install_bmc_ips
         ]
         for t in opt6_threads:
             t.start()
@@ -9083,7 +9101,7 @@ def _run_4b_standalone(log, resuming: bool = False):
         # If every node reached login: without needing option 6, the cluster is
         # still running.  Log in via the first node's console, run 'version',
         # and let the operator confirm before wiping everything.
-        if _opt6_login_nodes == set(bmc_ips):
+        if _opt6_login_nodes == set(_install_bmc_ips):
             _ver_str = None
             _ver_ch = loader_channels.get(first_ip)
             if _ver_ch is not None:
