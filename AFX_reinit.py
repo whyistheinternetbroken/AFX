@@ -2596,6 +2596,116 @@ def _ipmi_sol_deactivate(host: str, username: str, password: str,
         return False
 
 
+def _diagnose_stale_bmc_sessions(host: str, log=None) -> "dict":
+    """Inspect local state for sessions that could be starving the BMC's
+    SSH slot pool and print a short report. Returns a dict summarising
+    findings so callers can decide how to react. Always safe (read-only).
+
+    Reports:
+      - count of in-process SSHClient objects this script still holds
+        to `host` (we can close these on the next sweep);
+      - count of ESTABLISHED TCP sockets to `host`:22 owned by *other*
+        python PIDs on this machine (likely prior AFX_reinit runs that
+        died without cleaning up — killable with --auto-clear-stale-bmc);
+      - count owned by non-python PIDs (operator's interactive ssh,
+        sshd, scp, etc. — left alone);
+      - psutil availability (without psutil only the registry count is
+        meaningful).
+    """
+    findings = {
+        "registered_clients": 0,
+        "other_python_pids": [],   # list[(pid, name)]
+        "non_python_pids": [],     # list[(pid, name)]
+        "our_pid_sockets": 0,
+        "psutil_available": True,
+    }
+    with _bmc_clients_lock:
+        findings["registered_clients"] = len(
+            _bmc_clients_by_host.get(host, [])
+        )
+
+    try:
+        import psutil  # type: ignore  # noqa: F401
+    except Exception:
+        findings["psutil_available"] = False
+
+    socks = _find_stale_sockets_to(host, 22) if findings["psutil_available"] else []
+    our_pid = os.getpid()
+    seen: "set[int]" = set()
+    for pid, pname, _laddr in socks:
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        if pid == our_pid:
+            findings["our_pid_sockets"] += 1
+            continue
+        if "python" in (pname or "").lower():
+            findings["other_python_pids"].append((pid, pname or "unknown"))
+        else:
+            findings["non_python_pids"].append((pid, pname or "unknown"))
+
+    reg = findings["registered_clients"]
+    others = findings["other_python_pids"]
+    nonpy = findings["non_python_pids"]
+    if not findings["psutil_available"]:
+        with suppress(Exception):
+            print(
+                f"   🔍 [{host}] stale-session diagnosis: psutil not "
+                f"installed — can only see registry ({reg} in-process "
+                "client(s) held by this run). Install psutil for a full scan."
+            )
+        if log is not None:
+            with suppress(Exception):
+                log.log(
+                    f"[{host}] stale-session diagnosis: psutil unavailable; "
+                    f"registry={reg}"
+                )
+        return findings
+
+    if not (reg or others or nonpy):
+        with suppress(Exception):
+            print(
+                f"   🔍 [{host}] stale-session diagnosis: no stale local "
+                "SSH sockets to BMC:22 found. BMC slot pool is likely "
+                "starved server-side (try ipmitool sol deactivate)."
+            )
+        if log is not None:
+            with suppress(Exception):
+                log.log(f"[{host}] stale-session diagnosis: clean")
+        return findings
+
+    with suppress(Exception):
+        print(f"   🔍 [{host}] stale-session diagnosis:")
+        if reg:
+            print(f"      • {reg} in-process SSH client(s) still held by this "
+                  "run (will be force-closed before next retry)")
+        if findings["our_pid_sockets"]:
+            print(f"      • {findings['our_pid_sockets']} socket(s) owned by "
+                  "our own PID (expected; tied to in-process clients)")
+        if others:
+            print(f"      • {len(others)} socket(s) owned by OTHER python "
+                  "process(es) — likely stale prior AFX_reinit runs:")
+            for pid, pname in others:
+                print(f"          - pid={pid} ({pname})")
+            if not _auto_clear_stale_bmc:
+                print("      💡 Re-run with --auto-clear-stale-bmc to SIGTERM "
+                      "these prior runs automatically.")
+        if nonpy:
+            print(f"      • {len(nonpy)} socket(s) owned by non-python "
+                  "process(es) (left alone):")
+            for pid, pname in nonpy:
+                print(f"          - pid={pid} ({pname})")
+    if log is not None:
+        with suppress(Exception):
+            log.log(
+                f"[{host}] stale-session diagnosis: registered={reg}, "
+                f"our_pid_sockets={findings['our_pid_sockets']}, "
+                f"other_python={[p for p,_ in others]}, "
+                f"non_python={[p for p,_ in nonpy]}"
+            )
+    return findings
+
+
 def _clear_stale_bmc_sessions(host: str, username: str, password: str,
                               log=None) -> None:
     """Best-effort sweep called from the banner-retry block before each
@@ -2603,6 +2713,11 @@ def _clear_stale_bmc_sessions(host: str, username: str, password: str,
     When `--auto-clear-stale-bmc` is set, additionally scans for stale
     local PIDs and runs `ipmitool sol deactivate`.
     """
+    # (0) Diagnose: report what stale sessions exist BEFORE we touch
+    # anything, so the operator can see exactly what's holding BMC slots
+    # and whether --auto-clear-stale-bmc would help.
+    with suppress(Exception):
+        _diagnose_stale_bmc_sessions(host, log=log)
     # (1) Always safe: drop our own registered clients to this host.
     _drop_bmc_clients_for(host, log=log)
     # (2) Always safe: ipmitool sol deactivate. Cheap; clears a frequent
@@ -2614,13 +2729,6 @@ def _clear_stale_bmc_sessions(host: str, username: str, password: str,
     # operator's own concurrent script invocation.
     if _auto_clear_stale_bmc:
         with suppress(Exception):
-            socks = _find_stale_sockets_to(host, 22)
-            if socks:
-                with suppress(Exception):
-                    print(
-                        f"   🔍 [{host}] found {len(socks)} local TCP "
-                        "socket(s) to BMC:22; checking for stale prior runs..."
-                    )
             _kill_stale_local_pids_for(host, log=log)
 
 
