@@ -4236,13 +4236,21 @@ def _print_retain_summary(cluster_name, net_rows, peer_addresses=None):
     print("")
 
 
-def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=False):
+def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=False,
+                        direct_cluster_ssh=False):
     """Enter system console, capture requested data, return to BMC prompt.
 
     Each capture (cluster name, network LIFs, peer SP addresses) is attempted
     independently. If the cluster shell prompt cannot be reached (e.g. the
     node is already down), all captures are skipped gracefully and the caller
     proceeds with empty results.
+
+    When ``direct_cluster_ssh=True`` the channel is already connected directly
+    to the cluster shell (not via BMC console). In that case:
+      - ``enter_system_console`` is skipped (already at ``::>``)
+      - login prompt handling inside ``_wait_for_cluster_prompt`` is bypassed
+      - the Ctrl+D / BMC-return sequence at the end is replaced with a
+        simple ``exit`` to close the direct SSH session
 
     Returns (cluster_name, net_rows, peer_addresses). Any may be None / empty
     on failure.
@@ -4257,21 +4265,35 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
         purposes.append("retain config")
     if collect_peer_sps:
         purposes.append("peer BMC addresses")
-    print(f"\n🔍 Entering system console to capture: {', '.join(purposes)}...")
+    _src = "cluster SSH" if direct_cluster_ssh else "system console"
+    print(f"\n🔍 Capturing via {_src}: {', '.join(purposes)}...")
     if _session_log:
         _session_log.start_phase("Capture Cluster Inventory")
         _session_log.log(
             f"Capturing cluster info (name={retain_name}, network={retain_network}, "
-            f"peer_sps={collect_peer_sps})"
+            f"peer_sps={collect_peer_sps}, direct_cluster_ssh={direct_cluster_ssh})"
         )
 
-    enter_system_console(channel)
+    if not direct_cluster_ssh:
+        enter_system_console(channel)
 
     cluster_name = None
     net_rows = None
     peer_addresses = []
 
-    if not _wait_for_cluster_prompt(channel, timeout=30):
+    # For direct cluster SSH we are already at ::> — just confirm the prompt
+    # without sending any login commands. For BMC console paths, use the full
+    # _wait_for_cluster_prompt which handles login: prompts.
+    if direct_cluster_ssh:
+        channel.send("\r")
+        _crd_out, _crd_matched = direct_read_until_any(
+            channel, ["::>", "::*>"], timeout=15,
+        )
+        _at_shell = bool(_crd_matched and ("::>" in _crd_matched or "::*>" in _crd_matched))
+    else:
+        _at_shell = _wait_for_cluster_prompt(channel, timeout=30)
+
+    if not _at_shell:
         print("   ⚠️  Could not reach cluster shell prompt (node may be down).")
         print("      Skipping all captures and continuing without retained data")
         print("      or peer BMC addresses.")
@@ -4416,21 +4438,33 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
                         f"SP -> node mapping: {_retained_sp_to_node}"
                     )
 
-    # Exit system console back to BMC.
-    print("\n   ↩️  Exiting system console back to BMC...")
-    _slog("Exiting system console (Ctrl+D) after capture")
-    channel.send("\x04")  # Ctrl+D
-    time.sleep(2)
-    output = direct_read_until(channel, ">", timeout=15)
-    if ">" in output and "::" not in output[-10:]:
-        print("   ✅ Returned to BMC prompt.")
-        _slog("Returned to BMC prompt after capture")
+    if direct_cluster_ssh:
+        # We connected directly to the cluster shell (not via BMC console).
+        # Send 'exit' to close the session cleanly; the caller will close the
+        # channel and SSH client. No BMC prompt to wait for.
+        print("\n   ↩️  Finished capture. Exiting cluster SSH session...")
+        _slog("Direct cluster SSH: sending 'exit' after capture")
+        try:
+            channel.send("exit\r")
+            time.sleep(1)
+        except Exception:
+            pass
     else:
-        channel.send("\x04")
-        time.sleep(1)
-        direct_read_until(channel, ">", timeout=10)
-        print("   ⚠️  BMC prompt not cleanly detected; proceeding.")
-        _slog("BMC prompt not cleanly detected after exit", prefix="WARN")
+        # Exit system console back to BMC.
+        print("\n   ↩️  Exiting system console back to BMC...")
+        _slog("Exiting system console (Ctrl+D) after capture")
+        channel.send("\x04")  # Ctrl+D
+        time.sleep(2)
+        output = direct_read_until(channel, ">", timeout=15)
+        if ">" in output and "::" not in output[-10:]:
+            print("   ✅ Returned to BMC prompt.")
+            _slog("Returned to BMC prompt after capture")
+        else:
+            channel.send("\x04")
+            time.sleep(1)
+            direct_read_until(channel, ">", timeout=10)
+            print("   ⚠️  BMC prompt not cleanly detected; proceeding.")
+            _slog("BMC prompt not cleanly detected after exit", prefix="WARN")
 
     _retained_cluster_name = cluster_name
     _retained_net_config = net_rows
@@ -14681,6 +14715,7 @@ def main():
                 retain_name=True,
                 retain_network=True,
                 collect_peer_sps=True,
+                direct_cluster_ssh=_is_direct46,
             )
             _session_log.end_phase()
 
