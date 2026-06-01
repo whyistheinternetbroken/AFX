@@ -11919,16 +11919,16 @@ def _cluster_show_node_status(channel):
     return rows, all_true, has_warning
 
 
-def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=600,
-                                    poll_interval=120, label="",
+def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
+                                    poll_interval=300, label="",
                                     final_count=None):
     """Poll `cluster show` until it reports `target_count` nodes, every
     node row shows 'true' for Health and Eligibility, AND no 'warning'
     text appears in the command output (e.g. the post-join 'Cluster HA
     must be configured' notice).
 
-    Defaults: up to ``total_timeout`` seconds (10 minutes) of polling at
-    ``poll_interval`` second intervals (120s). Retry details are written
+    Defaults: up to ``total_timeout`` seconds (15 minutes) of polling at
+    ``poll_interval`` second intervals (300s / 5 min). Retry details are written
     to the log only; the console shows only the initial wait message and
     the final outcome.
     *final_count* is the expected cluster size once ALL peers have joined;
@@ -12451,7 +12451,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
 
         # Wait until cluster show confirms the new node count AND every
         # row reports Health=true / Eligibility=true with no 'warning'
-        # text. 10-minute total timeout, polling every 120s with operator
+        # text. 15-minute total timeout, polling every 5 min with operator
         # notifications on each retry. On a 2-node cluster the poller
         # will also auto-run `cluster ha modify -configured true` to
         # clear the post-join HA warning.
@@ -12462,7 +12462,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                              f">= {expected_count_after} with all-true status")
         ok = _wait_for_cluster_nodes_healthy(
             primary_channel, expected_count_after,
-            total_timeout=600, poll_interval=120, label=label,
+            total_timeout=900, poll_interval=300, label=label,
             final_count=final_cluster_count if final_cluster_count else None,
         )
         # Stamp the moment cluster-show verification finished (regardless
@@ -12474,7 +12474,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             _slog(f"[{label}] node added (verified, all-true)")
         else:
             print(f"\n⚠️  [{label}] Did not see {expected_count_after}"
-                  " healthy node(s) in cluster show within 10 minutes; continuing.")
+                  " healthy node(s) in cluster show within 15 minutes; continuing.")
             if _session_log:
                 _session_log.log(f"[{label}] cluster show verification "
                                  "timeout (10 min)", prefix="WARN")
