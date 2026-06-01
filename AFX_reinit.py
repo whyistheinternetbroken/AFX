@@ -5185,6 +5185,19 @@ def _resolve_cluster_mgmt_from_retained():
     return _resolve_mgmt_lif_from_retained("cluster")
 
 
+def _prompt_ntp_servers(start_index=1):
+    """Prompt the operator for up to 4 NTP server entries (starting at
+    *start_index*). Returns a list of entered server strings (may be empty).
+    An empty entry ends input early.
+    """
+    _entries = []
+    _max = start_index + (4 - start_index)   # never exceed index 4
+    for _i in range(start_index, 5):
+        _val = _prompt(f"  NTP server {_i} (Enter to finish): ").strip()
+        if not _val:
+            break
+        _entries.append(_val)
+    return _entries
 
 
 def apply_retained_to_cluster_config():
@@ -5220,21 +5233,38 @@ def apply_retained_to_cluster_config():
     if _retained_ntp_servers:
         _fill("ntp_servers", ",".join(_retained_ntp_servers))
     elif not cluster_block.get("ntp_servers"):
-        # No NTP servers found on cluster and none in config — offer pool.ntp.org.
+        # No NTP servers found on cluster and none in config.
         print(
             "\n  ⚠️  No NTP server configuration found on the existing cluster."
         )
         _ans = _prompt(
             "     Add 'pool.ntp.org' as the NTP server in the config? [Y/n]: "
         ).strip().lower()
+        _ntp_list = []
         if _ans in ("", "y", "yes"):
-            cluster_block["ntp_servers"] = "pool.ntp.org"
-            fills.append("ntp_servers")
+            _ntp_list.append("pool.ntp.org")
             if _session_log:
                 _session_log.log("No NTP found; user added pool.ntp.org to config")
+            _more = _prompt(
+                "     Would you like to specify additional NTP servers? [y/N]: "
+            ).strip().lower()
+            if _more in ("y", "yes"):
+                _ntp_list.extend(_prompt_ntp_servers(start_index=2))
         else:
             if _session_log:
-                _session_log.log("No NTP found; user declined to add pool.ntp.org")
+                _session_log.log("No NTP found; user declined pool.ntp.org")
+            _more = _prompt(
+                "     Would you like to specify NTP servers? [y/N]: "
+            ).strip().lower()
+            if _more in ("y", "yes"):
+                _ntp_list.extend(_prompt_ntp_servers(start_index=1))
+        if _ntp_list:
+            cluster_block["ntp_servers"] = ",".join(_ntp_list)
+            fills.append("ntp_servers")
+            if _session_log:
+                _session_log.log(
+                    f"NTP servers set: {cluster_block['ntp_servers']}"
+                )
 
     if fills:
         print("\n  \U0001F4D1 Populated cluster config from existing cluster:")
@@ -5921,12 +5951,7 @@ def collect_cluster_config():
         ntp_servers = ntp_servers_raw
     else:
         print("\n  ℹ️   NTP servers (optional, up to 4). Press Enter to skip.")
-        _ntp_entries = []
-        for _ntp_i in range(1, 5):
-            _ntp_val = _prompt(f"  NTP server {_ntp_i} (Enter to skip): ").strip()
-            if not _ntp_val:
-                break
-            _ntp_entries.append(_ntp_val)
+        _ntp_entries = _prompt_ntp_servers(start_index=1)
         ntp_servers = ",".join(_ntp_entries) if _ntp_entries else None
         if ntp_servers:
             print(f"  ✅ NTP servers configured: {ntp_servers}")
