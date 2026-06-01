@@ -11411,12 +11411,23 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
     _print_banner("\U0001f511 Configuring passwordless SSH")
     _slog(f"Setting up passwordless SSH for {ssh_user}@{mgmt_ip}")
 
-    # 1. Remove stale known_hosts entry.
+    # 1. Remove stale known_hosts entries — by IP and by reverse-DNS hostname.
+    _hosts_to_remove = [mgmt_ip]
     try:
-        subprocess.run(["ssh-keygen", "-R", mgmt_ip],
-                       check=False, capture_output=True)
-        print(f"  🗑️  Removed existing known_hosts entries for {mgmt_ip}.")
-        _slog(f"Removed known_hosts entries for {mgmt_ip}")
+        import socket as _socket
+        _rdns = _socket.gethostbyaddr(mgmt_ip)[0]
+        if _rdns and _rdns != mgmt_ip:
+            _hosts_to_remove.append(_rdns)
+            _slog(f"Reverse DNS for {mgmt_ip}: {_rdns}")
+    except Exception:
+        pass  # no reverse DNS entry — fine, just clean by IP
+    try:
+        for _host in _hosts_to_remove:
+            subprocess.run(["ssh-keygen", "-R", _host],
+                           check=False, capture_output=True)
+        _removed_str = ", ".join(_hosts_to_remove)
+        print(f"  🗑️  Removed existing known_hosts entries for {_removed_str}.")
+        _slog(f"Removed known_hosts entries for {_removed_str}")
     except FileNotFoundError:
         print("  ℹ️  ssh-keygen not found; skipping known_hosts cleanup.")
         _slog("ssh-keygen not found; known_hosts cleanup skipped", prefix="WARN")
