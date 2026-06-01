@@ -1879,6 +1879,9 @@ def select_operation_mode():
                 _physical_zeroing = (_pz_ans == "y")
                 if _physical_zeroing:
                     print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+                if _diag_mode:
+                    global _diag_bootargs
+                    _diag_bootargs = _load_diag_bootargs()
                 print("\n  ✅ Confirmed. 1a: Format first node (interactive)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
                 print("     → Boot menu: option 9 (Initialize); then interactive\n")
@@ -1917,6 +1920,9 @@ def select_operation_mode():
                 _physical_zeroing = (_pz_ans == "y")
                 if _physical_zeroing:
                     print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+                if _diag_mode:
+                    global _diag_bootargs
+                    _diag_bootargs = _load_diag_bootargs()
                 print("\n  ✅ Confirmed. 1b: Format first node + setup cluster (auto)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
                 print("     → Boot menu: option 9, then auto option 4 + auto setup\n")
@@ -2006,6 +2012,9 @@ def select_operation_mode():
                 _physical_zeroing = (_pz_ans == "y")
                 if _physical_zeroing:
                     print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+                if _diag_mode:
+                    global _diag_bootargs
+                    _diag_bootargs = _load_diag_bootargs()
                 print("\n  ✅ Confirmed. 3: End-to-end auto initialize\n")
                 return 3, True, True
             print("\n  ↩️  Returning to menu...\n")
@@ -2141,6 +2150,9 @@ def get_loader_commands():
             cmds.append("setenv raid.use-physical-zeroing? true")
         else:
             cmds.append("setenv raid.use-physical-zeroing? false")
+        if _diag_mode and _diag_bootargs:
+            for ba in _diag_bootargs:
+                cmds.append(f"setenv {ba}")
         cmds += ["saveenv", "boot_ontap menu"]
         return cmds
     else:
@@ -2155,6 +2167,9 @@ def get_loader_commands():
             cmds.append("setenv raid.use-physical-zeroing? true")
         else:
             cmds.append("setenv raid.use-physical-zeroing? false")
+        if _diag_mode and _diag_bootargs:
+            for ba in _diag_bootargs:
+                cmds.append(f"setenv {ba}")
         cmds += ["saveenv", "boot_ontap menu"]
         return cmds
 
@@ -2281,6 +2296,13 @@ _netboot_before_reinit = False
 # When True (set by 1a/1b/3 prompt), adds 'setenv raid.use-physical-zeroing? true'
 # to the primary node's LOADER commands so disks are physically zeroed.
 _physical_zeroing = False
+
+# When True (set by --diag flag), enables diagnostic bootarg injection at LOADER.
+_diag_mode = False
+
+# List of validated "bootarg.name.variable <value>" strings to inject at LOADER
+# when _diag_mode is True. Populated by _load_diag_bootargs().
+_diag_bootargs: list = []
 
 _shutdown_event = threading.Event()
 _client_lock    = threading.Lock()
@@ -3570,6 +3592,15 @@ def parse_args():
                              "culprits). Always-on cleanup (closing this "
                              "process's own SSH clients + ipmitool sol "
                              "deactivate) runs regardless of this flag.")
+    parser.add_argument("--diag", action="store_true", default=False,
+                        help="Enable diagnostic mode: load custom LOADER "
+                             "bootargs from a 'bootargs.json' file (a JSON "
+                             "array of strings, each formatted as "
+                             "'bootarg.name.variable value') next to this "
+                             "script, or prompt for bootargs interactively. "
+                             "Bootargs are injected with 'setenv' after "
+                             "'set-defaults' and before 'saveenv' in the "
+                             "LOADER stage.")
     args = parser.parse_args()
     if args.help:
         _print_man_page()
@@ -5882,6 +5913,94 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="", is_node_ad
 
 
 # ---------------------------------------------------------------------------
+# Diagnostic bootarg helpers
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_BOOTARG_LINE_RE = _re.compile(r'^(bootarg\.\S+)\s+(\S+)$')
+
+def _load_diag_bootargs():
+    """Load and validate diagnostic LOADER bootargs.
+
+    Looks for a ``bootargs.json`` file next to this script.  If found the file
+    must be a JSON array of strings, each formatted as
+    ``"bootarg.name.variable value"``.
+
+    If the file is not found the operator is prompted to enter bootargs
+    interactively (one per line, blank line to finish).
+
+    Each entry is validated:
+    - Must be exactly two whitespace-separated tokens.
+    - The first token must start with ``bootarg.``.
+    - Must NOT include the ``setenv`` prefix (the script adds it).
+
+    Invalid entries emit a warning and offer the operator a chance to exit
+    and correct the file/input.  Valid entries are returned as a list of
+    ``"bootarg.name value"`` strings.
+    """
+    import json as _json
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    bootargs_path = os.path.join(script_dir, "bootargs.json")
+
+    raw_entries = []
+    if os.path.isfile(bootargs_path):
+        print(f"\n  📄 Found bootargs.json at {bootargs_path}")
+        try:
+            with open(bootargs_path) as _f:
+                data = _json.load(_f)
+            if not isinstance(data, list):
+                print("  ❌ bootargs.json must contain a JSON array of strings. Exiting.")
+                sys.exit(1)
+            raw_entries = [str(e) for e in data]
+        except Exception as e:
+            print(f"  ❌ Failed to parse bootargs.json: {e}")
+            sys.exit(1)
+    else:
+        print("\n  ℹ️  No bootargs.json found. Enter bootargs interactively.")
+        print("     Format: bootarg.name.variable <value>   (do NOT include 'setenv')")
+        print("     Press Enter on a blank line when done.")
+        while True:
+            try:
+                line = input("  bootarg> ").strip()
+            except EOFError:
+                break
+            if not line:
+                break
+            raw_entries.append(line)
+
+    validated = []
+    for entry in raw_entries:
+        # Reject entries that already include 'setenv'
+        if entry.strip().lower().startswith("setenv"):
+            print(f"\n  ⚠️  Bootarg entry should NOT include 'setenv' prefix: {entry!r}")
+            ans = _prompt("     Exit to fix this? [Y/n]: ", "y").strip().lower()
+            if ans != "n":
+                sys.exit(1)
+            continue
+
+        m = _BOOTARG_LINE_RE.match(entry.strip())
+        if not m:
+            print(f"\n  ⚠️  Invalid bootarg format (expected 'bootarg.name.variable value'): {entry!r}")
+            ans = _prompt("     Exit to fix this? [Y/n]: ", "y").strip().lower()
+            if ans != "n":
+                sys.exit(1)
+            continue
+
+        validated.append(f"{m.group(1)} {m.group(2)}")
+
+    if not validated:
+        print("  ⚠️  No valid bootargs loaded for --diag mode.")
+    else:
+        print(f"  ✅ Loaded {len(validated)} diagnostic bootarg(s):")
+        for ba in validated:
+            print(f"     setenv {ba}")
+
+    return validated
+
+
+# ---------------------------------------------------------------------------
 # ONTAP license helpers
 # ---------------------------------------------------------------------------
 
@@ -7823,6 +7942,18 @@ def _run_4b_standalone(log, resuming: bool = False):
         if log:
             log.log(f"4b: physical disk zeroing requested: {_physical_zeroing}")
 
+        # Diagnostic bootargs: if --diag was passed, load/prompt for bootargs now.
+        global _diag_mode, _diag_bootargs
+        if _diag_mode:
+            _cp_diag = _checkpoint.get_param("diag_bootargs") if (resuming and _checkpoint) else None
+            if resuming and _cp_diag is not None:
+                _diag_bootargs = _cp_diag
+                print(f"\n  🔖 Resuming: {len(_diag_bootargs)} diagnostic bootarg(s) loaded from checkpoint.")
+            else:
+                _diag_bootargs = _load_diag_bootargs()
+            if log:
+                log.log(f"4b: diag bootargs: {_diag_bootargs}")
+
     # ── Static vs DHCP ifconfig in LOADER ─────────────────────────────────
     global _netboot_static_ip
     if resuming and _checkpoint and _checkpoint.get_param("netboot_static_ip") is not None:
@@ -7889,6 +8020,8 @@ def _run_4b_standalone(log, resuming: bool = False):
         _checkpoint.set_param("reinit_mode",       _mode_sel)
         _checkpoint.set_param("physical_zeroing",  _physical_zeroing)
         _checkpoint.set_param("netboot_static_ip", _netboot_static_ip)
+        if _diag_mode:
+            _checkpoint.set_param("diag_bootargs", _diag_bootargs)
     if log:
         log.log(f"4b: checkpoint {'resumed' if resuming else 'initialised'} at {_checkpoint._path}")
 
@@ -12098,11 +12231,18 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             _peer_loader_cmds.append("setenv raid.use-physical-zeroing? true")
         else:
             _peer_loader_cmds.append("setenv raid.use-physical-zeroing? false")
+        if _diag_mode and _diag_bootargs:
+            for ba in _diag_bootargs:
+                _peer_loader_cmds.append(f"setenv {ba}")
         _peer_loader_cmds += ["saveenv", "boot_ontap menu"]
         for cmd in _peer_loader_cmds:
             if cmd != "boot_ontap menu":
-                direct_send_and_wait(ch, cmd, "LOADER", timeout=15,
-                                     node_log=node_file)
+                _out = direct_send_and_wait(ch, cmd, "LOADER", timeout=15,
+                                            node_log=node_file)
+                if cmd.startswith("setenv bootarg."):
+                    if any(tok in _out for tok in ("%", "Error", "error", "invalid", "unknown", "Unknown")):
+                        print(f"   ❌ [{label}] LOADER error after '{cmd}': {_out.strip()!r}")
+                        sys.exit(1)
             else:
                 ch.send(cmd + "\r"); time.sleep(1)
 
@@ -13207,6 +13347,20 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             output = direct_send_and_wait(channel, command, "LOADER", timeout=15)
             if "loader" not in output.lower():
                 print(f"⚠️  No LOADER prompt after '{command}', continuing anyway...")
+            # Check for LOADER errors on diag bootarg setenv commands.
+            if command.startswith("setenv bootarg."):
+                if any(tok in output for tok in ("%", "Error", "error", "invalid", "unknown", "Unknown")):
+                    print(f"\n  ❌ LOADER error after '{command}':")
+                    print(f"     {output.strip()!r}")
+                    if _session_log:
+                        _session_log.log(f"LOADER error after '{command}': {output.strip()!r}",
+                                         prefix="ERROR")
+                        _session_log.set_outcome("FAIL", f"LOADER error on {command}")
+                        try:
+                            _session_log.close()
+                        except Exception:
+                            pass
+                    sys.exit(1)
         else:
             channel.send(command + "\r")
             if _session_log:
@@ -14083,6 +14237,7 @@ def main():
     global _primary_bmc_user, _primary_bmc_password
     global _checkpoint, _run_context
     global _auto_clear_stale_bmc
+    global _diag_mode, _diag_bootargs
 
     args = parse_args()
 
@@ -14112,6 +14267,15 @@ def main():
     if _auto_clear_stale_bmc:
         print("🧹 --auto-clear-stale-bmc enabled: banner retries will SIGTERM "
               "stale prior-run python PIDs holding sockets to <bmc>:22.")
+
+    _diag_mode = args.diag
+    if _diag_mode:
+        print("🔬 --diag mode enabled: custom LOADER bootargs will be applied.")
+        # Bootarg collection is deferred: for modes 1/2/3 it happens inside
+        # select_operation_mode() after physical zeroing; for mode 4b it
+        # happens in the 4b upfront config phase. We just initialise the
+        # list here so _diag_bootargs is always defined.
+        _diag_bootargs = []
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
