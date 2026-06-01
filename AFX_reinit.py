@@ -3286,7 +3286,7 @@ def _reclaim_system_console(channel, node_log=None):
     return False
 
 
-def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=False):
+def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=False, quiet=False):
     """Shared receive loop used by direct_send_and_wait / direct_read_until /
     direct_read_until_any.
 
@@ -3313,7 +3313,7 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                 output_lower = output_lower[-8192:]
             if node_log:
                 _par_write(node_log, chunk)
-            elif not _console_quiet:
+            elif not quiet and not _console_quiet:
                 sys.stdout.write(chunk)
                 sys.stdout.flush()
             if _session_log:
@@ -3364,15 +3364,15 @@ def direct_read_until(channel, look_for, timeout=15, node_log=None, check_bmc_dr
     return output
 
 
-def direct_read_until_any(channel, look_for_list, timeout=15, node_log=None, check_bmc_drop=False):
+def direct_read_until_any(channel, look_for_list, timeout=15, node_log=None, check_bmc_drop=False, quiet=False):
     matchers = [(s.lower(), s) for s in look_for_list]
-    output, matched = _recv_loop(channel, matchers, timeout, node_log, check_bmc_drop)
+    output, matched = _recv_loop(channel, matchers, timeout, node_log, check_bmc_drop, quiet=quiet)
     if matched is None and _session_log:
         _session_log.log(f"Timeout ({timeout}s) waiting for any of {look_for_list}", prefix="WARN")
     return output, matched
 
 
-def drain_channel(channel, seconds=2, node_log=None):
+def drain_channel(channel, seconds=2, node_log=None, quiet=False):
     output = ""
     start_time = time.monotonic()
     while time.monotonic() - start_time < seconds:
@@ -3383,7 +3383,7 @@ def drain_channel(channel, seconds=2, node_log=None):
             output += chunk
             if node_log:
                 _par_write(node_log, chunk)
-            elif not _console_quiet:
+            elif not quiet and not _console_quiet:
                 sys.stdout.write(chunk)
                 sys.stdout.flush()
             if _session_log:
@@ -3816,7 +3816,7 @@ def enter_system_console(channel):
     output, matched = direct_read_until_any(
         channel,
         ["y/n", "ctrl-d", "type exit", "serial console", "boot loader", "loader", "autoboot"],
-        timeout=15
+        timeout=15, quiet=True
     )
 
     if matched and "y/n" in matched.lower():
@@ -3837,7 +3837,7 @@ def enter_system_console(channel):
             output2, matched2 = direct_read_until_any(
                 channel,
                 ["ctrl-d", "type exit", "serial console", "boot loader", "loader", "autoboot", ">"],
-                timeout=15
+                timeout=15, quiet=True
             )
             if matched2:
                 print("✅ System console connected after session takeover.")
@@ -3860,7 +3860,7 @@ def enter_system_console(channel):
         print("⚠️  No console confirmation detected, continuing anyway...")
         _slog("No console confirmation detected", prefix="WARN")
 
-    drain_channel(channel, seconds=3)
+    drain_channel(channel, seconds=3, quiet=True)
     print("✅ System console ready.\n")
     print("⏳ LOADER will appear. Script is continuing. Be patient.\n")
     _slog("System console ready")
