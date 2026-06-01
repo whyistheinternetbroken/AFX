@@ -14543,14 +14543,14 @@ def main():
             print("  ⚠️  Please enter 'gather' or 'build'.")
         _session_log.log(f"4e choice: {_mode46}")
 
-        # ── GATHER PATH: connect to cluster BMC ─────────────────────────
+        # ── GATHER PATH: connect to cluster via BMC or cluster mgmt IP ──────
         if _mode46 == "gather":
             print("")
             print("  ⚠️  Backup configuration will only work on a cluster")
             print("       that has an existing configuration.")
             print("")
 
-            # Optional config file for BMC credentials.
+            # Optional config file for pre-filling credentials.
             _cfg46 = {}
             _found_46 = _find_config_files(
                 candidate_names=("reinit-config.json", "reinit_config.json",
@@ -14571,28 +14571,43 @@ def main():
                      else ((_cfg46.get("nodes") or [None])[0]
                            if isinstance(_cfg46.get("nodes"), list) else None)) or {}
 
+            # Prefer a BMC address from config; otherwise prompt for any
+            # reachable interface (BMC, cluster mgmt IP, or hostname).
             sp_host46 = _cfg_str(_pn46.get("bmc"))
             if sp_host46:
                 _check_bmc_reachable(sp_host46)
             else:
-                sp_host46 = _prompt_bmc_host(allow_blank=True)
+                while True:
+                    sp_host46 = input(
+                        "  Cluster interface (BMC, cluster management IP or hostname): "
+                    ).strip()
+                    if not sp_host46:
+                        print("  ⚠️  A host address is required.")
+                        continue
+                    if _check_bmc_reachable(sp_host46):
+                        break
+                    print("  ⚠️  Host not reachable. Please check the address and try again.")
             if not sp_host46:
-                print("  No BMC address entered. Exiting.")
+                print("  No address entered. Exiting.")
                 sys.exit(0)
-            sp_user46 = _cfg_str(_pn46.get("bmc_user")) or input("  BMC username [admin]: ").strip() or "admin"
+
+            # Generic credential prompt (works for both BMC and cluster mgmt SSH).
+            sp_user46 = (_cfg_str(_pn46.get("bmc_user"))
+                         or input("  Username [admin]: ").strip()
+                         or "admin")
             if "bmc_password" in _pn46 and isinstance(_pn46["bmc_password"], str):
                 sp_pass46 = _pn46["bmc_password"]
             else:
-                sp_pass46 = getpass.getpass("  BMC password (blank = none): ")
+                sp_pass46 = getpass.getpass("  Password (blank = none): ")
 
-            _session_log.log(f"Target BMC: {sp_host46} (user={sp_user46})")
+            _session_log.log(f"4e gather: target={sp_host46} (user={sp_user46})")
 
-            # Connect to BMC – no interactive re-prompt; auth failure exits immediately.
+            # Connect via SSH – works for both BMC and cluster mgmt endpoints.
             _session_log.start_phase("SSH Connection")
             try:
                 _client46, sp_user46, sp_pass46 = _ssh_connect_with_retry(
                     sp_host46, sp_user46, sp_pass46,
-                    label=f"BMC/{sp_host46}", max_attempts=1, interactive=False,
+                    label=f"4e/{sp_host46}", max_attempts=1, interactive=False,
                 )
             except Exception as _e46:
                 print(f"  \u274c SSH connection failed: {_e46}")
@@ -14601,27 +14616,52 @@ def main():
                 _session_log.close()
                 sys.exit(1)
 
-            # Make the 4e credentials available to the cluster-login fallback chain
-            # so that collect_retain_data can log in silently without re-prompting.
+            # Make credentials available to the cluster-login fallback chain.
             _primary_bmc_user = sp_user46
             _primary_bmc_password = sp_pass46
             if not _cluster_config.get("admin_user"):
                 _cluster_config["admin_user"] = sp_user46
             if not _cluster_config.get("admin_password"):
                 _cluster_config["admin_password"] = sp_pass46
+
             _ch46 = _open_shell(_client46)
             _kt46 = threading.Thread(target=keepalive_loop, args=(_client46,), daemon=True)
             _kt46.start()
             _session_log.end_phase()
 
-            if not wait_for_bmc_prompt(_ch46, auto_takeover=True):
-                print("  \u274c BMC prompt not received. Exiting.")
-                _session_log.set_outcome("FAIL", "BMC prompt not received")
-                _session_log.close()
-                sys.exit(1)
+            # Detect whether we landed on a BMC prompt or a cluster shell
+            # so we know whether to navigate via 'system console' or not.
+            _session_log.start_phase("Cluster Inventory Capture")
+            _ch46.send("\r")
+            _probe46, _ = direct_read_until_any(
+                _ch46, ["::>", "::*>", "login:", "bmc", ">"], timeout=10,
+            )
+            _is_direct46 = ("::>" in _probe46 or "::*>" in _probe46
+                            or "login:" in _probe46.lower())
+
+            if _is_direct46:
+                # Direct cluster-mgmt SSH: already at cluster shell or login
+                # prompt. Authenticate if needed, then run inventory commands.
+                _session_log.log("4e: direct cluster SSH detected; skipping BMC console path")
+                print("  ✅ Cluster management SSH detected.")
+                if "login:" in _probe46.lower():
+                    if not _attempt_console_cluster_login(_ch46):
+                        print("  ❌ Cluster login failed. Exiting.")
+                        _session_log.set_outcome("FAIL", "cluster login failed")
+                        _session_log.close()
+                        sys.exit(1)
+                # collect_retain_data will detect ::> via enter_system_console
+                # and skip the 'system console' step automatically.
+            else:
+                # BMC connection: wait for BMC prompt, then enter system console.
+                _session_log.log("4e: BMC connection detected; entering system console")
+                if not wait_for_bmc_prompt(_ch46, auto_takeover=True):
+                    print("  \u274c BMC prompt not received. Exiting.")
+                    _session_log.set_outcome("FAIL", "BMC prompt not received")
+                    _session_log.close()
+                    sys.exit(1)
 
             # Run the full retain capture (name + network + peer SPs).
-            _session_log.start_phase("Cluster Inventory Capture")
             _cname46r, _net46, _peers46 = collect_retain_data(
                 _ch46,
                 retain_name=True,
