@@ -3650,6 +3650,32 @@ def parse_args():
                              "Bootargs are injected with 'setenv' after "
                              "'set-defaults' and before 'saveenv' in the "
                              "LOADER stage.")
+    # ── Mode shortcut flags (bypass the interactive menu) ──────────────────
+    parser.add_argument("--first-node", action="store_true", default=False,
+                        help="Skip the menu and run mode 1b: initialize the "
+                             "first node and set up the cluster automatically.")
+    parser.add_argument("--add-nodes", action="store_true", default=False,
+                        help="Skip the menu and run mode 2b: add node(s) to "
+                             "an existing cluster automatically.")
+    parser.add_argument("--reinit", action="store_true", default=False,
+                        help="Skip the menu and run mode 3: end-to-end "
+                             "automated reinit (1b on primary + parallel "
+                             "node adds).")
+    parser.add_argument("--netboot-install", action="store_true", default=False,
+                        help="Skip the menu and run mode 4b: netboot and "
+                             "install ONTAP.")
+    parser.add_argument("--add-lic", action="store_true", default=False,
+                        help="Skip the menu and run mode 4c: install license "
+                             "file only.")
+    parser.add_argument("--passwordless", action="store_true", default=False,
+                        help="Skip the menu and run mode 4d: configure "
+                             "passwordless SSH to cluster management.")
+    parser.add_argument("--backup", action="store_true", default=False,
+                        help="Skip the menu and run mode 4e: create a backup "
+                             "cluster configuration file.")
+    parser.add_argument("--verify", action="store_true", default=False,
+                        help="Skip the menu and run mode 4f: verify BMC "
+                             "authentication for all configured nodes.")
     args = parser.parse_args()
     if args.help:
         _print_man_page()
@@ -14716,7 +14742,43 @@ def main():
             _resume_cp = None
 
     if not _resume_autodispatch:
-        _operation_mode, _auto_setup, _auto_add = select_operation_mode()
+        # ── Mode shortcut flags: bypass the interactive menu ──────────────
+        _shortcut_mode = None
+        _shortcut_auto_setup = False
+        _shortcut_auto_add = False
+        if args.first_node:
+            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 1, True, False
+            print("\n  ⚡ --first-node: launching mode 1b (automated first-node init).")
+        elif args.add_nodes:
+            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 2, False, True
+            print("\n  ⚡ --add-nodes: launching mode 2b (automated node add).")
+        elif args.reinit:
+            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 3, True, True
+            print("\n  ⚡ --reinit: launching mode 3 (end-to-end automated reinit).")
+        elif args.netboot_install:
+            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 42, False, False
+            print("\n  ⚡ --netboot-install: launching mode 4b (netboot and install ONTAP).")
+        elif args.add_lic:
+            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 44, False, False
+            print("\n  ⚡ --add-lic: launching mode 4c (install license).")
+        elif args.passwordless:
+            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 45, False, False
+            print("\n  ⚡ --passwordless: launching mode 4d (passwordless SSH setup).")
+        elif args.backup:
+            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 46, False, False
+            print("\n  ⚡ --backup: launching mode 4e (config backup).")
+        elif args.verify:
+            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 47, False, False
+            print("\n  ⚡ --verify: launching mode 4f (BMC auth verify).")
+
+        if _shortcut_mode is not None:
+            _operation_mode = _shortcut_mode
+            _auto_setup = _shortcut_auto_setup
+            _auto_add = _shortcut_auto_add
+        else:
+            _operation_mode, _auto_setup, _auto_add = select_operation_mode()
+    else:
+        pass  # _resume_autodispatch already set _operation_mode above
     # Remember the mode the operator explicitly chose at startup.  Mid-run
     # transitions (e.g. 1b → add nodes) change _operation_mode but leave
     # _initial_operation_mode intact so mode-specific up-front prompts only

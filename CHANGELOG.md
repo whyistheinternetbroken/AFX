@@ -9,6 +9,12 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **CLI mode shortcut flags.** Eight new flags bypass the interactive menu and
+  launch directly into the requested mode: `--first-node` (1b), `--add-nodes`
+  (2b), `--reinit` (3), `--netboot-install` (4b), `--add-lic` (4c),
+  `--passwordless` (4d), `--backup` (4e), `--verify` (4f). All flags can be
+  combined with `--config`, `--debug`, `--screen`, and other existing options.
+  See *Mode Shortcut Flags* in the README for examples.
 - **Incremental node join timing.** The per-node sub-rows under `Node join
   total` in both the session log and the standalone summary file now show
   **incremental** elapsed time for the 2nd and later nodes (e.g. `+10.2m`)

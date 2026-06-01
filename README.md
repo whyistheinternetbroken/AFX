@@ -429,6 +429,40 @@ python3 AFX_reinit.py [OPTIONS]
 | `--diag` | | Enable diagnostic bootarg injection. Loads `bootargs.json` from the script directory (a JSON array of `"bootarg.name value"` strings) or prompts interactively. Bootargs are set via `setenv` after `set-defaults` and before `saveenv` at the LOADER stage on all nodes. See [Diagnostic Bootargs (`--diag`)](#diagnostic-bootargs---diag). |
 | `--help` / `-h` | | Show a short man page about the script's options. |
 
+### Mode Shortcut Flags
+
+These flags bypass the interactive menu and launch directly into the specified mode. They can be combined with `--config`, `--debug`, `--screen`, and other flags.
+
+| Flag | Mode | Description |
+|---|---|---|
+| `--first-node` | 1b | Initialize the first node and set up the cluster automatically. |
+| `--add-nodes` | 2b | Add node(s) to an existing cluster automatically. |
+| `--reinit` | 3 | End-to-end automated reinit: 1b on primary + parallel node adds. |
+| `--netboot-install` | 4b | Netboot and install ONTAP. |
+| `--add-lic` | 4c | Install license file only. |
+| `--passwordless` | 4d | Configure passwordless SSH to cluster management. |
+| `--backup` | 4e | Create a backup cluster configuration file. |
+| `--verify` | 4f | Verify BMC authentication for all configured nodes. |
+
+**Examples:**
+
+```bash
+# Full unattended reinit using a config file
+python3 AFX_reinit.py --reinit --config configs/reinit-config.json --screen
+
+# Netboot all nodes then reinit (inside screen, detached)
+python3 AFX_reinit.py --netboot-install --screen --config configs/reinit-config.json
+
+# Back up the current cluster config
+python3 AFX_reinit.py --backup
+
+# Verify BMC credentials before starting a reinit
+python3 AFX_reinit.py --verify --config configs/reinit-config.json
+
+# Add a license without running a reinit
+python3 AFX_reinit.py --add-lic --config configs/reinit-config.json
+```
+
 ---
 
 ## Step-by-Step Instructions
