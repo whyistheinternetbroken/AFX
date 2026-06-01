@@ -6613,6 +6613,7 @@ def _apply_license(channel):
                         timeout=30,
                         allow_agent=False,
                         look_for_keys=False,
+                        disabled_algorithms={"pubkeys": ["ssh-dss"]},
                     )
                     sftp = lic_client.open_sftp()
                     # Track transfer progress to confirm 100 % completion.
@@ -7025,7 +7026,8 @@ def _verify_bmc_ip(ip, username, password):
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(hostname=ip, username=username, password=password,
-                       timeout=15, banner_timeout=20)
+                       timeout=15, banner_timeout=20,
+                       disabled_algorithms={"pubkeys": ["ssh-dss"]})
         _stdin, stdout, _stderr = client.exec_command("bmc status")
         output = stdout.read().decode("utf-8", errors="replace")
         client.close()
@@ -8796,7 +8798,8 @@ def _run_4b_standalone(log, resuming: bool = False):
                     _new_cl = paramiko.SSHClient()
                     _new_cl.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     _new_cl.connect(ip, username=bmc_user, password=_pw,
-                                    timeout=20, allow_agent=False, look_for_keys=False)
+                                    timeout=20, allow_agent=False, look_for_keys=False,
+                                    disabled_algorithms={"pubkeys": ["ssh-dss"]})
                     _new_ch = _open_shell(_new_cl)
                     # Drain the BMC banner, then enter system console.
                     time.sleep(1)
@@ -11408,6 +11411,7 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
             key_filename=_pk_path,
             look_for_keys=True, allow_agent=False,
             timeout=20,
+            disabled_algorithms={"pubkeys": ["ssh-dss"]},
         )
         _tch = _tc.invoke_shell(width=200, height=50)
         _tout, _tmatch = direct_read_until_any(
@@ -15856,6 +15860,7 @@ def main():
                 key_filename=_pk_path_45,
                 look_for_keys=True, allow_agent=False,
                 timeout=20,
+                disabled_algorithms={"pubkeys": ["ssh-dss"]},
             )
             _tch_45 = _tc_45.invoke_shell(width=200, height=50)
             _tout_45, _tmatch_45 = direct_read_until_any(
