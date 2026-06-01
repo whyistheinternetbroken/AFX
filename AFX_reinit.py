@@ -12352,6 +12352,14 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
             else:
                 ha_fix_attempted = True
                 _slog(f"{prefix}cluster ha modify completed")
+        # Print a console heartbeat so the operator isn't left wondering.
+        _em = int(elapsed) // 60
+        _es = int(elapsed) % 60
+        _elapsed_disp = f"{_em}m{_es:02d}s" if _em else f"{_es}s"
+        _next_min = int(poll_interval) // 60
+        print(f"   ⏳ {prefix}Still waiting for {target_count} healthy "
+              f"node(s) — elapsed {_elapsed_disp}; "
+              f"next check in ~{_next_min} min...")
         # Sleep with shutdown sensitivity so Ctrl-C aborts promptly.
         slept = 0.0
         while slept < poll_interval:
