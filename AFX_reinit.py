@@ -10144,7 +10144,8 @@ def _find_upgrade_package():
             print("  ⚠️  Out of range.")
 
     # Manual entry
-    print("\n  Enter a path to a .tgz file or a web URL (blank to exit).")
+    print("\n  Enter a path to a .tgz file, a directory containing .tgz files,")
+    print("  or a web URL (blank to exit).")
     while True:
         try:
             ans = input("  Path or URL: ").strip()
@@ -10158,8 +10159,33 @@ def _find_upgrade_package():
         if ans.lower().startswith("http://") or ans.lower().startswith("https://"):
             return "url", ans
         expanded = os.path.expanduser(os.path.expandvars(ans))
+        # If the user pointed at a directory, list .tgz files inside it.
+        if os.path.isdir(expanded):
+            dir_tgz = sorted(
+                os.path.abspath(os.path.join(expanded, fn))
+                for fn in os.listdir(expanded)
+                if fn.lower().endswith(".tgz")
+            )
+            if not dir_tgz:
+                print(f"  ⚠️  No .tgz files found in: {expanded}")
+                continue
+            print(f"\n  Found {len(dir_tgz)} package(s) in {expanded}:")
+            for i, p in enumerate(dir_tgz, 1):
+                print(f"    {i}. {os.path.basename(p)}")
+            print("")
+            while True:
+                try:
+                    sel = input(f"  Select package [1-{len(dir_tgz)}] or blank to re-enter path: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    return None, None
+                if sel == "":
+                    break  # back to outer path prompt
+                if sel.isdigit() and 1 <= int(sel) <= len(dir_tgz):
+                    return "file", dir_tgz[int(sel) - 1]
+                print("  ⚠️  Out of range.")
+            continue
         if not os.path.isfile(expanded):
-            print(f"  ⚠️  File not found: {expanded}")
+            print(f"  ⚠️  Path not found: {expanded}")
             continue
         if not expanded.lower().endswith(".tgz"):
             print("  ⚠️  Only .tgz upgrade packages are supported.")
