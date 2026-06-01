@@ -16498,8 +16498,18 @@ def main():
             _print_banner("🔐 Peer BMC SSH Credentials")
             print("\n  Provide SSH credentials for each peer BMC. Press Enter")
             print(f"  to reuse the primary BMC username '{sp_user}' / password.")
+
+            # Ask if all peers share the same credentials as the primary.
+            try:
+                _same_creds_ans = input(
+                    f"\n  Use the same BMC username '{sp_user}' and password"
+                    " for all peer nodes? [Y/n]: "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                _same_creds_ans = ""
+            _same_creds_all = (_same_creds_ans != "n")
+
             for addr in other_sps:
-                print(f"\n  ── Peer BMC {addr} ──")
                 node_cfg = _node_cfg_for(addr)
                 # Three-state handling for each field:
                 #   * Key absent / non-string  -> prompt the operator.
@@ -16515,35 +16525,43 @@ def main():
                     "bmc_password" in node_cfg
                     and isinstance(node_cfg["bmc_password"], str)
                 )
-                # Resolve username.
-                if user_in_cfg:
-                    u = node_cfg["bmc_user"].strip() or sp_user
-                    if not node_cfg["bmc_user"].strip():
-                        print(f"    📄 Username blank in config for {addr}; "
-                              f"reusing primary user '{sp_user}'.")
-                else:
-                    try:
-                        u = input(
-                            f"    Username for {addr} "
-                            f"[hit enter to re-use {sp_user}]: "
-                        ).strip() or sp_user
-                    except (EOFError, KeyboardInterrupt):
-                        u = sp_user
 
-                # Resolve password.
-                if pass_in_cfg:
-                    p = node_cfg["bmc_password"]
-                    if p:
-                        print(f"    📄 Using config credentials for {addr} (user={u})")
-                    else:
-                        print(f"    📄 Password blank in config for {addr}; "
-                              "will attempt SSH with no password.")
+                if _same_creds_all:
+                    # Use primary credentials for all peers (no per-node prompt).
+                    u = sp_user
+                    p = sp_pass
                 else:
-                    p = getpass.getpass(
-                        f"    Password for {addr} (blank to reuse primary): "
-                    )
-                    if not p:
-                        p = sp_pass
+                    print(f"\n  ── Peer BMC {addr} ──")
+                    # Resolve username.
+                    if user_in_cfg:
+                        u = node_cfg["bmc_user"].strip() or sp_user
+                        if not node_cfg["bmc_user"].strip():
+                            print(f"    📄 Username blank in config for {addr}; "
+                                  f"reusing primary user '{sp_user}'.")
+                    else:
+                        try:
+                            u = input(
+                                f"    Username for {addr} "
+                                f"[hit enter to re-use {sp_user}]: "
+                            ).strip() or sp_user
+                        except (EOFError, KeyboardInterrupt):
+                            u = sp_user
+
+                    # Resolve password.
+                    if pass_in_cfg:
+                        p = node_cfg["bmc_password"]
+                        if p:
+                            print(f"    📄 Using config credentials for {addr} (user={u})")
+                        else:
+                            print(f"    📄 Password blank in config for {addr}; "
+                                  "will attempt SSH with no password.")
+                    else:
+                        p = getpass.getpass(
+                            f"    Password for {addr} (blank to reuse primary): "
+                        )
+                        if not p:
+                            p = sp_pass
+
                 _peer_bmc_creds[addr] = {"user": u, "password": p}
                 if p == sp_pass:
                     pw_desc = "<reused-primary>"
@@ -16555,6 +16573,9 @@ def main():
                     f"Captured credentials for peer BMC {addr} (user={u}, "
                     f"password={pw_desc})"
                 )
+            if _same_creds_all:
+                print(f"  ✅ Using primary credentials (user={sp_user}) for all"
+                      f" {len(other_sps)} peer node(s).")
 
         if _operation_mode == 3:
             # Mode 3: peers will be auto-added in parallel AFTER the primary's
