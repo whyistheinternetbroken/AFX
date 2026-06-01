@@ -15760,8 +15760,8 @@ def main():
         _check_bmc_reachable(sp_host)
     else:
         sp_host = _prompt_bmc_host("Enter SP hostname/IP: ")
-    sp_user = _cfg_str(primary_node.get("bmc_user")) or input("Enter SP username: ")
-    sp_pass = _cfg_get_or_prompt("bmc_password", "Enter SP password: ", hidden=True)
+    sp_user = _cfg_str(primary_node.get("bmc_user")) or input("Enter BMC username: ")
+    sp_pass = _cfg_get_or_prompt("bmc_password", "Enter BMC password: ", hidden=True)
     if primary_node.get("bmc"):
         _pn_src = "primary_node" if isinstance(_config_data.get("primary_node"), dict) else "nodes[0]"
         print(f"📄 Using primary BMC from config {_pn_src}: {sp_host} (user={sp_user})")
