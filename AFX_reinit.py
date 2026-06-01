@@ -4137,6 +4137,7 @@ def _parse_network_interfaces(output):
     }
     rows = []
     current: "dict[str, str]" = {}
+    _seen_labels: "set[str]" = set()
     for line in output.splitlines():
         stripped = line.strip()
         if not stripped:
@@ -4155,12 +4156,21 @@ def _parse_network_interfaces(output):
         value = value.strip()
         if not value or value in ("-", "--"):
             continue
+        matched = False
         for key_pat, field_name in _KEY_MAP.items():
             if label_lower == key_pat:   # exact match only
                 current[field_name] = value
+                matched = True
                 break
+        if not matched:
+            _seen_labels.add(label_lower)
     if current:
         rows.append(current)
+    if _session_log:
+        _session_log.log(
+            f"_parse_network_interfaces: {len(rows)} rows; "
+            f"unmatched labels seen: {sorted(_seen_labels)}"
+        )
     return rows
 
 
@@ -4446,9 +4456,6 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
                     _session_log.log(f"Captured NTP servers: {_retained_ntp_servers!r}")
 
             if retain_network:
-                # Use -instance without a role filter; ONTAP does not reliably
-                # accept comma-separated values in -role. Role-based display
-                # categorisation is handled downstream by _print_retain_summary.
                 _slog("Running: net int show -instance")
                 try:
                     out = _run_cluster_command(
@@ -4456,6 +4463,10 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
                         "net int show -instance",
                         timeout=90,
                     )
+                    if _session_log:
+                        _session_log.log(
+                            f"net int show raw output (first 3000 chars):\n{out[:3000]}"
+                        )
                     net_rows = _parse_network_interfaces(out)
                 except Exception as e:
                     print(f"   ⚠️  net int show failed: {e}")
