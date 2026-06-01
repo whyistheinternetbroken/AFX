@@ -47,7 +47,7 @@ All session activity is captured in a timestamped log directory with a human-rea
 | ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence. |
 | Netboot Install (4b) | Automated ONTAP netboot and software installation. |
 | SSH Key Setup (4d) | Configures passwordless SSH from the script host to cluster management. |
-| Config Backup (4e) | Saves or constructs cluster configuration (cluster name, IPs, licenses, nodes) to a JSON file for use in future runs. |
+| Config Backup (4e) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. |
 | BMC Auth Verify (4f) | Batch-tests BMC SSH credentials for all nodes in the config file. |
 | Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
 | Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |

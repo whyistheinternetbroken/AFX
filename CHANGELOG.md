@@ -9,6 +9,53 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **4e config gather — cluster management SSH support.** The 4e "backup
+  configuration" entry point now accepts a BMC address, cluster management
+  IP, or cluster hostname as the connection target. A ping check validates
+  the entered address before proceeding; re-entry is requested on failure.
+  When a reinit config file is loaded, `primary_node.bmc` is pre-filled
+  automatically so no prompt is shown.
+- **4e config gather — NTP server capture.** `collect_retain_data` now runs
+  `ntp server show` and stores the result in `_retained_ntp_servers`.
+  `apply_retained_to_cluster_config` writes a `ntp_servers` field (comma-
+  separated) to the config. If no NTP servers are found and the config has
+  no existing `ntp_servers` entry, the operator is offered `pool.ntp.org`
+  as a one-prompt default.
+
+### Changed
+- **Option 3 / 4e BMC prompt text.** The "Enter SP hostname/IP" prompt now
+  reads "Enter BMC hostname/IP or primary node (this will be the first node
+  in the cluster)" to clarify that a cluster management address is also
+  accepted.
+
+### Fixed
+- **4e config gather — `_parse_network_interfaces` silently undefined.**
+  An edit that inserted `_parse_ntp_servers` accidentally removed the `def`
+  line for `_parse_network_interfaces`, leaving its body as unreachable dead
+  code inside the NTP parser. All calls to `_parse_network_interfaces` would
+  raise `NameError` at runtime, so the captured network interface rows were
+  always empty — causing the saved config to omit `clus_mgmt_address`,
+  `clus_mgmt_mask`, `mgmt_port`, and all per-node management data. The `def`
+  line has been restored.
+- **4e config gather — spurious cluster login and wrong exit on direct
+  cluster SSH.** When connecting directly to cluster management (rather than
+  via BMC console), `collect_retain_data` was calling `_wait_for_cluster_prompt`
+  which attempted a cluster login (sending `admin\r` as a cluster command)
+  and then sent Ctrl+D followed by a BMC prompt wait that never arrived.
+  Fixed by adding a `direct_cluster_ssh=True` code path that skips console
+  entry/exit entirely and closes the session with `exit`.
+- **4e config gather — wrong BMC address written to `primary_node.bmc` when
+  connecting via cluster management IP.** The cluster management hostname/IP
+  was being written as the primary node's BMC address. The script now
+  matches each SP IP from `service-processor show` against the configured
+  `node_mgmt_ip`; the matching entry becomes the real primary BMC, with a
+  fallback to the first SP IP when no match is found.
+- **`RunContext` `TypeError` for `retained_ntp_servers`.** The new
+  `retained_ntp_servers` checkpoint key was added to `_SYNC_KEYS` without a
+  corresponding field in the `RunContext` dataclass, causing `TypeError:
+  __init__() got an unexpected keyword argument 'retained_ntp_servers'` on
+  startup. The field has been added.
+
 - **`--diag` flag: diagnostic LOADER bootarg injection.** A new `--diag`
   CLI flag enables one-off LOADER bootarg injection at the LOADER stage
   (after `set-defaults`, before `saveenv`) on **all nodes** (primary and

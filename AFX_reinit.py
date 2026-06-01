@@ -4110,7 +4110,7 @@ def _parse_ntp_servers(output):
     return servers
 
 
-
+def _parse_network_interfaces(output):
     """Parse 'net int show ... -fields ...' table output into list[dict]."""
     headers = None
     dashes_seen = False
@@ -15893,7 +15893,7 @@ def main():
     if sp_host:
         _check_bmc_reachable(sp_host)
     else:
-        sp_host = _prompt_bmc_host("Enter SP hostname/IP: ")
+        sp_host = _prompt_bmc_host("Enter BMC hostname/IP or primary node (this will be the first node in the cluster): ")
     sp_user = _cfg_str(primary_node.get("bmc_user")) or input("Enter BMC username: ")
     sp_pass = _cfg_get_or_prompt("bmc_password", "Enter BMC password: ", hidden=True)
     if primary_node.get("bmc"):
