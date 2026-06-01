@@ -4446,15 +4446,19 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
                     _session_log.log(f"Captured NTP servers: {_retained_ntp_servers!r}")
 
             if retain_network:
-                _slog("Running: net int show -role node-mgmt,cluster-mgmt,cluster -instance")
+                # Use -instance without a role filter; ONTAP does not reliably
+                # accept comma-separated values in -role. Role-based display
+                # categorisation is handled downstream by _print_retain_summary.
+                _slog("Running: net int show -instance")
                 try:
                     out = _run_cluster_command(
                         channel,
-                        "net int show -role node-mgmt,cluster-mgmt,cluster -instance",
+                        "net int show -instance",
                         timeout=90,
                     )
                     net_rows = _parse_network_interfaces(out)
                 except Exception as e:
+                    print(f"   ⚠️  net int show failed: {e}")
                     _slog(f"net int show failed: {e}", prefix="WARN")
                 _slog(f"Captured {len(net_rows or [])} network interface rows")
 
