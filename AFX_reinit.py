@@ -353,6 +353,7 @@ _retained_cluster_contact = None  # str — from `cluster identity show`
 _retained_cluster_location = None  # str — from `cluster identity show`
 _retained_dns_domains = None       # str — comma-separated, from `dns show`
 _retained_dns_servers = None       # str — comma-separated, from `dns show`
+_retained_ntp_servers = None       # list[str] — from `ntp server show`
 
 # Mapping captured during retain phase to correlate per-node data:
 #   _retained_sp_to_node : {sp_address(str) -> ontap_node_name(str)}
@@ -550,6 +551,7 @@ _RUN_CONTEXT_FIELD_TO_GLOBAL = {
     "retained_cluster_location": "_retained_cluster_location",
     "retained_dns_domains":      "_retained_dns_domains",
     "retained_dns_servers":      "_retained_dns_servers",
+    "retained_ntp_servers":      "_retained_ntp_servers",
     "retained_sp_to_node":       "_retained_sp_to_node",
     "retain_preselected":        "_retain_preselected",
     # Peer / BMC state
@@ -4075,7 +4077,39 @@ def _parse_dns_config(output):
     }
 
 
-def _parse_network_interfaces(output):
+def _parse_ntp_servers(output):
+    """Parse 'ntp server show' output and return a list of server addresses.
+
+    ONTAP lists one server per row; the first column after the header
+    separator is the server name/IP. Returns [] on failure or empty output.
+    """
+    servers = []
+    dashes_seen = False
+    for line in output.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if "::" in s or s.lower().startswith("ntp server"):
+            continue
+        if "entries were displayed" in s.lower() or "entry was displayed" in s.lower():
+            continue
+        if set(s) <= {"-", " "}:
+            dashes_seen = True
+            continue
+        if not dashes_seen:
+            continue
+        tokens = s.split()
+        if not tokens:
+            continue
+        # First token is the server name/IP. Skip obvious junk tokens.
+        candidate = tokens[0]
+        if candidate in ("-", "--") or candidate.startswith("("):
+            continue
+        servers.append(candidate)
+    return servers
+
+
+
     """Parse 'net int show ... -fields ...' table output into list[dict]."""
     headers = None
     dashes_seen = False
@@ -4354,6 +4388,16 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
                     f"Captured DNS: domains={_retained_dns_domains!r}, "
                     f"servers={_retained_dns_servers!r}"
                 )
+
+            print("\n   ▶ ntp server show")
+            try:
+                out = _run_cluster_command(channel, "ntp server show", timeout=30)
+                global _retained_ntp_servers
+                _retained_ntp_servers = _parse_ntp_servers(out) or None
+            except Exception as e:
+                _slog(f"ntp server show failed: {e}", prefix="WARN")
+            if _session_log:
+                _session_log.log(f"Captured NTP servers: {_retained_ntp_servers!r}")
 
         if retain_network:
             print("\n   ▶ net int show -role node-mgmt,cluster-mgmt,cluster -fields ...")
@@ -4993,6 +5037,25 @@ def apply_retained_to_cluster_config():
     _fill("contact", _retained_cluster_contact)
     _fill("dns_domains", _retained_dns_domains)
     _fill("dns_servers", _retained_dns_servers)
+    # NTP servers: convert list to comma-separated string for config storage.
+    if _retained_ntp_servers:
+        _fill("ntp_servers", ",".join(_retained_ntp_servers))
+    elif not cluster_block.get("ntp_servers"):
+        # No NTP servers found on cluster and none in config — offer pool.ntp.org.
+        print(
+            "\n  ⚠️  No NTP server configuration found on the existing cluster."
+        )
+        _ans = _prompt(
+            "     Add 'pool.ntp.org' as the NTP server in the config? [Y/n]: "
+        ).strip().lower()
+        if _ans in ("", "y", "yes"):
+            cluster_block["ntp_servers"] = "pool.ntp.org"
+            fills.append("ntp_servers")
+            if _session_log:
+                _session_log.log("No NTP found; user added pool.ntp.org to config")
+        else:
+            if _session_log:
+                _session_log.log("No NTP found; user declined to add pool.ntp.org")
 
     if fills:
         print("\n  \U0001F4D1 Populated cluster config from existing cluster:")
@@ -16534,6 +16597,7 @@ def main():
         _retained_cluster_location,
         _retained_dns_domains,
         _retained_dns_servers,
+        _retained_ntp_servers,
         _retained_sp_to_node,
     ))
     if retain_captured and not config_path:
