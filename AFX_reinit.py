@@ -4366,9 +4366,9 @@ def _print_retain_summary(cluster_name, net_rows, peer_addresses=None):
 
         if cluster_lifs:
             print("\n  Cluster LIFs:")
-            print("  " + "-" * 72)
+            print("  " + "-" * 89)
             print(f"  {'lif':<26} {'home-node':<18} {'port':<8} {'address':<18} {'netmask'}")
-            print("  " + "-" * 72)
+            print("  " + "-" * 89)
             for r in cluster_lifs:
                 print(
                     f"  {r.get('lif', '-'):<26} "
@@ -4380,9 +4380,9 @@ def _print_retain_summary(cluster_name, net_rows, peer_addresses=None):
 
         if mgmt_lifs:
             print("\n  Management LIFs:")
-            print("  " + "-" * 90)
+            print("  " + "-" * 105)
             print(f"  {'lif':<26} {'home-node':<18} {'port':<8} {'address':<18} {'netmask':<16} {'role'}")
-            print("  " + "-" * 90)
+            print("  " + "-" * 105)
             for r in mgmt_lifs:
                 print(
                     f"  {r.get('lif', '-'):<26} "
