@@ -4170,7 +4170,9 @@ def _parse_network_interfaces(output):
         "mask length": "netmask_prefix",
         # Role and IPspace
         "role": "role",
+        "(deprecated)-role": "role",      # ONTAP 9.x emits "(DEPRECATED)-Role:"
         "ipspace": "ipspace",
+        "ipspace of lif": "ipspace",      # alternate label seen on some versions
     }
 
     rows = []
@@ -4190,7 +4192,11 @@ def _parse_network_interfaces(output):
                 current = {}
             continue
 
-        if "::" in clean or clean.startswith("("):
+        if "::" in clean:
+            continue
+        # Skip parenthesized ONTAP command-echo lines like "(network interface show)"
+        # but NOT field labels like "(DEPRECATED)-Role: cluster" which are real data.
+        if clean.startswith("(") and clean.endswith(")"):
             continue
         if "entries were displayed" in clean.lower() or "entry was displayed" in clean.lower():
             continue
