@@ -1652,10 +1652,20 @@ class SessionLogger:
                 self._file.write(
                     f"  {phase:<45} {elapsed:>7.1f}s ({minutes:.1f}m){ph_col}\n"
                 )
+                _prev_node_elapsed = None
                 for sub_label, sub_elapsed in self._phase_subtimings.get(phase, []):
+                    if sub_label.startswith("Node [") and _prev_node_elapsed is not None:
+                        _delta = sub_elapsed - _prev_node_elapsed
+                        _time_str = f"(+{_delta/60:.1f}m)"
+                        _prev_node_elapsed = sub_elapsed
+                    elif sub_label.startswith("Node ["):
+                        _time_str = f"({sub_elapsed/60:.1f}m)"
+                        _prev_node_elapsed = sub_elapsed
+                    else:
+                        _time_str = f"({sub_elapsed/60:.1f}m)"
                     self._file.write(
                         f"     - {sub_label:<41} {sub_elapsed:>7.1f}s "
-                        f"({sub_elapsed/60:.1f}m)\n"
+                        f"{_time_str}\n"
                     )
             self._file.write(f"  {'─' * 55}\n")
             self._file.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
@@ -1753,10 +1763,20 @@ class SessionLogger:
                         ph_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(ph_status, "  ")
                         ph_col = f"  {ph_icon} {ph_status}" if ph_status else ""
                         sf.write(f"  {phase:<45} {elapsed:>7.1f}s ({minutes:.1f}m){ph_col}\n")
+                        _prev_node_elapsed = None
                         for sub_label, sub_elapsed in self._phase_subtimings.get(phase, []):
+                            if sub_label.startswith("Node [") and _prev_node_elapsed is not None:
+                                _delta = sub_elapsed - _prev_node_elapsed
+                                _time_str = f"(+{_delta/60:.1f}m)"
+                                _prev_node_elapsed = sub_elapsed
+                            elif sub_label.startswith("Node ["):
+                                _time_str = f"({sub_elapsed/60:.1f}m)"
+                                _prev_node_elapsed = sub_elapsed
+                            else:
+                                _time_str = f"({sub_elapsed/60:.1f}m)"
                             sf.write(
                                 f"     - {sub_label:<41} {sub_elapsed:>7.1f}s "
-                                f"({sub_elapsed/60:.1f}m)\n"
+                                f"{_time_str}\n"
                             )
                     sf.write(f"  {'─' * 55}\n")
                     sf.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
