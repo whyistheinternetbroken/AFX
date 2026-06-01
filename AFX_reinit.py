@@ -53,6 +53,30 @@ _SHELL_PROMPT_RE = re.compile(r"::\*?>")
 _ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
 # ---------------------------------------------------------------------------
+# Per-reinit elapsed-time / node-label tracking
+# ---------------------------------------------------------------------------
+# Set at AUTOBOOT detection so every status line that follows shows how far
+# into the reinit sequence the node is.
+_reinit_t0: "float | None" = None   # time.monotonic() when reinit started
+_reinit_label: str = ""             # BMC IP or node identifier
+
+
+def _elapsed_str() -> str:
+    """Return ' (+Xs)' or ' (+MmSs)' since _reinit_t0, or '' if not set."""
+    if _reinit_t0 is None:
+        return ""
+    secs = int(time.monotonic() - _reinit_t0)
+    if secs < 60:
+        return f" (+{secs}s)"
+    return f" (+{secs // 60}m{secs % 60:02d}s)"
+
+
+def _node_pfx(label: str = "") -> str:
+    """Return '[label] ' using *label* if given, else _reinit_label."""
+    lbl = label or _reinit_label
+    return f"[{lbl}] " if lbl else ""
+
+# ---------------------------------------------------------------------------
 # Checkpoint manager
 # ---------------------------------------------------------------------------
 
@@ -3303,7 +3327,7 @@ def direct_send_and_wait(channel, command, look_for, timeout=15, auto_respond=No
         time.sleep(0.3)
         channel.send(auto_respond + "\r")
         if not quiet:
-            print(f"\n✅ Detected '{look_for}' – auto-responded with '{auto_respond}'")
+            print(f"\n✅ {_node_pfx()}Detected '{look_for}' – auto-responded with '{auto_respond}'{_elapsed_str()}")
         elif node_log:
             _par_write(node_log, f"\n>>> auto-responded to '{look_for}' with '{auto_respond}'\n")
         if _session_log:
@@ -4917,7 +4941,7 @@ class InteractiveSession:
 # Boot menu handler
 # ---------------------------------------------------------------------------
 
-def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None):
+def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_label=""):
     """Wait for the ONTAP boot menu then auto-select the configured option.
 
     When *node_log* is supplied all raw console bytes are written there
@@ -4925,9 +4949,10 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None):
     """
     option, description = get_boot_menu_option()
 
-    print(f"\n⏳ Primary node booting to boot menu (will auto-select option {option} – {description})...")
+    _pfx = _node_pfx(node_label)
+    print(f"\n⏳ {_pfx}Primary node booting to boot menu (will auto-select option {option} – {description}){_elapsed_str()}")
     if node_log and hasattr(node_log, "name"):
-        print(f"   📝 Primary node log: {node_log.name}")
+        print(f"   📝 {_pfx}Primary node log: {node_log.name}")
     if _session_log:
         _session_log.log(
             f"Phase 2: Waiting for boot menu up to {timeout}s "
@@ -5004,9 +5029,9 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None):
     drain_channel(channel, seconds=1, node_log=node_log)
 
     if _operation_mode == 2:
-        print(f"\n✅ Boot menu detected! Option {option} selected. Node reinitializing to be added to cluster.")
+        print(f"\n✅ {_pfx}Boot menu detected! Option {option} selected. Node reinitializing to be added to cluster.{_elapsed_str()}")
     else:
-        print(f"\n✅ Boot menu detected! Option {option} selected. Node reinitializing and Storage Availability Zone being destroyed.")
+        print(f"\n✅ {_pfx}Boot menu detected! Option {option} selected. Node reinitializing and Storage Availability Zone being destroyed.{_elapsed_str()}")
     if _session_log:
         _session_log.log(f"Boot menu detected – auto-selecting option {option} ({description})")
         _session_log.log_sent(option)
@@ -6102,9 +6127,9 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="", is_node_ad
                      ambiguous (both primary init and peer add run under it).
     """
     _node_add = (_operation_mode == 2) if is_node_add is None else bool(is_node_add)
+    _pfx = _node_pfx(label)
     if _node_add:
-        _lbl = f" [{label}]" if label else ""
-        print(f"\n⏳{_lbl} Resetting configuration and rebooting.")
+        print(f"\n⏳ {_pfx}Resetting configuration and rebooting.{_elapsed_str()}")
     _cc_done_ev = None  # set when the cluster-creation progress reporter starts
     for trigger, resp, lbl in (
         ("zero disks, reset config and install a new file system", "yes",
@@ -6122,17 +6147,18 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="", is_node_ad
             else:
                 _boot_action = "begin cluster creation"
                 _still_waiting_msg = "Still waiting for cluster creation"
-            print(f"\n⏳ Waiting for node to boot and {_boot_action}.")
+            print(f"\n⏳ {_pfx}Waiting for node to boot and {_boot_action}.{_elapsed_str()}")
             print(f"   For details, see log at:\n   {_log_path}\n   (open in a separate SSH session)")
             _cc_done_ev = threading.Event()
             _cc_t0 = time.monotonic()
-            def _cc_reporter(_ev=_cc_done_ev, _t0=_cc_t0, _msg=_still_waiting_msg):
+            def _cc_reporter(_ev=_cc_done_ev, _t0=_cc_t0, _msg=_still_waiting_msg, _p=_pfx):
                 while not _ev.wait(60):
                     elapsed = int(time.monotonic() - _t0)
-                    print(f"   ⏳ {_msg}... ({elapsed}s elapsed)")
+                    reinit_elapsed = _elapsed_str()
+                    print(f"   ⏳ {_p}{_msg}... ({elapsed}s in this phase{reinit_elapsed})")
             threading.Thread(target=_cc_reporter, daemon=True).start()
         elif not _node_add:
-            print(f"\n⏳ Waiting for {lbl} (auto-answer '{resp}')...")
+            print(f"\n⏳ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
         _slog(f"Waiting for {lbl}")
         direct_send_and_wait(channel, "", trigger, timeout=1800, auto_respond=resp,
                              check_bmc_drop=True, quiet=_node_add, node_log=node_log)
@@ -13458,13 +13484,13 @@ def auto_complete_initialization(channel, bmc_host=None):
     Remaining setup-wizard prompts (cluster name, admin password, etc.) are
     left to the interactive session that runs after this function returns.
     """
-    print("\n🤖 Mode 1b: automated cluster initialization in progress...")
+    print(f"\n🤖 {_node_pfx(bmc_host)}Mode 1b: automated cluster initialization in progress...{_elapsed_str()}")
     if _session_log:
         _session_log.start_phase("Auto Cluster Init (1b)")
         _session_log.log("Mode 1b automated init starting after option 9 sent")
 
     # 1) Storage availability zone warning -> "no"
-    print("\n⏳ Waiting for storage-availability-zone warning (auto-answer 'no')...")
+    print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for storage-availability-zone warning (auto-answer 'no')...{_elapsed_str()}")
     _slog("Waiting for storage-availability-zone warning")
     direct_send_and_wait(
         channel, "", "storage availability zone will be destroyed",
@@ -13472,7 +13498,7 @@ def auto_complete_initialization(channel, bmc_host=None):
     )
 
     # 2) Wait for the *second* boot menu and select option 4.
-    print("\n⏳ Waiting for second boot menu (auto-select option 4)...")
+    print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for second boot menu (auto-select option 4)...{_elapsed_str()}")
     _slog("Waiting for second boot menu (option 4)")
     sig_lower = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
     output_lower = ""
@@ -13503,7 +13529,7 @@ def auto_complete_initialization(channel, bmc_host=None):
         return
 
     drain_channel(channel, seconds=1)
-    print("🔢 Selecting option 4 (Initialize and configure)...")
+    print(f"🔢 {_node_pfx(bmc_host)}Selecting option 4 (Initialize and configure)...{_elapsed_str()}")
     if _session_log:
         _session_log.log("2nd boot menu detected; auto-selecting option 4")
         _session_log.log_sent("4")
@@ -13545,7 +13571,10 @@ def auto_complete_initialization(channel, bmc_host=None):
 
 
 def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
-    print("\n⏳ Setting LOADER boot options...")
+    global _reinit_label
+    _reinit_label = sp_host or _reinit_label
+    _pfx = _node_pfx()
+    print(f"\n⏳ {_pfx}Setting LOADER boot options...{_elapsed_str()}")
     if _session_log:
         _session_log.end_phase()  # End AUTOBOOT/LOADER Monitoring
         _session_log.start_phase("LOADER Commands")
@@ -13655,7 +13684,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     if _session_log:
         _session_log.start_phase("Boot Menu Selection")
 
-    if not wait_for_boot_menu_and_select(channel, timeout=1800):
+    if not wait_for_boot_menu_and_select(channel, timeout=1800, node_label=sp_host):
         print("\n⚠️  Falling back to manual menu selection...")
         _slog("Auto-select failed, falling back to manual input", prefix="WARN")
         drain_channel(channel, seconds=5)
@@ -13766,12 +13795,16 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     _session_log.log_console(chunk)
 
                 if "starting autoboot press ctrl-c to abort" in output_buffer.lower():
-                    print("\n🛑 AUTOBOOT detected! Sending Ctrl+C to interrupt...")
+                    global _reinit_t0, _reinit_label
+                    _reinit_t0 = time.monotonic()
+                    _reinit_label = sp_host or ""
+                    _pfx = _node_pfx()
+                    print(f"\n🛑 {_pfx}AUTOBOOT detected! Sending Ctrl+C to interrupt...{_elapsed_str()}")
                     _slog("AUTOBOOT detected – sending Ctrl+C to interrupt")
                     for _ in range(5):
                         channel.send("\x03")
                         time.sleep(0.3)
-                    print("✅ Ctrl+C sent.")
+                    print(f"✅ {_pfx}Ctrl+C sent.{_elapsed_str()}")
                     _slog("Ctrl+C sent to interrupt AUTOBOOT")
                     output_buffer = ""
 
