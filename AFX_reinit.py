@@ -1827,6 +1827,7 @@ def select_operation_mode():
       5  -> Exit.
     """
     global _setup_passwordless_ssh, _netboot_before_reinit, _physical_zeroing
+    global _diag_bootargs
     while True:
         _print_banner("NetApp AFX BMC Console Automation 🤖")
         print("\n  What do you want to do?\n")
@@ -1880,7 +1881,6 @@ def select_operation_mode():
                 if _physical_zeroing:
                     print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
                 if _diag_mode:
-                    global _diag_bootargs
                     _diag_bootargs = _load_diag_bootargs()
                 print("\n  ✅ Confirmed. 1a: Format first node (interactive)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
@@ -1921,7 +1921,6 @@ def select_operation_mode():
                 if _physical_zeroing:
                     print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
                 if _diag_mode:
-                    global _diag_bootargs
                     _diag_bootargs = _load_diag_bootargs()
                 print("\n  ✅ Confirmed. 1b: Format first node + setup cluster (auto)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
@@ -2013,7 +2012,6 @@ def select_operation_mode():
                 if _physical_zeroing:
                     print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
                 if _diag_mode:
-                    global _diag_bootargs
                     _diag_bootargs = _load_diag_bootargs()
                 print("\n  ✅ Confirmed. 3: End-to-end auto initialize\n")
                 return 3, True, True
