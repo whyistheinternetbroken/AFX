@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 5/29/2026  
+**Updated:** 6/1/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
 ---
@@ -55,6 +55,7 @@ All session activity is captured in a timestamped log directory with a human-rea
 | Node add resume | Resumes interrupted node add processes. |
 | Physical disk zeroing | Adds option to physically zero disks rather than fast zero (which helps ensure performance consistency). |
 | BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 4f offers an interactive cleanup pass when BMC verification fails. |
+| Diagnostic bootarg injection (`--diag`) | Injects custom LOADER `setenv` bootargs (from a `bootargs.json` file or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Validates format, detects LOADER errors on apply, and checkpoints the bootarg list for resume. |
 
 ---
 
@@ -425,6 +426,7 @@ python3 AFX_reinit.py [OPTIONS]
 | `--resume` | | Mode 4b only. Resume the previous 4b run from its saved checkpoint (`afx_checkpoint.json`). Skips phases already completed so you do not have to restart from scratch after a failure or Ctrl+C. See **Checkpoint & Resume** below. |
 | `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, age, BMC IPs, completed global phases, completed per-node phases — then exit. Does not modify the checkpoint file. |
 | `--auto-clear-stale-bmc` | | On banner-timeout retries, scan for `ESTABLISHED` TCP sockets to each BMC's port 22 owned by other Python processes on this host and `SIGTERM` them. The "always-on" cleanup (close own SSH clients + `ipmitool sol deactivate`) runs regardless of this flag. See [BMC SSH Stale Session Diagnostics](#bmc-ssh-stale-session-diagnostics). |
+| `--diag` | | Enable diagnostic bootarg injection. Loads `bootargs.json` from the script directory (a JSON array of `"bootarg.name value"` strings) or prompts interactively. Bootargs are set via `setenv` after `set-defaults` and before `saveenv` at the LOADER stage on all nodes. See [Diagnostic Bootargs (`--diag`)](#diagnostic-bootargs---diag). |
 | `--help` / `-h` | | Show a short man page about the script's options. |
 
 ---
@@ -832,6 +834,64 @@ Then re-run with `--screen`.
 
 ---
 
+## Diagnostic Bootargs (`--diag`)
+
+The `--diag` flag enables injection of one-off custom LOADER bootargs during the LOADER stage of a reinit. This is useful for applying special diagnostics or tuning variables (e.g. after `set-defaults` resets them) without modifying the script itself.
+
+### How it works
+
+1. At startup (or during the 4b upfront config phase) the script looks for a `bootargs.json` file next to `AFX_reinit.py`.
+2. If found, the file is parsed as a JSON array of strings.
+3. If not found, the operator is prompted to enter bootargs interactively (one per line, blank line to finish).
+4. Each entry is validated and then injected as `setenv <bootarg>` in the LOADER command sequence on **all nodes** (primary and all peers), immediately after `raid.use-physical-zeroing?` is set and before `saveenv`.
+5. If the LOADER returns an error response to any `setenv bootarg.*` command, the script prints the error and exits immediately.
+
+### `bootargs.json` format
+
+The file must be a JSON array of strings. Each string must be exactly two whitespace-separated tokens: the bootarg name (starting with `bootarg.`) and its value. Do **not** include `setenv` — the script adds it.
+
+```json
+[
+  "bootarg.init.initnonsz 0x80000",
+  "bootarg.vm.memmap.efi true",
+  "bootarg.some.flag 1"
+]
+```
+
+### Entry validation rules
+
+| Rule | What happens on violation |
+|---|---|
+| Entry must NOT start with `setenv` | Warning printed; operator offered exit-or-skip |
+| Entry must be exactly `bootarg.<name> <value>` (two tokens, name starts with `bootarg.`) | Warning printed; operator offered exit-or-skip |
+| LOADER responds with `%`, `Error`, `invalid`, or `unknown` after a `setenv` | Script prints the LOADER output and exits |
+
+### Usage
+
+```bash
+# With a bootargs.json file present next to the script:
+python3 AFX_reinit.py --diag
+
+# Without a file — interactive prompt:
+python3 AFX_reinit.py --diag
+#  ℹ️  No bootargs.json found. Enter bootargs interactively.
+#     Format: bootarg.name.variable <value>   (do NOT include 'setenv')
+#     Press Enter on a blank line when done.
+#   bootarg> bootarg.init.initnonsz 0x80000
+#   bootarg> bootarg.vm.memmap.efi true
+#   bootarg>
+
+# Can be combined with any reinit mode:
+python3 AFX_reinit.py --diag --resume
+python3 AFX_reinit.py --diag --config reinit-config.json
+```
+
+### Checkpoint / resume
+
+For mode 4b, the validated bootarg list is saved to the checkpoint file. On `--resume` the stored list is restored automatically — no re-prompt.
+
+---
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for the full revision history. The table
@@ -840,6 +900,7 @@ current `[Unreleased]` working set.
 
 | Version | Date | Description |
 |---|---|---|
+| v2 (unreleased) | Jun 1, 2026 | `--diag` flag: inject custom LOADER bootargs (from `bootargs.json` or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Validates format, detects LOADER errors on apply, checkpoints list for resume. |
 | v2 (unreleased) | May 29, 2026 | BMC SSH stale session diagnostics: automatic diagnosis + `ipmitool sol deactivate` on every banner-retry; `--auto-clear-stale-bmc` flag SIGTERMs other-Python PIDs holding sockets to the BMC; interactive cleanup offer added to mode 4f when BMC verification fails. |
 | v2 (unreleased) | May 28, 2026 | 4a ONTAP upgrade overhaul: BMC picker from existing reinit config / `BMC_IP.json`; cluster login reuses BMC credentials; parallel image install fans out across per-node management IPs (round-robin) with TCP/22 + SSH-auth pre-flight validation; raw cluster command echo suppressed from console (still in log); failover wait polls every 3 min for up to 30 min with live elapsed / remaining status. Interactive prompt-wait telemetry added to session summary (count, total, longest, ≥60 s extended waits, and `Unaccounted time` line). 4b reinit-type-3 now prompts for physical-disk zeroing. |
 | v2 | May 15, 2026 | Added `--screen` flag: auto-launches the script inside a detached GNU screen session to protect against SSH disconnections and terminal timeouts. Implies `--bg`. Detects existing screen sessions via `STY` env var to prevent recursion. |

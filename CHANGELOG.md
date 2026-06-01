@@ -9,6 +9,29 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **`--diag` flag: diagnostic LOADER bootarg injection.** A new `--diag`
+  CLI flag enables one-off LOADER bootarg injection at the LOADER stage
+  (after `set-defaults`, before `saveenv`) on **all nodes** (primary and
+  all peers).
+  - At startup (or during 4b upfront config) the script looks for a
+    `bootargs.json` file next to `AFX_reinit.py`. The file must be a
+    JSON array of strings, each formatted as `"bootarg.name value"`.
+    If the file is not found the operator is prompted interactively.
+  - Each entry is validated: must be exactly two whitespace-separated
+    tokens with the first starting with `bootarg.`; must **not** include
+    the `setenv` prefix. Invalid entries warn and offer to exit to fix.
+  - Bootargs are injected into `get_loader_commands()` (modes 1/2/3
+    primary) and the inline peer LOADER command block in
+    `_add_peer_node_thread`.
+  - After each `setenv bootarg.*` is sent, the LOADER response is
+    checked for error indicators (`%`, `Error`, `invalid`, `unknown`).
+    On match the script prints the LOADER output and exits.
+  - For mode 4b, the validated list is persisted to the checkpoint via
+    `set_param("diag_bootargs", ...)` and restored on `--resume`,
+    skipping re-prompt.
+  - New module-level globals: `_diag_mode: bool`, `_diag_bootargs: list`.
+  - New helper: `_load_diag_bootargs()`.
+
 - **4a ONTAP upgrade — BMC picker from existing config.** When a reinit
   config (`primary_node.bmc` / `secondary_nodes[].bmc`) or `BMC_IP.json`
   is on disk, 4a presents a numbered picker (file → BMC) instead of
