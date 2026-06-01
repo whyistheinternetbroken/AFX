@@ -4111,89 +4111,50 @@ def _parse_ntp_servers(output):
 
 
 def _parse_network_interfaces(output):
-    """Parse 'net int show ... -fields ...' table output into list[dict].
+    """Parse 'net int show ... -instance' output into list[dict].
 
-    Uses the dashes-separator line to determine column widths (ONTAP aligns
-    all columns), which handles ONTAP's two-line wrapped headers robustly.
-    Column names are identified by matching known ONTAP field keywords within
-    each column's horizontal span across all header lines.
+    ONTAP -instance format shows one 'Label: Value' line per field, with a
+    blank line separating each interface entry.  This format is immune to the
+    line-wrapping that breaks column-based parsing of wide tabular output.
     """
-    lines = output.splitlines()
-
-    # Locate the first dashes-separator line.
-    dash_idx = None
-    for i, line in enumerate(lines):
-        s = line.strip()
-        if s and len(s) > 4 and set(s) <= {"-", " "}:
-            dash_idx = i
-            break
-    if dash_idx is None:
-        return []
-
-    # Derive column (start, end) spans from the dashes line.
-    col_spans = []
-    in_run, cs = False, 0
-    for j, ch in enumerate(lines[dash_idx] + " "):
-        if ch == "-":
-            if not in_run:
-                cs, in_run = j, True
-        elif in_run:
-            col_spans.append((cs, j))
-            in_run = False
-    if not col_spans:
-        return []
-
-    # Identify each column by scanning ALL header lines for known ONTAP keywords
-    # within each column's horizontal span.  First match wins per column.
-    _FIELD_KEYWORDS = {
-        "vserver":   {"vserver"},
-        "lif":       {"interface", "lif"},
-        "home-node": {"node"},
-        "home-port": {"port"},
-        "address":   {"address"},
-        "netmask":   {"netmask", "mask"},
-        "ipspace":   {"ipspace"},
-        "role":      {"role"},
+    _KEY_MAP = {
+        "logical interface name": "lif",
+        "interface": "lif",
+        "vserver": "vserver",
+        "home node": "home-node",
+        "home port": "home-port",
+        "ip address": "address",
+        "address": "address",
+        "netmask": "netmask",
+        "role": "role",
+        "ipspace": "ipspace",
     }
-    col_names: "list[str | None]" = [None] * len(col_spans)
-    for line in lines[:dash_idx]:
-        raw = line.rstrip()
-        stripped = raw.strip()
-        if not stripped or "::" in stripped or stripped.startswith("("):
-            continue
-        for ci, (start, end) in enumerate(col_spans):
-            if col_names[ci]:
-                continue
-            seg = raw[start:end].strip().lower() if len(raw) > start else ""
-            if not seg:
-                continue
-            words = set(seg.replace("-", " ").split())
-            for field, keywords in _FIELD_KEYWORDS.items():
-                if words & keywords:
-                    col_names[ci] = field
-                    break
-    col_names_final = [n or f"col{ci}" for ci, n in enumerate(col_names)]
-
-    # Parse data rows using the same column spans.
     rows = []
-    for line in lines[dash_idx + 1:]:
-        raw = line.rstrip()
-        stripped = raw.strip()
+    current: "dict[str, str]" = {}
+    for line in output.splitlines():
+        stripped = line.strip()
         if not stripped:
+            if current:
+                rows.append(current)
+                current = {}
             continue
         if "::" in stripped or stripped.startswith("("):
             continue
         if "entries were displayed" in stripped.lower() or "entry was displayed" in stripped.lower():
             continue
-        if set(stripped) <= {"-", " "}:
-            break
-        row = {}
-        for ci, (start, end) in enumerate(col_spans):
-            val = raw[start:end].strip() if len(raw) > start else ""
-            if val and val not in ("-", "--"):
-                row[col_names_final[ci]] = val
-        if row:
-            rows.append(row)
+        if ":" not in stripped:
+            continue
+        label, _, value = stripped.partition(":")
+        label_lower = label.strip().lower()
+        value = value.strip()
+        if not value or value in ("-", "--"):
+            continue
+        for key_pat, field_name in _KEY_MAP.items():
+            if key_pat in label_lower:
+                current[field_name] = value
+                break
+    if current:
+        rows.append(current)
     return rows
 
 
@@ -4306,21 +4267,41 @@ def _print_retain_summary(cluster_name, net_rows, peer_addresses=None):
     if cluster_name:
         print(f"\n  Cluster name: {cluster_name}")
     if net_rows:
-        print("\n  Network interfaces:")
-        print("  " + "-" * 88)
-        print(f"  {'vserver':<14} {'lif':<22} {'home-node':<12} {'port':<8} "
-              f"{'address':<16} {'netmask':<16} {'ipspace':<10}")
-        print("  " + "-" * 88)
-        for r in net_rows:
-            print(
-                f"  {r.get('vserver', '-'):<14} "
-                f"{r.get('lif', '-'):<22} "
-                f"{r.get('home-node', '-'):<12} "
-                f"{r.get('home-port', r.get('port', '-')):<8} "
-                f"{r.get('address', '-'):<16} "
-                f"{r.get('netmask', '-'):<16} "
-                f"{r.get('ipspace', '-'):<10}"
-            )
+        cluster_lifs = [r for r in net_rows
+                        if (r.get("ipspace") or "").lower() == "cluster"
+                        or (r.get("role") or "").lower() in ("cluster",)]
+        mgmt_lifs = [r for r in net_rows
+                     if (r.get("role") or "").lower() in ("node-mgmt", "cluster-mgmt")]
+
+        if cluster_lifs:
+            print("\n  Cluster LIFs:")
+            print("  " + "-" * 72)
+            print(f"  {'lif':<26} {'home-node':<18} {'port':<8} {'address':<18} {'netmask'}")
+            print("  " + "-" * 72)
+            for r in cluster_lifs:
+                print(
+                    f"  {r.get('lif', '-'):<26} "
+                    f"{r.get('home-node', '-'):<18} "
+                    f"{r.get('home-port', r.get('port', '-')):<8} "
+                    f"{r.get('address', '-'):<18} "
+                    f"{r.get('netmask', '-')}"
+                )
+
+        if mgmt_lifs:
+            print("\n  Management LIFs:")
+            print("  " + "-" * 90)
+            print(f"  {'lif':<26} {'home-node':<18} {'port':<8} {'address':<18} {'netmask':<16} {'role'}")
+            print("  " + "-" * 90)
+            for r in mgmt_lifs:
+                print(
+                    f"  {r.get('lif', '-'):<26} "
+                    f"{r.get('home-node', '-'):<18} "
+                    f"{r.get('home-port', r.get('port', '-')):<8} "
+                    f"{r.get('address', '-'):<18} "
+                    f"{r.get('netmask', '-'):<16} "
+                    f"{r.get('role', '-')}"
+                )
+
     if peer_addresses:
         print("\n  Discovered service-processor (BMC) addresses:")
         for a in peer_addresses:
@@ -4459,13 +4440,12 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
                     _session_log.log(f"Captured NTP servers: {_retained_ntp_servers!r}")
 
             if retain_network:
-                _slog("Running: net int show -role node-mgmt,cluster-mgmt,cluster -fields ...")
+                _slog("Running: net int show -role node-mgmt,cluster-mgmt,cluster -instance")
                 try:
                     out = _run_cluster_command(
                         channel,
-                        "net int show -role node-mgmt,cluster-mgmt,cluster "
-                        "-fields home-port,home-node,address,netmask,ipspace,role",
-                        timeout=60,
+                        "net int show -role node-mgmt,cluster-mgmt,cluster -instance",
+                        timeout=90,
                     )
                     net_rows = _parse_network_interfaces(out)
                 except Exception as e:
