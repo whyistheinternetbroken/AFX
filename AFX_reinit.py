@@ -5913,6 +5913,24 @@ def collect_cluster_config():
         "dns_domains", "DNS domain names (comma separated)", None)
     dns_servers = _from_cfg_or_prompt(
         "dns_servers", "DNS servers (comma separated)", None)
+
+    # NTP servers: use config value if present, otherwise prompt (up to 4).
+    ntp_servers_raw = cc_cfg.get("ntp_servers")
+    if ntp_servers_raw:
+        print(f"  📄 NTP servers (from config): {ntp_servers_raw}")
+        ntp_servers = ntp_servers_raw
+    else:
+        print("\n  ℹ️   NTP servers (optional, up to 4). Press Enter to skip.")
+        _ntp_entries = []
+        for _ntp_i in range(1, 5):
+            _ntp_val = _prompt(f"  NTP server {_ntp_i} (Enter to skip): ").strip()
+            if not _ntp_val:
+                break
+            _ntp_entries.append(_ntp_val)
+        ntp_servers = ",".join(_ntp_entries) if _ntp_entries else None
+        if ntp_servers:
+            print(f"  ✅ NTP servers configured: {ntp_servers}")
+
     location = _from_cfg_or_prompt(
         "location", "Controller location", None)
 
@@ -5926,6 +5944,7 @@ def collect_cluster_config():
         "mgmt_gateway": mgmt_gateway,
         "dns_domains": dns_domains,
         "dns_servers": dns_servers,
+        "ntp_servers": ntp_servers,
         "location": location,
     })
 
@@ -6838,6 +6857,49 @@ def _apply_license(channel):
     if _session_log:
         _session_log.end_phase()
 
+
+
+def _apply_ntp_servers(channel):
+    """Apply NTP server(s) from _cluster_config after cluster creation.
+
+    Must be called while the console channel is logged in to the cluster
+    shell (``::>`` prompt). Does nothing when no ``ntp_servers`` entry is
+    present in ``_cluster_config``.
+    """
+    ntp_raw = _cluster_config.get("ntp_servers") or ""
+    servers = [s.strip() for s in ntp_raw.replace(";", ",").split(",") if s.strip()]
+    if not servers:
+        return
+
+    print("\n⏳ Configuring NTP servers...")
+    if _session_log:
+        _session_log.start_phase("NTP Configuration")
+        _session_log.log(f"NTP servers to configure: {servers}")
+
+    for srv in servers:
+        _slog(f"ntp server create -server {srv}")
+        try:
+            out = _run_cluster_command(
+                channel, f"ntp server create -server {srv}", timeout=30
+            )
+            if any(w in out.lower() for w in ("error", "failed", "exists", "duplicate")):
+                print(f"  ⚠️  NTP server {srv}: unexpected response.")
+                if _session_log:
+                    _session_log.log(
+                        f"ntp server create {srv} may have issues: {out[:200]}",
+                        prefix="WARN",
+                    )
+            else:
+                print(f"  ✅ NTP server added: {srv}")
+        except Exception as exc:
+            print(f"  ❌ Error adding NTP server {srv}: {exc}")
+            if _session_log:
+                _session_log.log(
+                    f"ntp server create {srv} error: {exc}", prefix="ERROR"
+                )
+
+    if _session_log:
+        _session_log.end_phase()
 
 
 # ---------------------------------------------------------------------------
@@ -11722,6 +11784,18 @@ def _run_cluster_setup_wizard(channel):
             if _session_log:
                 _session_log.log(
                     "Cluster shell login failed for license application",
+                    prefix="WARN",
+                )
+
+    # Apply NTP servers if configured.
+    if cc.get("ntp_servers"):
+        if _login_primary_cluster_shell(channel, cc.get("admin_password")):
+            _apply_ntp_servers(channel)
+        else:
+            print("\n  ⚠️  Could not log in to cluster shell for NTP configuration.")
+            if _session_log:
+                _session_log.log(
+                    "Cluster shell login failed for NTP configuration",
                     prefix="WARN",
                 )
 
