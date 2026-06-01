@@ -14697,9 +14697,44 @@ def main():
             _config_data = dict(_cfg46)  # start from any file values
             _ctx_sync_from_globals()
             apply_retained_to_cluster_config()
-            apply_retained_to_node_configs(primary_bmc=sp_host46)
+
             # _peers46 holds the SP/BMC IPs from 'service-processor show'.
             _sp_ips46 = list(_peers46) if _peers46 else []
+
+            # When we connected via cluster mgmt (not BMC), sp_host46 is a
+            # mgmt IP/hostname — not a real BMC address. Resolve the primary
+            # node's actual BMC IP from the SP list by matching its node-mgmt
+            # LIF against the primary_node.node_mgmt_ip in the config; fall
+            # back to the first SP IP when no match is found.
+            _primary_bmc46 = sp_host46  # default: what we connected with
+            if _is_direct46 and _sp_ips46:
+                _cfg_primary_node_mgmt_ip = _cfg_str(
+                    _pn46.get("node_mgmt_ip") or _pn46.get("ip")
+                )
+                _matched_bmc = None
+                for _sp in _sp_ips46:
+                    _mgmt = _retained_node_mgmt_for(_sp)
+                    if _mgmt and _cfg_primary_node_mgmt_ip:
+                        if _mgmt.get("ip") == _cfg_primary_node_mgmt_ip:
+                            _matched_bmc = _sp
+                            break
+                if _matched_bmc:
+                    _primary_bmc46 = _matched_bmc
+                    print(f"  ℹ️  Resolved primary BMC from SP list: {_primary_bmc46}")
+                    _session_log.log(f"4e: primary BMC resolved from SP list: {_primary_bmc46}")
+                else:
+                    # Fall back to first SP IP and warn.
+                    _primary_bmc46 = _sp_ips46[0]
+                    print(f"  ⚠️  Could not match primary BMC from SP list; using first: {_primary_bmc46}")
+                    _session_log.log(f"4e: primary BMC fallback to first SP IP: {_primary_bmc46}",
+                                     prefix="WARN")
+                # Update the primary_node bmc field in config so it's saved correctly.
+                if isinstance(_config_data.get("primary_node"), dict):
+                    _config_data["primary_node"]["bmc"] = _primary_bmc46
+                elif isinstance(_config_data.get("nodes"), list) and _config_data["nodes"]:
+                    _config_data["nodes"][0]["bmc"] = _primary_bmc46
+
+            apply_retained_to_node_configs(primary_bmc=_primary_bmc46)
             if _sp_ips46:
                 print(f"  \U0001f4cb SP/BMC addresses from cluster: {', '.join(_sp_ips46)}")
                 _session_log.log(f"SP IPs from cluster: {_sp_ips46}")
