@@ -605,6 +605,7 @@ class RunContext:
     retained_cluster_location: "str | None" = None
     retained_dns_domains: "str | None" = None
     retained_dns_servers: "str | None" = None
+    retained_ntp_servers: "list | None" = None
     retained_sp_to_node: dict = field(default_factory=dict)
     retain_preselected: "tuple | None" = None
 
