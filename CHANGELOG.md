@@ -21,12 +21,34 @@ revision labels rather than strict [SemVer](https://semver.org/).
   separated) to the config. If no NTP servers are found and the config has
   no existing `ntp_servers` entry, the operator is offered `pool.ntp.org`
   as a one-prompt default.
+- **4e config gather — LIF summary split by type.** The retained
+  configuration summary now displays two separate tables instead of one
+  combined table:
+  - **Cluster LIFs** (IPspace = Cluster): `lif`, `home-node`, `port`,
+    `address`, `netmask`
+  - **Management LIFs** (roles `node-mgmt` / `cluster-mgmt`): same
+    columns plus a `role` column
+  Both tables use fixed-width columns with dash separators sized to the
+  actual content width.
+- **"Same credentials for all peers" prompt (modes 1/3).** Before
+  prompting for individual peer BMC credentials, the script now asks:
+  _"Use the same BMC username 'admin' and password for all peer nodes?
+  [Y/n]"_. Answering Y (the default) silently assigns the primary node's
+  credentials to every peer, avoiding repeated Enter presses for clusters
+  where all BMCs share the same login. Answering N falls through to the
+  existing per-node prompt loop (Enter still reuses primary credentials).
 
 ### Changed
 - **Option 3 / 4e BMC prompt text.** The "Enter SP hostname/IP" prompt now
   reads "Enter BMC hostname/IP or primary node (this will be the first node
   in the cluster)" to clarify that a cluster management address is also
   accepted.
+- **Default BMC username is `admin` in options 3 and 4d.** Both prompts
+  now read `BMC username [admin]:` and fall back to `admin` when the
+  operator presses Enter without typing a name.
+- **4e summary table dash separators.** Separator lines in the Cluster LIF
+  and Management LIF tables have been extended to match the actual column
+  widths (89 characters for Cluster LIFs, 105 for Management LIFs).
 
 ### Fixed
 - **4e config gather — `_parse_network_interfaces` silently undefined.**
@@ -55,6 +77,47 @@ revision labels rather than strict [SemVer](https://semver.org/).
   corresponding field in the `RunContext` dataclass, causing `TypeError:
   __init__() got an unexpected keyword argument 'retained_ntp_servers'` on
   startup. The field has been added.
+- **4e config gather — `net int show -instance` parser failures.**
+  Several cascading issues prevented `_parse_network_interfaces` from
+  returning any rows, causing `reinit-config.json` to be written without
+  `primary_node` or `secondary_nodes` blocks:
+  - **ANSI escape codes in PTY output.** `invoke_shell()` injects VT100
+    sequences (e.g. `\x1b[m`) into "blank" separator lines between
+    `-instance` records. `str.strip()` does not remove them, so the blank-
+    line detector never fired and blocks were never committed. Fixed by
+    stripping ANSI codes with `_ANSI_RE` before parsing, and by checking
+    `ch.isprintable()` per-character when detecting blank separators.
+  - **`(DEPRECATED)-Role` label filtered.** The parser skipped every line
+    starting with `(` to ignore the `(network interface show)` command-echo
+    header. This also silently dropped the `(DEPRECATED)-Role: cluster`
+    field, so no LIF was ever classified as a Cluster or node-mgmt
+    interface. Fixed by requiring BOTH `startswith("(")` AND `endswith(")")`
+    before skipping a line.
+  - **`IPspace of LIF` label not in key map.** The label `"IPspace of LIF"`
+    was missing from `_KEY_MAP`, so ipspace was never recorded and Cluster
+    LIFs were not identifiable. Added `"ipspace of lif"` to `_KEY_MAP`.
+  - **`_KEY_MAP` used substring matching.** Changed all label lookups from
+    `in` (substring) to `==` (exact match) to prevent partial-label
+    collisions across ONTAP versions.
+  - **Prefix-length netmask.** Newer ONTAP versions emit
+    `Bits in the Netmask: 16` rather than a dotted netmask. Added a
+    `_prefix_to_mask()` helper (prefix → dotted notation) and mapped
+    `"bits in the netmask"` / `"netmask length"` in `_KEY_MAP`.
+  With all of these fixed, `primary_node` and `secondary_nodes` are now
+  correctly written to `reinit-config.json` after a 4e gather.
+- **4e config gather — BMC prompt consumed by probe.** When connecting
+  via a BMC IP, the initial probe (`direct_read_until_any` with `">"` in
+  the pattern list) consumed the BMC's `>` prompt before
+  `wait_for_bmc_prompt` was called, causing an immediate timeout. Fixed by
+  checking whether `">"` was already in the probe output and skipping
+  `wait_for_bmc_prompt` in that case.
+- **Mode 3 crash — `AttributeError: 'NoneType' has no attribute 'log'`.**
+  `_run_context.apply_to_globals()` at the peer-list stash step was writing
+  `session_log=None` back to `_session_log` because the `RunContext`
+  snapshot was taken before `_make_session_log()` was called. Fixed by
+  calling `_run_context.refresh_from_globals()` immediately before
+  `apply_to_globals()` so live globals — including `_session_log` — are
+  preserved on the write-back.
 
 - **`--diag` flag: diagnostic LOADER bootarg injection.** A new `--diag`
   CLI flag enables one-off LOADER bootarg injection at the LOADER stage

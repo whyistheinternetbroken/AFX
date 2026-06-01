@@ -47,7 +47,7 @@ All session activity is captured in a timestamped log directory with a human-rea
 | ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence. |
 | Netboot Install (4b) | Automated ONTAP netboot and software installation. |
 | SSH Key Setup (4d) | Configures passwordless SSH from the script host to cluster management. |
-| Config Backup (4e) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. |
+| Config Backup (4e) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. After gathering, the saved `reinit-config.json` includes `cluster`, `primary_node`, and `secondary_nodes` blocks, fully populated with management IPs and BMC addresses. The retained configuration summary displays Cluster LIFs and Management LIFs in separate tables. |
 | BMC Auth Verify (4f) | Batch-tests BMC SSH credentials for all nodes in the config file. |
 | Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
 | Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |
@@ -900,6 +900,12 @@ current `[Unreleased]` working set.
 
 | Version | Date | Description |
 |---|---|---|
+| v2 (unreleased) | Jun 1, 2026 | **Mode 1/3: "same credentials for all peers" prompt.** Before collecting per-peer BMC credentials, the script asks whether to reuse the primary node's username and password for all peers. Answering Y (default) skips all per-node prompts. |
+| v2 (unreleased) | Jun 1, 2026 | **Mode 3 crash fix.** `apply_to_globals()` at the peer-list stash step was overwriting `_session_log` with `None` because the `RunContext` snapshot predated `_make_session_log()`. Fixed with `refresh_from_globals()` before the write-back. |
+| v2 (unreleased) | Jun 1, 2026 | **4e config gather — complete `reinit-config.json` output.** `primary_node` and `secondary_nodes` blocks are now written correctly. Fixes: ANSI escape codes stripping in PTY output; `(DEPRECATED)-Role` label incorrectly filtered; `IPspace of LIF` label missing from key map; prefix-length (`/16`) netmask support added; all label lookups changed to exact-match. |
+| v2 (unreleased) | Jun 1, 2026 | **4e config gather — LIF summary tables.** Retained configuration summary now shows Cluster LIFs and Management LIFs in separate fixed-width tables (with a `role` column in the management table). Dash separators are sized to match actual column widths. |
+| v2 (unreleased) | Jun 1, 2026 | **4e config gather — BMC prompt consumed by probe fix.** When connecting via a BMC IP, the initial probe was consuming the BMC `>` prompt before `wait_for_bmc_prompt` ran, causing an immediate timeout. Fixed by checking probe output before deciding whether to wait again. |
+| v2 (unreleased) | Jun 1, 2026 | **Default BMC username `admin`.** Options 3 and 4d prompts now show `BMC username [admin]:` and fall back to `admin` on Enter. |
 | v2 (unreleased) | Jun 1, 2026 | `--diag` flag: inject custom LOADER bootargs (from `bootargs.json` or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Validates format, detects LOADER errors on apply, checkpoints list for resume. |
 | v2 (unreleased) | Jun 1, 2026 | Cluster node-healthy wait increased to 15 minutes (was 10), polling every 5 minutes (was 2). |
 | v2 (unreleased) | May 29, 2026 | BMC SSH stale session diagnostics: automatic diagnosis + `ipmitool sol deactivate` on every banner-retry; `--auto-clear-stale-bmc` flag SIGTERMs other-Python PIDs holding sockets to the BMC; interactive cleanup offer added to mode 4f when BMC verification fails. |
