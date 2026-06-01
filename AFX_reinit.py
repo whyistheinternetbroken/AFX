@@ -14694,7 +14694,7 @@ def main():
             sp_host = _prompt_bmc_host(
                 "  Enter BMC hostname/IP or cluster management IP address: "
             )
-        sp_user = _cfg_str(primary_node_44.get("bmc_user")) or input("  BMC username: ").strip()
+        sp_user = _cfg_str(primary_node_44.get("bmc_user")) or input("  BMC username [admin]: ").strip() or "admin"
         if "bmc_password" in primary_node_44 and isinstance(primary_node_44["bmc_password"], str):
             sp_pass = primary_node_44["bmc_password"]
         else:
@@ -16053,7 +16053,7 @@ def main():
         _check_bmc_reachable(sp_host)
     else:
         sp_host = _prompt_bmc_host("Enter BMC hostname/IP or primary node (this will be the first node in the cluster): ")
-    sp_user = _cfg_str(primary_node.get("bmc_user")) or input("Enter BMC username: ")
+    sp_user = _cfg_str(primary_node.get("bmc_user")) or input("Enter BMC username [admin]: ").strip() or "admin"
     sp_pass = _cfg_get_or_prompt("bmc_password", "Enter BMC password: ", hidden=True)
     if primary_node.get("bmc"):
         _pn_src = "primary_node" if isinstance(_config_data.get("primary_node"), dict) else "nodes[0]"
