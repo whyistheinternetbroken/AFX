@@ -16560,6 +16560,9 @@ def main():
             # Mode 3: peers will be auto-added in parallel AFTER the primary's
             # cluster create completes. Stash the peer list for the wizard
             # post-step.
+            # Refresh first so apply_to_globals() doesn't clobber _session_log
+            # (or other globals set after the RunContext was last synced).
+            _run_context.refresh_from_globals()
             _run_context.peer_bmc_list = list(other_sps)
             _run_context.apply_to_globals()
             if other_sps:
