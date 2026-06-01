@@ -32,6 +32,14 @@ revision labels rather than strict [SemVer](https://semver.org/).
   - New module-level globals: `_diag_mode: bool`, `_diag_bootargs: list`.
   - New helper: `_load_diag_bootargs()`.
 
+### Changed
+- **Cluster node-healthy wait extended.** `_wait_for_cluster_nodes_healthy`
+  default `total_timeout` increased from 600 s (10 min) to 900 s (15 min);
+  default `poll_interval` increased from 120 s (2 min) to 300 s (5 min).
+  Both the function-signature defaults and the explicit call site in
+  `_add_peer_node_thread` were updated. Console timeout message and
+  inline comment updated to reflect the new values.
+
 - **4a ONTAP upgrade — BMC picker from existing config.** When a reinit
   config (`primary_node.bmc` / `secondary_nodes[].bmc`) or `BMC_IP.json`
   is on disk, 4a presents a numbered picker (file → BMC) instead of
