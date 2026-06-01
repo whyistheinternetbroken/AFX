@@ -14644,14 +14644,28 @@ def main():
                 # prompt. Authenticate if needed, then run inventory commands.
                 _session_log.log("4e: direct cluster SSH detected; skipping BMC console path")
                 print("  ✅ Cluster management SSH detected.")
-                if "login:" in _probe46.lower():
+                if "login:" in _probe46.lower() and "::>" not in _probe46:
+                    # Genuine login: prompt (not just banner text like "Last login:")
                     if not _attempt_console_cluster_login(_ch46):
                         print("  ❌ Cluster login failed. Exiting.")
                         _session_log.set_outcome("FAIL", "cluster login failed")
                         _session_log.close()
                         sys.exit(1)
-                # collect_retain_data will detect ::> via enter_system_console
-                # and skip the 'system console' step automatically.
+                # Drain any residual SSH login banner text (e.g. "Last login:",
+                # "Unsuccessful login attempts...") so _wait_for_cluster_prompt
+                # inside collect_retain_data does not mistake banner lines for
+                # an actual login: prompt and attempt to re-authenticate.
+                drain_channel(_ch46, seconds=1)
+                # Confirm we are at the cluster shell before handing off.
+                _ch46.send("\r")
+                _confirm46, _ = direct_read_until_any(
+                    _ch46, ["::>", "::*>"], timeout=10,
+                )
+                if "::>" not in _confirm46 and "::*>" not in _confirm46:
+                    print("  ❌ Could not confirm cluster shell prompt. Exiting.")
+                    _session_log.set_outcome("FAIL", "cluster shell prompt not confirmed")
+                    _session_log.close()
+                    sys.exit(1)
             else:
                 # BMC connection: wait for BMC prompt, then enter system console.
                 _session_log.log("4e: BMC connection detected; entering system console")
