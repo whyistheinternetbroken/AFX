@@ -4117,15 +4117,21 @@ def _parse_network_interfaces(output):
     blank line separating each interface entry.  This format is immune to the
     line-wrapping that breaks column-based parsing of wide tabular output.
     """
+    # Exact ONTAP label names (case-insensitive). Exact matching avoids
+    # false hits on labels like "IP Address Family" or "Bits in the Netmask"
+    # that would overwrite the real IP / netmask via substring matching.
+    # "Failover Role" would also corrupt the "role" field with substring matching.
     _KEY_MAP = {
         "logical interface name": "lif",
-        "interface": "lif",
+        "interface name": "lif",
+        "vserver name": "vserver",
         "vserver": "vserver",
         "home node": "home-node",
         "home port": "home-port",
         "ip address": "address",
-        "address": "address",
+        "network address": "address",   # alternate ONTAP label in some versions
         "netmask": "netmask",
+        "subnet mask": "netmask",
         "role": "role",
         "ipspace": "ipspace",
     }
@@ -4150,7 +4156,7 @@ def _parse_network_interfaces(output):
         if not value or value in ("-", "--"):
             continue
         for key_pat, field_name in _KEY_MAP.items():
-            if key_pat in label_lower:
+            if label_lower == key_pat:   # exact match only
                 current[field_name] = value
                 break
     if current:
@@ -14839,27 +14845,44 @@ def main():
 
             # When we connected via cluster mgmt (not BMC), sp_host46 is a
             # mgmt IP/hostname — not a real BMC address. Resolve the primary
-            # node's actual BMC IP from the SP list by matching its node-mgmt
-            # LIF against the primary_node.node_mgmt_ip in the config; fall
-            # back to the first SP IP when no match is found.
+            # node's actual BMC IP from the SP list by:
+            #   1. Matching the SP's node-mgmt IP against config's primary_node.node_mgmt_ip
+            #   2. Picking the SP whose ONTAP node name ends in "-01" (primary convention)
+            #   3. Picking the SP whose node name sorts lowest alphabetically
             _primary_bmc46 = sp_host46  # default: what we connected with
             if _is_direct46 and _sp_ips46:
                 _cfg_primary_node_mgmt_ip = _cfg_str(
                     _pn46.get("node_mgmt_ip") or _pn46.get("ip")
                 )
                 _matched_bmc = None
+                # Strategy 1: match via pre-existing config node_mgmt_ip
                 for _sp in _sp_ips46:
                     _mgmt = _retained_node_mgmt_for(_sp)
                     if _mgmt and _cfg_primary_node_mgmt_ip:
                         if _mgmt.get("ip") == _cfg_primary_node_mgmt_ip:
                             _matched_bmc = _sp
                             break
+                # Strategy 2: use SP→node name map; primary is conventionally *-01
+                if not _matched_bmc and _retained_sp_to_node:
+                    _sp_node_pairs = [
+                        (sp, _retained_sp_to_node.get(sp, ""))
+                        for sp in _sp_ips46
+                        if sp in _retained_sp_to_node
+                    ]
+                    if _sp_node_pairs:
+                        # Sort by node name; primary node typically has lowest suffix (-01)
+                        _sp_node_pairs.sort(key=lambda x: x[1])
+                        _matched_bmc = _sp_node_pairs[0][0]
+                        _session_log.log(
+                            f"4e: primary BMC resolved by node name sort: "
+                            f"{_matched_bmc} -> {_sp_node_pairs[0][1]}"
+                        )
                 if _matched_bmc:
                     _primary_bmc46 = _matched_bmc
                     print(f"  ℹ️  Resolved primary BMC from SP list: {_primary_bmc46}")
                     _session_log.log(f"4e: primary BMC resolved from SP list: {_primary_bmc46}")
                 else:
-                    # Fall back to first SP IP and warn.
+                    # Final fallback: first SP IP
                     _primary_bmc46 = _sp_ips46[0]
                     print(f"  ⚠️  Could not match primary BMC from SP list; using first: {_primary_bmc46}")
                     _session_log.log(f"4e: primary BMC fallback to first SP IP: {_primary_bmc46}",
