@@ -9,7 +9,37 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- **4e config gather — cluster management SSH support.** The 4e "backup
+- **Incremental node join timing.** The per-node sub-rows under `Node join
+  total` in both the session log and the standalone summary file now show
+  **incremental** elapsed time for the 2nd and later nodes (e.g. `+10.2m`)
+  rather than cumulative time, making it easy to see how long each individual
+  node join took. The first node and the `Join → all nodes healthy` line
+  retain their cumulative totals.
+- **Periodic elapsed-time heartbeat during cluster health wait.** While
+  `_wait_for_cluster_nodes_healthy` polls every 5 minutes, the terminal now
+  prints a `⏳ Still waiting for N healthy node(s) — elapsed Xm Ys; next
+  check in ~5 min...` line before each sleep so operators can confirm the
+  script is alive during long waits.
+
+### Fixed
+- **DSA host key rejection (`q must be exactly 160, 224, or 256 bits long`).**
+  `cryptography` ≥ 2.6 strictly validates DSA `q` parameter lengths. Some
+  ONTAP BMC and cluster management interfaces present non-standard DSA host
+  keys that fail this check. Fixed by adding
+  `disabled_algorithms={"pubkeys": ["ssh-dss"]}` to every `SSHClient.connect()`
+  call site in the script so DSA host key negotiation is skipped entirely and
+  paramiko falls back to RSA/ECDSA.
+- **Raw BMC console output leaked to terminal during `system console` entry.**
+  BIOS version banners, copyright text, and memory-init lines were printed to
+  the operator's terminal between "System console connected" and "Now
+  monitoring boot output" because `_recv_loop` and `drain_channel` wrote raw
+  channel data directly to `sys.stdout` before `_NodeLogWriter` was installed.
+  Added `quiet=True` to all `direct_read_until_any` and `drain_channel` calls
+  inside `enter_system_console()`. Console data continues to flow to the
+  session log; only the terminal display is suppressed.
+
+### Added
+- **4e config gather — cluster management SSH support.**The 4e "backup
   configuration" entry point now accepts a BMC address, cluster management
   IP, or cluster hostname as the connection target. A ping check validates
   the entered address before proceeding; re-entry is requested on failure.
