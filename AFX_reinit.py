@@ -4111,30 +4111,89 @@ def _parse_ntp_servers(output):
 
 
 def _parse_network_interfaces(output):
-    """Parse 'net int show ... -fields ...' table output into list[dict]."""
-    headers = None
-    dashes_seen = False
+    """Parse 'net int show ... -fields ...' table output into list[dict].
+
+    Uses the dashes-separator line to determine column widths (ONTAP aligns
+    all columns), which handles ONTAP's two-line wrapped headers robustly.
+    Column names are identified by matching known ONTAP field keywords within
+    each column's horizontal span across all header lines.
+    """
+    lines = output.splitlines()
+
+    # Locate the first dashes-separator line.
+    dash_idx = None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s and len(s) > 4 and set(s) <= {"-", " "}:
+            dash_idx = i
+            break
+    if dash_idx is None:
+        return []
+
+    # Derive column (start, end) spans from the dashes line.
+    col_spans = []
+    in_run, cs = False, 0
+    for j, ch in enumerate(lines[dash_idx] + " "):
+        if ch == "-":
+            if not in_run:
+                cs, in_run = j, True
+        elif in_run:
+            col_spans.append((cs, j))
+            in_run = False
+    if not col_spans:
+        return []
+
+    # Identify each column by scanning ALL header lines for known ONTAP keywords
+    # within each column's horizontal span.  First match wins per column.
+    _FIELD_KEYWORDS = {
+        "vserver":   {"vserver"},
+        "lif":       {"interface", "lif"},
+        "home-node": {"node"},
+        "home-port": {"port"},
+        "address":   {"address"},
+        "netmask":   {"netmask", "mask"},
+        "ipspace":   {"ipspace"},
+        "role":      {"role"},
+    }
+    col_names: "list[str | None]" = [None] * len(col_spans)
+    for line in lines[:dash_idx]:
+        raw = line.rstrip()
+        stripped = raw.strip()
+        if not stripped or "::" in stripped or stripped.startswith("("):
+            continue
+        for ci, (start, end) in enumerate(col_spans):
+            if col_names[ci]:
+                continue
+            seg = raw[start:end].strip().lower() if len(raw) > start else ""
+            if not seg:
+                continue
+            words = set(seg.replace("-", " ").split())
+            for field, keywords in _FIELD_KEYWORDS.items():
+                if words & keywords:
+                    col_names[ci] = field
+                    break
+    col_names_final = [n or f"col{ci}" for ci, n in enumerate(col_names)]
+
+    # Parse data rows using the same column spans.
     rows = []
-    for line in output.splitlines():
-        s = line.rstrip()
-        stripped = s.strip()
+    for line in lines[dash_idx + 1:]:
+        raw = line.rstrip()
+        stripped = raw.strip()
         if not stripped:
             continue
-        if "::" in stripped or stripped.startswith("(") or stripped.lower().startswith("net int"):
+        if "::" in stripped or stripped.startswith("("):
             continue
-        if "entries were displayed" in stripped.lower():
+        if "entries were displayed" in stripped.lower() or "entry was displayed" in stripped.lower():
             continue
         if set(stripped) <= {"-", " "}:
-            dashes_seen = True
-            continue
-        tokens = stripped.split()
-        if not dashes_seen:
-            lowered = [t.lower() for t in tokens]
-            if "address" in lowered and ("home-port" in lowered or "port" in lowered):
-                headers = lowered
-            continue
-        if headers and len(tokens) == len(headers):
-            rows.append(dict(zip(headers, tokens)))
+            break
+        row = {}
+        for ci, (start, end) in enumerate(col_spans):
+            val = raw[start:end].strip() if len(raw) > start else ""
+            if val and val not in ("-", "--"):
+                row[col_names_final[ci]] = val
+        if row:
+            rows.append(row)
     return rows
 
 
@@ -4301,7 +4360,7 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
     if collect_peer_sps:
         purposes.append("peer BMC addresses")
     _src = "cluster SSH" if direct_cluster_ssh else "system console"
-    print(f"\n🔍 Capturing via {_src}: {', '.join(purposes)}...")
+    print(f"\n  🔍 Gathering cluster configuration...")
     if _session_log:
         _session_log.start_phase("Capture Cluster Inventory")
         _session_log.log(
@@ -4339,149 +4398,147 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
                 prefix="WARN",
             )
     else:
-        # Disable paging so multi-row output isn't truncated / paged.
-        try:
-            _run_cluster_command(channel, "rows 0", timeout=15)
-        except Exception as e:
-            _slog(f"'rows 0' failed: {e}", prefix="WARN")
-
-        if retain_name:
-            print("\n   ▶ cluster identity show -fields name,contact,location")
+        with _suppress_console():
+            # Disable paging so multi-row output isn't truncated / paged.
             try:
-                out = _run_cluster_command(
-                    channel,
-                    "cluster identity show -fields name,contact,location",
-                    timeout=30,
-                )
-                identity = _parse_cluster_identity(out)
-                cluster_name = identity.get("name")
-                global _retained_cluster_contact, _retained_cluster_location
-                _retained_cluster_contact = identity.get("contact")
-                _retained_cluster_location = identity.get("location")
+                _run_cluster_command(channel, "rows 0", timeout=15)
             except Exception as e:
-                _slog(f"cluster identity show failed: {e}", prefix="WARN")
-            if _session_log:
-                _session_log.log(
-                    f"Captured cluster identity: name={cluster_name!r}, "
-                    f"contact={_retained_cluster_contact!r}, "
-                    f"location={_retained_cluster_location!r}"
-                )
+                _slog(f"'rows 0' failed: {e}", prefix="WARN")
 
-            # DNS configuration. Pulled alongside cluster identity so it's
-            # available for the cluster-setup wizard (DNS domain + servers
-            # prompts) when retaining the existing config.
-            print("\n   ▶ vserver services name-service dns show")
-            try:
-                out = _run_cluster_command(
-                    channel,
-                    "vserver services name-service dns show "
-                    "-fields domains,name-servers",
-                    timeout=30,
-                )
-                dns = _parse_dns_config(out)
-                global _retained_dns_domains, _retained_dns_servers
-                _retained_dns_domains = dns.get("domains")
-                _retained_dns_servers = dns.get("name-servers")
-            except Exception as e:
-                _slog(f"dns show failed: {e}", prefix="WARN")
-            if _session_log:
-                _session_log.log(
-                    f"Captured DNS: domains={_retained_dns_domains!r}, "
-                    f"servers={_retained_dns_servers!r}"
-                )
-
-            print("\n   ▶ ntp server show")
-            try:
-                out = _run_cluster_command(channel, "ntp server show", timeout=30)
-                global _retained_ntp_servers
-                _retained_ntp_servers = _parse_ntp_servers(out) or None
-            except Exception as e:
-                _slog(f"ntp server show failed: {e}", prefix="WARN")
-            if _session_log:
-                _session_log.log(f"Captured NTP servers: {_retained_ntp_servers!r}")
-
-        if retain_network:
-            print("\n   ▶ net int show -role node-mgmt,cluster-mgmt,cluster -fields ...")
-            try:
-                out = _run_cluster_command(
-                    channel,
-                    "net int show -role node-mgmt,cluster-mgmt,cluster "
-                    "-fields home-port,home-node,address,netmask,ipspace,role",
-                    timeout=60,
-                )
-                net_rows = _parse_network_interfaces(out)
-            except Exception as e:
-                _slog(f"net int show failed: {e}", prefix="WARN")
-            _slog(f"Captured {len(net_rows or [])} network interface rows")
-
-            # Capture the cluster-management gateway using
-            # 'route show -vserver <cluster_name> -fields gateway' and
-            # select the gateway whose subnet contains the cluster-mgmt IP.
-            # This is more precise than the generic default-route lookup.
-            _gw_vserver = cluster_name or ""
-            if _gw_vserver:
-                _gw_cmd = (
-                    f"route show -vserver {_gw_vserver} "
-                    "-fields destination,gateway"
-                )
-            else:
-                _gw_cmd = (
-                    "network route show "
-                    "-fields destination,gateway,vserver"
-                )
-            print(f"\n   ▶ {_gw_cmd}")
-            # Determine the cluster-mgmt IP to use for subnet matching.
-            _clus_mgmt_ip_for_gw = None
-            if net_rows:
-                for _r in net_rows:
-                    if ((_r.get("role") or "").lower() == "cluster-mgmt"
-                            or "cluster-mgmt" in (_r.get("ipspace") or "").lower()):
-                        _clus_mgmt_ip_for_gw = _r.get("address")
-                        break
-            try:
-                out = _run_cluster_command(channel, _gw_cmd, timeout=30)
-                gw = _parse_matching_gateway(out, _clus_mgmt_ip_for_gw)
-                if gw:
-                    _retained_default_gateway = gw
-                    if _session_log:
-                        _session_log.log(
-                            f"Captured cluster-mgmt gateway: {gw} "
-                            f"(matched to mgmt IP {_clus_mgmt_ip_for_gw!r})"
-                        )
-                else:
-                    if _session_log:
-                        _session_log.log(
-                            "No gateway parsed from route output", prefix="WARN"
-                        )
-            except Exception as e:
-                _slog(f"route show for gateway failed: {e}", prefix="WARN")
-
-        # Peer SP discovery is attempted independently of the retain captures
-        # above (success or failure). It always runs when collect_peer_sps is
-        # set, even if the user answered 'n' to both retain prompts.
-        if collect_peer_sps:
-            print("\n   ▶ service-processor show -fields address,node")
-            try:
-                out = _run_cluster_command(
-                    channel,
-                    "service-processor show -fields address,node",
-                    timeout=30,
-                )
-                peer_addresses = _parse_sp_addresses(out)
-            except Exception as e:
+            if retain_name:
+                _slog("Running: cluster identity show -fields name,contact,location")
+                try:
+                    out = _run_cluster_command(
+                        channel,
+                        "cluster identity show -fields name,contact,location",
+                        timeout=30,
+                    )
+                    identity = _parse_cluster_identity(out)
+                    cluster_name = identity.get("name")
+                    global _retained_cluster_contact, _retained_cluster_location
+                    _retained_cluster_contact = identity.get("contact")
+                    _retained_cluster_location = identity.get("location")
+                except Exception as e:
+                    _slog(f"cluster identity show failed: {e}", prefix="WARN")
                 if _session_log:
                     _session_log.log(
-                        f"service-processor show failed: {e}", prefix="WARN"
+                        f"Captured cluster identity: name={cluster_name!r}, "
+                        f"contact={_retained_cluster_contact!r}, "
+                        f"location={_retained_cluster_location!r}"
                     )
-            if _session_log:
-                _session_log.log(
-                    f"Captured {len(peer_addresses)} service-processor address(es): "
-                    f"{peer_addresses}"
-                )
-                if _retained_sp_to_node:
+
+                # DNS configuration.
+                _slog("Running: vserver services name-service dns show -fields domains,name-servers")
+                try:
+                    out = _run_cluster_command(
+                        channel,
+                        "vserver services name-service dns show "
+                        "-fields domains,name-servers",
+                        timeout=30,
+                    )
+                    dns = _parse_dns_config(out)
+                    global _retained_dns_domains, _retained_dns_servers
+                    _retained_dns_domains = dns.get("domains")
+                    _retained_dns_servers = dns.get("name-servers")
+                except Exception as e:
+                    _slog(f"dns show failed: {e}", prefix="WARN")
+                if _session_log:
                     _session_log.log(
-                        f"SP -> node mapping: {_retained_sp_to_node}"
+                        f"Captured DNS: domains={_retained_dns_domains!r}, "
+                        f"servers={_retained_dns_servers!r}"
                     )
+
+                _slog("Running: ntp server show")
+                try:
+                    out = _run_cluster_command(channel, "ntp server show", timeout=30)
+                    global _retained_ntp_servers
+                    _retained_ntp_servers = _parse_ntp_servers(out) or None
+                except Exception as e:
+                    _slog(f"ntp server show failed: {e}", prefix="WARN")
+                if _session_log:
+                    _session_log.log(f"Captured NTP servers: {_retained_ntp_servers!r}")
+
+            if retain_network:
+                _slog("Running: net int show -role node-mgmt,cluster-mgmt,cluster -fields ...")
+                try:
+                    out = _run_cluster_command(
+                        channel,
+                        "net int show -role node-mgmt,cluster-mgmt,cluster "
+                        "-fields home-port,home-node,address,netmask,ipspace,role",
+                        timeout=60,
+                    )
+                    net_rows = _parse_network_interfaces(out)
+                except Exception as e:
+                    _slog(f"net int show failed: {e}", prefix="WARN")
+                _slog(f"Captured {len(net_rows or [])} network interface rows")
+
+                # Capture the cluster-management gateway using
+                # 'route show -vserver <cluster_name> -fields gateway' and
+                # select the gateway whose subnet contains the cluster-mgmt IP.
+                _gw_vserver = cluster_name or ""
+                if _gw_vserver:
+                    _gw_cmd = (
+                        f"route show -vserver {_gw_vserver} "
+                        "-fields destination,gateway"
+                    )
+                else:
+                    _gw_cmd = (
+                        "network route show "
+                        "-fields destination,gateway,vserver"
+                    )
+                _slog(f"Running: {_gw_cmd}")
+                # Determine the cluster-mgmt IP to use for subnet matching.
+                _clus_mgmt_ip_for_gw = None
+                if net_rows:
+                    for _r in net_rows:
+                        if ((_r.get("role") or "").lower() == "cluster-mgmt"
+                                or "cluster-mgmt" in (_r.get("ipspace") or "").lower()):
+                            _clus_mgmt_ip_for_gw = _r.get("address")
+                            break
+                try:
+                    out = _run_cluster_command(channel, _gw_cmd, timeout=30)
+                    gw = _parse_matching_gateway(out, _clus_mgmt_ip_for_gw)
+                    if gw:
+                        _retained_default_gateway = gw
+                        if _session_log:
+                            _session_log.log(
+                                f"Captured cluster-mgmt gateway: {gw} "
+                                f"(matched to mgmt IP {_clus_mgmt_ip_for_gw!r})"
+                            )
+                    else:
+                        if _session_log:
+                            _session_log.log(
+                                "No gateway parsed from route output", prefix="WARN"
+                            )
+                except Exception as e:
+                    _slog(f"route show for gateway failed: {e}", prefix="WARN")
+
+            # Peer SP discovery is attempted independently of the retain captures
+            # above (success or failure). It always runs when collect_peer_sps is
+            # set, even if the user answered 'n' to both retain prompts.
+            if collect_peer_sps:
+                _slog("Running: service-processor show -fields address,node")
+                try:
+                    out = _run_cluster_command(
+                        channel,
+                        "service-processor show -fields address,node",
+                        timeout=30,
+                    )
+                    peer_addresses = _parse_sp_addresses(out)
+                except Exception as e:
+                    if _session_log:
+                        _session_log.log(
+                            f"service-processor show failed: {e}", prefix="WARN"
+                        )
+                if _session_log:
+                    _session_log.log(
+                        f"Captured {len(peer_addresses)} service-processor address(es): "
+                        f"{peer_addresses}"
+                    )
+                    if _retained_sp_to_node:
+                        _session_log.log(
+                            f"SP -> node mapping: {_retained_sp_to_node}"
+                        )
 
     if direct_cluster_ssh:
         # We connected directly to the cluster shell (not via BMC console).
