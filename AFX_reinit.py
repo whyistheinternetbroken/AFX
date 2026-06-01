@@ -48,6 +48,10 @@ _CLUSTER_PROMPT_RE = re.compile(r'\S+::\*?>\s*$')
 # regex is compiled once instead of on every helper invocation.
 _SHELL_PROMPT_RE = re.compile(r"::\*?>")
 
+# ANSI/VT100 escape sequence stripper — PTY and system-console sessions inject
+# these codes for colour / cursor movement; strip before text parsing.
+_ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
 # ---------------------------------------------------------------------------
 # Checkpoint manager
 # ---------------------------------------------------------------------------
@@ -4110,62 +4114,127 @@ def _parse_ntp_servers(output):
     return servers
 
 
+def _prefix_to_mask(prefix_str):
+    """Convert a CIDR prefix length (e.g. '24') to dotted-decimal netmask."""
+    try:
+        prefix = int(str(prefix_str).strip())
+        if not 0 <= prefix <= 32:
+            return None
+        mask_int = (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
+        return ".".join(str((mask_int >> (8 * i)) & 0xFF) for i in [3, 2, 1, 0])
+    except (ValueError, TypeError):
+        return None
+
+
 def _parse_network_interfaces(output):
     """Parse 'net int show ... -instance' output into list[dict].
 
     ONTAP -instance format shows one 'Label: Value' line per field, with a
-    blank line separating each interface entry.  This format is immune to the
-    line-wrapping that breaks column-based parsing of wide tabular output.
+    blank line separating each interface entry.
+
+    IMPORTANT: PTY / system-console sessions inject ANSI/VT100 escape codes
+    that prevent blank lines from appearing truly empty when stripped normally.
+    We strip all ANSI codes from the output before parsing so blank-line
+    separator detection works regardless of the session type.
     """
-    # Exact ONTAP label names (case-insensitive). Exact matching avoids
-    # false hits on labels like "IP Address Family" or "Bits in the Netmask"
-    # that would overwrite the real IP / netmask via substring matching.
-    # "Failover Role" would also corrupt the "role" field with substring matching.
+    # Strip ANSI/VT100 escape sequences injected by PTY or system console.
+    output = _ANSI_RE.sub("", output)
+
+    # Exact ONTAP label names (case-insensitive). Maps to an internal field
+    # name, or to special sentinel strings handled below.
+    #   "address_mask"   — combined "x.x.x.x/prefix" field; split on "/"
+    #   "netmask_prefix" — prefix-length-only field; convert to dotted mask
     _KEY_MAP = {
+        # LIF name variants across ONTAP versions
         "logical interface name": "lif",
         "interface name": "lif",
+        "lif": "lif",
+        # Vserver
         "vserver name": "vserver",
         "vserver": "vserver",
+        # Home node / port
         "home node": "home-node",
         "home port": "home-port",
+        # IP address — plain (some versions) or combined with prefix
         "ip address": "address",
-        "network address": "address",   # alternate ONTAP label in some versions
+        "network address": "address",
+        "address": "address",
+        "ip address/mask": "address_mask",   # e.g. "169.254.1.1/16"
+        "address/mask": "address_mask",
+        # Netmask — full mask or prefix length (varies by ONTAP version)
         "netmask": "netmask",
         "subnet mask": "netmask",
+        "network mask": "netmask",
+        "netmask length": "netmask_prefix",
+        "network mask length": "netmask_prefix",
+        "mask length": "netmask_prefix",
+        # Role and IPspace
         "role": "role",
         "ipspace": "ipspace",
     }
+
     rows = []
     current: "dict[str, str]" = {}
     _seen_labels: "set[str]" = set()
+
     for line in output.splitlines():
+        # Strip standard whitespace AND any residual non-printable chars so
+        # that lines containing only ANSI remnants or control chars are
+        # treated as blank separators between -instance records.
         stripped = line.strip()
-        if not stripped:
+        clean = "".join(ch for ch in stripped if ch.isprintable()).strip()
+
+        if not clean:
             if current:
                 rows.append(current)
                 current = {}
             continue
-        if "::" in stripped or stripped.startswith("("):
+
+        if "::" in clean or clean.startswith("("):
             continue
-        if "entries were displayed" in stripped.lower() or "entry was displayed" in stripped.lower():
+        if "entries were displayed" in clean.lower() or "entry was displayed" in clean.lower():
             continue
-        if ":" not in stripped:
+        if ":" not in clean:
             continue
-        label, _, value = stripped.partition(":")
+
+        label, _, value = clean.partition(":")
         label_lower = label.strip().lower()
         value = value.strip()
         if not value or value in ("-", "--"):
             continue
+
         matched = False
         for key_pat, field_name in _KEY_MAP.items():
-            if label_lower == key_pat:   # exact match only
-                current[field_name] = value
+            if label_lower == key_pat:
+                if field_name == "address_mask":
+                    # "x.x.x.x/24" or "x.x.x.x/255.255.255.0"
+                    if "/" in value:
+                        ip_part, prefix_part = value.split("/", 1)
+                        current["address"] = ip_part.strip()
+                        pp = prefix_part.strip()
+                        if "." in pp:
+                            current.setdefault("netmask", pp)
+                        else:
+                            mask = _prefix_to_mask(pp)
+                            if mask:
+                                current.setdefault("netmask", mask)
+                    else:
+                        current["address"] = value
+                elif field_name == "netmask_prefix":
+                    mask = _prefix_to_mask(value)
+                    if mask:
+                        current.setdefault("netmask", mask)
+                else:
+                    current[field_name] = value
                 matched = True
                 break
+
         if not matched:
             _seen_labels.add(label_lower)
+
     if current:
         rows.append(current)
+
     if _session_log:
         _session_log.log(
             f"_parse_network_interfaces: {len(rows)} rows; "
@@ -14823,9 +14892,18 @@ def main():
                     _session_log.close()
                     sys.exit(1)
             else:
-                # BMC connection: wait for BMC prompt, then enter system console.
+                # BMC connection: need to have the BMC '>' prompt before
+                # entering system console.  The probe above may have already
+                # consumed it (direct read until '>'), so only call
+                # wait_for_bmc_prompt when the probe did NOT see '>'.
                 _session_log.log("4e: BMC connection detected; entering system console")
-                if not wait_for_bmc_prompt(_ch46, auto_takeover=True):
+                _bmc_prompt_in_probe = ">" in _probe46
+                if _bmc_prompt_in_probe:
+                    print("  ✅ BMC prompt detected.")
+                    _session_log.log(
+                        "4e: BMC prompt already consumed by probe; skipping wait"
+                    )
+                elif not wait_for_bmc_prompt(_ch46, auto_takeover=True):
                     print("  \u274c BMC prompt not received. Exiting.")
                     _session_log.set_outcome("FAIL", "BMC prompt not received")
                     _session_log.close()
