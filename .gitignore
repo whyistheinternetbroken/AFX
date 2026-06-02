@@ -17,3 +17,9 @@ env/
 Thumbs.db
 .vscode/
 .idea/
+
+# Runtime output — keep the folders but ignore their contents
+logs/*
+!logs/.gitkeep
+ONTAP/*
+!ONTAP/.gitkeep
