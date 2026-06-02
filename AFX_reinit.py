@@ -1899,10 +1899,11 @@ def select_operation_mode():
         print("    4d. Set up passwordless SSH to cluster management")
         print("    4e. Create backup cluster configuration")
         print("    4f. Verify BMC authentication")
+        print("    4g. Reset all nodes to LOADER prompt")
         print("  5.  Exit")
         print("")
         print("  " + "─" * 58)
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4f, or 5): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4g, or 5): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2058,9 +2059,10 @@ def select_operation_mode():
                 print("  4d. Set up passwordless SSH to cluster management")
                 print("  4e. Create backup cluster configuration")
                 print("  4f. Verify BMC authentication")
+                print("  4g. Reset all nodes to LOADER prompt")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (4a, 4b, 4c, 4d, 4e, 4f) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (4a, 4b, 4c, 4d, 4e, 4f, 4g) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -2156,13 +2158,31 @@ def select_operation_mode():
                     print("\n  \u2705 Confirmed. 4f: Verify BMC authentication\n")
                     return 47, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
+
+            if choice == "4g":
+                _print_banner("\U0001f504 4g: Reset all nodes to LOADER prompt")
+                print("")
+                print("  Connects to all BMC addresses in parallel, issues a")
+                print("  system reset on each node, enters the system console,")
+                print("  and sends Ctrl+C to interrupt AUTOBOOT.")
+                print("  The script exits when every node is at the LOADER> prompt.")
+                print("")
+                print("  BMC addresses are loaded from a reinit config file or")
+                print("  BMC_IP.json if present, otherwise entered manually.")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  \u2705 Confirmed. 4g: Reset all nodes to LOADER prompt\n")
+                    return 48, False, False
+                print("\n  \u21a9\ufe0f  Returning to menu...\n")
             continue
 
         if choice == "5":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4f, or 5.")
+        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4g, or 5.")
 
 
 def get_loader_commands():
@@ -3655,6 +3675,9 @@ def parse_args():
     parser.add_argument("--verify", action="store_true", default=False,
                         help="Skip the menu and run mode 4f: verify BMC "
                              "authentication for all configured nodes.")
+    parser.add_argument("--loader", action="store_true", default=False,
+                        help="Skip the menu and run mode 4g: reset all nodes "
+                             "to the LOADER prompt in parallel.")
     args = parser.parse_args()
     if args.help:
         _print_man_page()
@@ -14795,6 +14818,9 @@ def main():
         elif args.verify:
             _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 47, False, False
             print("\n  ⚡ --verify: launching mode 4f (BMC auth verify).")
+        elif args.loader:
+            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 48, False, False
+            print("\n  ⚡ --loader: launching mode 4g (reset all nodes to LOADER).")
 
         if _shortcut_mode is not None:
             _operation_mode = _shortcut_mode
@@ -15879,6 +15905,139 @@ def main():
                 _offer_bmc_ssh_diagnostic(_failing47, _rep_user47, _pw_map47)
 
         sys.exit(0)
+
+    # ── Mode 48 (4g): reset all nodes to LOADER prompt ─────────────────────
+    if _operation_mode == 48:
+        _print_banner("\U0001f504 4g: Reset all nodes to LOADER prompt")
+        print("")
+
+        # ── Locate BMC IP list (same logic as mode 47) ───────────────────
+        _bmc_ips48 = []
+        _found_file48 = None
+        for _p48 in _find_config_files(
+            candidate_names=("BMC_IP.json",
+                             "reinit-config.json", "reinit_config.json",
+                             "reinit-afx-config.json", "add_nodes.json"),
+        ):
+            try:
+                with open(_p48, "r", encoding="utf-8") as _f48:
+                    _d48data = json.load(_f48)
+            except Exception:
+                continue
+            if isinstance(_d48data.get("netboot_bmcs"), list):
+                _bmc_ips48 = [str(x) for x in _d48data["netboot_bmcs"] if x]
+            else:
+                _pn48 = _d48data.get("primary_node")
+                if isinstance(_pn48, dict) and _pn48.get("bmc"):
+                    _bmc_ips48.append(str(_pn48["bmc"]))
+                for _sn48 in (_d48data.get("secondary_nodes") or []):
+                    if isinstance(_sn48, dict) and _sn48.get("bmc"):
+                        _bmc_ips48.append(str(_sn48["bmc"]))
+                if not _bmc_ips48:
+                    for _n48 in (_d48data.get("nodes") or []):
+                        if isinstance(_n48, dict) and _n48.get("bmc"):
+                            _bmc_ips48.append(str(_n48["bmc"]))
+            if _bmc_ips48:
+                _found_file48 = _p48
+                break
+
+        if _found_file48:
+            print(f"  \U0001f4c4 Loaded {len(_bmc_ips48)} BMC address(es) from: {_found_file48}")
+            for _ip48 in _bmc_ips48:
+                print(f"     \u2022 {_ip48}")
+        else:
+            print("  \u2139\ufe0f  No BMC IP file found. Enter BMC addresses manually.")
+            print("  (Leave blank and press Enter when done.)\n")
+            _idx48 = 1
+            while True:
+                _entry48 = _prompt(f"  BMC {_idx48} hostname/IP (blank to finish): ")
+                if not _entry48:
+                    break
+                _bmc_ips48.append(_entry48)
+                _idx48 += 1
+
+        if not _bmc_ips48:
+            print("  No BMC addresses entered. Exiting.")
+            sys.exit(0)
+
+        # ── Credentials ──────────────────────────────────────────────────
+        print("")
+        _same_creds48 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
+        _creds48 = {}   # ip -> (user, password)
+        if _same_creds48 != "n":
+            _shared_user48 = input("  BMC username [admin]: ").strip() or "admin"
+            _shared_pass48 = getpass.getpass("  BMC password (blank = none): ")
+            for _ip48 in _bmc_ips48:
+                _creds48[_ip48] = (_shared_user48, _shared_pass48)
+        else:
+            for _ip48 in _bmc_ips48:
+                print(f"\n  Credentials for {_ip48}:")
+                _u48 = input("    Username [admin]: ").strip() or "admin"
+                _p48 = getpass.getpass("    Password (blank = none): ")
+                _creds48[_ip48] = (_u48, _p48)
+        print("")
+
+        _make_session_log("4g: reset all nodes to LOADER")
+
+        # ── Reset each node to LOADER in parallel ────────────────────────
+        _print_banner(f"\U0001f504 Resetting {len(_bmc_ips48)} node(s) to LOADER prompt")
+        print(f"  Nodes: {', '.join(_bmc_ips48)}\n")
+        _session_log.start_phase("Reset to LOADER")
+
+        _log_dir48 = _session_log.log_dir if _session_log else os.getcwd()
+        _node_logs48 = {}
+        for _ip48 in _bmc_ips48:
+            try:
+                _nf48 = _node_log_open(_ip48, _log_dir48, prefix="mode4g_loader")
+                _node_logs48[_ip48] = _nf48
+                print(f"  \U0001f4dd [{_ip48}] Log \u2192 {_nf48.name}")
+            except Exception:
+                _node_logs48[_ip48] = None
+
+        _results48 = {}
+        _results_lock48 = threading.Lock()
+
+        def _loader_worker48(ip):
+            u48, p48 = _creds48.get(ip, ("admin", ""))
+            # Populate _peer_bmc_creds so reset_peer_to_loader can update them.
+            _peer_bmc_creds[ip] = {"user": u48, "password": p48}
+            ok = reset_peer_to_loader(
+                ip, u48, p48,
+                node_log=_node_logs48.get(ip),
+            )
+            with _results_lock48:
+                _results48[ip] = ok
+
+        _run_parallel(_bmc_ips48, _loader_worker48)
+
+        for _nf48 in _node_logs48.values():
+            if _nf48:
+                try:
+                    _nf48.close()
+                except Exception:
+                    pass
+
+        # ── Results summary ───────────────────────────────────────────────
+        print("\n  " + "─" * 58)
+        print(f"  {'BMC IP':<24}  Result")
+        print(f"  {'─'*24}  {'─'*20}")
+        _pass48 = _fail48 = 0
+        for _ip48 in _bmc_ips48:
+            _ok48 = _results48.get(_ip48, False)
+            _icon48 = "\u2705" if _ok48 else "\u274c"
+            _label48 = "LOADER reached" if _ok48 else "FAILED"
+            print(f"  {_ip48:<24}  {_icon48} {_label48}")
+            if _ok48:
+                _pass48 += 1
+            else:
+                _fail48 += 1
+        print(f"  {'─'*24}  {'─'*20}")
+        print(f"\n  {_pass48} reached LOADER  /  {_fail48} failed  (of {len(_bmc_ips48)} nodes)\n")
+
+        _session_log.end_phase()
+        _session_log.record_completion(normal_exit=(_fail48 == 0))
+        print(f"\U0001f4dd Session log: {_session_log.log_file}")
+        sys.exit(0 if _fail48 == 0 else 1)
 
     # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
     if _operation_mode == 45:

@@ -9,10 +9,17 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- **CLI mode shortcut flags.** Eight new flags bypass the interactive menu and
+- **Menu option 4g: Reset all nodes to LOADER prompt.** Connects to all BMC
+  addresses (from config file or manual entry) in parallel, issues a system
+  reset on each node, enters the system console, and sends Ctrl+C to interrupt
+  AUTOBOOT. The script exits with a pass/fail results table once every node has
+  reached the LOADER> prompt. Node-level logs are written to the session log
+  directory. Available as `--loader` CLI flag.
+- **CLI mode shortcut flags.** Nine flags bypass the interactive menu:
   launch directly into the requested mode: `--first-node` (1b), `--add-nodes`
   (2b), `--reinit` (3), `--netboot-install` (4b), `--add-lic` (4c),
-  `--passwordless` (4d), `--backup` (4e), `--verify` (4f). All flags can be
+  `--passwordless` (4d), `--backup` (4e), `--verify` (4f), `--loader` (4g).
+  All flags can be
   combined with `--config`, `--debug`, `--screen`, and other existing options.
   See *Mode Shortcut Flags* in the README for examples.
 - **Incremental node join timing.** The per-node sub-rows under `Node join

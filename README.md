@@ -49,6 +49,7 @@ All session activity is captured in a timestamped log directory with a human-rea
 | SSH Key Setup (4d) | Configures passwordless SSH from the script host to cluster management. |
 | Config Backup (4e) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. After gathering, the saved `reinit-config.json` includes `cluster`, `primary_node`, and `secondary_nodes` blocks, fully populated with management IPs and BMC addresses. The retained configuration summary displays Cluster LIFs and Management LIFs in separate tables. |
 | BMC Auth Verify (4f) | Batch-tests BMC SSH credentials for all nodes in the config file. |
+| Reset to LOADER (4g) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
 | Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
 | Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |
 | Screen Mode | `--screen` flag: automatically re-launches the script inside a detached GNU screen session. Protects against SSH disconnections and terminal timeouts. Implies `--bg`. |
@@ -443,6 +444,7 @@ These flags bypass the interactive menu and launch directly into the specified m
 | `--passwordless` | 4d | Configure passwordless SSH to cluster management. |
 | `--backup` | 4e | Create a backup cluster configuration file. |
 | `--verify` | 4f | Verify BMC authentication for all configured nodes. |
+| `--loader` | 4g | Reset all nodes to the LOADER prompt in parallel via BMC. |
 
 **Examples:**
 
@@ -458,6 +460,9 @@ python3 AFX_reinit.py --backup
 
 # Verify BMC credentials before starting a reinit
 python3 AFX_reinit.py --verify --config configs/reinit-config.json
+
+# Reset all nodes to LOADER prompt in parallel
+python3 AFX_reinit.py --loader --config configs/reinit-config.json
 
 # Add a license without running a reinit
 python3 AFX_reinit.py --add-lic --config configs/reinit-config.json
