@@ -27,7 +27,24 @@ revision labels rather than strict [SemVer](https://semver.org/).
   check in ~5 min...` line before each sleep so operators can confirm the
   script is alive during long waits.
 
-### Fixed
+### Changed
+- **`--diag` bootarg validation broadened.** Bootarg entries no longer need
+  to start with `bootarg.` — any `option_name value` two-token pair is
+  accepted. Invalid entries (missing value, `setenv` prefix) are now a hard
+  exit rather than a warn-and-skip prompt.
+- **`--diag` bootarg confirmation prompt.** After loading bootargs (from file
+  or interactive input), all entries are printed as `setenv option value` and
+  the operator must confirm before the script proceeds.
+- **`--diag` and physical-zeroing prompts moved.** Both questions (physical
+  disk zeroing and diagnostic bootargs) now appear right after the config file
+  / retain prompts and before any BMC connection, grouping all up-front
+  questions together.
+- **`bootargs.txt` / `bootargs` search path extended.** The script now checks
+  `configs/bootargs.txt`, `configs/bootargs`, `./bootargs.txt`, and
+  `./bootargs` in that order, so the file can live alongside other config
+  files in the `configs/` subdirectory.
+
+
 - **DSA host key rejection (`q must be exactly 160, 224, or 256 bits long`).**
   `cryptography` ≥ 2.6 strictly validates DSA `q` parameter lengths. Some
   ONTAP BMC and cluster management interfaces present non-standard DSA host
@@ -159,19 +176,22 @@ revision labels rather than strict [SemVer](https://semver.org/).
   CLI flag enables one-off LOADER bootarg injection at the LOADER stage
   (after `set-defaults`, before `saveenv`) on **all nodes** (primary and
   all peers).
-  - At startup (or during 4b upfront config) the script looks for a
-    `bootargs.txt` or `bootargs` file next to `AFX_reinit.py`. Each
-    non-blank, non-comment line must be formatted as `"bootarg.name value"`.
-    If no file is found the operator is prompted interactively.
-  - Each entry is validated: must be exactly two whitespace-separated
-    tokens with the first starting with `bootarg.`; must **not** include
-    the `setenv` prefix. Invalid entries warn and offer to exit to fix.
+  - At startup the script looks for a `bootargs.txt` or `bootargs` file in
+    `configs/` (preferred) then the script directory. Each non-blank,
+    non-comment line is one bootarg entry (`option_name value`). If no
+    file is found the operator is prompted interactively.
+  - Entry format is `option_name value` (any two-token pair; does **not**
+    need to start with `bootarg.`). The `setenv` prefix must **not** be
+    included — the script adds it. Missing value or `setenv` prefix
+    causes an immediate hard exit.
+  - After loading, all entries are printed as `setenv option value` and
+    the operator must confirm before the script proceeds.
   - Bootargs are injected into `get_loader_commands()` (modes 1/2/3
     primary) and the inline peer LOADER command block in
     `_add_peer_node_thread`.
-  - After each `setenv bootarg.*` is sent, the LOADER response is
-    checked for error indicators (`%`, `Error`, `invalid`, `unknown`).
-    On match the script prints the LOADER output and exits.
+  - After each `setenv` is sent, the LOADER response is checked for error
+    indicators (`%`, `Error`, `invalid`, `unknown`). On match the script
+    prints the LOADER output and exits.
   - For mode 4b, the validated list is persisted to the checkpoint via
     `set_param("diag_bootargs", ...)` and restored on `--resume`,
     skipping re-prompt.

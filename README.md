@@ -55,7 +55,7 @@ All session activity is captured in a timestamped log directory with a human-rea
 | Node add resume | Resumes interrupted node add processes. |
 | Physical disk zeroing | Adds option to physically zero disks rather than fast zero (which helps ensure performance consistency). |
 | BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 4f offers an interactive cleanup pass when BMC verification fails. |
-| Diagnostic bootarg injection (`--diag`) | Injects custom LOADER `setenv` bootargs (from a `bootargs.txt` or `bootargs` file, or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Validates format, detects LOADER errors on apply, and checkpoints the bootarg list for resume. |
+| Diagnostic bootarg injection (`--diag`) | Injects custom LOADER `setenv` bootargs (from a `bootargs.txt` or `bootargs` file in `configs/` or the script directory, or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Accepts any `option_name value` format (not just `bootarg.` prefix). All entries printed and confirmed before proceeding. Validates format, detects LOADER errors on apply, and checkpoints the bootarg list for resume. |
 
 ---
 
@@ -426,7 +426,7 @@ python3 AFX_reinit.py [OPTIONS]
 | `--resume` | | Mode 4b only. Resume the previous 4b run from its saved checkpoint (`afx_checkpoint.json`). Skips phases already completed so you do not have to restart from scratch after a failure or Ctrl+C. See **Checkpoint & Resume** below. |
 | `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, age, BMC IPs, completed global phases, completed per-node phases — then exit. Does not modify the checkpoint file. |
 | `--auto-clear-stale-bmc` | | On banner-timeout retries, scan for `ESTABLISHED` TCP sockets to each BMC's port 22 owned by other Python processes on this host and `SIGTERM` them. The "always-on" cleanup (close own SSH clients + `ipmitool sol deactivate`) runs regardless of this flag. See [BMC SSH Stale Session Diagnostics](#bmc-ssh-stale-session-diagnostics). |
-| `--diag` | | Enable diagnostic bootarg injection. Loads `bootargs.txt` or `bootargs` from the script directory (one `bootarg.name value` entry per line; lines starting with `#` are comments) or prompts interactively. Bootargs are set via `setenv` after `set-defaults` and before `saveenv` at the LOADER stage on all nodes. See [Diagnostic Bootargs (`--diag`)](#diagnostic-bootargs---diag). |
+| `--diag` | | Enable diagnostic bootarg injection. Loads `bootargs.txt` or `bootargs` from `configs/` or the script directory (one `option_name value` entry per line; lines starting with `#` are comments) or prompts interactively. After loading, all entries are printed and must be confirmed before proceeding. Bootargs are set via `setenv` after `set-defaults` and before `saveenv` at the LOADER stage on all nodes. See [Diagnostic Bootargs (`--diag`)](#diagnostic-bootargs---diag). |
 | `--help` / `-h` | | Show a short man page about the script's options. |
 
 ### Mode Shortcut Flags
@@ -874,45 +874,61 @@ The `--diag` flag enables injection of one-off custom LOADER bootargs during the
 
 ### How it works
 
-1. At startup (or during the 4b upfront config phase) the script looks for a `bootargs.txt` or `bootargs` file next to `AFX_reinit.py`.
+1. After the config file prompt (and before any BMC connection), the script looks for a `bootargs.txt` or `bootargs` file in `configs/` then the script directory.
 2. If found, each non-blank, non-comment line is treated as one bootarg entry.
 3. If not found, the operator is prompted to enter bootargs interactively (one per line, blank line to finish).
-4. Each entry is validated and then injected as `setenv <bootarg>` in the LOADER command sequence on **all nodes** (primary and all peers), immediately after `raid.use-physical-zeroing?` is set and before `saveenv`.
-5. If the LOADER returns an error response to any `setenv bootarg.*` command, the script prints the error and exits immediately.
+4. All entries are printed as `setenv option value` and the operator must confirm before the script proceeds. Invalid entries (missing value, `setenv` prefix) cause an immediate exit.
+5. Confirmed entries are injected as `setenv <option> <value>` in the LOADER command sequence on **all nodes** (primary and all peers), immediately after `raid.use-physical-zeroing?` is set and before `saveenv`.
+6. If the LOADER returns an error response to any `setenv` command, the script prints the error and exits immediately.
 
 ### `bootargs.txt` / `bootargs` format
 
-Each non-blank line must be exactly two whitespace-separated tokens: the bootarg name (starting with `bootarg.`) and its value. Do **not** include `setenv` — the script adds it. Lines starting with `#` are treated as comments and ignored.
+Each non-blank line must be exactly two whitespace-separated tokens: the option name and its value. The name does **not** need to start with `bootarg.` — any `option_name value` pair is accepted. Do **not** include `setenv` — the script adds it. Lines starting with `#` are treated as comments and ignored.
 
 ```
 # Diagnostic bootargs
 bootarg.init.initnonsz 0x80000
 bootarg.vm.memmap.efi true
-bootarg.some.flag 1
+some_option_name 1
 ```
+
+The file is searched in this order:
+1. `configs/bootargs.txt`
+2. `configs/bootargs`
+3. `./bootargs.txt` (same directory as the script)
+4. `./bootargs`
 
 ### Entry validation rules
 
 | Rule | What happens on violation |
 |---|---|
-| Entry must NOT start with `setenv` | Warning printed; operator offered exit-or-skip |
-| Entry must be exactly `bootarg.<name> <value>` (two tokens, name starts with `bootarg.`) | Warning printed; operator offered exit-or-skip |
+| Entry must NOT start with `setenv` | Hard exit with message — remove the prefix and re-run |
+| Entry must be exactly two tokens: `option_name value` | Hard exit with message — fix the file/input and re-run |
 | LOADER responds with `%`, `Error`, `invalid`, or `unknown` after a `setenv` | Script prints the LOADER output and exits |
+
+After loading, all entries are printed as `setenv option value` and the operator must confirm before the script proceeds.
 
 ### Usage
 
 ```bash
-# With a bootargs.txt file present next to the script:
+# With a bootargs.txt file present (configs/ or script dir):
 python3 AFX_reinit.py --diag
 
 # Without a file — interactive prompt:
 python3 AFX_reinit.py --diag
 #  ℹ️  No bootargs.txt / bootargs file found. Enter bootargs interactively.
-#     Format: bootarg.name.variable <value>   (do NOT include 'setenv')
+#     Format: option_name <value>   (do NOT include 'setenv')
+#     Examples:  bootarg.init.initrd 1   |   some_option true
 #     Press Enter on a blank line when done.
 #   bootarg> bootarg.init.initnonsz 0x80000
-#   bootarg> bootarg.vm.memmap.efi true
+#   bootarg> some_option true
 #   bootarg>
+#
+#   📋 2 diagnostic bootarg(s) to apply:
+#      setenv bootarg.init.initnonsz 0x80000
+#      setenv some_option true
+#
+#   Apply these bootargs? [Y/n]:
 
 # Can be combined with any reinit mode:
 python3 AFX_reinit.py --diag --resume
@@ -943,7 +959,7 @@ current `[Unreleased]` working set.
 | v2 (unreleased) | Jun 1, 2026 | **4e config gather — LIF summary tables.** Retained configuration summary now shows Cluster LIFs and Management LIFs in separate fixed-width tables (with a `role` column in the management table). Dash separators are sized to match actual column widths. |
 | v2 (unreleased) | Jun 1, 2026 | **4e config gather — BMC prompt consumed by probe fix.** When connecting via a BMC IP, the initial probe was consuming the BMC `>` prompt before `wait_for_bmc_prompt` ran, causing an immediate timeout. Fixed by checking probe output before deciding whether to wait again. |
 | v2 (unreleased) | Jun 1, 2026 | **Default BMC username `admin`.** Options 3 and 4d prompts now show `BMC username [admin]:` and fall back to `admin` on Enter. |
-| v2 (unreleased) | Jun 1, 2026 | `--diag` flag: inject custom LOADER bootargs (from `bootargs.txt` / `bootargs` file or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Validates format, detects LOADER errors on apply, checkpoints list for resume. |
+| v2 (unreleased) | Jun 1, 2026 | `--diag` flag: inject custom LOADER bootargs (from `bootargs.txt` / `bootargs` file in `configs/` or script dir, or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Accepts any `option_name value` format. All entries printed and confirmed before proceeding. Invalid entries (missing value, `setenv` prefix) are a hard exit. Validates format, detects LOADER errors on apply, checkpoints list for resume. |
 | v2 (unreleased) | Jun 1, 2026 | Cluster node-healthy wait increased to 15 minutes (was 10), polling every 5 minutes (was 2). |
 | v2 (unreleased) | May 29, 2026 | BMC SSH stale session diagnostics: automatic diagnosis + `ipmitool sol deactivate` on every banner-retry; `--auto-clear-stale-bmc` flag SIGTERMs other-Python PIDs holding sockets to the BMC; interactive cleanup offer added to mode 4f when BMC verification fails. |
 | v2 (unreleased) | May 28, 2026 | 4a ONTAP upgrade overhaul: BMC picker from existing reinit config / `BMC_IP.json`; cluster login reuses BMC credentials; parallel image install fans out across per-node management IPs (round-robin) with TCP/22 + SSH-auth pre-flight validation; raw cluster command echo suppressed from console (still in log); failover wait polls every 3 min for up to 30 min with live elapsed / remaining status. Interactive prompt-wait telemetry added to session summary (count, total, longest, ≥60 s extended waits, and `Unaccounted time` line). 4b reinit-type-3 now prompts for physical-disk zeroing. |
