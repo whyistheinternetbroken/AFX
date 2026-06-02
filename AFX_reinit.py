@@ -16881,12 +16881,18 @@ def main():
             _print_banner("📋 Cluster node summary")
             print(f"  BMC of first node in the cluster : {sp_host} (user={sp_user})")
             if other_sps:
-                print(f"  Nodes to add after cluster init  ({len(other_sps)}):")
+                if _operation_mode == 1:
+                    print(f"  Peer nodes (ignored by 1b — use mode 3 to add them) ({len(other_sps)}):")
+                else:
+                    print(f"  Nodes to add after cluster init  ({len(other_sps)}):")
                 for a in other_sps:
                     print(f"    - {a}")
             else:
                 print("  Nodes to add after cluster init  : (none)")
             print(f"  Total nodes                      : {1 + len(other_sps)}")
+            if _operation_mode == 1 and other_sps:
+                print("\n  ℹ️   Mode 1b only initialises the first node.")
+                print("     Peer nodes listed above will NOT be reset or touched.")
             ans = _prompt("\n  Is this the correct number of nodes? [Y/N]: ", "y").lower()
             _session_log.log_user_input(f"Confirm node count ({1 + len(other_sps)}): {ans}")
             if ans in ("", "y", "yes"):
@@ -16963,7 +16969,7 @@ def main():
         if _auto_setup:
             collect_cluster_config()
 
-        if other_sps:
+        if other_sps and _operation_mode != 1:
             _print_banner("🔐 Peer BMC SSH Credentials")
             print("\n  Provide SSH credentials for each peer BMC. Press Enter")
             print(f"  to reuse the primary BMC username '{sp_user}' / password.")
@@ -17061,10 +17067,10 @@ def main():
                 print(f"     {', '.join(other_sps)}")
                 _session_log.log(f"Mode 3 peer add list: {other_sps}")
 
-        # Reset every peer BMC to LOADER up-front (modes 1 and 3 both need
-        # peers parked at LOADER before the primary runs option 9 / before
-        # the mode 3 parallel auto-add kicks in).
-        if other_sps:
+        # Reset every peer BMC to LOADER up-front (mode 3 needs peers parked at
+        # LOADER before the parallel auto-add kicks in). Mode 1 (1a/1b) only
+        # operates on the first node — skip peer resets entirely.
+        if other_sps and _operation_mode == 3:
             _print_banner(f"🔁 Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
             print(f"  Peer BMCs: {', '.join(other_sps)}")
             _session_log.start_phase("Peer Node Reset to LOADER")
