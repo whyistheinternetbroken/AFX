@@ -4866,6 +4866,68 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
 
 
 # ---------------------------------------------------------------------------
+# Interactive prompt broker (mode 2a parallel)
+# ---------------------------------------------------------------------------
+
+class _InteractivePromptBroker:
+    """Thread-safe serializer for user prompts from parallel node threads.
+
+    When mode 2a runs nodes in parallel, threads call ``broker.ask()`` to
+    pause and collect a single line of user input without interleaving
+    output from other running threads.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+
+    def ask(self, node_label, prompt_text, default=None, secret=False):
+        """Block until the lock is free, then prompt the operator.
+
+        Returns the operator's answer, or ``default`` if they pressed Enter.
+        """
+        with self._lock:
+            suffix = f" [{default}]" if default else ""
+            print(f"\n  🔔 [{node_label}] {prompt_text}{suffix}", flush=True)
+            try:
+                if secret:
+                    val = getpass.getpass("  Response: ")
+                else:
+                    val = input("  Response: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                val = ""
+            return val if val else (default or "")
+
+
+def _interactive_disk_erase_prompts(channel, broker, label, node_log=None):
+    """Wait for each of the three disk-erase confirmation prompts and ask the
+    operator via *broker* rather than auto-answering.  Used by mode 2a.
+    """
+    _pfx = f"[{label}]" if label else ""
+    for trigger, short_label in (
+        ("zero disks, reset config and install a new file system",
+         "Zero disks / reset config?"),
+        ("this will erase all the data on the disks",
+         "Erase all data on disks?"),
+        ("type yes to confirm and continue",
+         "Type yes to confirm and continue:"),
+    ):
+        _slog(f"{_pfx} waiting for disk-erase prompt: {short_label}")
+        out, matched = direct_read_until_any(
+            channel, [trigger, "login:"], timeout=1800,
+            node_log=node_log, check_bmc_drop=True,
+        )
+        if not matched or trigger.lower() not in matched.lower():
+            _slog(f"{_pfx} disk-erase prompt '{short_label}' not seen; skipping",
+                  prefix="WARN")
+            continue
+        ans = broker.ask(label, short_label, default="yes")
+        channel.send(ans + "\r")
+        if _session_log:
+            _session_log.log_sent(f"<broker> {ans}")
+        time.sleep(0.5)
+
+
+# ---------------------------------------------------------------------------
 # Interactive terminal
 # ---------------------------------------------------------------------------
 
@@ -12625,7 +12687,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                           join_barrier=None, join_proceed_events=None,
                           join_index=0, final_cluster_count=0,
                           timings_record=None, barrier_release_box=None,
-                          timings_lock=None, first_join_sent_box=None):
+                          timings_lock=None, first_join_sent_box=None,
+                          broker=None):
     """Run a full add-node automation against a single peer BMC.
 
     All peer threads run LOADER/format in parallel. When each thread
@@ -12791,8 +12854,12 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         ch.send("4\r"); time.sleep(2)
 
         # Yes confirmations + node mgmt + join wizard.
-        _auto_answer_disk_erase_prompts(ch, node_log=node_file, label=peer_bmc,
-                                        is_node_add=True)
+        if broker is not None:
+            _interactive_disk_erase_prompts(ch, broker, peer_bmc,
+                                            node_log=node_file)
+        else:
+            _auto_answer_disk_erase_prompts(ch, node_log=node_file, label=peer_bmc,
+                                            is_node_add=True)
 
         cfg = _resolve_node_mgmt_config(peer_bmc)
         _mgmt_residual = _auto_answer_node_mgmt(ch, cfg, node_log=node_file) or ""
@@ -12903,10 +12970,22 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         _slog(f"[{label}] driving post-join wizard")
 
         # 1. Confirm "use this configuration?"
-        print(f"\n⏳ [{label}] Auto-confirming 'use this configuration?'...")
-        direct_send_and_wait(ch, "", "[yes]:",
-                             timeout=900, auto_respond="yes",
-                             node_log=node_file)
+        if broker is not None:
+            print(f"\n⏳ [{label}] Waiting for 'use this configuration?' prompt...")
+            _slog(f"[{label}] waiting for use-this-configuration prompt")
+            _cfg_out, _cfg_matched = direct_read_until_any(
+                ch, ["[yes]:", "login:"], timeout=900, node_log=node_file)
+            if _cfg_matched and "[yes]:" in _cfg_matched.lower():
+                _cfg_ans = broker.ask(label, "Use this configuration?", default="yes")
+                ch.send(_cfg_ans + "\r")
+                if _session_log:
+                    _session_log.log_sent(f"<broker> {_cfg_ans}")
+                time.sleep(0.5)
+        else:
+            print(f"\n⏳ [{label}] Auto-confirming 'use this configuration?'...")
+            direct_send_and_wait(ch, "", "[yes]:",
+                                 timeout=900, auto_respond="yes",
+                                 node_log=node_file)
 
         # 2. Cluster-network IP. Reuse the same lookup helper mode 2b
         # uses (silently tries cluster admin creds, then BMC creds).
@@ -12922,14 +13001,18 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             node_log=node_file,
         )
         if not cluster_iface_ip:
-            print(f"\n⚠️  [{label}] No cluster-network IP available;"
-                  " peer will block on prompt.")
-            if _session_log:
-                _session_log.log(
-                    f"[{label}] cluster-network IP unavailable; "
-                    "peer will be stuck at private-IP prompt",
-                    prefix="WARN",
-                )
+            if broker is not None:
+                cluster_iface_ip = broker.ask(
+                    label, "Enter cluster-network IP address (private cluster interconnect)")
+            if not cluster_iface_ip:
+                print(f"\n⚠️  [{label}] No cluster-network IP available;"
+                      " peer will block on prompt.")
+                if _session_log:
+                    _session_log.log(
+                        f"[{label}] cluster-network IP unavailable; "
+                        "peer will be stuck at private-IP prompt",
+                        prefix="WARN",
+                    )
         else:
             print(f"\n✅ [{label}] Sending cluster-network IP: "
                   f"{cluster_iface_ip}")
@@ -13412,6 +13495,192 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     print("\n  ✅ Mode 2b parallel add complete.")
     if log:
         log.log("Mode 2b parallel add: all threads finished")
+    return True
+
+
+def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
+    """Mode 2a: run nodes in parallel with interactive broker prompting.
+
+    Each node goes through the same LOADER → option 4 → join flow as 2b,
+    but whenever a confirmation is needed (disk erase, "use this config?",
+    cluster-network IP) the thread pauses and asks the operator via a
+    thread-safe prompt broker rather than auto-answering.
+
+    peer_bmcs    : ordered list of BMC IPs/hostnames
+    bmc_user     : default BMC username
+    bmc_passwords: {ip: password} mapping
+    log          : SessionLogger instance
+    """
+    if not peer_bmcs:
+        return False
+
+    broker = _InteractivePromptBroker()
+
+    # ── 1. Display nodes ─────────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print(f"  ➕ Mode 2a: add the following {len(peer_bmcs)} node(s) interactively")
+    print("  " + "─" * 58)
+    _col_w = 18
+    print(f"  {'#':<4} {'BMC IP':<{_col_w}} {'Node Mgmt IP':<{_col_w}} "
+          f"{'Port':<8} {'Gateway':<{_col_w}}")
+    print("  " + "─" * 58)
+    for i, ip in enumerate(peer_bmcs, 1):
+        _nc = _node_cfg_for(ip)
+        _n_ip  = _nc.get("node_mgmt_ip")      or _nc.get("ip")      or "—"
+        _n_prt = _nc.get("node_mgmt_port")    or _nc.get("port")    or "—"
+        _n_gw  = _nc.get("node_mgmt_gateway") or _nc.get("gateway") or "—"
+        print(f"  {i:<4} {ip:<{_col_w}} {_n_ip:<{_col_w}} {_n_prt:<8} {_n_gw:<{_col_w}}")
+    print("=" * 60)
+    print("\n  ℹ️   Nodes will boot in parallel. When user input is needed")
+    print("  the relevant node will pause and ask you here.\n")
+
+    # ── 2. Collect BMC credentials ───────────────────────────────────────────
+    _needs_creds = [ip for ip in peer_bmcs if ip not in _peer_bmc_creds
+                    or not (_peer_bmc_creds[ip] or {}).get("password")]
+    if _needs_creds:
+        _same_pw = _prompt(
+            f"\n  Are the BMC passwords the same for all {len(peer_bmcs)} node(s)? [y/n]: "
+        , "n").lower()
+        _shared_pw = None
+        if _same_pw == "y":
+            _primary_p = (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password") or ""
+            if _primary_p:
+                _shared_pw = _primary_p
+                print("  ✅ Using primary node BMC password for all nodes.")
+            else:
+                try:
+                    _shared_pw = getpass.getpass("  BMC password for all nodes: ")
+                except (EOFError, KeyboardInterrupt):
+                    _shared_pw = ""
+        for ip in _needs_creds:
+            _nc = _node_cfg_for(ip)
+            _ep_u = ((_nc.get("bmc_user") or "").strip() or bmc_user)
+            _ep_p_cfg = _nc.get("bmc_password")
+            if _ep_p_cfg:
+                print(f"  📄 Using config credentials for {ip} (user={_ep_u})")
+                _ep_p = _ep_p_cfg
+            elif _shared_pw is not None:
+                _ep_p = _shared_pw
+            else:
+                try:
+                    _ep_p = getpass.getpass(
+                        f"  BMC password for {_ep_u}@{ip} "
+                        "(blank to reuse primary): "
+                    ) or (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password", "")
+                except (EOFError, KeyboardInterrupt):
+                    _ep_p = ""
+            _peer_bmc_creds[ip] = {"user": _ep_u, "password": _ep_p}
+            if log:
+                log.log(f"2a: resolved BMC creds for {ip} (user={_ep_u})")
+
+    # ── 3. Connect to cluster mgmt for join verification ─────────────────────
+    admin_password = (
+        _cluster_config.get("admin_password")
+        or ((_config_data.get("cluster") or {}).get("password")
+            if isinstance(_config_data, dict) else None)
+        or ""
+    )
+    _admin_user = (
+        _cluster_config.get("admin_user")
+        or ((_config_data.get("cluster") or {}).get("user")
+            if isinstance(_config_data, dict) else None)
+        or "admin"
+    )
+    primary_channel = None
+    primary_client = None
+    baseline = 0
+    mgmt_ip = _cluster_config.get("mgmt_ip")
+    if mgmt_ip:
+        print(f"\n  🔌 Connecting to cluster {mgmt_ip} for join verification...")
+        try:
+            primary_client, _admin_user, admin_password = _ssh_connect_with_retry(
+                mgmt_ip, _admin_user, admin_password,
+                label=f"cluster/{mgmt_ip}", max_attempts=1, interactive=False,
+            )
+            _pch = _open_shell(primary_client)
+            if _login_primary_cluster_shell(_pch, admin_password):
+                primary_channel = _pch
+                baseline = _cluster_show_node_count(primary_channel)
+                print(f"  ✅ Connected; current cluster node count: {baseline}")
+            else:
+                primary_client.close()
+                primary_client = None
+                print("  ⚠️  Could not log into cluster shell; join verification skipped.")
+        except Exception as _ce:
+            print(f"  ⚠️  Cluster mgmt connection failed ({_ce}); verification skipped.")
+            primary_channel = None
+            primary_client = None
+    else:
+        print("  ℹ️  Cluster mgmt IP not set; join verification will be skipped.")
+
+    # ── 4. Spawn threads ─────────────────────────────────────────────────────
+    if log:
+        log.start_phase("2a – Interactive Parallel Node Add")
+
+    _final_2a = (baseline + len(peer_bmcs)) if primary_channel is not None else 0
+    _pending = list(peer_bmcs)
+    _joined_count = 0
+
+    while _pending:
+        _n = len(_pending)
+        _join_barrier = threading.Barrier(_n)
+        _join_proceed = [threading.Event() for _ in range(_n)]
+        _join_proceed[0].set()
+        _batch_results = [None] * _n
+
+        threads = []
+        for idx, addr in enumerate(_pending):
+            _creds = _peer_bmc_creds.get(addr) or {}
+            u = _creds.get("user") or bmc_user
+            p = _creds.get("password") or bmc_passwords.get(addr, "")
+            expected = (baseline + _joined_count + idx + 1
+                        if primary_channel is not None else 0)
+            def _run_2a(_ri=idx, _addr=addr, _u=u, _p=p, _exp=expected):
+                _batch_results[_ri] = _add_peer_node_thread(
+                    _addr, _u, _p, primary_channel, admin_password, _exp,
+                    _join_barrier, _join_proceed, _ri,
+                    final_cluster_count=_final_2a,
+                    broker=broker,
+                )
+            t = threading.Thread(
+                target=_run_2a,
+                daemon=True,
+                name=f"2a-add-{addr}",
+            )
+            t.start()
+            threads.append(t)
+            print(f"  ▶️  [{addr}] Thread started.")
+
+        print(f"\n  ⏳ Nodes running in parallel. Answer prompts above when asked...")
+        for t in threads:
+            t.join()
+
+        _joined_count += sum(1 for r in _batch_results if r)
+        _failed = [_pending[i] for i, r in enumerate(_batch_results) if not r]
+
+        if not _failed:
+            break
+
+        print(f"\n  ⚠️  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
+        if log:
+            log.log(f"2a: {len(_failed)} node(s) failed: {_failed}", prefix="WARN")
+        _retry_ans = _prompt("  Retry failed node(s)? [y/n]: ", "n").lower()
+        if _retry_ans != "y":
+            break
+        _pending = _failed
+
+    if log:
+        log.end_phase()
+
+    if primary_client:
+        try:
+            primary_client.close()
+        except Exception:
+            pass
+
+    print("\n  ✅ Mode 2a interactive parallel add complete.")
+    if log:
+        log.log("Mode 2a parallel add: all threads finished")
     return True
 
 
@@ -17262,6 +17531,59 @@ def main():
             _session_log.record_completion(normal_exit=ok)
             print(f"\n📝 Session log: {_session_log.log_file}")
             sys.exit(0 if ok else 1)
+
+    # ── Mode 2a: parallel add with interactive broker ───────────────────────
+    # Mode 2a always uses the parallel thread infrastructure (same as 2b) so
+    # that multi-node configs are handled correctly, but threads pause and ask
+    # the operator whenever a confirmation is required rather than
+    # auto-answering.  Even a single-node 2a benefits from summary output
+    # instead of raw BMC console pass-through.
+    if _operation_mode == 2 and not _auto_add:
+        _2a_extra_peers = []
+        if isinstance(_config_data, dict):
+            _sn_list = _config_data.get("secondary_nodes")
+            if isinstance(_sn_list, list):
+                _2a_extra_peers = [
+                    str(n["bmc"]) for n in _sn_list
+                    if isinstance(n, dict) and n.get("bmc")
+                    and str(n["bmc"]) != sp_host
+                ]
+            else:
+                _all_nodes_2a = _config_data.get("nodes") or []
+                _2a_extra_peers = [
+                    str(n["bmc"]) for n in _all_nodes_2a
+                    if isinstance(n, dict) and n.get("bmc")
+                    and str(n["bmc"]) != sp_host
+                ]
+
+        _2a_all_peers = [sp_host] + _2a_extra_peers
+
+        # Collect node-mgmt info for extra peers upfront.
+        for _ep in _2a_extra_peers:
+            collect_node_mgmt_per_bmc(_ep, [])
+
+        if sp_host not in _peer_bmc_creds:
+            _peer_bmc_creds[sp_host] = {"user": sp_user, "password": sp_pass}
+
+        # Close the already-open channel; threads open their own connections.
+        try:
+            channel.close()
+        except Exception:
+            pass
+        try:
+            client.close()
+        except Exception:
+            pass
+
+        ok = _run_2a_parallel_add(
+            _2a_all_peers, sp_user,
+            {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "")
+             for ip in _2a_all_peers},
+            _session_log,
+        )
+        _session_log.record_completion(normal_exit=ok)
+        print(f"\n📝 Session log: {_session_log.log_file}")
+        sys.exit(0 if ok else 1)
 
     # If we captured retain data from an existing cluster (and the operator
     # didn't load a JSON config off disk), persist the merged in-memory
