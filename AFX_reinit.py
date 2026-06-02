@@ -16877,26 +16877,28 @@ def main():
             val = _prompt(f"    {label}{suffix}: ")
             return val or (default or "")
 
-        while True:
+        if _operation_mode == 1:
+            # Mode 1a/1b only touches the first node — skip the summary/confirm loop
+            global _initial_node_count
+            _initial_node_count = 1
+            if other_sps:
+                ignored_list = ", ".join(other_sps)
+                print(f"\n  ℹ️  Secondary nodes [{ignored_list}] ignored")
+            _session_log.log(f"Mode 1 — initial node count set to 1; peers ignored: {other_sps}")
+        else:
+          while True:
             _print_banner("📋 Cluster node summary")
             print(f"  BMC of first node in the cluster : {sp_host} (user={sp_user})")
             if other_sps:
-                if _operation_mode == 1:
-                    print(f"  Peer nodes (ignored by 1b — use mode 3 to add them) ({len(other_sps)}):")
-                else:
-                    print(f"  Nodes to add after cluster init  ({len(other_sps)}):")
+                print(f"  Nodes to add after cluster init  ({len(other_sps)}):")
                 for a in other_sps:
                     print(f"    - {a}")
             else:
                 print("  Nodes to add after cluster init  : (none)")
             print(f"  Total nodes                      : {1 + len(other_sps)}")
-            if _operation_mode == 1 and other_sps:
-                print("\n  ℹ️   Mode 1b only initialises the first node.")
-                print("     Peer nodes listed above will NOT be reset or touched.")
             ans = _prompt("\n  Is this the correct number of nodes? [Y/N]: ", "y").lower()
             _session_log.log_user_input(f"Confirm node count ({1 + len(other_sps)}): {ans}")
             if ans in ("", "y", "yes"):
-                global _initial_node_count
                 _initial_node_count = 1 + len(other_sps)
                 _session_log.log(f"Initial node count confirmed: {_initial_node_count}")
                 break
