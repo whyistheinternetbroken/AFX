@@ -5213,19 +5213,69 @@ def _resolve_cluster_mgmt_from_retained():
     return _resolve_mgmt_lif_from_retained("cluster")
 
 
+_NTP_PRESETS = [
+    "time.nist.gov",
+    "pool.ntp.org",
+    "time.google.com",
+    "time.aws.com",
+    "time.apple.com",
+]
+
 def _prompt_ntp_servers(start_index=1):
-    """Prompt the operator for up to 4 NTP server entries (starting at
-    *start_index*). Returns a list of entered server strings (may be empty).
-    An empty entry ends input early.
+    """Interactive NTP server picker.
+
+    Displays a numbered list of common NTP servers plus 'Add all' and
+    'Add custom' options.  The operator may enter one or more numbers
+    separated by commas (e.g. ``1,3``).  Blank input exits with no servers
+    selected.  Returns a deduplicated list of server strings.
     """
-    _entries = []
-    _max = start_index + (4 - start_index)   # never exceed index 4
-    for _i in range(start_index, 5):
-        _val = _prompt(f"  NTP server {_i} (Enter to finish): ").strip()
-        if not _val:
-            break
-        _entries.append(_val)
-    return _entries
+    print("")
+    print("  Select NTP server(s) to add (comma-separated numbers, blank to skip):")
+    for _idx, _srv in enumerate(_NTP_PRESETS, start=1):
+        print(f"    {_idx}. {_srv}")
+    print(f"    {len(_NTP_PRESETS) + 1}. Add all")
+    print(f"    {len(_NTP_PRESETS) + 2}. Add custom")
+    print("")
+
+    _ALL_IDX    = len(_NTP_PRESETS) + 1
+    _CUSTOM_IDX = len(_NTP_PRESETS) + 2
+
+    _raw = _prompt("  Choice(s): ").strip()
+    if not _raw:
+        return []
+
+    _selected = []
+    _seen = set()
+
+    def _add(srv):
+        if srv not in _seen:
+            _seen.add(srv)
+            _selected.append(srv)
+
+    for _tok in _raw.split(","):
+        _tok = _tok.strip()
+        if not _tok:
+            continue
+        try:
+            _n = int(_tok)
+        except ValueError:
+            print(f"  \u26a0\ufe0f  Ignoring unrecognised entry: {_tok!r}")
+            continue
+        if 1 <= _n <= len(_NTP_PRESETS):
+            _add(_NTP_PRESETS[_n - 1])
+        elif _n == _ALL_IDX:
+            for _srv in _NTP_PRESETS:
+                _add(_srv)
+        elif _n == _CUSTOM_IDX:
+            while True:
+                _custom = _prompt("  Custom NTP server (blank to finish): ").strip()
+                if not _custom:
+                    break
+                _add(_custom)
+        else:
+            print(f"  \u26a0\ufe0f  Ignoring out-of-range number: {_n}")
+
+    return _selected
 
 
 def apply_retained_to_cluster_config():
@@ -5261,31 +5311,11 @@ def apply_retained_to_cluster_config():
     if _retained_ntp_servers:
         _fill("ntp_servers", ",".join(_retained_ntp_servers))
     elif not cluster_block.get("ntp_servers"):
-        # No NTP servers found on cluster and none in config.
+        # No NTP servers found on cluster and none in config — offer picker.
         print(
             "\n  ⚠️  No NTP server configuration found on the existing cluster."
         )
-        _ans = _prompt(
-            "     Add 'pool.ntp.org' as the NTP server in the config? [Y/n]: "
-        ).strip().lower()
-        _ntp_list = []
-        if _ans in ("", "y", "yes"):
-            _ntp_list.append("pool.ntp.org")
-            if _session_log:
-                _session_log.log("No NTP found; user added pool.ntp.org to config")
-            _more = _prompt(
-                "     Would you like to specify additional NTP servers? [y/N]: "
-            ).strip().lower()
-            if _more in ("y", "yes"):
-                _ntp_list.extend(_prompt_ntp_servers(start_index=2))
-        else:
-            if _session_log:
-                _session_log.log("No NTP found; user declined pool.ntp.org")
-            _more = _prompt(
-                "     Would you like to specify NTP servers? [y/N]: "
-            ).strip().lower()
-            if _more in ("y", "yes"):
-                _ntp_list.extend(_prompt_ntp_servers(start_index=1))
+        _ntp_list = _prompt_ntp_servers()
         if _ntp_list:
             cluster_block["ntp_servers"] = ",".join(_ntp_list)
             fills.append("ntp_servers")
@@ -5978,11 +6008,11 @@ def collect_cluster_config():
         print(f"  📄 NTP servers (from config): {ntp_servers_raw}")
         ntp_servers = ntp_servers_raw
     else:
-        print("\n  ℹ️   NTP servers (optional, up to 4). Press Enter to skip.")
-        _ntp_entries = _prompt_ntp_servers(start_index=1)
+        print("\n  ℹ️   NTP servers (optional). Select from the list or add custom.")
+        _ntp_entries = _prompt_ntp_servers()
         ntp_servers = ",".join(_ntp_entries) if _ntp_entries else None
         if ntp_servers:
-            print(f"  ✅ NTP servers configured: {ntp_servers}")
+            print(f"  \u2705 NTP servers configured: {ntp_servers}")
 
     location = _from_cfg_or_prompt(
         "location", "Controller location", None)
