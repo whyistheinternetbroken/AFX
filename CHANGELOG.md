@@ -160,9 +160,9 @@ revision labels rather than strict [SemVer](https://semver.org/).
   (after `set-defaults`, before `saveenv`) on **all nodes** (primary and
   all peers).
   - At startup (or during 4b upfront config) the script looks for a
-    `bootargs.json` file next to `AFX_reinit.py`. The file must be a
-    JSON array of strings, each formatted as `"bootarg.name value"`.
-    If the file is not found the operator is prompted interactively.
+    `bootargs.txt` or `bootargs` file next to `AFX_reinit.py`. Each
+    non-blank, non-comment line must be formatted as `"bootarg.name value"`.
+    If no file is found the operator is prompted interactively.
   - Each entry is validated: must be exactly two whitespace-separated
     tokens with the first starting with `bootarg.`; must **not** include
     the `setenv` prefix. Invalid entries warn and offer to exit to fix.

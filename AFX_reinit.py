@@ -3643,10 +3643,10 @@ def parse_args():
                              "deactivate) runs regardless of this flag.")
     parser.add_argument("--diag", action="store_true", default=False,
                         help="Enable diagnostic mode: load custom LOADER "
-                             "bootargs from a 'bootargs.json' file (a JSON "
-                             "array of strings, each formatted as "
-                             "'bootarg.name.variable value') next to this "
-                             "script, or prompt for bootargs interactively. "
+                             "bootargs from a 'bootargs.txt' or 'bootargs' "
+                             "file next to this script (one "
+                             "'bootarg.name.variable value' entry per line), "
+                             "or prompt for bootargs interactively. "
                              "Bootargs are injected with 'setenv' after "
                              "'set-defaults' and before 'saveenv' in the "
                              "LOADER stage.")
@@ -6268,11 +6268,11 @@ _BOOTARG_LINE_RE = _re.compile(r'^(bootarg\.\S+)\s+(\S+)$')
 def _load_diag_bootargs():
     """Load and validate diagnostic LOADER bootargs.
 
-    Looks for a ``bootargs.json`` file next to this script.  If found the file
-    must be a JSON array of strings, each formatted as
+    Looks for a ``bootargs.txt`` or ``bootargs`` file next to this script.
+    Each non-blank, non-comment line must be formatted as
     ``"bootarg.name.variable value"``.
 
-    If the file is not found the operator is prompted to enter bootargs
+    If no file is found the operator is prompted to enter bootargs
     interactively (one per line, blank line to finish).
 
     Each entry is validated:
@@ -6284,26 +6284,29 @@ def _load_diag_bootargs():
     and correct the file/input.  Valid entries are returned as a list of
     ``"bootarg.name value"`` strings.
     """
-    import json as _json
-
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    bootargs_path = os.path.join(script_dir, "bootargs.json")
+    bootargs_path = None
+    for candidate in ("bootargs.txt", "bootargs"):
+        p = os.path.join(script_dir, candidate)
+        if os.path.isfile(p):
+            bootargs_path = p
+            break
 
     raw_entries = []
-    if os.path.isfile(bootargs_path):
-        print(f"\n  📄 Found bootargs.json at {bootargs_path}")
+    if bootargs_path:
+        fname = os.path.basename(bootargs_path)
+        print(f"\n  📄 Found {fname} at {bootargs_path}")
         try:
             with open(bootargs_path) as _f:
-                data = _json.load(_f)
-            if not isinstance(data, list):
-                print("  ❌ bootargs.json must contain a JSON array of strings. Exiting.")
-                sys.exit(1)
-            raw_entries = [str(e) for e in data]
+                for line in _f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        raw_entries.append(line)
         except Exception as e:
-            print(f"  ❌ Failed to parse bootargs.json: {e}")
+            print(f"  ❌ Failed to read {fname}: {e}")
             sys.exit(1)
     else:
-        print("\n  ℹ️  No bootargs.json found. Enter bootargs interactively.")
+        print("\n  ℹ️  No bootargs.txt / bootargs file found. Enter bootargs interactively.")
         print("     Format: bootarg.name.variable <value>   (do NOT include 'setenv')")
         print("     Press Enter on a blank line when done.")
         while True:
