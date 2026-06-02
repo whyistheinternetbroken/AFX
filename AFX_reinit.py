@@ -14801,6 +14801,19 @@ def main():
             _operation_mode = _shortcut_mode
             _auto_setup = _shortcut_auto_setup
             _auto_add = _shortcut_auto_add
+            # Modes that reinit the primary node (1, 3) need the same up-front
+            # prompts that select_operation_mode() normally handles.
+            if _operation_mode in (1, 3):
+                print("  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
+                try:
+                    _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    _pz_ans = ""
+                _physical_zeroing = (_pz_ans == "y")
+                if _physical_zeroing:
+                    print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+            if _diag_mode and _operation_mode in (1, 3):
+                _diag_bootargs = _load_diag_bootargs()
         else:
             _operation_mode, _auto_setup, _auto_add = select_operation_mode()
     else:
