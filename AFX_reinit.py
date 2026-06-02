@@ -6268,7 +6268,8 @@ _BOOTARG_LINE_RE = _re.compile(r'^(bootarg\.\S+)\s+(\S+)$')
 def _load_diag_bootargs():
     """Load and validate diagnostic LOADER bootargs.
 
-    Looks for a ``bootargs.txt`` or ``bootargs`` file next to this script.
+    Looks for a ``bootargs.txt`` or ``bootargs`` file in the ``configs/``
+    subdirectory next to this script, then falls back to the script directory.
     Each non-blank, non-comment line must be formatted as
     ``"bootarg.name.variable value"``.
 
@@ -6285,11 +6286,15 @@ def _load_diag_bootargs():
     ``"bootarg.name value"`` strings.
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    configs_dir = os.path.join(script_dir, "configs")
     bootargs_path = None
-    for candidate in ("bootargs.txt", "bootargs"):
-        p = os.path.join(script_dir, candidate)
-        if os.path.isfile(p):
-            bootargs_path = p
+    for search_dir in (configs_dir, script_dir):
+        for candidate in ("bootargs.txt", "bootargs"):
+            p = os.path.join(search_dir, candidate)
+            if os.path.isfile(p):
+                bootargs_path = p
+                break
+        if bootargs_path:
             break
 
     raw_entries = []
