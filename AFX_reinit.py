@@ -1926,13 +1926,6 @@ def select_operation_mode():
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the cluster reinit.")
-                print("  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
-                _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
-                _physical_zeroing = (_pz_ans == "y")
-                if _physical_zeroing:
-                    print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
-                if _diag_mode:
-                    _diag_bootargs = _load_diag_bootargs()
                 print("\n  ✅ Confirmed. 1a: Format first node (interactive)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
                 print("     → Boot menu: option 9 (Initialize); then interactive\n")
@@ -1966,13 +1959,6 @@ def select_operation_mode():
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the cluster reinit.")
-                print("  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
-                _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
-                _physical_zeroing = (_pz_ans == "y")
-                if _physical_zeroing:
-                    print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
-                if _diag_mode:
-                    _diag_bootargs = _load_diag_bootargs()
                 print("\n  ✅ Confirmed. 1b: Format first node + setup cluster (auto)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
                 print("     → Boot menu: option 9, then auto option 4 + auto setup\n")
@@ -2057,13 +2043,6 @@ def select_operation_mode():
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER on the primary node before cluster reinit.")
-                print("  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
-                _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
-                _physical_zeroing = (_pz_ans == "y")
-                if _physical_zeroing:
-                    print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
-                if _diag_mode:
-                    _diag_bootargs = _load_diag_bootargs()
                 print("\n  ✅ Confirmed. 3: End-to-end auto initialize\n")
                 return 3, True, True
             print("\n  ↩️  Returning to menu...\n")
@@ -14701,7 +14680,7 @@ def main():
     global _primary_bmc_user, _primary_bmc_password
     global _checkpoint, _run_context
     global _auto_clear_stale_bmc
-    global _diag_mode, _diag_bootargs
+    global _diag_mode, _diag_bootargs, _physical_zeroing
 
     args = parse_args()
 
@@ -14811,17 +14790,6 @@ def main():
             _auto_add = _shortcut_auto_add
             # Modes that reinit the primary node (1, 3) need the same up-front
             # prompts that select_operation_mode() normally handles.
-            if _operation_mode in (1, 3):
-                print("  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
-                try:
-                    _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    _pz_ans = ""
-                _physical_zeroing = (_pz_ans == "y")
-                if _physical_zeroing:
-                    print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
-            if _diag_mode and _operation_mode in (1, 3):
-                _diag_bootargs = _load_diag_bootargs()
         else:
             _operation_mode, _auto_setup, _auto_add = select_operation_mode()
     else:
@@ -17086,6 +17054,24 @@ def main():
     # still prevents re-joining nodes that already completed.
     if _operation_mode == 3 and _checkpoint is None:
         _option3_init_checkpoint(_run_context, sp_host, _peer_bmc_list, config_path)
+
+    # ── Pre-reinit prompts (modes 1 and 3 only) ───────────────────────────
+    # Asked here — right before the system reset — so the operator has
+    # already reviewed all node/cluster config and these feel like the
+    # final "ready to go?" questions.
+    if _operation_mode in (1, 3):
+        print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
+        try:
+            _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            _pz_ans = ""
+        _physical_zeroing = (_pz_ans == "y")
+        if _physical_zeroing:
+            print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+        _session_log.log(f"Physical zeroing: {_physical_zeroing}")
+        if _diag_mode:
+            _diag_bootargs = _load_diag_bootargs()
+            _session_log.log(f"Diag bootargs loaded: {_diag_bootargs}")
 
     # Phase: System Reset
     _session_log.start_phase("System Reset")
