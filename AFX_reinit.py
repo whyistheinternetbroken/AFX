@@ -11958,10 +11958,27 @@ def _run_cluster_setup_wizard(channel):
         add_peer_nodes_parallel(channel, _peer_bmc_list, cc.get("admin_password"))
         _option3_finalize(_run_context, cc.get("mgmt_ip"))
 
+    # Mode 1 (1a/1b) only initialises the first node — exit cleanly here.
+    if _operation_mode == 1:
+        mgmt_ip = cc.get("mgmt_ip") or "<cluster-management-ip>"
+        _print_banner("✅ Configuration complete.")
+        print(f"  To login to the cluster, SSH to {mgmt_ip} or use a web")
+        print(f"  browser to access https://{mgmt_ip}")
+        print("=" * 60)
+        if _session_log:
+            _session_log.log("Mode 1 complete; exiting (peer nodes not touched)")
+            _session_log.log(f"SSH to {mgmt_ip} or https://{mgmt_ip}")
+            _session_log.set_outcome("PASS", "cluster setup complete (mode 1)")
+            try:
+                _session_log.close()
+            except Exception:
+                pass
+        sys.exit(0)
+
     # Ask the operator whether to continue (e.g. into interactive add-node
     # flow) or stop the script with a friendly summary.
-    # For automated modes (1b, 2b, 3) answer yes automatically.
-    if _auto_setup or _auto_add or _operation_mode == 3:
+    # For automated modes (2b, 3) answer yes automatically.
+    if _auto_add or _operation_mode == 3:
         ans = "y"
         print("\n✅ Cluster creation complete. Continuing to add nodes... [auto-answered]")
         _slog("Continue to add nodes? y [auto-answered for automated mode]")
@@ -12009,13 +12026,13 @@ def _run_cluster_setup_wizard(channel):
             try:
                 print("  " + "─" * 58)
                 node_choice = input(
-                    "  Enter sub-option (2a / 2b) or blank to skip: "
+                    "  Enter sub-option (2a / 2b) or blank to end session: "
                 ).strip().lower()
             except (EOFError, KeyboardInterrupt):
                 node_choice = ""
             if node_choice == "":
-                print("\n  Skipping node add.")
-                _slog("User skipped node add after cluster creation")
+                print("\n  Ending session.")
+                _slog("User chose not to add nodes; ending session")
                 return
             if node_choice in ("2a", "2b"):
                 break
