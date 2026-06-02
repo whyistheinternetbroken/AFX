@@ -8156,18 +8156,21 @@ def _peer_reinit_worker(ip, ctx):
     ``ctx`` is a dict produced by ``_run_4b_standalone`` containing the
     per-run state that each thread needs:
       loader_channels, loader_clients, bmc_user, bmc_passwords,
-      log, peer_errors, peer_lock, menu_sigs_lower, status.
+      admin_password, log, peer_errors, peer_lock, menu_sigs_lower, status,
+      cluster_ips_out.
     """
-    loader_channels  = ctx["loader_channels"]
-    loader_clients   = ctx["loader_clients"]
-    bmc_user         = ctx["bmc_user"]
-    bmc_passwords    = ctx["bmc_passwords"]
-    log              = ctx["log"]
-    peer_errors      = ctx["peer_errors"]
-    peer_lock        = ctx["peer_lock"]
-    menu_sigs_lower  = ctx["menu_sigs_lower"]
-    _status          = ctx["status"]
+    loader_channels   = ctx["loader_channels"]
+    loader_clients    = ctx["loader_clients"]
+    bmc_user          = ctx["bmc_user"]
+    bmc_passwords     = ctx["bmc_passwords"]
+    admin_password    = ctx.get("admin_password") or ""
+    log               = ctx["log"]
+    peer_errors       = ctx["peer_errors"]
+    peer_lock         = ctx["peer_lock"]
+    menu_sigs_lower   = ctx["menu_sigs_lower"]
+    _status           = ctx["status"]
     _node_reinit_logs = ctx.get("node_reinit_logs") or {}
+    cluster_ips_out   = ctx.get("cluster_ips_out")
 
     peer_ch = loader_channels.get(ip)
     peer_cl = loader_clients.get(ip)
@@ -8179,8 +8182,7 @@ def _peer_reinit_worker(ip, ctx):
     _pnf = _node_reinit_logs.get(ip)
 
     # Redirect stdout for this thread to the per-node log writer so
-    # all wizard/auto_complete_join output goes to the file and only
-    # milestone lines (✅/⚠️ etc.) reach the terminal.
+    # all output goes to the file and only milestone lines reach the terminal.
     _peer_nlw = _NodeLogWriter(_pnf, interactive=False) if _pnf else None
     _prev_stdout = sys.stdout
     if _peer_nlw:
@@ -8209,25 +8211,40 @@ def _peer_reinit_worker(ip, ctx):
                 if len(_buf_lower) > 16384:
                     _buf_lower = _buf_lower[-8192:]
             time.sleep(0.1)
-        if _found:
-            time.sleep(1)
-            _status(f"  ✅ [{ip}] Boot menu detected – selecting option 4...")
-            if log:
-                log.log(f"[{ip}] boot menu detected – sending option 4")
-            if _pnf:
-                _par_write(_pnf, "\n>>> sending option 4\n")
-            peer_ch.send("4\r")
-            time.sleep(2)
-            auto_complete_join(
-                peer_ch, peer_cl, ip,
-                bmc_user, bmc_passwords.get(ip, ""),
-                bmc_host=ip,
-                no_add_another=True,
-            )
-        else:
+
+        if not _found:
             _status(f"  ⚠️  [{ip}] Boot menu not detected for peer.")
             with peer_lock:
                 peer_errors.append((ip, "boot menu timeout"))
+            return
+
+        time.sleep(1)
+        _status(f"  ✅ [{ip}] Boot menu detected – selecting option 4...")
+        if log:
+            log.log(f"[{ip}] boot menu detected – sending option 4")
+        if _pnf:
+            _par_write(_pnf, "\n>>> sending option 4\n")
+        peer_ch.send("4\r")
+        time.sleep(2)
+
+        # Auto-answer disk-erase and node-mgmt prompts (same as mode 2b).
+        _auto_answer_disk_erase_prompts(peer_ch, node_log=_pnf, label=ip,
+                                        is_node_add=True)
+        cfg = _resolve_node_mgmt_config(ip)
+        _auto_answer_node_mgmt(peer_ch, cfg, node_log=_pnf)
+
+        # Abort the cluster wizard with Ctrl+C, log in as admin, and
+        # capture the node's cluster interface IP.
+        _cluster_ip = _abort_wizard_get_cluster_ip(
+            peer_ch, ip, admin_password, cluster_ips_out, ip, node_log=_pnf)
+
+        if _cluster_ip is None:
+            _status(f"  ⚠️  [{ip}] Could not capture cluster IP; "
+                    "node will not be added via cluster add-node.")
+            with peer_lock:
+                peer_errors.append((ip, "cluster IP capture failed"))
+        else:
+            _status(f"  ✅ [{ip}] Ready for cluster add-node (IP: {_cluster_ip}).")
     finally:
         # Restore stdout; log file is closed after all workers finish.
         sys.stdout = _prev_stdout
@@ -10122,6 +10139,7 @@ def _run_4b_standalone(log, resuming: bool = False):
 
         _peer_errors = []
         _peer_lock = threading.Lock()
+        _4b_cluster_ips_out = {}  # peer_bmc -> cluster interface IP
         _menu_sigs_lower = [
             "selection (1-", "(1-9)?", "(1-11)?", "(1-12)?",
             # Shown after netboot install when boot device has changed:
@@ -10129,17 +10147,27 @@ def _run_4b_standalone(log, resuming: bool = False):
             "normal boot is prohibited",
         ]
 
+        # admin_password for logging into nodes after wizard abort
+        _4b_admin_pw = (
+            _cluster_config.get("admin_password")
+            or ((_config_data.get("cluster") or {}).get("password")
+                if isinstance(_config_data, dict) else None)
+            or ""
+        )
+
         _peer_ctx = {
             "loader_channels":  loader_channels,
             "loader_clients":   loader_clients,
             "bmc_user":         bmc_user,
             "bmc_passwords":    bmc_passwords,
+            "admin_password":   _4b_admin_pw,
             "log":              log,
             "peer_errors":      _peer_errors,
             "peer_lock":        _peer_lock,
             "menu_sigs_lower":  _menu_sigs_lower,
             "status":           _status,
             "node_reinit_logs": _node_reinit_logs,
+            "cluster_ips_out":  _4b_cluster_ips_out,
         }
 
         # Write node-add manifest so option 2c can resume if interrupted.
@@ -10173,6 +10201,55 @@ def _run_4b_standalone(log, resuming: bool = False):
 
         if _peer_errors:
             print(f"  ⚠️  Peer reinit issues: {_peer_errors}")
+
+        # ── Bulk cluster add via the primary node's cluster shell ──────────
+        _4b_collected_ips = [_4b_cluster_ips_out[ip] for ip in _peers_for_reinit
+                             if ip in _4b_cluster_ips_out]
+        if _4b_collected_ips:
+            # Connect to the cluster mgmt IP (or fall back to first_ch).
+            _4b_pch = None
+            _4b_pcl = None
+            _4b_mgmt_ip = _cluster_config.get("mgmt_ip")
+            _4b_admin_user = (
+                _cluster_config.get("admin_user")
+                or ((_config_data.get("cluster") or {}).get("user")
+                    if isinstance(_config_data, dict) else None)
+                or "admin"
+            )
+            if _4b_mgmt_ip:
+                try:
+                    _4b_pcl, _4b_admin_user, _4b_admin_pw = _ssh_connect_with_retry(
+                        _4b_mgmt_ip, _4b_admin_user, _4b_admin_pw,
+                        label=f"cluster/{_4b_mgmt_ip}", max_attempts=1,
+                        interactive=False,
+                    )
+                    _4b_pch = _open_shell(_4b_pcl)
+                    if not _login_primary_cluster_shell(_4b_pch, _4b_admin_pw):
+                        _4b_pch = None
+                except Exception as _4b_e:
+                    _status(f"  ⚠️  Could not connect to cluster mgmt: {_4b_e}")
+                    _4b_pch = None
+
+            if _4b_pch:
+                _cluster_add_nodes_bulk(_4b_pch, _4b_collected_ips, log=log)
+                try:
+                    _4b_pch.close()
+                except Exception:
+                    pass
+                try:
+                    _4b_pcl.close()
+                except Exception:
+                    pass
+            else:
+                _status("  ⚠️  No cluster shell available; skipping cluster add-node.")
+                if log:
+                    log.log("4b mode 3: cluster shell unavailable; skipping cluster add-node",
+                            prefix="WARN")
+        else:
+            _status("  ⚠️  No cluster IPs collected from peers; skipping cluster add-node.")
+            if log:
+                log.log("4b mode 3: no cluster IPs; skipping cluster add-node",
+                        prefix="WARN")
 
     # Close all unified per-node reinit log files now that all workers are done.
     for _ip, _nf in _node_reinit_logs.items():
@@ -12425,6 +12502,145 @@ def _login_primary_cluster_shell(channel, admin_password):
     return bool(matched and ("::>" in matched or "::*>" in matched))
 
 
+def _abort_wizard_get_cluster_ip(ch, label, admin_password,
+                                  cluster_ips_out, peer_bmc, node_log=None):
+    """Abort the ONTAP cluster setup wizard with Ctrl+C, log in as admin,
+    run ``net int show -role cluster -fields address``, and store the first
+    cluster interface IP found in ``cluster_ips_out[peer_bmc]``.
+
+    Returns the cluster IP string, or None on failure.
+    """
+    print(f"\n🛑 [{label}] Aborting cluster wizard (Ctrl+C)...")
+    _slog(f"[{label}] sending Ctrl+C to abort cluster wizard")
+    for _ in range(5):
+        ch.send("\x03")
+        time.sleep(0.3)
+    ch.send("\r")
+    time.sleep(0.5)
+
+    _out, _matched = direct_read_until_any(
+        ch, ["login:", "::>", "::*>"], timeout=180, node_log=node_log)
+
+    if not _matched:
+        print(f"   ⚠️  [{label}] No login: or ::> seen after Ctrl+C; aborting.")
+        _slog(f"[{label}] no login/shell after Ctrl+C", prefix="WARN")
+        return None
+
+    if "::>" not in _matched and "::*>" not in _matched:
+        print(f"\n⏳ [{label}] Logging in as admin...")
+        ch.send("admin\r")
+        _pw_out, _pw_matched = direct_read_until_any(
+            ch, ["password:", "::>", "::*>"], timeout=30, node_log=node_log)
+        if _pw_matched and "password:" in _pw_matched.lower():
+            ch.send((admin_password or "") + "\r")
+            _shell_out, _shell_matched = direct_read_until_any(
+                ch, ["::>", "::*>", "login:"], timeout=60, node_log=node_log)
+            if not (_shell_matched and ("::>" in _shell_matched or "::*>" in _shell_matched)):
+                print(f"   ⚠️  [{label}] Could not reach ::> after login; aborting.")
+                _slog(f"[{label}] no ::> after admin login", prefix="WARN")
+                return None
+
+    print(f"\n📡 [{label}] Capturing cluster interface IP...")
+    _slog(f"[{label}] running net int show -role cluster -fields address")
+    ch.send("net int show -role cluster -fields address\r")
+    time.sleep(1)
+    _netint_buf = ""
+    _s = time.monotonic()
+    while time.monotonic() - _s < 30:
+        if ch.recv_ready():
+            chunk = ch.recv(4096).decode("utf-8", errors="replace")
+            if node_log:
+                _par_write(node_log, chunk)
+            _netint_buf += chunk
+            if "::>" in _netint_buf or "::*>" in _netint_buf:
+                break
+        time.sleep(0.2)
+
+    _cluster_ip = None
+    for _line in _netint_buf.splitlines():
+        _m = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b', _line)
+        if _m:
+            _cluster_ip = _m.group(1)
+            break
+
+    if _cluster_ip:
+        print(f"\n✅ [{label}] Cluster interface IP: {_cluster_ip}")
+        _slog(f"[{label}] cluster IP: {_cluster_ip}")
+        if cluster_ips_out is not None:
+            cluster_ips_out[peer_bmc] = _cluster_ip
+    else:
+        print(f"\n⚠️  [{label}] Could not parse cluster IP from net int show output.")
+        _slog(f"[{label}] cluster IP parse failed", prefix="WARN")
+
+    return _cluster_ip
+
+
+def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None):
+    """Add multiple nodes in parallel via ONTAP's ``cluster add-node`` command.
+
+    Runs ``cluster add-node -cluster-ips IP1,IP2,...`` on the primary channel
+    then polls ``cluster add-node-status`` every 120 s for up to 15 minutes.
+    Returns True when all nodes report 'success', False on timeout.
+    """
+    if not cluster_ips:
+        return True
+
+    ips_str = ",".join(cluster_ips)
+    print(f"\n🔗 Running: cluster add-node -cluster-ips {ips_str}")
+    if log:
+        log.log(f"cluster add-node -cluster-ips {ips_str}")
+
+    with _primary_shell_lock:
+        _run_cluster_command(
+            primary_channel,
+            f"cluster add-node -cluster-ips {ips_str}",
+            timeout=60,
+        )
+
+    total_timeout = 900   # 15 minutes
+    poll_interval = 120   # 2 minutes
+    start = time.monotonic()
+
+    while time.monotonic() - start < total_timeout:
+        time.sleep(poll_interval)
+        with _primary_shell_lock:
+            status_out = _run_cluster_command(
+                primary_channel, "cluster add-node-status", timeout=30)
+
+        print(f"\n📊 cluster add-node-status:\n{status_out}")
+        if log:
+            log.log(f"cluster add-node-status:\n{status_out}")
+
+        in_table = False
+        status_rows = []
+        for _sl in status_out.splitlines():
+            stripped = _sl.strip()
+            if not stripped:
+                continue
+            if set(stripped) <= {'-', ' '}:
+                in_table = True
+                continue
+            if in_table and '::' not in stripped:
+                status_rows.append(stripped.lower())
+
+        if status_rows and all('success' in row for row in status_rows):
+            print(f"\n✅ All {len(cluster_ips)} node(s) added successfully.")
+            if log:
+                log.log(f"cluster add-node: {len(cluster_ips)} node(s) all success")
+            return True
+
+        elapsed = int(time.monotonic() - start)
+        remaining = max(0, total_timeout - elapsed)
+        print(f"\n⏳ Waiting for all nodes to report success "
+              f"({elapsed}s elapsed, up to {remaining}s remaining)...")
+
+    print(f"\n⚠️  cluster add-node-status did not show success for all "
+          f"{len(cluster_ips)} node(s) within 15 minutes.")
+    if log:
+        log.log("cluster add-node: timeout waiting for success status", prefix="WARN")
+    return False
+
+
 def _cluster_show_node_count(channel):
     """Run `cluster show` on the primary's cluster shell and return the
     number of node rows. Returns -1 on parse failure.
@@ -12683,39 +12899,35 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
 
 
 def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
-                          admin_password, expected_count_after,
+                          admin_password, expected_count_after=0,
                           join_barrier=None, join_proceed_events=None,
                           join_index=0, final_cluster_count=0,
                           timings_record=None, barrier_release_box=None,
                           timings_lock=None, first_join_sent_box=None,
-                          broker=None):
+                          broker=None, cluster_ips_out=None):
     """Run a full add-node automation against a single peer BMC.
 
-    All peer threads run LOADER/format in parallel. When each thread
-    finishes setup it waits at `join_barrier` until every node is ready,
-    then joins in `peer_bmcs` list order (index 0 first) via the
-    `join_proceed_events` chain.
+    Each thread runs LOADER → option 4 → disk erase → node-mgmt in parallel.
+    After node-mgmt is complete the cluster wizard is aborted (Ctrl+C) and the
+    thread logs in as admin, captures the node's cluster interface IP via
+    ``net int show``, and stores it in ``cluster_ips_out[peer_bmc]``.  The
+    caller is responsible for then running ``cluster add-node`` with all
+    collected IPs.
 
-    If ``timings_record`` is provided, this thread records its split
-    timing (option-4/format prep vs. node-join wall time) into
+    ``join_barrier``, ``join_proceed_events``, and related parameters are
+    accepted for backward compatibility but are no longer used.
+
+    If ``timings_record`` is provided, this thread records its timing into
     ``timings_record[peer_bmc]`` under ``timings_lock`` so the caller
-    can render a per-node breakdown in the session summary. The first
-    thread to clear ``join_barrier`` also stamps ``barrier_release_box[0]``
-    with the shared barrier-release timestamp. The first thread to send
-    "join" stamps ``first_join_sent_box[0]`` so the caller can compute
-    the wall-clock time from the first cluster-join send to the last
-    node's health confirmation.
+    can render a per-node breakdown in the session summary.
     """
     label = f"peer/{peer_bmc}"
     print(f"\n🧵 [{label}] Starting peer auto-add thread...")
     if _session_log:
-        _session_log.log(f"[{label}] thread starting (expected count after = "
-                         f"{expected_count_after})")
+        _session_log.log(f"[{label}] thread starting")
 
-    # Per-thread timing anchors. Using monotonic so the deltas are not
-    # affected by wall-clock adjustments.
+    # Per-thread timing anchor.
     _t_thread_start = time.monotonic()
-    _t_barrier_pass = None
 
     # Open per-node log file.
     _nf_log_dir = (_session_log.log_dir
@@ -12731,7 +12943,6 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
 
     client = None
     ch = None
-    _passed_barrier = False
     try:
         try:
             client, peer_user, peer_password = _ssh_connect_with_retry(
@@ -12864,31 +13075,16 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         cfg = _resolve_node_mgmt_config(peer_bmc)
         _mgmt_residual = _auto_answer_node_mgmt(ch, cfg, node_log=node_file) or ""
 
-        # Press Enter at "press Enter to complete cluster setup".
-        # The prompt may already be in the residual buffer from the last
-        # management-prompt recheck window; if so send Enter immediately
-        # rather than waiting for data that won't arrive.
-        if "press enter to complete cluster setup" in _mgmt_residual.lower():
-            print(f"\n✅ [{label}] 'Press Enter' prompt already received – sending Enter")
-            _slog(f"[{label}] 'Press Enter' prompt was in residual buffer; sent Enter")
-            ch.send("\r")
-            time.sleep(0.5)
-        else:
-            _wait_and_send(ch, "press enter to complete cluster setup", "",
-                           f"[{label}] Press Enter to complete cluster setup",
-                           timeout=1800, node_log=node_file)
+        # ── Abort cluster wizard, log in, and capture cluster IP ──────────────
+        # After node-mgmt is applied, Ctrl+C out of the cluster wizard,
+        # log in as admin, and read the node's cluster interface IP.
+        # The caller collects all IPs and runs cluster add-node in bulk.
+        _cluster_ip = _abort_wizard_get_cluster_ip(
+            ch, label, admin_password, cluster_ips_out, peer_bmc,
+            node_log=node_file,
+        )
 
-        # ── All-ready barrier ───────────────────────────────────────────────
-        # Block here until every peer thread has finished LOADER/format and
-        # reached this point. This guarantees that the join order is the same
-        # as the peer_bmcs list, not arbitrary lock-acquisition order.
-        print(f"\n⏳ [{label}] Format complete – waiting for all nodes to reach the join phase...")
-        _slog(f"[{label}] reached join phase (index {join_index}); waiting at barrier")
-
-        # Checkpoint: this peer has cleared boot-menu option 4 and the
-        # disk/format work is done; it is now waiting at the join
-        # barrier. On resume we know the option-4/format step does not
-        # need to be repeated for this peer.
+        # Checkpoint: option-4 and node-mgmt prep done for this peer.
         if _checkpoint:
             try:
                 _checkpoint.mark_node_done("peer_option4_done", peer_bmc)
@@ -12896,206 +13092,16 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             except Exception:
                 pass
 
-        if join_barrier is not None:
-            try:
-                join_barrier.wait(timeout=1800)
-                _passed_barrier = True
-            except threading.BrokenBarrierError:
-                print(f"   ❌ [{label}] Join barrier broken (a peer likely failed); aborting.")
-                _slog(f"[{label}] join barrier broken", prefix="ERROR")
-                return False
-        # Record the exact moment this thread cleared the barrier; the first
-        # thread to set this also fixes the shared barrier-release timestamp
-        # used by the caller to split the option-4 phase from the join phase.
-        _t_barrier_pass = time.monotonic()
-        if barrier_release_box is not None:
-            try:
-                if timings_lock is not None:
-                    with timings_lock:
-                        if barrier_release_box[0] is None:
-                            barrier_release_box[0] = _t_barrier_pass
-                else:
-                    if barrier_release_box[0] is None:
-                        barrier_release_box[0] = _t_barrier_pass
-            except Exception:
-                pass
-        print(f"\n✅ [{label}] All nodes ready. Joining in list order (position {join_index + 1})...")
-
-        # ── Ordered join ─────────────────────────────────────────────────────
-        # Index 0 may proceed immediately after the barrier (its event is
-        # pre-set by the caller). Each subsequent node waits for the previous
-        # one to finish before sending 'join'.
-        if join_proceed_events is not None and join_index < len(join_proceed_events):
-            if join_index > 0:
-                print(f"\n⏳ [{label}] Waiting for node {join_index} to finish joining first...")
-                _slog(f"[{label}] waiting for join_proceed_events[{join_index}]")
-                join_proceed_events[join_index].wait(timeout=1800)
-
-        print(f"\n🔗 [{label}] Join turn {join_index + 1}: sending 'join'...")
-        _slog(f"[{label}] join turn {join_index + 1}: proceeding")
-        # Stamp the moment this peer is about to send "join". The first
-        # peer to reach this point also fixes the shared "first join sent"
-        # timestamp used by the caller to compute join→all-healthy wall time.
-        _t_join_sent = time.monotonic()
-        if first_join_sent_box is not None:
-            try:
-                if timings_lock is not None:
-                    with timings_lock:
-                        if first_join_sent_box[0] is None:
-                            first_join_sent_box[0] = _t_join_sent
-                else:
-                    if first_join_sent_box[0] is None:
-                        first_join_sent_box[0] = _t_join_sent
-            except Exception:
-                pass
-        _wait_and_send(ch, "do you want to create a new cluster or join",
-                       "join", f"[{label}] -> join", timeout=900,
-                       node_log=node_file)
-
-        # ---- Post-join prompts on the peer's own channel. The cluster
-        # show polling that follows runs against the *primary* channel
-        # and won't ever see 2 nodes unless we keep driving the peer
-        # through the rest of its join wizard.
-        #
-        #   1. "use this configuration? [yes]:"
-        #   2. "enter the IP address of an interface on the private
-        #       cluster network..."
-        #   3. "username:"
-        #   4. "password:"
-        #
-        # We use the existing cluster admin credentials (admin_password
-        # arg + sp_user/peer_user) for steps 3-4, which mirrors the
-        # mode-2b flow.
-        print(f"\n🤖 [{label}] Driving post-join wizard on peer channel...")
-        _slog(f"[{label}] driving post-join wizard")
-
-        # 1. Confirm "use this configuration?"
-        if broker is not None:
-            print(f"\n⏳ [{label}] Waiting for 'use this configuration?' prompt...")
-            _slog(f"[{label}] waiting for use-this-configuration prompt")
-            _cfg_out, _cfg_matched = direct_read_until_any(
-                ch, ["[yes]:", "login:"], timeout=900, node_log=node_file)
-            if _cfg_matched and "[yes]:" in _cfg_matched.lower():
-                _cfg_ans = broker.ask(label, "Use this configuration?", default="yes")
-                ch.send(_cfg_ans + "\r")
-                if _session_log:
-                    _session_log.log_sent(f"<broker> {_cfg_ans}")
-                time.sleep(0.5)
-        else:
-            print(f"\n⏳ [{label}] Auto-confirming 'use this configuration?'...")
-            direct_send_and_wait(ch, "", "[yes]:",
-                                 timeout=900, auto_respond="yes",
-                                 node_log=node_file)
-
-        # 2. Cluster-network IP. Reuse the same lookup helper mode 2b
-        # uses (silently tries cluster admin creds, then BMC creds).
-        print(f"\n📡 [{label}] Looking up cluster-network IP...")
-        cluster_iface_ip = _fetch_existing_cluster_ip(
-            bmc_user=peer_user, bmc_password=peer_password,
-        )
-        print(f"\n⏳ [{label}] Waiting for cluster-network IP prompt...")
-        direct_send_and_wait(
-            ch, "",
-            "enter the ip address of an interface on the private",
-            timeout=900,
-            node_log=node_file,
-        )
-        if not cluster_iface_ip:
-            if broker is not None:
-                cluster_iface_ip = broker.ask(
-                    label, "Enter cluster-network IP address (private cluster interconnect)")
-            if not cluster_iface_ip:
-                print(f"\n⚠️  [{label}] No cluster-network IP available;"
-                      " peer will block on prompt.")
-                if _session_log:
-                    _session_log.log(
-                        f"[{label}] cluster-network IP unavailable; "
-                        "peer will be stuck at private-IP prompt",
-                        prefix="WARN",
-                    )
-        else:
-            print(f"\n✅ [{label}] Sending cluster-network IP: "
-                  f"{cluster_iface_ip}")
-            ch.send(cluster_iface_ip + "\r")
-            if _session_log:
-                _session_log.log_sent(cluster_iface_ip)
-            time.sleep(0.5)
-
-            # 3. Username — the cluster admin (defaults to "admin").
-            cluster_admin_user = (
-                _cluster_config.get("admin_user")
-                or (
-                    (_config_data.get("cluster") or {}).get("user")
-                    if isinstance(_config_data, dict) else None
-                )
-                or "admin"
-            )
-            print(f"\n⏳ [{label}] Waiting for username prompt...")
-            direct_send_and_wait(ch, "", "username", timeout=600,
-                                 node_log=node_file)
-            print(f"\n✅ [{label}] Sending username: {cluster_admin_user}")
-            ch.send(cluster_admin_user + "\r")
-            if _session_log:
-                _session_log.log_sent(cluster_admin_user)
-            time.sleep(0.5)
-
-            # 4. Password — cluster admin password.
-            print(f"\n⏳ [{label}] Waiting for password prompt...")
-            direct_send_and_wait(ch, "", "password", timeout=600,
-                                 node_log=node_file)
-            print(f"\n✅ [{label}] Sending cluster admin password (hidden).")
-            ch.send((admin_password or "") + "\r")
-            if _session_log:
-                _session_log.log(f"[{label}] sent cluster admin password "
-                                 "(<hidden>)")
-            time.sleep(0.5)
-
-        # Wait until cluster show confirms the new node count AND every
-        # row reports Health=true / Eligibility=true with no 'warning'
-        # text. 15-minute total timeout, polling every 5 min with operator
-        # notifications on each retry. On a 2-node cluster the poller
-        # will also auto-run `cluster ha modify -configured true` to
-        # clear the post-join HA warning.
-        print(f"\n⏳ [{label}] Waiting for cluster to show "
-              f"{expected_count_after} healthy node(s)...")
-        if _session_log:
-            _session_log.log(f"[{label}] waiting for cluster show count "
-                             f">= {expected_count_after} with all-true status")
-        ok = _wait_for_cluster_nodes_healthy(
-            primary_channel, expected_count_after,
-            total_timeout=900, poll_interval=300, label=label,
-            final_count=final_cluster_count if final_cluster_count else None,
-        )
-        # Stamp the moment cluster-show verification finished (regardless
-        # of ok/timeout). Used both per-node (join→healthy) and aggregate
-        # (first-join → last-healthy) in the session summary.
-        _t_healthy_done = time.monotonic()
-        if ok:
-            print(f"\n✅ [{label}] Node added (cluster show confirmed all healthy).")
-            _slog(f"[{label}] node added (verified, all-true)")
-        else:
-            print(f"\n⚠️  [{label}] Did not see {expected_count_after}"
-                  " healthy node(s) in cluster show within 15 minutes; continuing.")
-            if _session_log:
-                _session_log.log(f"[{label}] cluster show verification "
-                                 "timeout (10 min)", prefix="WARN")
-
-        # Signal the next node in the list that it is their turn to join.
-        if join_proceed_events is not None and join_index + 1 < len(join_proceed_events):
-            print(f"\n✅ [{label}] Signaling node {join_index + 2} to proceed with join...")
-            _slog(f"[{label}] setting join_proceed_events[{join_index + 1}]")
-            join_proceed_events[join_index + 1].set()
-
-        # Record per-node split timing for the session summary.
-        if timings_record is not None and _t_barrier_pass is not None:
+        # Record per-node timing for the session summary.
+        if timings_record is not None:
             _t_done = time.monotonic()
             _entry = {
-                "option4": _t_barrier_pass - _t_thread_start,
-                "join": _t_done - _t_barrier_pass,
-                "join_to_healthy": _t_healthy_done - _t_join_sent,
-                "healthy_done_mono": _t_healthy_done,
+                "option4": _t_done - _t_thread_start,
+                "join": 0.0,
+                "join_to_healthy": 0.0,
+                "healthy_done_mono": _t_done,
                 "node_name": (_node_cfg_for(peer_bmc) or {}).get("name") or "",
-                "ok": True,
+                "ok": _cluster_ip is not None,
             }
             try:
                 if timings_lock is not None:
@@ -13106,35 +13112,12 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             except Exception:
                 pass
 
-        # Checkpoint: this peer has joined the cluster.
-        if _checkpoint:
-            try:
-                _checkpoint.mark_node_done("peer_joined", peer_bmc)
-                _slog(f"[{label}] checkpoint: peer_joined saved")
-            except Exception:
-                pass
-
-        return True
+        return _cluster_ip is not None
     except Exception as e:
         print(f"   ❌ [{label}] Error: {e}")
         _slog(f"[{label}] thread error: {e}", prefix="ERROR")
         return False
     finally:
-        # If this thread is exiting for any reason (failure or success) without
-        # having reached the barrier or set its proceed-event, unblock the other
-        # threads immediately so they don't hang for up to 30 minutes waiting.
-        try:
-            if join_barrier is not None and not _passed_barrier:
-                join_barrier.abort()
-        except Exception:
-            pass
-        try:
-            if (join_proceed_events is not None
-                    and join_index + 1 < len(join_proceed_events)
-                    and not join_proceed_events[join_index + 1].is_set()):
-                join_proceed_events[join_index + 1].set()
-        except Exception:
-            pass
         try:
             if ch is not None:
                 ch.close()
@@ -13155,8 +13138,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
 
 def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     """Mode 2b with multiple nodes: reset all peers to LOADER in parallel,
-    run option 4 and auto-answer prompts for all in parallel, then
-    serialize the cluster join one node at a time (via _join_lock).
+    run option 4, disk erase, and node-mgmt for all in parallel, then use
+    ONTAP's ``cluster add-node`` to add all nodes at once.
 
     peer_bmcs    : ordered list of BMC IPs/hostnames
     bmc_user     : default BMC username (used when no per-IP override)
@@ -13425,15 +13408,11 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     if log:
         log.start_phase("2b – Parallel Node Add")
 
-    _final_2b = (baseline + len(peer_bmcs)) if primary_channel is not None else 0
-    _pending = list(peer_bmcs)  # nodes still to be successfully added
-    _joined_count = 0           # number that have successfully joined so far
+    _cluster_ips_out = {}   # peer_bmc -> cluster interface IP (populated by threads)
+    _pending = list(peer_bmcs)
 
     while _pending:
         _n = len(_pending)
-        _join_barrier = threading.Barrier(_n)
-        _join_proceed = [threading.Event() for _ in range(_n)]
-        _join_proceed[0].set()  # first node may proceed immediately after barrier
         _batch_results = [None] * _n
 
         threads = []
@@ -13443,14 +13422,10 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             p = _creds.get("password")
             if p is None:
                 p = bmc_passwords.get(addr, "")
-            # Each peer needs to see (baseline + already-joined + its own slot).
-            expected = (baseline + _joined_count + idx + 1
-                        if primary_channel is not None else 0)
-            def _run_with_result(_ri=idx, _addr=addr, _u=u, _p=p, _exp=expected):
+            def _run_with_result(_ri=idx, _addr=addr, _u=u, _p=p):
                 _batch_results[_ri] = _add_peer_node_thread(
-                    _addr, _u, _p, primary_channel, admin_password, _exp,
-                    _join_barrier, _join_proceed, _ri,
-                    final_cluster_count=_final_2b,
+                    _addr, _u, _p, primary_channel, admin_password,
+                    cluster_ips_out=_cluster_ips_out,
                 )
             t = threading.Thread(
                 target=_run_with_result,
@@ -13462,11 +13437,10 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             print(f"  ▶️  [{addr}] Thread started.")
 
         print(f"\n  ⏳ Waiting for {_n} node(s) to complete "
-              f"(parallel LOADER/format, serialized join)...")
+              f"(parallel LOADER/format/node-mgmt, then bulk cluster join)...")
         for t in threads:
             t.join()
 
-        _joined_count += sum(1 for r in _batch_results if r)
         _failed = [_pending[i] for i, r in enumerate(_batch_results) if not r]
 
         if not _failed:
@@ -13482,6 +13456,22 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         if log:
             log.log(f"2b: operator chose to retry: {_failed}")
         _pending = _failed
+
+    # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
+    if primary_channel and _cluster_ips_out:
+        _collected_ips = [_cluster_ips_out[ip] for ip in peer_bmcs
+                          if ip in _cluster_ips_out]
+        if _collected_ips:
+            _cluster_add_nodes_bulk(primary_channel, _collected_ips, log=log)
+        else:
+            print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
+            if log:
+                log.log("2b: no cluster IPs collected; skipping cluster add-node",
+                        prefix="WARN")
+    elif not primary_channel:
+        print("\n  ℹ️  No primary channel; skipping cluster add-node.")
+        if log:
+            log.log("2b: no primary channel; skipping cluster add-node")
 
     if log:
         log.end_phase()
@@ -13499,12 +13489,9 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
 
 def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
-    """Mode 2a: run nodes in parallel with interactive broker prompting.
-
-    Each node goes through the same LOADER → option 4 → join flow as 2b,
-    but whenever a confirmation is needed (disk erase, "use this config?",
-    cluster-network IP) the thread pauses and asks the operator via a
-    thread-safe prompt broker rather than auto-answering.
+    """Mode 2a: run nodes in parallel, each going through LOADER → option 4 →
+    disk erase → node-mgmt, then all nodes are joined via ONTAP's
+    ``cluster add-node`` command from the primary cluster.
 
     peer_bmcs    : ordered list of BMC IPs/hostnames
     bmc_user     : default BMC username
@@ -13617,15 +13604,11 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     if log:
         log.start_phase("2a – Interactive Parallel Node Add")
 
-    _final_2a = (baseline + len(peer_bmcs)) if primary_channel is not None else 0
+    _cluster_ips_out = {}   # peer_bmc -> cluster interface IP
     _pending = list(peer_bmcs)
-    _joined_count = 0
 
     while _pending:
         _n = len(_pending)
-        _join_barrier = threading.Barrier(_n)
-        _join_proceed = [threading.Event() for _ in range(_n)]
-        _join_proceed[0].set()
         _batch_results = [None] * _n
 
         threads = []
@@ -13633,14 +13616,11 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             _creds = _peer_bmc_creds.get(addr) or {}
             u = _creds.get("user") or bmc_user
             p = _creds.get("password") or bmc_passwords.get(addr, "")
-            expected = (baseline + _joined_count + idx + 1
-                        if primary_channel is not None else 0)
-            def _run_2a(_ri=idx, _addr=addr, _u=u, _p=p, _exp=expected):
+            def _run_2a(_ri=idx, _addr=addr, _u=u, _p=p):
                 _batch_results[_ri] = _add_peer_node_thread(
-                    _addr, _u, _p, primary_channel, admin_password, _exp,
-                    _join_barrier, _join_proceed, _ri,
-                    final_cluster_count=_final_2a,
+                    _addr, _u, _p, primary_channel, admin_password,
                     broker=broker,
+                    cluster_ips_out=_cluster_ips_out,
                 )
             t = threading.Thread(
                 target=_run_2a,
@@ -13655,7 +13635,6 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         for t in threads:
             t.join()
 
-        _joined_count += sum(1 for r in _batch_results if r)
         _failed = [_pending[i] for i, r in enumerate(_batch_results) if not r]
 
         if not _failed:
@@ -13668,6 +13647,22 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         if _retry_ans != "y":
             break
         _pending = _failed
+
+    # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
+    if primary_channel and _cluster_ips_out:
+        _collected_ips = [_cluster_ips_out[ip] for ip in peer_bmcs
+                          if ip in _cluster_ips_out]
+        if _collected_ips:
+            _cluster_add_nodes_bulk(primary_channel, _collected_ips, log=log)
+        else:
+            print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
+            if log:
+                log.log("2a: no cluster IPs collected; skipping cluster add-node",
+                        prefix="WARN")
+    elif not primary_channel:
+        print("\n  ℹ️  No primary channel; skipping cluster add-node.")
+        if log:
+            log.log("2a: no primary channel; skipping cluster add-node")
 
     if log:
         log.end_phase()
@@ -13851,31 +13846,20 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
 
     _print_banner(f"🚀 Mode 3: parallel auto-add for {len(peer_bmcs)} peer node(s)")
     print(f"  Peers: {', '.join(peer_bmcs)}")
-    # Track split timings: option-4 (parallel format/LOADER prep up to the
-    # join barrier) vs. the sequential node-join wall time. The threads
-    # populate _m3_peer_timings keyed by BMC IP; the barrier-release timestamp
-    # is captured by the first thread to clear the barrier. _m3_first_join_box
-    # is stamped by the first thread to send "join" so we can report the
-    # wall-clock time from first cluster-join to all-nodes-healthy.
-    _m3_peer_timings: "dict[str, dict]" = {}
-    _m3_barrier_release_box = [None]
-    _m3_first_join_box = [None]
-    _m3_timings_lock = threading.Lock()
     _t_mode3_start = time.monotonic()
     if _session_log:
         _session_log.log(f"Spawning auto-add threads for: {peer_bmcs}")
 
-    # Login to primary cluster shell so we can run `cluster show` for join
-    # verification.
+    # Login to primary cluster shell so we can run cluster add-node later.
     if not _login_primary_cluster_shell(primary_channel, admin_password):
-        print("⚠️  Could not log in to primary cluster shell; cluster show "
-              "verification will be skipped.")
+        print("⚠️  Could not log in to primary cluster shell; "
+              "cluster add-node will be skipped.")
         if _session_log:
-            _session_log.log("Primary cluster shell login failed; verification skipped",
+            _session_log.log("Primary cluster shell login failed; "
+                             "cluster add-node will be skipped",
                              prefix="WARN")
     else:
-        baseline = _cluster_show_node_count(primary_channel)
-        _slog(f"Baseline cluster node count: {baseline}")
+        _slog("Primary cluster shell ready for cluster add-node")
 
     # Write node-add manifest so option 2c can resume if this run is interrupted.
     _write_node_add_manifest(
@@ -13896,14 +13880,14 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
     )
 
     _m3_total = len(peer_bmcs)
-    _m3_pending = list(peer_bmcs)  # nodes still to be successfully added
-    _m3_joined = 0                 # peers that have joined so far
+    _m3_peer_timings: "dict[str, dict]" = {}
+    _m3_timings_lock = threading.Lock()
+    _m3_cluster_ips_out = {}   # peer_bmc -> cluster interface IP
+
+    _m3_pending = list(peer_bmcs)
 
     while _m3_pending:
         _n3 = len(_m3_pending)
-        _join_barrier3 = threading.Barrier(_n3)
-        _join_proceed3 = [threading.Event() for _ in range(_n3)]
-        _join_proceed3[0].set()  # first node proceeds immediately after barrier
         _m3_results = [None] * _n3
 
         threads = []
@@ -13911,17 +13895,12 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
             creds = _peer_bmc_creds.get(addr, {"user": None, "password": None})
             u = creds.get("user") or "admin"
             p = creds.get("password") or ""
-            # 1 primary + already-joined peers + this peer's slot.
-            expected = _m3_joined + idx + 2
-            def _run_m3(_ri=idx, _addr=addr, _u=u, _p=p, _exp=expected):
+            def _run_m3(_ri=idx, _addr=addr, _u=u, _p=p):
                 _m3_results[_ri] = _add_peer_node_thread(
-                    _addr, _u, _p, primary_channel, admin_password, _exp,
-                    _join_barrier3, _join_proceed3, _ri,
-                    final_cluster_count=_m3_total + 1,
+                    _addr, _u, _p, primary_channel, admin_password,
                     timings_record=_m3_peer_timings,
-                    barrier_release_box=_m3_barrier_release_box,
                     timings_lock=_m3_timings_lock,
-                    first_join_sent_box=_m3_first_join_box,
+                    cluster_ips_out=_m3_cluster_ips_out,
                 )
             t = threading.Thread(
                 target=_run_m3,
@@ -13934,7 +13913,6 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
         for t in threads:
             t.join()
 
-        _m3_joined += sum(1 for r in _m3_results if r)
         _m3_failed = [_m3_pending[i] for i, r in enumerate(_m3_results) if not r]
 
         if not _m3_failed:
@@ -13952,29 +13930,28 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
             _session_log.log(f"peer add: operator chose to retry: {_m3_failed}")
         _m3_pending = _m3_failed
 
+    # ── Bulk cluster join via cluster add-node ─────────────────────────────
+    _m3_collected_ips = [_m3_cluster_ips_out[ip] for ip in peer_bmcs
+                         if ip in _m3_cluster_ips_out]
+    if _m3_collected_ips:
+        _cluster_add_nodes_bulk(primary_channel, _m3_collected_ips,
+                                log=_session_log)
+    else:
+        print("\n⚠️  No cluster IPs collected from peer nodes; skipping cluster add-node.")
+        if _session_log:
+            _session_log.log("peer add: no cluster IPs collected; skipping cluster add-node",
+                             prefix="WARN")
+
     if _session_log:
         _t_mode3_end = time.monotonic()
-        _barrier_release = _m3_barrier_release_box[0]
-        if _barrier_release is not None:
-            _option4_wall = max(0.0, _barrier_release - _t_mode3_start)
-            _joins_wall = max(0.0, _t_mode3_end - _barrier_release)
-        else:
-            # No node ever cleared the barrier (all failed during option-4).
-            _option4_wall = max(0.0, _t_mode3_end - _t_mode3_start)
-            _joins_wall = 0.0
-
+        _option4_wall = max(0.0, _t_mode3_end - _t_mode3_start)
         _any_failed = any(r is False for r in (_m3_results or []))
-        _opt4_outcome = "PASSED (WITH ERRORS)" if _any_failed and _barrier_release is None else "PASS"
-        _join_outcome = "PASSED (WITH ERRORS)" if _any_failed and _barrier_release is not None else "PASS"
+        _opt4_outcome = "PASSED (WITH ERRORS)" if _any_failed else "PASS"
 
         _session_log.record_phase(
             "Parallel Peer Option 4 (mode 3)", _option4_wall, outcome=_opt4_outcome,
         )
-        _session_log.record_phase(
-            "Node join total", _joins_wall, outcome=_join_outcome,
-        )
-        # Per-node join breakdown (only nodes that reached the join phase
-        # populated _m3_peer_timings).
+        # Per-node timing breakdown.
         for _bmc in peer_bmcs:
             _t = _m3_peer_timings.get(_bmc)
             if not _t:
@@ -13984,21 +13961,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
                 f"Node [{_nm} - {_bmc}]" if _nm else f"Node [{_bmc}]"
             )
             _session_log.add_phase_subtiming(
-                "Node join total", _node_label, _t.get("join", 0.0),
-            )
-
-        # Aggregate: wall-clock time from the first peer's "join" send to
-        # the moment the last peer's cluster-show health check completed.
-        _first_join = _m3_first_join_box[0]
-        _last_healthy = max(
-            (_t.get("healthy_done_mono") or 0.0)
-            for _t in _m3_peer_timings.values()
-        ) if _m3_peer_timings else 0.0
-        if _first_join is not None and _last_healthy > _first_join:
-            _session_log.add_phase_subtiming(
-                "Node join total",
-                "Join → all nodes healthy",
-                _last_healthy - _first_join,
+                "Parallel Peer Option 4 (mode 3)", _node_label, _t.get("option4", 0.0),
             )
     print("\n✅ Parallel peer auto-add complete.")
 
@@ -14979,9 +14942,7 @@ def _run_2c_resume():
 
     baseline      = len(cluster_node_ips) if primary_channel else 0
     _n2c          = len(retry_bmc_list)
-    _join_barrier = threading.Barrier(_n2c)
-    _join_proceed = [threading.Event() for _ in range(_n2c)]
-    _join_proceed[0].set()
+    _2c_cluster_ips_out = {}
 
     _session_log.start_phase("2c – Resume Node Add")
     threads = []
@@ -14989,14 +14950,10 @@ def _run_2c_resume():
         _creds = _peer_bmc_creds.get(_bmc) or {}
         _u = _creds.get("user") or "admin"
         _p = _creds.get("password") or ""
-        _expected  = baseline + _idx + 1 if primary_channel else 0
-        _final     = baseline + _n2c      if primary_channel else 0
         _t = threading.Thread(
             target=_add_peer_node_thread,
-            args=(_bmc, _u, _p, primary_channel,
-                  cluster_admin_password, _expected,
-                  _join_barrier, _join_proceed, _idx),
-            kwargs={"final_cluster_count": _final},
+            args=(_bmc, _u, _p, primary_channel, cluster_admin_password),
+            kwargs={"cluster_ips_out": _2c_cluster_ips_out},
             daemon=True,
             name=f"2c-resume-{_bmc}",
         )
@@ -15007,6 +14964,15 @@ def _run_2c_resume():
     print(f"\n  ⏳ Waiting for {_n2c} node(s) to complete...")
     for _t in threads:
         _t.join()
+
+    # Bulk add via cluster add-node
+    _2c_ips = [_2c_cluster_ips_out[b] for b in retry_bmc_list if b in _2c_cluster_ips_out]
+    if primary_channel and _2c_ips:
+        _cluster_add_nodes_bulk(primary_channel, _2c_ips, log=_session_log)
+    elif not _2c_ips:
+        print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
+        _session_log.log("2c: no cluster IPs collected; skipping cluster add-node",
+                         prefix="WARN")
 
     _session_log.end_phase()
     print("\n  ✅ 2c resume complete.")
