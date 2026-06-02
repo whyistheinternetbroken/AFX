@@ -6242,27 +6242,26 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="", is_node_ad
 
 import re as _re
 
-_BOOTARG_LINE_RE = _re.compile(r'^(bootarg\.\S+)\s+(\S+)$')
+_BOOTARG_LINE_RE = _re.compile(r'^(\S+)\s+(\S+)$')
 
 def _load_diag_bootargs():
     """Load and validate diagnostic LOADER bootargs.
 
     Looks for a ``bootargs.txt`` or ``bootargs`` file in the ``configs/``
     subdirectory next to this script, then falls back to the script directory.
-    Each non-blank, non-comment line must be formatted as
-    ``"bootarg.name.variable value"``.
+    Each non-blank, non-comment line must be exactly two whitespace-separated
+    tokens: ``"option value"`` (e.g. ``bootarg.init.initrd 1`` or
+    ``option_name value``).
 
     If no file is found the operator is prompted to enter bootargs
     interactively (one per line, blank line to finish).
 
     Each entry is validated:
-    - Must be exactly two whitespace-separated tokens.
-    - The first token must start with ``bootarg.``.
+    - Must be exactly two whitespace-separated tokens (option + value).
     - Must NOT include the ``setenv`` prefix (the script adds it).
 
-    Invalid entries emit a warning and offer the operator a chance to exit
-    and correct the file/input.  Valid entries are returned as a list of
-    ``"bootarg.name value"`` strings.
+    Entries with missing option or value cause an immediate exit.
+    Valid entries are printed for operator confirmation before returning.
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     configs_dir = os.path.join(script_dir, "configs")
@@ -6291,7 +6290,8 @@ def _load_diag_bootargs():
             sys.exit(1)
     else:
         print("\n  ℹ️  No bootargs.txt / bootargs file found. Enter bootargs interactively.")
-        print("     Format: bootarg.name.variable <value>   (do NOT include 'setenv')")
+        print("     Format: option_name <value>   (do NOT include 'setenv')")
+        print("     Examples:  bootarg.init.initrd 1   |   some_option true")
         print("     Press Enter on a blank line when done.")
         while True:
             try:
@@ -6306,28 +6306,40 @@ def _load_diag_bootargs():
     for entry in raw_entries:
         # Reject entries that already include 'setenv'
         if entry.strip().lower().startswith("setenv"):
-            print(f"\n  ⚠️  Bootarg entry should NOT include 'setenv' prefix: {entry!r}")
-            ans = _prompt("     Exit to fix this? [Y/n]: ", "y").strip().lower()
-            if ans != "n":
-                sys.exit(1)
-            continue
+            print(f"\n  ❌ Bootarg entry should NOT include 'setenv' prefix: {entry!r}")
+            print("     Please remove 'setenv' from your bootargs file/input and re-run.")
+            sys.exit(1)
 
         m = _BOOTARG_LINE_RE.match(entry.strip())
         if not m:
-            print(f"\n  ⚠️  Invalid bootarg format (expected 'bootarg.name.variable value'): {entry!r}")
-            ans = _prompt("     Exit to fix this? [Y/n]: ", "y").strip().lower()
-            if ans != "n":
-                sys.exit(1)
-            continue
+            tokens = entry.strip().split()
+            if len(tokens) == 1:
+                print(f"\n  ❌ Bootarg entry is missing a value: {entry!r}")
+                print("     Each entry must be exactly: option_name value")
+            elif len(tokens) == 0:
+                print(f"\n  ❌ Empty bootarg entry encountered.")
+            else:
+                print(f"\n  ❌ Invalid bootarg format (expected 'option_name value'): {entry!r}")
+            print("     Please correct your bootargs file/input and re-run.")
+            sys.exit(1)
 
         validated.append(f"{m.group(1)} {m.group(2)}")
 
     if not validated:
-        print("  ⚠️  No valid bootargs loaded for --diag mode.")
+        print("  ⚠️  No bootargs loaded for --diag mode.")
     else:
-        print(f"  ✅ Loaded {len(validated)} diagnostic bootarg(s):")
+        print(f"\n  📋 {len(validated)} diagnostic bootarg(s) to apply:")
         for ba in validated:
             print(f"     setenv {ba}")
+        print("")
+        try:
+            confirm = input("  Apply these bootargs? [Y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            confirm = ""
+        if confirm == "n":
+            print("  ❌ Bootarg application cancelled. Exiting.")
+            sys.exit(1)
+        print("  ✅ Bootargs confirmed.")
 
     return validated
 
