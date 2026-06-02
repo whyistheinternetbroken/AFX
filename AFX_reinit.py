@@ -2049,7 +2049,7 @@ def select_operation_mode():
             print("\n  ↩️  Returning to menu...\n")
             continue
 
-        if choice in ("4", "4a", "4b", "4c", "4d", "4e", "4f"):
+        if choice in ("4", "4a", "4b", "4c", "4d", "4e", "4f", "4g"):
             if choice == "4":
                 # Show the sub-menu and re-prompt.
                 _print_banner("\U0001f4e6 Install/Manage ONTAP")
