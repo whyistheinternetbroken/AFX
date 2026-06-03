@@ -508,10 +508,22 @@ python3 AFX_reinit.py --add-lic --config configs/reinit-config.json
 
 ### Step 1: Download and Place the Script
 
-Place `AFX_reinit.py` on the client machine that has network access to all BMC/SP addresses and the cluster management IP.
+Clone the repository onto the client machine that has network access to all BMC/SP addresses and the cluster management IP:
 
 ```bash
-# Recommended: create a dedicated directory
+git clone https://github.com/whyistheinternetbroken/AFX.git
+cd AFX
+```
+
+To pull the latest updates later:
+
+```bash
+git pull
+```
+
+Alternatively, download `AFX_reinit.py` directly and place it in a dedicated directory:
+
+```bash
 mkdir ~/afx-reinit
 cp AFX_reinit.py ~/afx-reinit/
 cd ~/afx-reinit
