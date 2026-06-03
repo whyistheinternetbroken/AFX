@@ -12101,7 +12101,8 @@ def _run_cluster_setup_wizard(channel):
 
     # Mode 3: launch parallel auto-add for every peer BMC.
     if _operation_mode == 3 and _peer_bmc_list:
-        add_peer_nodes_parallel(channel, _peer_bmc_list, cc.get("admin_password"))
+        add_peer_nodes_parallel(channel, _peer_bmc_list, cc.get("admin_password"),
+                                primary_bmc=sp_host)
         _option3_finalize(_run_context, cc.get("mgmt_ip"))
 
     # Mode 1 (1a/1b) only initialises the first node — exit cleanly here.
@@ -13917,14 +13918,44 @@ def _option3_finalize(ctx, cluster_mgmt_ip):
     sys.exit(0)
 
 
-def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
+def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
+                            primary_bmc=None):
     """Spawn one thread per peer BMC, all running the auto-add flow in
     parallel. The "create/join" answer + cluster-show verification is
     serialized via `_join_lock`, so only one peer joins at a time even
     though everything else (LOADER, format, node-mgmt setup) runs together.
+
+    ``primary_bmc`` is the BMC address of the already-initialized cluster
+    master.  Any entry in ``peer_bmcs`` that resolves to the same address
+    is silently excluded so the primary node is never reset or re-added.
     """
     if not peer_bmcs:
         return
+
+    # Safety: exclude any peer BMC that is (or resolves to) the primary.
+    if primary_bmc:
+        def _resolve(addr):
+            try:
+                return socket.gethostbyname(addr)
+            except Exception:
+                return addr
+        _primary_ip = _resolve(primary_bmc)
+        _before = list(peer_bmcs)
+        peer_bmcs = [
+            p for p in peer_bmcs
+            if p != primary_bmc and _resolve(p) != _primary_ip
+        ]
+        _excluded = [p for p in _before if p not in peer_bmcs]
+        if _excluded:
+            print(f"\n  ⚠️  Excluded primary BMC from peer add list: "
+                  f"{', '.join(_excluded)}")
+            if _session_log:
+                _session_log.log(
+                    f"add_peer_nodes_parallel: excluded primary BMC(s) "
+                    f"from peer list: {_excluded}", prefix="WARN")
+        if not peer_bmcs:
+            print("  ℹ️  No peer BMCs remain after excluding primary; nothing to do.")
+            return
 
     # Checkpoint: primary is up and we're about to add peers. Record this
     # milestone now so a re-run can detect that the cluster already exists
@@ -17114,26 +17145,37 @@ def main():
         # operator didn't pre-list in the JSON config.
         apply_retained_to_node_configs(primary_bmc=sp_host)
 
+        # Resolve the primary BMC to an IP once so hostname/IP mismatches
+        # don't cause it to leak into the peer list.
+        def _bmc_ip(addr):
+            try:
+                return socket.gethostbyname(addr)
+            except Exception:
+                return addr
+        _sp_host_ip = _bmc_ip(sp_host)
+
         # Build the unique peer-BMC list. Sources, in priority order:
         #   1. SP addresses discovered from the running cluster.
         #   2. `nodes[]` entries from the JSON config file.
         # Any entry matching the primary BMC (`sp_host`) is dropped so the
         # script never tries to "add" the node it just initialized, and
         # duplicates are removed while preserving order.
-        seen_peers = {sp_host}
+        seen_peers = {sp_host, _sp_host_ip}
         other_sps = []
 
         for a in (peer_addresses or []):
             if not a:
                 continue
-            if a in seen_peers:
-                if a == sp_host:
+            _a_ip = _bmc_ip(a)
+            if a in seen_peers or _a_ip in seen_peers:
+                if a == sp_host or _a_ip == _sp_host_ip:
                     _session_log.log(
                         f"Discovered peer entry matches primary BMC ({a}); "
                         "treating as primary only.",
                     )
                 continue
             seen_peers.add(a)
+            seen_peers.add(_a_ip)
             other_sps.append(a)
 
         cfg_nodes = []
@@ -17157,15 +17199,17 @@ def main():
             bmc = (node.get("bmc") or "").strip()
             if not bmc:
                 continue
-            if bmc == sp_host:
+            _bmc_resolved = _bmc_ip(bmc)
+            if bmc == sp_host or _bmc_resolved == _sp_host_ip:
                 _session_log.log(
-                    f"Config 'nodes[]' entry {bmc} matches primary BMC; "
-                    "treating as primary only.",
+                    f"Config 'nodes[]' entry {bmc} matches primary BMC "
+                    f"({sp_host}); treating as primary only.",
                 )
                 continue
-            if bmc in seen_peers:
+            if bmc in seen_peers or _bmc_resolved in seen_peers:
                 continue
             seen_peers.add(bmc)
+            seen_peers.add(_bmc_resolved)
             other_sps.append(bmc)
             cfg_peer_added.append(bmc)
 
