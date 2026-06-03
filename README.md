@@ -44,7 +44,7 @@ All session activity is captured in a timestamped log directory with a human-rea
 | Full Automation Modes | Modes 1b, 2b, and 3 drive the ONTAP cluster setup and node-join wizards without operator interaction. |
 | Parallel Node Operations | Mode 2b and Mode 3 run peer node additions in parallel threads, significantly reducing multi-node reinit time. |
 | End-to-End Mode (3) | Combines 1b (primary init) + 2b (peer adds) into a single unattended run. |
-| **Bulk cluster join (`cluster add-node`)** | Peer nodes now join via ONTAP's native bulk command rather than the per-node interactive wizard. All nodes complete Option 4 / disk erase / node-mgmt in parallel; a single `cluster add-node -cluster-ips` command adds them all at once. Progress is polled every 2 minutes until all nodes show success (up to 15 min). Estimated time comparison (based on observed 4-node run):<br><br>**Old:** parallel prep (~10.5m flat) + serial joins (~12m avg each, 15m max)<br>**New:** parallel prep (~10.5m flat) + bulk join (first ~10m + ~2m per additional peer)<br><br>\| Cluster size \| Old (parallel prep + serial joins) \| New (parallel prep + bulk join) \| Savings \|<br>\|---\|---\|---\|---\|<br>\| 4 nodes \| ~46m \| ~25m \| ~21m \|<br>\| 8 nodes \| ~94m \| ~33m \| ~61m \|<br>\| 16 nodes \| ~190m (3.2h) \| ~49m \| ~2.4h \|<br>\| 64 nodes \| ~770m (12.8h) \| ~145m (2.4h) \| ~10.4h \| |
+| **Bulk cluster join (`cluster add-node`)** | Peer nodes now join via ONTAP's native bulk command rather than the per-node interactive wizard. All nodes complete Option 4 / disk erase / node-mgmt in parallel; a single `cluster add-node -cluster-ips` command adds them all at once. Progress is polled every 2 minutes until all nodes show success (up to 15 min). See [End-to-End Reinit Time Estimates](#end-to-end-reinit-time-estimates) for a full comparison — at 64 nodes the new approach saves ~10h vs the old serial join method. |
 | **Per-node milestone timing** | The session summary now emits five timestamped milestones per peer node (LOADER, Option 4, disk erase, node-mgmt, cluster IP) plus per-node `cluster add-node` success time. |
 | ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence. |
 | Netboot Install (4b) | Automated ONTAP netboot and software installation. |
@@ -64,20 +64,30 @@ All session activity is captured in a timestamped log directory with a human-rea
 
 ## End-to-End Reinit Time Estimates
 
-The table below compares estimated total wall-clock time for a full end-to-end cluster reinit (primary + N−1 peer nodes) between the **old** wizard-based node-join and the **new** `cluster add-node` bulk-join, based on observed 4-node benchmark data.
+The table below compares estimated total wall-clock time for a full end-to-end cluster reinit (primary + N−1 peer nodes) between the **old** wizard-based node-join and the **new** `cluster add-node` bulk-join, based on an observed 4-node benchmark (3094s / 51.6m total).
+
+**Phase breakdown (observed, 4 nodes):**
+
+| Phase | Time | Scales with nodes? |
+|---|---|---|
+| Early setup (SSH, LOADER, boot menu) | ~3.5m | No — constant |
+| Primary node 1b (cluster init + wizard) | ~21.3m | No — constant |
+| Peer parallel prep (Option 4 → cluster IP) | ~10.5m | No — all peers run simultaneously |
+| Old: serial join wizard per peer | ~12m avg / peer (15m max) | Yes — ×(N−1) |
+| New: `cluster add-node` bulk join | ~14m for 3 peers + ~2m per additional | Near-constant |
 
 **Formulas:**
-- **Old:** ~10.5m parallel prep + (N−1) × ~12m serial join per peer (15m max each)
-- **New:** ~10.5m parallel prep + ~10m first bulk join + ~2m per additional peer
+- **Old total:** ~35m fixed + (N−1) × ~12m serial joins
+- **New total:** ~35m fixed + ~14m bulk join + ~2m per peer beyond the first 3
 
-| Cluster Size | Old: Prep | Old: Joins (serial) | **Old Total** | New: Prep | New: Bulk Join | **New Total** | **Savings** |
-|---|---|---|---|---|---|---|---|
-| 4 nodes | ~10.5m | 3 × ~12m = ~36m | **~46m** | ~10.5m | ~10m + 4m | **~25m** | ~21m |
-| 8 nodes | ~10.5m | 7 × ~12m = ~84m | **~94m** | ~10.5m | ~10m + 12m | **~33m** | ~61m |
-| 16 nodes | ~10.5m | 15 × ~12m = ~180m | **~190m (3.2h)** | ~10.5m | ~10m + 28m | **~49m** | ~2.4h |
-| 64 nodes | ~10.5m | 63 × ~12m = ~756m | **~767m (12.8h)** | ~10.5m | ~10m + 124m | **~145m (2.4h)** | ~10.4h |
+| Cluster Size | **Old Total** | **New Total** | **Savings** |
+|---|---|---|---|
+| 4 nodes (observed) | **~71m** | **~52m** | ~19m |
+| 8 nodes | **~119m (2h)** | **~57m** | ~62m |
+| 16 nodes | **~215m (3.6h)** | **~69m** | ~2.4h |
+| 64 nodes | **~791m (13.2h)** | **~175m (2.9h)** | ~10.3h |
 
-> Estimates based on observed 4-node run: prep ~635s, first `cluster add-node` completion ~609s, each additional peer ~120s polling interval. Old join times use ~720s average (15-minute max per node).
+> Based on observed 4-node run (3094s total): fixed overhead ~1496s (~25m), peer parallel prep ~630s (~10.5m), bulk join last success ~846s + ~120s health poll. Old serial join ~720s avg per peer. Observed new 4-node total was 51.6m; table shows ~52m.
 
 ---
 
