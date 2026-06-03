@@ -531,14 +531,23 @@ cd ~/afx-reinit
 
 ### Step 2: (Optional) Create a Config File
 
-For automated or multi-node runs, create a `reinit-config.json` in the same directory:
+For automated or multi-node runs, create a `reinit-config.json`. There are three ways:
+
+**Option A — Back up from a live cluster (recommended):** If the cluster is currently running, use `--backup` to capture its configuration automatically:
 
 ```bash
-# Print the example format
+python3 AFX_reinit.py --backup
+# Follow the prompts to connect to the cluster; config is saved to configs/reinit-config.json
+```
+
+**Option B — Generate a blank template and fill it in manually:**
+
+```bash
 python3 AFX_reinit.py --config-example > configs/reinit-config.json
-# Edit with your cluster and node details
 vi configs/reinit-config.json
 ```
+
+**Option C — Build interactively:** Run the script without a config file and enter values at the prompts; save the resulting config when offered at the end of the run.
 
 ### Step 3: Run the Script
 
