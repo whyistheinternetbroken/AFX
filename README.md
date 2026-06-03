@@ -317,6 +317,7 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **4d** | SSH Key Setup | Configures passwordless SSH from the script host to the cluster management interface. |
 | **4e** | Config Backup | Connects to the cluster and captures its current configuration (name, IPs, licenses, nodes) to a JSON file. Can also build a config file manually from user prompts. |
 | **4f** | BMC Auth Verify | Tests BMC SSH authentication for all nodes defined in the config file and reports pass/fail. |
+| **4g** | Reset to LOADER | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging all nodes before a manual reinit or netboot run. |
 
 > **Warning:** Options 1a and 1b destroy all storage on the target node and reinitialize the cluster. If a cluster already exists, use option 2 instead.
 
@@ -976,6 +977,35 @@ python3 AFX_reinit.py --diag --config reinit-config.json
 ### Checkpoint / resume
 
 For mode 4b, the validated bootarg list is saved to the checkpoint file. On `--resume` the stored list is restored automatically — no re-prompt.
+
+---
+
+## Reset to LOADER (`--loader` / mode 4g)
+
+Mode 4g resets every configured node to the `LOADER>` prompt in parallel via BMC. It is a lightweight staging utility — it does not begin a reinit, install software, or modify any configuration. Use it to prepare all nodes before starting a manual reinit, netboot, or any workflow that requires nodes to be sitting at LOADER.
+
+### How it works
+
+1. Reads the config file for all BMC addresses (primary + all secondary nodes).
+2. Opens a parallel BMC SSH session to each node simultaneously.
+3. Issues `system reset` to reboot the node.
+4. Monitors the console, intercepting the AUTOBOOT countdown with Ctrl+C.
+5. Confirms the `LOADER>` prompt on each node and reports success or failure per node.
+6. The script exits once all nodes have reached LOADER (or timed out).
+
+### Usage
+
+```bash
+# Reset all nodes to LOADER prompt in parallel
+python3 AFX_reinit.py --loader --config configs/reinit-config.json
+```
+
+### Notes
+
+- Requires a config file with BMC addresses for all nodes (`--config`).
+- Each node is processed independently; a failure on one node does not stop the others.
+- If a node fails to reach LOADER within the timeout, it is reported as failed in the summary — other nodes continue.
+- This mode does **not** modify ONTAP or cluster state; it only resets the nodes at the hardware level.
 
 ---
 
