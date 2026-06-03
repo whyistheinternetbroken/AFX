@@ -11,14 +11,15 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ### Added
 - **`cluster add-node` bulk join flow (modes 2a, 2b, 2c, 3, 4b).** Peer node
   addition has been re-architected around ONTAP's native bulk join command.
-  Previously the script drove each node's interactive cluster-join wizard
-  serially. Now all peer nodes run Option 4 / disk erase / node-mgmt config in
-  parallel, then Ctrl+C is sent to abort the wizard, the node logs in as `admin`,
-  and `net int show -role cluster -fields address` captures one cluster-interface
-  IP per node. Once all parallel threads complete, the primary node issues a
-  single `cluster add-node -cluster-ips IP1,IP2,...` command that adds all peers
-  simultaneously. Progress is monitored with `cluster add-node-status` polled
-  every 120 seconds (up to 15 minutes).
+  The previous per-node interactive cluster-join wizard flow (create/join
+  prompts, `join_barrier` synchronization, serialized wizard answers) has been
+  **removed**. Now all peer nodes run Option 4 / disk erase / node-mgmt config
+  in parallel, then Ctrl+C is sent to abort the wizard, the node logs in as
+  `admin`, and `net int show -role cluster -fields address` captures one
+  cluster-interface IP per node. Once all parallel threads complete, the primary
+  node issues a single `cluster add-node -cluster-ips IP1,IP2,...` command that
+  adds all peers simultaneously. Progress is monitored with
+  `cluster add-node-status` polled every 120 seconds (up to 15 minutes).
 - **Per-node milestone timing in session summary (modes 2a, 2b, 3, 4b).** The
   parallel peer phase now emits five timestamped sub-rows per node: LOADER
   reached, Option 4 sent, disk erase done, node-mgmt applied, and cluster IP
