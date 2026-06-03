@@ -2252,21 +2252,27 @@ def detect_package_manager():
 
 
 def install_system_package(package_name, pkg_manager):
+    """Attempt to install *package_name* via the system package manager.
+
+    Returns True on success, False on failure (caller can fall back to pip).
+    """
     answer = input(
         f"⚠️  System package '{package_name}' is required but not installed.\n"
         f"   Install it now using '{pkg_manager}'? [Y/N]: "
     ).strip().lower()
     if answer != "y":
-        print("❌ Cannot continue without the required package. Exiting.")
-        sys.exit(1)
+        print("⚠️  Skipping system install; will attempt pip fallback.")
+        return False
     try:
         cmd = ["sudo", pkg_manager, "install", "-y", package_name]
         print(f"Running: {' '.join(cmd)}")
         subprocess.check_call(cmd)
         print(f"✅ '{package_name}' installed successfully.")
+        return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Failed to install '{package_name}': {e}")
-        sys.exit(1)
+        print(f"⚠️  System install of '{package_name}' failed ({e}); "
+              f"will attempt pip fallback.")
+        return False
 
 
 REQUIRED_MODULES = {
@@ -2290,13 +2296,14 @@ def install_required_modules():
             pass
         if pkg_manager and pkg_manager in pkg_info:
             print(f"Module '{module_name}' is missing.")
-            install_system_package(pkg_info[pkg_manager], pkg_manager)
-            try:
-                importlib.import_module(module_name)
-                continue
-            except ImportError:
-                print("⚠️  System package installed but module still not importable. "
-                      "Falling back to pip.")
+            sys_ok = install_system_package(pkg_info[pkg_manager], pkg_manager)
+            if sys_ok:
+                try:
+                    importlib.import_module(module_name)
+                    continue
+                except ImportError:
+                    print("⚠️  System package installed but module still not importable. "
+                          "Falling back to pip.")
         answer = input(
             f"⚠️  Python module '{module_name}' is not installed.\n"
             f"   Install it now via pip? [Y/N]: "
