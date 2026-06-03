@@ -9,7 +9,44 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- **Menu option 4g: Reset all nodes to LOADER prompt.** Connects to all BMC
+- **`cluster add-node` bulk join flow (modes 2a, 2b, 2c, 3, 4b).** Peer node
+  addition has been re-architected around ONTAP's native bulk join command.
+  Previously the script drove each node's interactive cluster-join wizard
+  serially. Now all peer nodes run Option 4 / disk erase / node-mgmt config in
+  parallel, then Ctrl+C is sent to abort the wizard, the node logs in as `admin`,
+  and `net int show -role cluster -fields address` captures one cluster-interface
+  IP per node. Once all parallel threads complete, the primary node issues a
+  single `cluster add-node -cluster-ips IP1,IP2,...` command that adds all peers
+  simultaneously. Progress is monitored with `cluster add-node-status` polled
+  every 120 seconds (up to 15 minutes).
+- **Per-node milestone timing in session summary (modes 2a, 2b, 3, 4b).** The
+  parallel peer phase now emits five timestamped sub-rows per node: LOADER
+  reached, Option 4 sent, disk erase done, node-mgmt applied, and cluster IP
+  captured. Each time is seconds elapsed from thread start. The `cluster add-node`
+  success time per node is also tracked and reported.
+- **`--skip-broken` fallback for system package installs.** When a `dnf`/`apt`
+  system package install fails, the script now falls through to `pip install`
+  instead of calling `sys.exit(1)`. The `pip` fallback was already present;
+  this change ensures it is always reached on system-install failure.
+- **NTP server picker always shown during cluster setup collection.** When
+  `collect_cluster_config` is called (modes 1b, 3, 4b), the NTP picker is now
+  always displayed even if `ntp_servers` is already set in the config file.
+  The current config value is shown above the picker; pressing Enter (blank)
+  keeps the existing value while selecting new servers replaces it.
+
+### Fixed
+- **Primary BMC leaked into peer list when hostname and IP differ.** `sp_host`
+  is stored as the IP address entered at startup, but a config file may list the
+  same node's BMC by hostname (or vice versa). The exact-string `bmc == sp_host`
+  check silently failed, causing the primary node to be included in the
+  `cluster add-node -cluster-ips` command and appear as a node being "added" to
+  its own cluster. Fixed by resolving both `sp_host` and each candidate BMC to
+  IP via `socket.gethostbyname()` before comparing. A second safety filter was
+  also added inside `add_peer_nodes_parallel` (accepts `primary_bmc=` parameter)
+  to catch any entry that resolves to the primary IP before threads are spawned.
+
+### Added
+- **Menu option 4g: Reset all nodes to LOADER prompt.**Connects to all BMC
   addresses (from config file or manual entry) in parallel, issues a system
   reset on each node, enters the system console, and sends Ctrl+C to interrupt
   AUTOBOOT. The script exits with a pass/fail results table once every node has

@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/1/2026  
+**Updated:** 6/3/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
 ---
@@ -44,6 +44,8 @@ All session activity is captured in a timestamped log directory with a human-rea
 | Full Automation Modes | Modes 1b, 2b, and 3 drive the ONTAP cluster setup and node-join wizards without operator interaction. |
 | Parallel Node Operations | Mode 2b and Mode 3 run peer node additions in parallel threads, significantly reducing multi-node reinit time. |
 | End-to-End Mode (3) | Combines 1b (primary init) + 2b (peer adds) into a single unattended run. |
+| **Bulk cluster join (`cluster add-node`)** | Peer nodes now join via ONTAP's native bulk command rather than the per-node interactive wizard. All nodes complete Option 4 / disk erase / node-mgmt in parallel; a single `cluster add-node -cluster-ips` command adds them all at once. Progress is polled every 2 minutes until all nodes show success (up to 15 min). |
+| **Per-node milestone timing** | The session summary now emits five timestamped milestones per peer node (LOADER, Option 4, disk erase, node-mgmt, cluster IP) plus per-node `cluster add-node` success time. |
 | ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence. |
 | Netboot Install (4b) | Automated ONTAP netboot and software installation. |
 | SSH Key Setup (4d) | Configures passwordless SSH from the script host to cluster management. |
