@@ -221,7 +221,7 @@ python3 AFX_reinit.py --config /path/to/myconfig.json
     "clus_mgmt_gw":      "192.168.1.1",
     "clus_mgmt_port":    "e0M",
     "user":              "admin",
-    "password":          "password",
+    "password":          "PASSWORDHERE",
     "dns_domains":       "example.com",
     "dns_servers":       "192.168.1.10,192.168.1.11",
     "location":          "Rack 1",
@@ -230,7 +230,7 @@ python3 AFX_reinit.py --config /path/to/myconfig.json
   "primary_node": {
     "bmc":               "192.168.2.10",
     "bmc_user":          "admin",
-    "bmc_password":      "NetApp1!AFX",
+    "bmc_password":      "PASSWORDHERE",
     "node_mgmt_port":    "e0M",
     "node_mgmt_ip":      "192.168.2.11",
     "node_mgmt_netmask": "255.255.255.0",
@@ -240,7 +240,7 @@ python3 AFX_reinit.py --config /path/to/myconfig.json
     {
       "bmc":               "192.168.2.20",
       "bmc_user":          "admin",
-      "bmc_password":      "NetApp1!AFX",
+      "bmc_password":      "PASSWORDHERE",
       "node_mgmt_port":    "e0M",
       "node_mgmt_ip":      "192.168.2.21",
       "node_mgmt_netmask": "255.255.255.0",
