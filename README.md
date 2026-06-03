@@ -62,6 +62,25 @@ All session activity is captured in a timestamped log directory with a human-rea
 
 ---
 
+## End-to-End Reinit Time Estimates
+
+The table below compares estimated total wall-clock time for a full end-to-end cluster reinit (primary + N−1 peer nodes) between the **old** wizard-based node-join and the **new** `cluster add-node` bulk-join, based on observed 4-node benchmark data.
+
+**Formulas:**
+- **Old:** ~10.5m parallel prep + (N−1) × ~12m serial join per peer (15m max each)
+- **New:** ~10.5m parallel prep + ~10m first bulk join + ~2m per additional peer
+
+| Cluster Size | Old: Prep | Old: Joins (serial) | **Old Total** | New: Prep | New: Bulk Join | **New Total** | **Savings** |
+|---|---|---|---|---|---|---|---|
+| 4 nodes | ~10.5m | 3 × ~12m = ~36m | **~46m** | ~10.5m | ~10m + 4m | **~25m** | ~21m |
+| 8 nodes | ~10.5m | 7 × ~12m = ~84m | **~94m** | ~10.5m | ~10m + 12m | **~33m** | ~61m |
+| 16 nodes | ~10.5m | 15 × ~12m = ~180m | **~190m (3.2h)** | ~10.5m | ~10m + 28m | **~49m** | ~2.4h |
+| 64 nodes | ~10.5m | 63 × ~12m = ~756m | **~767m (12.8h)** | ~10.5m | ~10m + 124m | **~145m (2.4h)** | ~10.4h |
+
+> Estimates based on observed 4-node run: prep ~635s, first `cluster add-node` completion ~609s, each additional peer ~120s polling interval. Old join times use ~720s average (15-minute max per node).
+
+---
+
 ## Prerequisites
 
 Before running this script, ensure the following are in place:
