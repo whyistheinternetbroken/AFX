@@ -83,11 +83,13 @@ The table below compares estimated total wall-clock time for a full end-to-end c
 | Cluster Size | **Old Total** | **New Total** | **Savings** |
 |---|---|---|---|
 | 4 nodes (observed) | **~71m** | **~52m** | ~19m |
-| 8 nodes | **~119m (2h)** | **~57m** | ~62m |
-| 16 nodes | **~215m (3.6h)** | **~69m** | ~2.4h |
-| 64 nodes | **~791m (13.2h)** | **~175m (2.9h)** | ~10.3h |
+| 8 nodes* | **~119m (2h)** | **~57m** | ~62m |
+| 16 nodes* | **~215m (3.6h)** | **~69m** | ~2.4h |
+| 64 nodes* | **~791m (13.2h)** | **~175m (2.9h)** | ~10.3h |
 
 > Based on observed 4-node run (3094s total): fixed overhead ~1496s (~25m), peer parallel prep ~630s (~10.5m), bulk join last success ~846s + ~120s health poll. Old serial join ~720s avg per peer. Observed new 4-node total was 51.6m; table shows ~52m.
+>
+> \* Extrapolated from 4-node observed data; not tested.
 
 ---
 
