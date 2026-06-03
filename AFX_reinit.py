@@ -6071,17 +6071,19 @@ def collect_cluster_config():
     dns_servers = _from_cfg_or_prompt(
         "dns_servers", "DNS servers (comma separated)", None)
 
-    # NTP servers: use config value if present, otherwise prompt (up to 4).
+    # NTP servers: always prompt so the operator can confirm or modify.
     ntp_servers_raw = cc_cfg.get("ntp_servers")
     if ntp_servers_raw:
-        print(f"  📄 NTP servers (from config): {ntp_servers_raw}")
-        ntp_servers = ntp_servers_raw
+        print(f"\n  📄 NTP servers (from config): {ntp_servers_raw}")
+        print("  Select new server(s) to replace the above, or press Enter to keep as-is.")
     else:
         print("\n  ℹ️   NTP servers (optional). Select from the list or add custom.")
-        _ntp_entries = _prompt_ntp_servers()
-        ntp_servers = ",".join(_ntp_entries) if _ntp_entries else None
-        if ntp_servers:
-            print(f"  \u2705 NTP servers configured: {ntp_servers}")
+    _ntp_entries = _prompt_ntp_servers()
+    if _ntp_entries:
+        ntp_servers = ",".join(_ntp_entries)
+        print(f"  ✅ NTP servers configured: {ntp_servers}")
+    else:
+        ntp_servers = ntp_servers_raw or None
 
     location = _from_cfg_or_prompt(
         "location", "Controller location", None)
