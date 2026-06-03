@@ -11822,9 +11822,13 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
         _slog(f"SSH test exception: {_te}", prefix="WARN")
 
 
-def _run_cluster_setup_wizard(channel):
+def _run_cluster_setup_wizard(channel, primary_bmc=None):
     """Drive the post-node-mgmt cluster setup wizard non-interactively using
     values gathered in `_cluster_config`.
+
+    ``primary_bmc`` is the BMC address of the primary node (the one that just
+    created the cluster).  Passed through to ``add_peer_nodes_parallel`` so it
+    can exclude the primary from the peer-add list.
 
     Returns True on success, False on fatal failure (caller should exit).
     """
@@ -12104,7 +12108,7 @@ def _run_cluster_setup_wizard(channel):
     # Mode 3: launch parallel auto-add for every peer BMC.
     if _operation_mode == 3 and _peer_bmc_list:
         add_peer_nodes_parallel(channel, _peer_bmc_list, cc.get("admin_password"),
-                                primary_bmc=sp_host)
+                                primary_bmc=primary_bmc)
         _option3_finalize(_run_context, cc.get("mgmt_ip"))
 
     # Mode 1 (1a/1b) only initialises the first node — exit cleanly here.
@@ -14211,7 +14215,7 @@ def auto_complete_initialization(channel, bmc_host=None):
         _session_log.end_phase()
 
     # Drive the post-node-mgmt cluster setup wizard from gathered values.
-    wizard_ok = _run_cluster_setup_wizard(channel)
+    wizard_ok = _run_cluster_setup_wizard(channel, primary_bmc=bmc_host)
     if wizard_ok is False:
         print("\n❌ Cluster setup wizard failed – cannot proceed. Exiting.")
         if _session_log:
