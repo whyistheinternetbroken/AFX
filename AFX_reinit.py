@@ -11073,15 +11073,22 @@ def _run_ontap_upgrade(log):
             print(f"  \u27a1\ufe0f  promoted-dev-update: {nodename}...")
             if log:
                 log.log(f"Running promoted-dev-update on {nodename}")
+            _t0_pdu = time.monotonic()
             with _suppress_console():
                 _run_cluster_command(
                     channel_41,
                     f"set diag -c off; system node image promoted-dev-update -node {nodename}",
                     timeout=120,
                 )
+            _pdu_elapsed = time.monotonic() - _t0_pdu
             print(f"  \u2705 promoted-dev-update complete for {nodename}.")
             if log:
-                log.log(f"promoted-dev-update complete for {nodename}")
+                log.log(f"promoted-dev-update complete for {nodename} ({_pdu_elapsed:.1f}s)")
+                log.add_phase_subtiming(
+                    "Upgrade Workflow",
+                    f"  [{nodename}] promoted-dev-update",
+                    _pdu_elapsed,
+                )
 
         # ── Step 8: validate then run image update per group ────────────────
         # Ask once whether to run updates in parallel via separate SSH sessions.
@@ -11327,7 +11334,7 @@ def _run_ontap_upgrade(log):
                             label=label_v, max_attempts=3, interactive=False,
                         )
                     except Exception as ev:
-                        rd[nn] = (False, f"SSH connect failed: {ev}")
+                        rd[nn] = (False, f"SSH connect failed: {ev}", 0.0)
                         return
                     try:
                         vcmd2 = (
@@ -11339,13 +11346,15 @@ def _run_ontap_upgrade(log):
                             f"-validate-only true"
                         )
                         print(f"  [{nn}] \U0001f50e Validating...")
+                        _t0_v = time.monotonic()
                         out_v = _shell_run_cmd(clv, vcmd2, timeout=360)
+                        _val_elapsed = time.monotonic() - _t0_v
                         failed_v = "error" in out_v.lower() or "failed" in out_v.lower()
-                        rd[nn] = (not failed_v, out_v)
+                        rd[nn] = (not failed_v, out_v, _val_elapsed)
                         status = "\u274c Failed" if failed_v else "\u2705 Passed"
                         print(f"  [{nn}] Validation {status}")
                     except Exception as ev:
-                        rd[nn] = (False, f"Exception: {ev}")
+                        rd[nn] = (False, f"Exception: {ev}", 0.0)
                         print(f"  [{nn}] \u274c Validation exception: {ev}")
                     finally:
                         try:
@@ -11361,8 +11370,15 @@ def _run_ontap_upgrade(log):
                 tv.join()
 
             # Show summary and prompt once for all nodes.
-            val_failures = [(nn, msg) for nn, (ok, msg) in _val_results.items() if not ok]
-            val_passes   = [(nn, msg) for nn, (ok, msg) in _val_results.items() if ok]
+            val_failures = [(nn, msg) for nn, (ok, msg, _t) in _val_results.items() if not ok]
+            val_passes   = [(nn, msg) for nn, (ok, msg, _t) in _val_results.items() if ok]
+            if log:
+                for nn, (ok, msg, elapsed) in _val_results.items():
+                    log.add_phase_subtiming(
+                        "Upgrade Workflow",
+                        f"  [{nn}] image validate",
+                        elapsed,
+                    )
             print(f"\n  Validation summary: {len(val_passes)} passed, {len(val_failures)} failed.")
             if val_failures:
                 print("  \u274c Failed nodes:")
@@ -11403,7 +11419,7 @@ def _run_ontap_upgrade(log):
                             label=label2, max_attempts=3, interactive=False,
                         )
                     except Exception as e2:
-                        rd[nn] = (False, f"SSH connect failed: {e2}")
+                        rd[nn] = (False, f"SSH connect failed: {e2}", 0.0)
                         return
                     try:
                         ucmd2 = (
@@ -11414,7 +11430,9 @@ def _run_ontap_upgrade(log):
                             f"-setdefault true"
                         )
                         print(f"  [{nn}] \U0001f4e5 Installing image...")
+                        _t0_inst = time.monotonic()
                         out_u2 = _shell_run_cmd(cl2, ucmd2, timeout=960)
+                        _inst_elapsed = time.monotonic() - _t0_inst
                         # Full installer output (tar listings, MD5 / firmware
                         # progress, prompts) is verbose; log it but keep the
                         # console to a one-line status per node.
@@ -11422,13 +11440,13 @@ def _run_ontap_upgrade(log):
                             log.log(f"[{nn}] image install output (tail):\n{out_u2[-2000:]}")
                         upd_failed2 = "error" in out_u2.lower() or "failed" in out_u2.lower()
                         if upd_failed2:
-                            rd[nn] = (False, out_u2[-500:])
+                            rd[nn] = (False, out_u2[-500:], _inst_elapsed)
                             print(f"  [{nn}] \u274c Install failed (see log for details).")
                         else:
-                            rd[nn] = (True, "")
+                            rd[nn] = (True, "", _inst_elapsed)
                             print(f"  [{nn}] \u2705 Image installed.")
                     except Exception as e2:
-                        rd[nn] = (False, f"Exception: {e2}")
+                        rd[nn] = (False, f"Exception: {e2}", 0.0)
                         print(f"  [{nn}] \u274c Exception: {e2}")
                     finally:
                         try:
@@ -11446,8 +11464,14 @@ def _run_ontap_upgrade(log):
             # Check results.
             install_errors = []
             for nodename, _, _ in _update_tasks:
-                res = _par_results.get(nodename, (False, "No result recorded"))
-                ok, msg = res[0], res[1]
+                res = _par_results.get(nodename, (False, "No result recorded", 0.0))
+                ok, msg, inst_elapsed = res[0], res[1], res[2]
+                if log:
+                    log.add_phase_subtiming(
+                        "Upgrade Workflow",
+                        f"  [{nodename}] download + install",
+                        inst_elapsed,
+                    )
                 if not ok:
                     install_errors.append(f"  {nodename}: {msg}")
                     if log:
@@ -11477,12 +11501,15 @@ def _run_ontap_upgrade(log):
                     f"-validate-only true"
                 )
                 print(f"  \U0001f50e Validating update on {nodename}...")
+                _t0_seq_val = time.monotonic()
                 with _suppress_console():
                     out_val = _run_cluster_command(channel_41, vcmd, timeout=300)
+                _seq_val_elapsed = time.monotonic() - _t0_seq_val
                 if "error" in out_val.lower() or "failed" in out_val.lower():
                     print(f"\n  \u274c Validation failed for {nodename}:\n{out_val}")
                     if log:
                         log.log(f"Validation failed for {nodename}: {out_val[-500:]}", prefix="ERROR")
+                        log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] image validate", _seq_val_elapsed)
                     ans = _prompt("\n  Validation failed; continue with upgrade? [y/N]: ", "n").lower()
                     if log:
                         log.log(f"User chose to {'continue' if ans == 'y' else 'stop'} after validation failure")
@@ -11493,6 +11520,7 @@ def _run_ontap_upgrade(log):
                     print(f"  \u2705 Validation passed for {nodename}.")
                     if log:
                         log.log(f"Validation passed for {nodename}")
+                        log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] image validate", _seq_val_elapsed)
                     ans = _prompt("\n  Validation succeeded; continue with upgrade? [Y/n]: ", "n").lower()
                     if log:
                         log.log(f"User chose to {'continue' if ans != 'n' else 'stop'} after validation success")
@@ -11508,16 +11536,20 @@ def _run_ontap_upgrade(log):
                     f"-setdefault true"
                 )
                 print(f"  \U0001f4e5 Downloading/installing image on {nodename} (may take several minutes)...")
+                _t0_seq_inst = time.monotonic()
                 with _suppress_console():
                     out_upd = _run_cluster_command(channel_41, ucmd, timeout=900)
+                _seq_inst_elapsed = time.monotonic() - _t0_seq_inst
                 if "error" in out_upd.lower() or "failed" in out_upd.lower():
                     print(f"\n  \u274c Image update failed for {nodename}:\n{out_upd}")
                     if log:
                         log.log(f"Image update failed for {nodename}: {out_upd[-500:]}", prefix="ERROR")
+                        log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] download + install", _seq_inst_elapsed)
                     return False
                 print(f"  \u2705 Image installed on {nodename}.")
                 if log:
                     log.log(f"Image installed on {nodename}")
+                    log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] download + install", _seq_inst_elapsed)
 
         # ── Pre-stage only: exit here after installs complete ────────────────
         if _prestage_only:
@@ -11614,6 +11646,7 @@ def _run_ontap_upgrade(log):
             print(f"\n  \U0001f504 Takeover: {takeover_by} takes over {takeover_node}...")
             if log:
                 log.log(f"Initiating takeover of {takeover_node} by {takeover_by}")
+            _t0_tko = time.monotonic()
             with _suppress_console():
                 _run_cluster_command(
                     channel_41,
@@ -11627,14 +11660,28 @@ def _run_ontap_upgrade(log):
                 total_timeout=1800, poll_interval=180, log=log,
                 phase_label="takeover/giveback",
             ):
+                _tko_elapsed = time.monotonic() - _t0_tko
                 print(f"  \u274c Timed out waiting for giveback state on {takeover_node}.")
                 if log:
                     log.log(f"Timeout waiting for giveback state on {takeover_node}",
                             prefix="ERROR")
+                    log.add_phase_subtiming(
+                        "Upgrade Workflow",
+                        f"  [{takeover_node}] takeover (timed out)",
+                        _tko_elapsed,
+                    )
                 return False
+            _tko_elapsed = time.monotonic() - _t0_tko
+            if log:
+                log.add_phase_subtiming(
+                    "Upgrade Workflow",
+                    f"  [{takeover_node}] takeover wait",
+                    _tko_elapsed,
+                )
             print(f"  \U0001f501 Giving back {takeover_node}...")
             if log:
                 log.log(f"Issuing giveback for {takeover_node}")
+            _t0_gb = time.monotonic()
             with _suppress_console():
                 _run_cluster_command(
                     channel_41,
@@ -11648,14 +11695,26 @@ def _run_ontap_upgrade(log):
                 total_timeout=1800, poll_interval=180, log=log,
                 phase_label="node reconnect",
             ):
+                _gb_elapsed = time.monotonic() - _t0_gb
                 print(f"  \u274c Timed out waiting for {takeover_node} to reconnect.")
                 if log:
                     log.log(f"Timeout waiting for {takeover_node} reconnect",
                             prefix="ERROR")
+                    log.add_phase_subtiming(
+                        "Upgrade Workflow",
+                        f"  [{takeover_node}] giveback (timed out)",
+                        _gb_elapsed,
+                    )
                 return False
+            _gb_elapsed = time.monotonic() - _t0_gb
             print(f"  \u2705 {takeover_node} back online.")
             if log:
                 log.log(f"{takeover_node} giveback complete and reconnected")
+                log.add_phase_subtiming(
+                    "Upgrade Workflow",
+                    f"  [{takeover_node}] giveback + reconnect",
+                    _gb_elapsed,
+                )
             return True
 
         # Build a node→its_partner lookup for the takeover calls
@@ -11671,6 +11730,7 @@ def _run_ontap_upgrade(log):
 
         # ── Step 12: verify version ─────────────────────────────────────────
         print("\n  \U0001f50d Verifying ONTAP version post-upgrade...")
+        _t0_ver = time.monotonic()
         with _suppress_console():
             out_ver = _run_cluster_command(channel_41, "version", timeout=30)
             out_img2 = _run_cluster_command(
@@ -11678,6 +11738,7 @@ def _run_ontap_upgrade(log):
                 "set advanced -c off; system image show -fields version",
                 timeout=60,
             )
+        _ver_elapsed = time.monotonic() - _t0_ver
         # Extract the version string from the 'version' command output
         ver_match = re.search(r"NetApp Release\s+([\d\.]+[^\s:;]+)", out_ver, re.IGNORECASE)
         running_ver = ver_match.group(1).strip() if ver_match else None
@@ -11717,6 +11778,7 @@ def _run_ontap_upgrade(log):
                 log.log("Could not parse version output", prefix="WARN")
 
         if log:
+            log.add_phase_subtiming("Upgrade Workflow", "  version verify", _ver_elapsed)
             log.end_phase()
 
         try:
