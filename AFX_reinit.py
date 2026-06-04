@@ -10953,6 +10953,22 @@ def _run_ontap_upgrade(log):
         # Prefer an existing BMC/reinit config file (numbered list) over
         # asking the operator to type the address. Falls back to the manual
         # prompts when nothing usable is on disk or the operator declines.
+        _has_any_config = bool(_find_config_files(deep_scan=True)) or any(
+            os.path.isfile(os.path.join(_d, "BMC_IP.json"))
+            for _d in _default_config_search_dirs()
+        )
+        if not _has_any_config:
+            print("\n  \u26a0\ufe0f  No config files (reinit-config.json / BMC_IP.json) "
+                  "found on disk.")
+            print("     Option 4e can connect to your existing cluster and generate "
+                  "them automatically.")
+            _ans_4e = _prompt(
+                "  Run the 4e config-gather workflow now? [Y/n]: ", "n"
+            ).lower()
+            if _ans_4e != "n":
+                global _operation_mode
+                _operation_mode = 46
+                return None
         bmc_host, bmc_user, bmc_pass = _pick_bmc_from_existing_config()
         if not bmc_host:
             bmc_host = input("  BMC hostname / IP: ").strip()
@@ -11161,25 +11177,67 @@ def _run_ontap_upgrade(log):
                     log.log(f"4a: node mgmt IPs from config: {_node_mgmt_pool}")
                 _validate_targets = list(_node_mgmt_pool)
             else:
-                # No node mgmt IPs anywhere on disk — last-resort manual
-                # entry. Operator can still type a single LIF (cluster or
-                # node mgmt) to drive all parallel sessions.
+                # No node mgmt IPs anywhere on disk — try to discover them
+                # from the live cluster session before falling back to manual
+                # entry.
                 print("\n  \u26a0\ufe0f  No node management IPs found in any reinit "
                       "config on disk.")
-                _manual_ip = _prompt(
-                    "  Enter a node (or cluster) management IP to use "
-                    "for all parallel sessions: "
-                )
-                if not _manual_ip:
-                    print("  No address entered; falling back to sequential.")
-                    _parallel_update = False
-                    _validate_targets = []
-                else:
-                    _cl_mgmt_ip = _manual_ip
-                    print(f"  \U0001f4cd Using management IP: {_cl_mgmt_ip}")
+                print("  \U0001f50d Querying cluster for node-management LIFs...")
+                try:
+                    with _suppress_console():
+                        _lif_out = _run_cluster_command(
+                            channel_41,
+                            "set advanced -c off; network interface show "
+                            "-role node-mgmt -fields node,curr-address",
+                            timeout=30,
+                        )
+                    # Parse lines of the form:  nodename   10.x.x.x
+                    _discovered_ips = []
+                    _seen_disc = set()
+                    for _ln in _lif_out.splitlines():
+                        _parts = _ln.split()
+                        if len(_parts) >= 2:
+                            _maybe_ip = _parts[-1]
+                            try:
+                                socket.inet_aton(_maybe_ip)
+                                if _maybe_ip not in _seen_disc and not _maybe_ip.startswith("0."):
+                                    _seen_disc.add(_maybe_ip)
+                                    _discovered_ips.append(_maybe_ip)
+                            except OSError:
+                                pass
+                except Exception as _disc_err:
+                    _discovered_ips = []
                     if log:
-                        log.log(f"4a: parallel SSH fallback IP: {_cl_mgmt_ip}")
-                    _validate_targets = [_cl_mgmt_ip]
+                        log.log(f"4a: node-mgmt LIF query failed: {_disc_err}",
+                                prefix="WARN")
+
+                if _discovered_ips:
+                    print(f"  \u2705 Found {len(_discovered_ips)} node-management IP(s) "
+                          "from cluster:")
+                    for _ip in _discovered_ips:
+                        print(f"     \u2022 {_ip}")
+                    if log:
+                        log.log(f"4a: node mgmt IPs from live cluster: {_discovered_ips}")
+                    _node_mgmt_pool = _discovered_ips
+                    _validate_targets = list(_node_mgmt_pool)
+                else:
+                    print("  \u2139\ufe0f  Could not auto-discover node-mgmt IPs. "
+                          "You can also run option 4e to generate a config file "
+                          "containing these IPs for future runs.")
+                    _manual_ip = _prompt(
+                        "  Enter a node (or cluster) management IP to use "
+                        "for all parallel sessions: "
+                    )
+                    if not _manual_ip:
+                        print("  No address entered; falling back to sequential.")
+                        _parallel_update = False
+                        _validate_targets = []
+                    else:
+                        _cl_mgmt_ip = _manual_ip
+                        print(f"  \U0001f4cd Using management IP: {_cl_mgmt_ip}")
+                        if log:
+                            log.log(f"4a: parallel SSH fallback IP: {_cl_mgmt_ip}")
+                        _validate_targets = [_cl_mgmt_ip]
 
             # Ping + auth validation: confirm every target is reachable and
             # accepts the BMC credentials BEFORE starting the long-running
@@ -15544,9 +15602,16 @@ def main():
     if _operation_mode == 41:
         _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
         ok = _run_ontap_upgrade(_session_log)
-        _session_log.record_completion(normal_exit=ok)
-        print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
-        sys.exit(0 if ok else 1)
+        if ok is None and _operation_mode == 46:
+            # User chose to run 4e config-gather first.
+            print("\n  \u2139\ufe0f  Switching to 4e config-gather workflow.")
+            print("     After it completes, re-run and select option 4a to "
+                  "perform the upgrade.")
+            # Fall through to mode 46 block below.
+        else:
+            _session_log.record_completion(normal_exit=ok)
+            print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
+            sys.exit(0 if ok else 1)
 
     # ── Mode 44 (4c): standalone license-only install ──────────────────────
     if _operation_mode == 44:
