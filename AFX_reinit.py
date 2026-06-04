@@ -16386,6 +16386,7 @@ def main():
         _session_log.record_completion(normal_exit=True)
         print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
 
+        global _4a_pending_after_4e
         if _4a_pending_after_4e:
             _4a_pending_after_4e = False
             _operation_mode = 41
