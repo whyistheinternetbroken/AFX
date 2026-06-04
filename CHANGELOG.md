@@ -9,6 +9,20 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Screen output log (`screen_output_*.log`).** Every line printed to the
+  operator's terminal during a run is now mirrored to a
+  `screen_output_<timestamp>.log` file inside the session log directory.
+  ANSI escape codes are stripped so the file is clean plain text. The new
+  `_TeeStdout` class wraps `sys.stdout` transparently; the original stdout
+  is restored when `SessionLogger.close()` is called.
+- **Auto-offer option 4e when no config files are found (modes 1/3).** When
+  mode 1 (initialize first node) or mode 3 (end-to-end reinit) is selected
+  without a `--config` flag, and no `reinit-config.json` or `BMC_IP.json`
+  is detected in the standard search paths, the script now asks:
+  _"Would you like to generate them from an existing cluster (option 4e)?"_
+  Answering Y (the default) redirects into the option 4e gather-config flow
+  so the user can pull the cluster configuration before starting the reinit,
+  without having to restart the script and manually pick 4e.
 - **`cluster add-node` bulk join flow (modes 2a, 2b, 2c, 3, 4b).** Peer node
   addition has been re-architected around ONTAP's native bulk join command.
   The previous per-node interactive cluster-join wizard flow (create/join

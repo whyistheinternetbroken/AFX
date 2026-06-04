@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/3/2026  
+**Updated:** 6/4/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
 ---
@@ -32,7 +32,7 @@ The script automates the following core tasks:
 - Creates and saves cluster configuration backups
 - Verifies BMC authentication
 
-All session activity is captured in a timestamped log directory with a human-readable summary report.
+All session activity is captured in a timestamped log directory with a human-readable summary report and a full screen-output transcript.
 
 ---
 
@@ -53,6 +53,7 @@ All session activity is captured in a timestamped log directory with a human-rea
 | BMC Auth Verify (4f) | Batch-tests BMC SSH credentials for all nodes in the config file. |
 | Reset to LOADER (4g) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
 | Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
+| **Screen output log** | Every line printed to the terminal during a run is captured to `screen_output_<timestamp>.log` in the session log directory. ANSI codes are stripped for clean plain-text reading. |
 | Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |
 | Screen Mode | `--screen` flag: automatically re-launches the script inside a detached GNU screen session. Protects against SSH disconnections and terminal timeouts. Implies `--bg`. |
 | Node add resume | Resumes interrupted node add processes. |
@@ -533,6 +534,8 @@ cd ~/afx-reinit
 
 For automated or multi-node runs, create a `reinit-config.json`. There are three ways:
 
+> **Tip:** If no config file or `BMC_IP.json` is found when you start modes 1 (initialize) or 3 (full reinit), the script will automatically ask whether you'd like to generate one from an existing cluster before proceeding — choosing **Y** launches option 4e inline.
+
 **Option A — Back up from a live cluster (recommended):** If the cluster is currently running, use `--backup` to capture its configuration automatically:
 
 ```bash
@@ -631,11 +634,16 @@ All output is captured in a timestamped log directory:
 ```
 logs/
   YYYYMMDD_HHMMSS/
-    session_<label>.log    ← full raw console transcript
-    summary_<label>.log    ← human-readable summary report
+    bmc_session_<timestamp>.log    ← full raw console transcript (BMC/ONTAP I/O)
+    screen_output_<timestamp>.log  ← complete transcript of what was printed on screen
+    summary_<timestamp>.log        ← human-readable timing and outcome summary
 ```
 
 The `logs/` directory is created in the same folder as the script.
+
+**`screen_output_*.log`** captures everything that would appear on the operator's terminal — menus, prompts, status lines, and milestone messages — in clean plain text (ANSI escape codes stripped). It is the easiest file to review after a run to see exactly what happened from a user's perspective.
+
+**`bmc_session_*.log`** contains the raw BMC/ONTAP console I/O and all structured log entries with timestamps.
 
 ### Summary File Format
 
