@@ -10750,22 +10750,28 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
                 "set advanced -c off; storage failover show -fields node,state-description",
                 timeout=30,
             )
-        matched_row = None
-        for line in out.splitlines():
-            stripped = line.strip()
-            if not stripped:
+        # ONTAP wraps long node names onto their own line; the state-description
+        # appears on the continuation line(s) immediately below.  Scan the
+        # entire output for a line that contains the node name and, separately,
+        # collect the next non-empty line as the state.  If both the node name
+        # and target_substr appear anywhere within a 3-line window, consider it
+        # matched.
+        matched_state = None
+        lines = [l.strip() for l in out.splitlines()]
+        for i, line in enumerate(lines):
+            if node.lower() not in line.lower():
                 continue
-            first_token = stripped.split()[0].lower()
-            if first_token != node.lower():
-                continue
-            matched_row = stripped
-            if target_substr.lower() in stripped.lower():
+            # Gather this line + next 2 as the "block" for this node entry.
+            block = " ".join(lines[i:i+3])
+            # Also capture just the state portion for logging.
+            matched_state = block
+            if target_substr.lower() in block.lower():
                 if log:
                     log.log(f"Failover state for {node}: matched '{target_substr}'")
                 return True
-            break   # only one row per node; no need to keep scanning
-        if log and matched_row:
-            log.log(f"Failover state for {node}: {matched_row}")
+            break   # found the node's block; stop scanning
+        if log and matched_state:
+            log.log(f"Failover state for {node}: {matched_state}")
         print(f"  \u23f3 Waiting for {label} on {node}  "
               f"(elapsed {int(elapsed)}s / remaining {int(remaining)}s)")
         _time.sleep(min(poll_interval, max(1, remaining)))
