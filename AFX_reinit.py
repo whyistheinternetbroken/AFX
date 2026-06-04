@@ -10916,10 +10916,29 @@ def _run_ontap_upgrade(log):
     """Full ONTAP upgrade workflow (mode 41 / option 4a).
 
     `log` is a SessionLogger instance (may be None in tests).
-    Returns True on success, False on any fatal error.
+    Returns True on success, False on any fatal error, None if redirecting to 4e.
     """
     _print_banner("\U0001f4e6 ONTAP Software Upgrade (4a)")
     print("\n  Note: only upgrades are supported (not downgrades).\n")
+
+    # ── Step 0: check for config files before doing anything else ───────────
+    _has_any_config = bool(_find_config_files(deep_scan=True)) or any(
+        os.path.isfile(os.path.join(_d, "BMC_IP.json"))
+        for _d in _default_config_search_dirs()
+    )
+    if not _has_any_config:
+        print("  \u26a0\ufe0f  No config files (reinit-config.json / BMC_IP.json) "
+              "found on disk.")
+        print("     Option 4e can connect to your existing cluster and generate "
+              "them automatically.")
+        _ans_4e = _prompt(
+            "  Run the 4e config-gather workflow now? [Y/n]: ", "n"
+        ).lower()
+        if _ans_4e != "n":
+            global _operation_mode, _4a_pending_after_4e
+            _operation_mode = 46
+            _4a_pending_after_4e = True
+            return None
 
     # ── Step 1: locate upgrade package ─────────────────────────────────────
     src_type, src_value = _find_upgrade_package()
@@ -10953,26 +10972,6 @@ def _run_ontap_upgrade(log):
         # ── Step 2: BMC credentials ─────────────────────────────────────────
         print("")
         print("  " + "\u2500" * 58)
-        # Prefer an existing BMC/reinit config file (numbered list) over
-        # asking the operator to type the address. Falls back to the manual
-        # prompts when nothing usable is on disk or the operator declines.
-        _has_any_config = bool(_find_config_files(deep_scan=True)) or any(
-            os.path.isfile(os.path.join(_d, "BMC_IP.json"))
-            for _d in _default_config_search_dirs()
-        )
-        if not _has_any_config:
-            print("\n  \u26a0\ufe0f  No config files (reinit-config.json / BMC_IP.json) "
-                  "found on disk.")
-            print("     Option 4e can connect to your existing cluster and generate "
-                  "them automatically.")
-            _ans_4e = _prompt(
-                "  Run the 4e config-gather workflow now? [Y/n]: ", "n"
-            ).lower()
-            if _ans_4e != "n":
-                global _operation_mode, _4a_pending_after_4e
-                _operation_mode = 46
-                _4a_pending_after_4e = True
-                return None
         bmc_host, bmc_user, bmc_pass = _pick_bmc_from_existing_config()
         if not bmc_host:
             bmc_host = input("  BMC hostname / IP: ").strip()
