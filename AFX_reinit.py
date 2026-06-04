@@ -1919,6 +1919,9 @@ def _slog(msg, prefix="INFO"):
 # ---------------------------------------------------------------------------
 
 _operation_mode = None
+# Set to True when 4a redirects to 4e for config creation; causes 4e to
+# continue directly into 4a after the config is written.
+_4a_pending_after_4e = False
 # When True (1b / 3 primary), the script auto-answers all post-option-9
 # prompts and drives the cluster setup wizard non-interactively.
 _auto_setup = False
@@ -10966,8 +10969,9 @@ def _run_ontap_upgrade(log):
                 "  Run the 4e config-gather workflow now? [Y/n]: ", "n"
             ).lower()
             if _ans_4e != "n":
-                global _operation_mode
+                global _operation_mode, _4a_pending_after_4e
                 _operation_mode = 46
+                _4a_pending_after_4e = True
                 return None
         bmc_host, bmc_user, bmc_pass = _pick_bmc_from_existing_config()
         if not bmc_host:
@@ -15603,11 +15607,8 @@ def main():
         _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
         ok = _run_ontap_upgrade(_session_log)
         if ok is None and _operation_mode == 46:
-            # User chose to run 4e config-gather first.
-            print("\n  \u2139\ufe0f  Switching to 4e config-gather workflow.")
-            print("     After it completes, re-run and select option 4a to "
-                  "perform the upgrade.")
-            # Fall through to mode 46 block below.
+            # User chose to run 4e config-gather first; fall through to mode 46.
+            pass
         else:
             _session_log.record_completion(normal_exit=ok)
             print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
@@ -16384,6 +16385,17 @@ def main():
 
         _session_log.record_completion(normal_exit=True)
         print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
+
+        if _4a_pending_after_4e:
+            _4a_pending_after_4e = False
+            _operation_mode = 41
+            print("\n  \u2705 Config created. Continuing with 4a upgrade workflow...\n")
+            _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
+            ok = _run_ontap_upgrade(_session_log)
+            _session_log.record_completion(normal_exit=ok)
+            print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
+            sys.exit(0 if ok else 1)
+
         sys.exit(0)
 
     # ── Mode 47 (4f): verify BMC authentication ────────────────────────────
