@@ -1264,6 +1264,49 @@ class _NodeLogWriter:
 # Session logging with phase timing
 # ---------------------------------------------------------------------------
 
+class _TeeStdout:
+    """Mirrors all write() calls to both the real stdout and a log file.
+
+    Installed by SessionLogger so every print() during a run is captured
+    to ``screen_output_*.log`` in the session log directory.  ANSI escape
+    codes are stripped from the file copy so the log is clean plain text.
+    Thread-safe: a lock guards the file write so concurrent threads don't
+    interleave partial lines in the log.
+    """
+
+    def __init__(self, real_stdout, log_file):
+        self._real = real_stdout
+        self._log = log_file
+        self._lock = threading.Lock()
+
+    def write(self, text):
+        self._real.write(text)
+        try:
+            if not self._log.closed:
+                clean = _ANSI_RE.sub("", text)
+                with self._lock:
+                    self._log.write(clean)
+        except Exception:
+            pass
+
+    def flush(self):
+        self._real.flush()
+        try:
+            if not self._log.closed:
+                self._log.flush()
+        except Exception:
+            pass
+
+    def fileno(self):
+        return self._real.fileno()
+
+    def isatty(self):
+        return self._real.isatty()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 class SessionLogger:
     # Background heartbeat tick interval (seconds). While a step is running
     # the logger writes a "still running" line at this cadence so long
@@ -1284,6 +1327,17 @@ class SessionLogger:
         # buffering=1 = line-buffered; auto-flushes on every \n so the file is
         # safe to read even while the script is still running (or backgrounded).
         self._file = open(self.log_file, "w", encoding="utf-8", buffering=1)
+        # Screen output log: captures everything printed to the console so a
+        # full transcript of the user-visible run output is preserved.
+        self.screen_log_file = os.path.join(
+            self.log_dir, f"screen_output_{timestamp}.log"
+        )
+        self._screen_log = open(
+            self.screen_log_file, "w", encoding="utf-8", buffering=1
+        )
+        self._orig_stdout = sys.stdout
+        self._stdout_restored = False
+        sys.stdout = _TeeStdout(self._orig_stdout, self._screen_log)
         self._bg_mode = bg_mode
         self._start_time = datetime.now()
         self._phase_times = {}
@@ -1713,6 +1767,20 @@ class SessionLogger:
                 now, total_elapsed,
                 outcome_status, outcome_note,
             )
+
+        # Restore the real stdout and close the screen output log.
+        # Done outside the lock so closing the file doesn't block other threads.
+        if not self._stdout_restored:
+            try:
+                sys.stdout = self._orig_stdout
+                self._stdout_restored = True
+            except Exception:
+                pass
+        try:
+            if not self._screen_log.closed:
+                self._screen_log.close()
+        except Exception:
+            pass
 
     def _write_summary_file(self, now, total_elapsed, outcome_status, outcome_note):
         """Write a human-readable summary file next to the full session log.
@@ -15516,6 +15584,33 @@ def main():
         _session_log.record_completion(normal_exit=True)
         print(f"\n\U0001f4dd Full session log saved to: {_session_log.log_file}")
         sys.exit(0)
+
+    # ── Pre-check: offer 4e when mode 1/3 finds no config files ───────────
+    # Checked here — before the mode 46 block — so that changing
+    # _operation_mode to 46 causes the 4e block immediately below to run.
+    if _operation_mode in (1, 3) and not args.config:
+        _precheck_dirs = _default_config_search_dirs()
+        _precheck_configs = _find_config_files(
+            search_dirs=_precheck_dirs, deep_scan=True
+        )
+        _bmc_ip_exists = any(
+            os.path.isfile(os.path.join(d, "BMC_IP.json"))
+            for d in _precheck_dirs
+        )
+        if not _precheck_configs and not _bmc_ip_exists:
+            print(
+                "\n⚠️  No reinit-config or BMC_IP files were detected in the "
+                "search paths."
+            )
+            try:
+                _gen_ans = input(
+                    "  Would you like to generate them from an existing cluster"
+                    " (option 4e)? [Y/n]: "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                _gen_ans = "n"
+            if _gen_ans != "n":
+                _operation_mode = 46
 
     # ── Mode 46 (4e): create backup cluster configuration ──────────────────
     if _operation_mode == 46:
