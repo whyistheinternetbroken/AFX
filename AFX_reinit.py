@@ -11782,7 +11782,7 @@ def _run_ontap_upgrade(log):
             print(f"  \u23f3 Waiting for {takeover_node} to reach 'waiting for giveback'...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "waiting for giveback",
-                total_timeout=1800, poll_interval=30, log=log,
+                total_timeout=1800, poll_interval=60, log=log,
                 phase_label="takeover/giveback",
             ):
                 _tko_elapsed = time.monotonic() - _t0_tko
@@ -11829,7 +11829,7 @@ def _run_ontap_upgrade(log):
             print(f"  \u23f3 Waiting for {takeover_node} to reconnect...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "connected to",
-                total_timeout=1800, poll_interval=30, log=log,
+                total_timeout=1800, poll_interval=60, log=log,
                 phase_label="node reconnect",
                 exclude_substrs=["partial giveback", "waiting for cluster"],
             ):
@@ -11944,7 +11944,7 @@ def _run_ontap_upgrade(log):
             # Re-use _wait_for_failover_state with a short timeout for each node.
             _fc_ok = _wait_for_failover_state(
                 channel_41, _fn, "connected to",
-                total_timeout=600, poll_interval=30, log=log,
+                total_timeout=600, poll_interval=60, log=log,
                 phase_label="final cluster reconnect",
                 exclude_substrs=["partial giveback", "waiting for cluster"],
             )
