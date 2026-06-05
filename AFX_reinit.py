@@ -10725,21 +10725,24 @@ def _parse_failover_show(output):
 
 
 def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
-                             poll_interval=180, log=None, phase_label=None,
-                             exclude_substrs=None):
+                             poll_interval=60, log=None, phase_label=None,
+                             exclude_substrs=None, also_accept=None):
     """Poll 'storage failover show -fields node,state-description' until
     the row for `node` contains `target_substr` (case-insensitive) AND does
     not contain any of `exclude_substrs`.
-    Returns True on success, False on timeout.
 
-    Console output is suppressed during the poll — the raw cluster command
-    echo and full state row land in the session log only. The operator
-    sees a single recurring "Waiting for ..." line with elapsed/remaining
-    seconds.
+    `also_accept` is an optional list of additional substrings (without
+    exclusions) that also count as success — used to handle cases where
+    the node transitions through the target state faster than the poll
+    interval and is already in a later state (e.g. already "connected to"
+    when waiting for "waiting for giveback").
+
+    Returns True on success, False on timeout.
     """
     import time as _time
     label = phase_label or f"failover state '{target_substr}'"
     exclude_substrs = [e.lower() for e in (exclude_substrs or [])]
+    also_accept = [a.lower() for a in (also_accept or [])]
     start = _time.monotonic()
     while True:
         elapsed = _time.monotonic() - start
@@ -10755,10 +10758,7 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
         # ONTAP wraps long node names and state descriptions across multiple
         # lines. Collect ALL lines belonging to this node's block by reading
         # until the next non-indented line (which starts the next node entry)
-        # or end of output. This handles states like:
-        #   "Connected to X, Waiting for cluster applications to
-        #    come online on the local node."
-        # which span more lines than a fixed window would cover.
+        # or end of output.
         matched_state = None
         lines = [l for l in out.splitlines() if l.strip()]
         for i, line in enumerate(lines):
@@ -10768,15 +10768,14 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
             block_lines = [line.strip()]
             for j in range(i + 1, len(lines)):
                 next_line = lines[j]
-                # A non-indented line starts a new record — stop collecting.
                 if next_line and next_line[0] != " ":
                     break
                 block_lines.append(next_line.strip())
             block = " ".join(b for b in block_lines if b)
             matched_state = block
             block_lower = block.lower()
+            # Check primary target (with exclusions).
             if target_substr.lower() in block_lower:
-                # Reject if any exclusion substring is also present.
                 excluded = [e for e in exclude_substrs if e in block_lower]
                 if excluded:
                     if log:
@@ -10785,6 +10784,13 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
                 else:
                     if log:
                         log.log(f"Failover state for {node}: matched '{target_substr}'")
+                    return True
+            # Check also_accept targets (no exclusions — these are "past" states).
+            for alt in also_accept:
+                if alt in block_lower:
+                    if log:
+                        log.log(f"Failover state for {node}: matched alt '{alt}' "
+                                f"(accepted as past target '{target_substr}'): {block}")
                     return True
             break   # found the node's block; stop scanning
         if log and matched_state:
@@ -11784,6 +11790,7 @@ def _run_ontap_upgrade(log):
                 channel_41, takeover_node, "waiting for giveback",
                 total_timeout=1800, poll_interval=60, log=log,
                 phase_label="takeover/giveback",
+                also_accept=["connected to"],
             ):
                 _tko_elapsed = time.monotonic() - _t0_tko
                 print(f"  \u274c Timed out waiting for giveback state on {takeover_node}.")
