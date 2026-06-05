@@ -10880,7 +10880,10 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
             if ("entries were displayed" in gl_lower or "::" in gl_lower
                     or gl_lower.startswith("node") or set(gl_lower) <= {"-", " "}
                     or "no aggregates to give back" in gl_lower
-                    or "partner" in gl_lower or "giveback status" in gl_lower):
+                    or "partner" in gl_lower or "giveback status" in gl_lower
+                    # Skip command-echo lines that appear in the output buffer
+                    or "storage failover" in gl_lower or "set diag" in gl_lower
+                    or "(storage failover" in gl_lower):
                 continue
             # Any other non-empty data line means pending giveback work.
             has_pending_gb = True
