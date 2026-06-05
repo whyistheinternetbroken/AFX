@@ -11738,12 +11738,30 @@ def _run_ontap_upgrade(log):
                 log.log(f"Initiating takeover of {takeover_node} by {takeover_by}")
             _t0_tko = time.monotonic()
             with _suppress_console():
-                _run_cluster_command(
-                    channel_41,
+                # Send the takeover command and handle any confirmation prompt
+                # that ONTAP may issue ("Do you want to continue? {y|n}:").
+                # _run_cluster_command waits for a cluster prompt; if ONTAP
+                # instead shows a y/n confirmation, we auto-answer 'y' then
+                # wait for the actual cluster prompt.
+                drain_channel(channel_41, seconds=0.3)
+                channel_41.send(
                     f"storage failover takeover -ofnode {takeover_node} "
-                    f"-option normal -override-vetoes true",
-                    timeout=60,
+                    f"-option normal -override-vetoes true\r"
                 )
+                _tko_buf = ""
+                _tko_deadline = time.monotonic() + 90
+                while time.monotonic() < _tko_deadline:
+                    if channel_41.recv_ready():
+                        _tko_buf += channel_41.recv(4096).decode("utf-8", errors="replace")
+                        if _session_log:
+                            _session_log.log_console(_tko_buf[-500:])
+                        # Auto-answer confirmation prompts
+                        if re.search(r"\{y\|n\}|\[y/n\]|\(y/n\)", _tko_buf, re.IGNORECASE):
+                            channel_41.send("y\r")
+                            _tko_buf = ""
+                        if _CLUSTER_PROMPT_RE.search(_tko_buf[-200:]):
+                            break
+                    time.sleep(0.2)
             print(f"  \u23f3 Waiting for {takeover_node} to reach 'waiting for giveback'...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "waiting for giveback",
@@ -11773,12 +11791,24 @@ def _run_ontap_upgrade(log):
                 log.log(f"Issuing giveback for {takeover_node}")
             _t0_gb = time.monotonic()
             with _suppress_console():
-                _run_cluster_command(
-                    channel_41,
+                drain_channel(channel_41, seconds=0.3)
+                channel_41.send(
                     f"storage failover giveback -ofnode {takeover_node} "
-                    f"-override-vetoes true",
-                    timeout=60,
+                    f"-override-vetoes true\r"
                 )
+                _gb_cmd_buf = ""
+                _gb_cmd_deadline = time.monotonic() + 90
+                while time.monotonic() < _gb_cmd_deadline:
+                    if channel_41.recv_ready():
+                        _gb_cmd_buf += channel_41.recv(4096).decode("utf-8", errors="replace")
+                        if _session_log:
+                            _session_log.log_console(_gb_cmd_buf[-500:])
+                        if re.search(r"\{y\|n\}|\[y/n\]|\(y/n\)", _gb_cmd_buf, re.IGNORECASE):
+                            channel_41.send("y\r")
+                            _gb_cmd_buf = ""
+                        if _CLUSTER_PROMPT_RE.search(_gb_cmd_buf[-200:]):
+                            break
+                    time.sleep(0.2)
             print(f"  \u23f3 Waiting for {takeover_node} to reconnect...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "connected to",
