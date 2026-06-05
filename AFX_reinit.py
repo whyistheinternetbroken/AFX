@@ -10907,6 +10907,7 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
 
 
 
+def _pick_bmc_from_existing_config():
     """4a helper: scan for known config / BMC files and let the operator
     pick a single BMC (with its stored credentials) instead of typing the
     hostname.
