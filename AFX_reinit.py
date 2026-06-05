@@ -10960,10 +10960,19 @@ def _run_ontap_upgrade(log):
         print("\n  No package selected. Exiting.")
         return False
 
-    _prestage_ans = _prompt("\n  Do you want to pre-stage the image only? [y/N]: ", "n").lower()
-    _prestage_only = (_prestage_ans == "y")
+    print("\n  What would you like to do?")
+    print("    validate  - Validate the package on all nodes only (no install)")
+    print("    install   - Full end-to-end upgrade (validate + install + takeover/giveback)")
+    print("    prestage  - Install image only; skip rolling takeover/giveback")
+    while True:
+        _mode_ans = _prompt("  Your choice [validate/install/prestage]: ").lower().strip()
+        if _mode_ans in ("validate", "install", "prestage"):
+            break
+        print("  \u26a0\ufe0f  Please enter 'validate', 'install', or 'prestage'.")
+    _validate_only = (_mode_ans == "validate")
+    _prestage_only = (_mode_ans == "prestage")
     if log:
-        log.log(f"Pre-stage only: {_prestage_only}")
+        log.log(f"Upgrade mode: {_mode_ans}")
 
     httpd = None
     pkg_url = None
@@ -11418,7 +11427,7 @@ def _run_ontap_upgrade(log):
                             f"-setdefault true "
                             f"-validate-only true"
                         )
-                        print(f"  [{nn}] \U0001f50e Validating...")
+                        print(f"  [{nn}] \U0001f50e Validating... (this may take 3-5 minutes)")
                         _t0_v = time.monotonic()
                         out_v = _shell_run_cmd(clv, vcmd2, timeout=360)
                         _val_elapsed = time.monotonic() - _t0_v
@@ -11459,21 +11468,23 @@ def _run_ontap_upgrade(log):
                     print(f"    {nn}:\n{msg[-400:]}")
                 if log:
                     log.log(f"Validation failures: {[nn for nn, _ in val_failures]}", prefix="ERROR")
-                ans = _prompt("\n  Validation failed on one or more nodes; continue with upgrade? [y/N]: ", "n").lower()
-                if log:
-                    log.log(f"User chose to {'continue' if ans == 'y' else 'stop'} after validation failures")
-                if ans != "y":
-                    print("  Exiting.")
-                    return False
+                if not _validate_only:
+                    _ans_vf2 = _prompt("\n  Validation failed on one or more nodes; continue with upgrade? [y/N]: ", "n").lower()
+                    if log:
+                        log.log(f"User chose to {'continue' if _ans_vf2 == 'y' else 'stop'} after validation failures")
+                    if _ans_vf2 != "y":
+                        print("  Exiting.")
+                        return False
             else:
                 if log:
                     log.log("All nodes passed validation")
-                ans = _prompt("\n  Validation succeeded on all nodes; continue with upgrade? [Y/n]: ", "n").lower()
+                print("\n  \u2705 Validation passed on all nodes.")
+
+            if _validate_only:
+                print("\n  Validate-only mode: skipping install and takeover/giveback.")
                 if log:
-                    log.log(f"User chose to {'continue' if ans != 'n' else 'stop'} after validation success")
-                if ans == "n":
-                    print("  Exiting.")
-                    return False
+                    log.log("Validate-only: exiting after validation")
+                return True
 
             # ── Parallel install ───────────────────────────────────────────
             print(f"\n  \U0001f680 Starting parallel image install on {len(_update_tasks)} node(s)...")
@@ -11573,7 +11584,7 @@ def _run_ontap_upgrade(log):
                     f"-setdefault true "
                     f"-validate-only true"
                 )
-                print(f"  \U0001f50e Validating update on {nodename}...")
+                print(f"  \U0001f50e Validating update on {nodename}... (this may take 3-5 minutes)")
                 _t0_seq_val = time.monotonic()
                 with _suppress_console():
                     out_val = _run_cluster_command(channel_41, vcmd, timeout=300)
@@ -11583,10 +11594,12 @@ def _run_ontap_upgrade(log):
                     if log:
                         log.log(f"Validation failed for {nodename}: {out_val[-500:]}", prefix="ERROR")
                         log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] image validate", _seq_val_elapsed)
-                    ans = _prompt("\n  Validation failed; continue with upgrade? [y/N]: ", "n").lower()
+                    if _validate_only:
+                        continue
+                    _ans_vf = _prompt("\n  Validation failed; continue with upgrade? [y/N]: ", "n").lower()
                     if log:
-                        log.log(f"User chose to {'continue' if ans == 'y' else 'stop'} after validation failure")
-                    if ans != "y":
+                        log.log(f"User chose to {'continue' if _ans_vf == 'y' else 'stop'} after validation failure")
+                    if _ans_vf != "y":
                         print("  Exiting.")
                         return False
                 else:
@@ -11594,12 +11607,9 @@ def _run_ontap_upgrade(log):
                     if log:
                         log.log(f"Validation passed for {nodename}")
                         log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] image validate", _seq_val_elapsed)
-                    ans = _prompt("\n  Validation succeeded; continue with upgrade? [Y/n]: ", "n").lower()
-                    if log:
-                        log.log(f"User chose to {'continue' if ans != 'n' else 'stop'} after validation success")
-                    if ans == "n":
-                        print("  Exiting.")
-                        return False
+
+                if _validate_only:
+                    continue  # skip install for this node
 
                 ucmd = (
                     f"set advanced -c off; system image update -node {nodename} "
@@ -11624,7 +11634,14 @@ def _run_ontap_upgrade(log):
                     log.log(f"Image installed on {nodename}")
                     log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] download + install", _seq_inst_elapsed)
 
-        # ── Pre-stage only: exit here after installs complete ────────────────
+        # ── Pre-stage / validate-only exits ─────────────────────────────────
+        if _validate_only:
+            print("\n  \u2705 Validate-only mode: all nodes validated. "
+                  "Skipping install and takeover/giveback.")
+            if log:
+                log.log("Validate-only: exiting after sequential validation")
+            return True
+
         if _prestage_only:
             print("\n  \u2705 Pre-stage complete. Image(s) installed on all nodes.")
             print("     Rolling upgrade (takeover/giveback) was skipped.")
