@@ -10752,17 +10752,27 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
                 "set advanced -c off; storage failover show -fields node,state-description",
                 timeout=30,
             )
-        # ONTAP wraps long node names onto their own line; the state-description
-        # appears on the continuation line(s) immediately below.  Collect up to
-        # 5 lines starting from the node-name line to cover multi-line states
-        # like "Connected to X, Partial giveback".
+        # ONTAP wraps long node names and state descriptions across multiple
+        # lines. Collect ALL lines belonging to this node's block by reading
+        # until the next non-indented line (which starts the next node entry)
+        # or end of output. This handles states like:
+        #   "Connected to X, Waiting for cluster applications to
+        #    come online on the local node."
+        # which span more lines than a fixed window would cover.
         matched_state = None
-        lines = [l.strip() for l in out.splitlines()]
+        lines = [l for l in out.splitlines() if l.strip()]
         for i, line in enumerate(lines):
-            if node.lower() not in line.lower():
+            if node.lower() not in line.strip().lower():
                 continue
-            # Gather this line + next 4 to capture multi-line state descriptions.
-            block = " ".join(l for l in lines[i:i+5] if l)
+            # Gather this line + all indented continuation lines.
+            block_lines = [line.strip()]
+            for j in range(i + 1, len(lines)):
+                next_line = lines[j]
+                # A non-indented line starts a new record — stop collecting.
+                if next_line and next_line[0] != " ":
+                    break
+                block_lines.append(next_line.strip())
+            block = " ".join(b for b in block_lines if b)
             matched_state = block
             block_lower = block.lower()
             if target_substr.lower() in block_lower:
