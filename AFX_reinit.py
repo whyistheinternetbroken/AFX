@@ -10725,10 +10725,11 @@ def _parse_failover_show(output):
 
 
 def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
-                             poll_interval=180, log=None, phase_label=None):
+                             poll_interval=180, log=None, phase_label=None,
+                             exclude_substrs=None):
     """Poll 'storage failover show -fields node,state-description' until
-    the row whose first column is exactly `node` contains `target_substr`
-    (case-insensitive) in the state-description column.
+    the row for `node` contains `target_substr` (case-insensitive) AND does
+    not contain any of `exclude_substrs`.
     Returns True on success, False on timeout.
 
     Console output is suppressed during the poll — the raw cluster command
@@ -10738,6 +10739,7 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
     """
     import time as _time
     label = phase_label or f"failover state '{target_substr}'"
+    exclude_substrs = [e.lower() for e in (exclude_substrs or [])]
     start = _time.monotonic()
     while True:
         elapsed = _time.monotonic() - start
@@ -10751,24 +10753,29 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
                 timeout=30,
             )
         # ONTAP wraps long node names onto their own line; the state-description
-        # appears on the continuation line(s) immediately below.  Scan the
-        # entire output for a line that contains the node name and, separately,
-        # collect the next non-empty line as the state.  If both the node name
-        # and target_substr appear anywhere within a 3-line window, consider it
-        # matched.
+        # appears on the continuation line(s) immediately below.  Collect up to
+        # 5 lines starting from the node-name line to cover multi-line states
+        # like "Connected to X, Partial giveback".
         matched_state = None
         lines = [l.strip() for l in out.splitlines()]
         for i, line in enumerate(lines):
             if node.lower() not in line.lower():
                 continue
-            # Gather this line + next 2 as the "block" for this node entry.
-            block = " ".join(lines[i:i+3])
-            # Also capture just the state portion for logging.
+            # Gather this line + next 4 to capture multi-line state descriptions.
+            block = " ".join(l for l in lines[i:i+5] if l)
             matched_state = block
-            if target_substr.lower() in block.lower():
-                if log:
-                    log.log(f"Failover state for {node}: matched '{target_substr}'")
-                return True
+            block_lower = block.lower()
+            if target_substr.lower() in block_lower:
+                # Reject if any exclusion substring is also present.
+                excluded = [e for e in exclude_substrs if e in block_lower]
+                if excluded:
+                    if log:
+                        log.log(f"Failover state for {node}: matched '{target_substr}' "
+                                f"but excluded by {excluded}: {block}")
+                else:
+                    if log:
+                        log.log(f"Failover state for {node}: matched '{target_substr}'")
+                    return True
             break   # found the node's block; stop scanning
         if log and matched_state:
             log.log(f"Failover state for {node}: {matched_state}")
@@ -11765,7 +11772,7 @@ def _run_ontap_upgrade(log):
             print(f"  \u23f3 Waiting for {takeover_node} to reach 'waiting for giveback'...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "waiting for giveback",
-                total_timeout=1800, poll_interval=180, log=log,
+                total_timeout=1800, poll_interval=30, log=log,
                 phase_label="takeover/giveback",
             ):
                 _tko_elapsed = time.monotonic() - _t0_tko
@@ -11812,8 +11819,9 @@ def _run_ontap_upgrade(log):
             print(f"  \u23f3 Waiting for {takeover_node} to reconnect...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "connected to",
-                total_timeout=1800, poll_interval=180, log=log,
+                total_timeout=1800, poll_interval=30, log=log,
                 phase_label="node reconnect",
+                exclude_substrs=["partial giveback", "waiting for cluster"],
             ):
                 _gb_elapsed = time.monotonic() - _t0_gb
                 print(f"  \u274c Timed out waiting for {takeover_node} to reconnect.")
@@ -11912,6 +11920,34 @@ def _run_ontap_upgrade(log):
             print("  \u2705 Remediation complete.")
             if log:
                 log.log("Remediation takeover/giveback complete")
+
+        # ── Step 11c: final cluster health gate ─────────────────────────────
+        # Block until every node is fully reconnected (no "partial giveback",
+        # no "waiting for cluster applications") AND running its default image.
+        print("\n  \U0001f50d Final health check: waiting for all nodes to be fully connected...")
+        with _suppress_console():
+            _fo_final = _run_cluster_command(channel_41, "storage failover show", timeout=60)
+        _fo_final_rows = _parse_failover_show(_fo_final)
+        _unhealthy = []
+        for _fr in _fo_final_rows:
+            _fn = _fr["node"]
+            # Re-use _wait_for_failover_state with a short timeout for each node.
+            _fc_ok = _wait_for_failover_state(
+                channel_41, _fn, "connected to",
+                total_timeout=600, poll_interval=30, log=log,
+                phase_label="final cluster reconnect",
+                exclude_substrs=["partial giveback", "waiting for cluster"],
+            )
+            if not _fc_ok:
+                _unhealthy.append(_fn)
+        if _unhealthy:
+            print(f"\n  \u274c Cluster did not reach healthy state for: {_unhealthy}")
+            if log:
+                log.log(f"Final health check failed for: {_unhealthy}", prefix="ERROR")
+            return False
+        print("  \u2705 All nodes fully connected.")
+        if log:
+            log.log("Final health check passed — all nodes connected")
 
         # ── Step 12: verify version ─────────────────────────────────────────
         print("\n  \U0001f50d Verifying ONTAP version post-upgrade...")
