@@ -11795,6 +11795,71 @@ def _run_ontap_upgrade(log):
                 if not _do_takeover_giveback(to_node, by_node):
                     return False
 
+        # ── Step 11b: remediation pass ──────────────────────────────────────
+        # After the rolling upgrade, verify that every node is running its
+        # default image (is-default=true AND is-current=true on the same row).
+        # A node where the default image is *not* current missed its takeover
+        # (e.g. due to a transient timeout); take it over and give it back now.
+        print("\n  \U0001f50d Checking that all nodes are running their default image...")
+        with _suppress_console():
+            out_imgcheck = _run_cluster_command(
+                channel_41,
+                "set advanced -c off; system image show",
+                timeout=60,
+            )
+        if log:
+            log.log(f"Post-upgrade image show:\n{out_imgcheck}")
+
+        # Parse full image show: node -> {image -> {is_default, is_current}}
+        _img_state = {}   # node -> list of (image, is_default, is_current)
+        _img_node = None
+        for _il in out_imgcheck.splitlines():
+            _is = _il.strip()
+            if not _is or "::" in _is or "entries were displayed" in _is.lower():
+                continue
+            if set(_is) <= {"-", " "}:
+                continue
+            # A line starting at column 0 (no leading space) is a new node name.
+            if _il and _il[0] != " ":
+                _img_node = _il.split()[0]
+                _img_state.setdefault(_img_node, [])
+            elif _img_node:
+                _tok = _is.split()
+                # Expected tokens: image  is_default  is_current  version  date...
+                if len(_tok) >= 3 and _tok[0].lower().startswith("image"):
+                    _img_state[_img_node].append(
+                        (_tok[0], _tok[1].lower() == "true", _tok[2].lower() == "true")
+                    )
+
+        _needs_remediation = []
+        for _n, _imgs in _img_state.items():
+            # Find the default image entry
+            _def_entry = next((e for e in _imgs if e[1]), None)
+            if _def_entry and not _def_entry[2]:
+                # Default image is not current — node needs a takeover/giveback
+                _needs_remediation.append(_n)
+                print(f"  \u26a0\ufe0f  {_n}: default image '{_def_entry[0]}' is NOT current — "
+                      "will perform takeover/giveback.")
+                if log:
+                    log.log(f"{_n}: default image not current; queuing remediation takeover")
+
+        if not _needs_remediation:
+            print("  \u2705 All nodes are running their default image.")
+            if log:
+                log.log("All nodes running default image — no remediation needed")
+        else:
+            print(f"\n  \U0001f504 Remediating {len(_needs_remediation)} node(s)...")
+            for _rn in _needs_remediation:
+                _rb = partner_of.get(_rn, "")
+                if not _do_takeover_giveback(_rn, _rb):
+                    print(f"  \u274c Remediation takeover/giveback failed for {_rn}.")
+                    if log:
+                        log.log(f"Remediation takeover failed for {_rn}", prefix="ERROR")
+                    return False
+            print("  \u2705 Remediation complete.")
+            if log:
+                log.log("Remediation takeover/giveback complete")
+
         # ── Step 12: verify version ─────────────────────────────────────────
         print("\n  \U0001f50d Verifying ONTAP version post-upgrade...")
         _t0_ver = time.monotonic()
