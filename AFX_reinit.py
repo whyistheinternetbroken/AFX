@@ -10804,7 +10804,109 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
     return False
 
 
-def _pick_bmc_from_existing_config():
+def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
+                               poll_interval=60, log=None):
+    """Poll until ALL expected nodes satisfy both:
+      1. 'storage failover show' shows takeover_possible=true and a state
+         description of exactly 'Connected to <partner>' with no extra text.
+      2. 'storage failover show-giveback' shows 'No aggregates to give back'
+         (or no rows) for every node.
+
+    Returns True when healthy, False on timeout.
+    """
+    import time as _time
+    start = _time.monotonic()
+    while True:
+        elapsed = _time.monotonic() - start
+        if elapsed >= total_timeout:
+            break
+        remaining = total_timeout - elapsed
+
+        with _suppress_console():
+            out_fo  = _run_cluster_command(channel, "storage failover show", timeout=30)
+            out_gb  = _run_cluster_command(
+                channel,
+                "set diag -c off; storage failover show-giveback",
+                timeout=30,
+            )
+
+        # ── Check 1: all nodes connected cleanly ────────────────────────────
+        fo_rows = _parse_failover_show(out_fo)
+        if log:
+            log.log(f"Cluster health poll — failover show:\n{out_fo.strip()}")
+
+        # Build a node→state_description map from raw output (same wrapped-line
+        # logic as _wait_for_failover_state).
+        node_state = {}
+        lines = [l for l in out_fo.splitlines() if l.strip()]
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line and line[0] != " " and "::" not in line and "---" not in line:
+                node_name = line.strip().split()[0]
+                block_lines = [line.strip()]
+                j = i + 1
+                while j < len(lines):
+                    nl = lines[j]
+                    if nl and nl[0] != " ":
+                        break
+                    block_lines.append(nl.strip())
+                    j += 1
+                node_state[node_name] = " ".join(b for b in block_lines if b)
+                i = j
+            else:
+                i += 1
+
+        not_clean = []
+        for n in expected_nodes:
+            state_block = node_state.get(n, "").lower()
+            # Must contain "connected to" and NOT contain any degraded phrases.
+            degraded = ["partial giveback", "waiting for cluster",
+                        "waiting for giveback", "in takeover"]
+            if "connected to" not in state_block:
+                not_clean.append(f"{n}: not yet connected ({state_block[:60]})")
+            elif any(d in state_block for d in degraded):
+                not_clean.append(f"{n}: degraded state ({state_block[:80]})")
+        # Also check takeover_possible from parsed rows.
+        for r in fo_rows:
+            if r["node"] in expected_nodes and not r["takeover_possible"]:
+                not_clean.append(f"{r['node']}: takeover_possible=false")
+
+        # ── Check 2: no aggregates to give back ─────────────────────────────
+        gb_lines = [l.strip() for l in out_gb.splitlines() if l.strip()]
+        has_pending_gb = False
+        for gl in gb_lines:
+            gl_lower = gl.lower()
+            if ("entries were displayed" in gl_lower or "::" in gl_lower
+                    or gl_lower.startswith("node") or set(gl_lower) <= {"-", " "}
+                    or "no aggregates to give back" in gl_lower
+                    or "partner" in gl_lower or "giveback status" in gl_lower):
+                continue
+            # Any other non-empty data line means pending giveback work.
+            has_pending_gb = True
+            not_clean.append(f"pending giveback: {gl[:80]}")
+            break
+
+        if not not_clean:
+            if log:
+                log.log("Cluster health check passed: all nodes connected, "
+                        "no pending giveback")
+            return True
+
+        if log:
+            log.log(f"Cluster not yet healthy: {not_clean}")
+        print(f"  \u23f3 Waiting for cluster to be healthy  "
+              f"(elapsed {int(elapsed)}s / remaining {int(remaining)}s)")
+        for reason in not_clean:
+            print(f"     \u2022 {reason}")
+        _time.sleep(min(poll_interval, max(1, remaining)))
+
+    if log:
+        log.log("Timeout waiting for cluster health", prefix="WARN")
+    return False
+
+
+
     """4a helper: scan for known config / BMC files and let the operator
     pick a single BMC (with its stored credentials) instead of typing the
     hostname.
@@ -11833,17 +11935,16 @@ def _run_ontap_upgrade(log):
                         if _CLUSTER_PROMPT_RE.search(_gb_cmd_buf[-200:]):
                             break
                     time.sleep(0.2)
-            print(f"  \u23f3 Waiting for {takeover_node} to reconnect...")
-            if not _wait_for_failover_state(
-                channel_41, takeover_node, "connected to",
+            print(f"  \u23f3 Waiting for cluster to be healthy after giveback of {takeover_node}...")
+            _all_nodes = list(node_image.keys())
+            if not _wait_for_cluster_healthy(
+                channel_41, _all_nodes,
                 total_timeout=1800, poll_interval=60, log=log,
-                phase_label="node reconnect",
-                exclude_substrs=["partial giveback", "waiting for cluster"],
             ):
                 _gb_elapsed = time.monotonic() - _t0_gb
-                print(f"  \u274c Timed out waiting for {takeover_node} to reconnect.")
+                print(f"  \u274c Timed out waiting for cluster health after giveback of {takeover_node}.")
                 if log:
-                    log.log(f"Timeout waiting for {takeover_node} reconnect",
+                    log.log(f"Timeout waiting for cluster health after giveback of {takeover_node}",
                             prefix="ERROR")
                     log.add_phase_subtiming(
                         "Upgrade Workflow",
@@ -11939,32 +12040,19 @@ def _run_ontap_upgrade(log):
                 log.log("Remediation takeover/giveback complete")
 
         # ── Step 11c: final cluster health gate ─────────────────────────────
-        # Block until every node is fully reconnected (no "partial giveback",
-        # no "waiting for cluster applications") AND running its default image.
-        print("\n  \U0001f50d Final health check: waiting for all nodes to be fully connected...")
-        with _suppress_console():
-            _fo_final = _run_cluster_command(channel_41, "storage failover show", timeout=60)
-        _fo_final_rows = _parse_failover_show(_fo_final)
-        _unhealthy = []
-        for _fr in _fo_final_rows:
-            _fn = _fr["node"]
-            # Re-use _wait_for_failover_state with a short timeout for each node.
-            _fc_ok = _wait_for_failover_state(
-                channel_41, _fn, "connected to",
-                total_timeout=600, poll_interval=60, log=log,
-                phase_label="final cluster reconnect",
-                exclude_substrs=["partial giveback", "waiting for cluster"],
-            )
-            if not _fc_ok:
-                _unhealthy.append(_fn)
-        if _unhealthy:
-            print(f"\n  \u274c Cluster did not reach healthy state for: {_unhealthy}")
+        print("\n  \U0001f50d Final health check: all nodes connected, no pending giveback...")
+        _all_upgrade_nodes = list(node_image.keys())
+        if not _wait_for_cluster_healthy(
+            channel_41, _all_upgrade_nodes,
+            total_timeout=600, poll_interval=60, log=log,
+        ):
+            print(f"\n  \u274c Cluster did not reach healthy state after upgrade.")
             if log:
-                log.log(f"Final health check failed for: {_unhealthy}", prefix="ERROR")
+                log.log("Final health check failed", prefix="ERROR")
             return False
-        print("  \u2705 All nodes fully connected.")
+        print("  \u2705 Cluster fully healthy.")
         if log:
-            log.log("Final health check passed — all nodes connected")
+            log.log("Final health check passed — all nodes connected, no pending giveback")
 
         # ── Step 12: verify version ─────────────────────────────────────────
         print("\n  \U0001f50d Verifying ONTAP version post-upgrade...")
