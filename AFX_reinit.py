@@ -11124,11 +11124,9 @@ def _run_ontap_upgrade(log):
                 )
 
         # ── Step 8: validate then run image update per group ────────────────
-        # Ask once whether to run updates in parallel via separate SSH sessions.
         print("")
         print("  " + "\u2500" * 58)
-        _par_ans = _prompt("  Update nodes in parallel? [y/N]: ", "n").lower()
-        _parallel_update = (_par_ans == "y")
+        _parallel_update = True
 
         _cl_mgmt_ip = None
         _cl_admin_user = "admin"
