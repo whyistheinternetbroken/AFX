@@ -10895,7 +10895,15 @@ def _pick_bmc_from_existing_config():
             _role, _ip, _u, _pw = _ents[int(_sel) - 1]
             _u = _u or "admin"
             if not _pw:
-                _pw = getpass.getpass(f"  BMC password for {_u}@{_ip}: ")
+                if _primary_bmc_password and _primary_bmc_user == _u:
+                    _reuse = _prompt(
+                        f"  Reuse previously entered password for {_u}@{_ip}? [Y/n]: ", "n"
+                    ).lower()
+                    _pw = _primary_bmc_password if _reuse != "n" else getpass.getpass(
+                        f"  BMC password for {_u}@{_ip}: "
+                    )
+                else:
+                    _pw = getpass.getpass(f"  BMC password for {_u}@{_ip}: ")
             else:
                 print(f"  🔑 Using password from config for {_u}@{_ip}.")
             # Stash the picked config so downstream lookups (e.g. per-node
