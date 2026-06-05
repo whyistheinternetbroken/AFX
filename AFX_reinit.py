@@ -11891,6 +11891,47 @@ def _run_ontap_upgrade(log):
                         if _CLUSTER_PROMPT_RE.search(_tko_buf[-200:]):
                             break
                     time.sleep(0.2)
+
+            # ── Confirm takeover actually started ──────────────────────────
+            # Poll until the node leaves "connected to" state (max 90s).
+            # This guards against the case where the takeover command was
+            # silently ignored and the node is still connected — without this
+            # check, also_accept=["connected to"] in the next poll would
+            # incorrectly declare success and issue a spurious giveback.
+            print(f"  \u23f3 Confirming takeover of {takeover_node} initiated...")
+            _tko_started = False
+            _tko_start_deadline = time.monotonic() + 90
+            while time.monotonic() < _tko_start_deadline:
+                with _suppress_console():
+                    _tko_chk = _run_cluster_command(
+                        channel_41,
+                        "set advanced -c off; storage failover show -fields node,state-description",
+                        timeout=30,
+                    )
+                _chk_lines = [l for l in _tko_chk.splitlines() if l.strip()]
+                for _ci, _cl in enumerate(_chk_lines):
+                    if takeover_node.lower() not in _cl.strip().lower():
+                        continue
+                    _blk = [_cl.strip()]
+                    for _cj in range(_ci + 1, len(_chk_lines)):
+                        if _chk_lines[_cj] and _chk_lines[_cj][0] != " ":
+                            break
+                        _blk.append(_chk_lines[_cj].strip())
+                    _blk_txt = " ".join(b for b in _blk if b).lower()
+                    if "connected to" not in _blk_txt:
+                        _tko_started = True
+                    break
+                if _tko_started:
+                    break
+                time.sleep(10)
+
+            if not _tko_started:
+                print(f"  \u274c Takeover of {takeover_node} did not start within 90s — "
+                      "the command may have been rejected. Skipping giveback.")
+                if log:
+                    log.log(f"Takeover of {takeover_node} never started", prefix="ERROR")
+                return False
+
             print(f"  \u23f3 Waiting for {takeover_node} to reach 'waiting for giveback'...")
             if not _wait_for_failover_state(
                 channel_41, takeover_node, "waiting for giveback",
