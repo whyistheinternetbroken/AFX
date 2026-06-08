@@ -11113,6 +11113,9 @@ def _pick_bmc_from_existing_config():
     if not _candidates:
         return None, None, None
 
+    # Sort so BMC_IP.json entries appear first (they are the preferred source).
+    _candidates.sort(key=lambda c: (0 if os.path.basename(c[0]).lower() == "bmc_ip.json" else 1))
+
     # Pick which file to use.
     if len(_candidates) == 1:
         _path, _data, _ents = _candidates[0]
@@ -11120,10 +11123,13 @@ def _pick_bmc_from_existing_config():
     else:
         print("\n  📄 Found multiple config file(s) with BMC entries:")
         for _i, (_p, _, _e) in enumerate(_candidates, 1):
-            print(f"    {_i}. {_p}  ({len(_e)} BMC(s))")
+            _default_tag = "  (default)" if _i == 1 else ""
+            print(f"    {_i}. {_p}  ({len(_e)} BMC(s)){_default_tag}")
         print("    0. Enter BMC address manually")
         while True:
-            _sel = _prompt("  Select config file [1]: ", "1")
+            _sel = _prompt("  Select config file [1]: ", "1").strip()
+            if _sel == "" or _sel == "1":
+                _sel = "1"
             if _sel == "0":
                 return None, None, None
             if _sel.isdigit() and 1 <= int(_sel) <= len(_candidates):
