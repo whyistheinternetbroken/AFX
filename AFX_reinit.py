@@ -11305,6 +11305,11 @@ def _run_ontap_upgrade(log):
                 log.log(f"BMC connection failed: {e}", prefix="ERROR")
             return False
         channel_41 = _open_shell(client_41)
+        # Widen the PTY so ONTAP does not wrap table output at 80 columns.
+        try:
+            channel_41.resize_pty(width=256, height=50)
+        except Exception:
+            pass
         # Publish the BMC credentials as the "primary" creds so the silent
         # cluster-login candidates (_candidate_cluster_logins) can reuse them
         # when the console hits a `login:` prompt; otherwise the operator
@@ -12058,7 +12063,6 @@ def _run_ontap_upgrade(log):
                         with _suppress_console():
                             _out = _run_cluster_command(
                                 channel_41,
-                                f"set -rows 0 -columns 256; "
                                 f"storage failover show -node {takeover_node} "
                                 f"-fields state-description,"
                                 f"takeover-of-possible,takeover-by-possible",
