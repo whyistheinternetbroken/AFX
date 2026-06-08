@@ -10776,6 +10776,11 @@ def _parse_sfo_fields(out, node):
     Returns dict {"state_description": str, "tof": bool|None}
     or None if the node's row was not found / output unparseable.
     """
+    # Strip ANSI/VT100 escape codes — PTY sessions inject these and they
+    # inflate string positions, breaking column-bounds-based extraction.
+    out = _ANSI_RE.sub("", out)
+    # Normalize carriage returns from PTY/serial-console sessions.
+    out = out.replace("\r\n", "\n").replace("\r", "\n")
     lines = out.splitlines()
 
     col_bounds = []
@@ -12071,12 +12076,17 @@ def _run_ontap_upgrade(log):
                 for _attempt in range(2):
                     try:
                         with _suppress_console():
+                            # Disable pager first so the table is never
+                            # truncated mid-output regardless of row count.
+                            _run_cluster_command(
+                                channel_41, "set -rows 0", timeout=15,
+                            )
                             _out = _run_cluster_command(
                                 channel_41,
                                 f"storage failover show -node {takeover_node} "
                                 f"-fields state-description,"
                                 f"takeover-of-possible",
-                                timeout=30,
+                                timeout=60,
                             )
                         _parsed = _parse_sfo_fields(_out, takeover_node)
                         if log:
