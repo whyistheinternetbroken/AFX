@@ -12225,8 +12225,10 @@ def _run_ontap_upgrade(log):
                     return True
 
                 _remaining = _PHASE1_TIMEOUT - _elapsed
+                _state_label = _state if _state else "Unknown"
                 print(f"  \u23f3 Waiting for takeover/giveback on {takeover_node}"
-                      f"  (elapsed {int(_elapsed)}s / remaining {int(_remaining)}s)")
+                      f"  (elapsed {int(_elapsed)}s / remaining {int(_remaining)}s;"
+                      f" Current state: {_state_label})")
                 time.sleep(60)
 
             # ── Phase 2: poll until node fully back online ───────────────────
@@ -12307,8 +12309,10 @@ def _run_ontap_upgrade(log):
                     return True
 
                 _remaining2 = _PHASE2_TIMEOUT - _elapsed2
+                _state_label2 = _state if _state else "Unknown"
                 print(f"  \u23f3 Waiting for {takeover_node} to come back online"
-                      f"  (elapsed {int(_elapsed2)}s / remaining {int(_remaining2)}s)")
+                      f"  (elapsed {int(_elapsed2)}s / remaining {int(_remaining2)}s;"
+                      f" Current state: {_state_label2})")
                 for _r in _not_ready:
                     print(f"     \u2022 {_r}")
                 time.sleep(60)
