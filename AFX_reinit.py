@@ -10765,13 +10765,13 @@ def _parse_failover_show(output):
 
 def _parse_sfo_fields(out, node):
     """Parse 'storage failover show -node <node> -fields
-    state-description,takeover-of-possible,takeover-by-possible' output.
+    state-description,takeover-of-possible' output.
 
     ONTAP -fields output is a regular table.  Column headers may span
     multiple lines (e.g. "Takeover / Of / Possible"), so we accumulate
     all pre-dashes header text per column and match by keywords.
 
-    Returns dict {"state_description": str, "tof": bool|None, "tby": bool|None}
+    Returns dict {"state_description": str, "tof": bool|None}
     or None if the node's row was not found / output unparseable.
     """
     lines = out.splitlines()
@@ -10816,12 +10816,9 @@ def _parse_sfo_fields(out, node):
     # Identify columns by keyword matching.
     state_col = None
     tof_col = None
-    tby_col = None
     for ci, h in enumerate(col_headers):
         if "state" in h or "description" in h:
             state_col = ci
-        elif "by" in h and "possible" in h:
-            tby_col = ci
         elif "of" in h and "possible" in h:
             tof_col = ci
 
@@ -10855,12 +10852,10 @@ def _parse_sfo_fields(out, node):
 
     state = " ".join(p for p in state_parts if p)
     tof_str = _ext(result_line, tof_col).lower() if tof_col is not None else ""
-    tby_str = _ext(result_line, tby_col).lower() if tby_col is not None else ""
 
     return {
         "state_description": state,
         "tof": (tof_str == "true") if tof_str else None,
-        "tby": (tby_str == "true") if tby_str else None,
     }
 
 
@@ -12048,10 +12043,10 @@ def _run_ontap_upgrade(log):
 
             Monitoring uses:
               storage failover show -node <node> -fields
-                state-description,takeover-of-possible,takeover-by-possible
+                state-description,takeover-of-possible
 
             Phase 1: poll until "Waiting for giveback" → issue giveback.
-            Phase 2: poll until tof=true, tby=true, and state does NOT contain
+            Phase 2: poll until tof=true and state does NOT contain
                      "Waiting for cluster applications to come online…".
 
             If the SSH channel drops (e.g. while the main-group node reboots
@@ -12078,7 +12073,7 @@ def _run_ontap_upgrade(log):
                                 channel_41,
                                 f"storage failover show -node {takeover_node} "
                                 f"-fields state-description,"
-                                f"takeover-of-possible,takeover-by-possible",
+                                f"takeover-of-possible",
                                 timeout=30,
                             )
                         _parsed = _parse_sfo_fields(_out, takeover_node)
@@ -12280,7 +12275,6 @@ def _run_ontap_upgrade(log):
                 )
                 _state_lower = _state.lower()
                 _tof = _parsed.get("tof") if _parsed else None
-                _tby = _parsed.get("tby") if _parsed else None
 
                 if _state_lower != _last_state:
                     if not _state or "unknown" in _state_lower:
@@ -12293,19 +12287,17 @@ def _run_ontap_upgrade(log):
                             )
                     else:
                         print(f"  \u23f3 {takeover_node}: {_state!r} "
-                              f"(tof={_tof}, tby={_tby})")
+                              f"(tof={_tof})")
                         if log:
                             log.log(
                                 f"{takeover_node}: state={_state!r} "
-                                f"tof={_tof} tby={_tby}"
+                                f"tof={_tof}"
                             )
                     _last_state = _state_lower
 
                 _not_ready = []
                 if not _tof:
                     _not_ready.append(f"takeover-of-possible={_tof}")
-                if not _tby:
-                    _not_ready.append(f"takeover-by-possible={_tby}")
                 if _WAITING_FOR_CLUSTER_APPS in _state_lower:
                     _not_ready.append("waiting for cluster applications")
 
