@@ -11212,14 +11212,16 @@ def _run_ontap_upgrade(log):
         return False
 
     print("\n  What would you like to do?")
-    print("    validate  - Validate the package on all nodes only (no install)")
-    print("    install   - Full end-to-end upgrade (validate + install + takeover/giveback)")
-    print("    prestage  - Install image only; skip rolling takeover/giveback")
+    print("    1. validate  - Validate the package on all nodes only (no install)")
+    print("    2. install   - Full end-to-end upgrade (validate + install + takeover/giveback)")
+    print("    3. prestage  - Install image only; skip rolling takeover/giveback")
+    _mode_map = {"1": "validate", "2": "install", "3": "prestage"}
     while True:
-        _mode_ans = _prompt("  Your choice [validate/install/prestage]: ").lower().strip()
+        _mode_ans = _prompt("  Your choice [1/2/3 or validate/install/prestage]: ").lower().strip()
+        _mode_ans = _mode_map.get(_mode_ans, _mode_ans)
         if _mode_ans in ("validate", "install", "prestage"):
             break
-        print("  \u26a0\ufe0f  Please enter 'validate', 'install', or 'prestage'.")
+        print("  \u26a0\ufe0f  Please enter 1, 2, 3, 'validate', 'install', or 'prestage'.")
     _validate_only = (_mode_ans == "validate")
     _prestage_only = (_mode_ans == "prestage")
     if log:
