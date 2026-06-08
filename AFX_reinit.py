@@ -10763,7 +10763,13 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
         matched_state = None
         lines = [l for l in out.splitlines() if l.strip()]
         for i, line in enumerate(lines):
-            if node.lower() not in line.strip().lower():
+            # Only match the node's OWN row — which always starts at column 0
+            # (non-indented).  Indented continuation lines carry partner names
+            # and state fragments that may also contain the node name (e.g.
+            # "Connected to rtp-afx1k-c01-01") but belong to a DIFFERENT node.
+            if line and line[0] == " ":
+                continue
+            if not line.strip().lower().startswith(node.lower()):
                 continue
             # Gather this line + all indented continuation lines.
             block_lines = [line.strip()]
@@ -11936,7 +11942,10 @@ def _run_ontap_upgrade(log):
                     )
                 _chk_lines = [l for l in _tko_chk.splitlines() if l.strip()]
                 for _ci, _cl in enumerate(_chk_lines):
-                    if takeover_node.lower() not in _cl.strip().lower():
+                    # Only match the node's own non-indented row header.
+                    if _cl and _cl[0] == " ":
+                        continue
+                    if not _cl.strip().lower().startswith(takeover_node.lower()):
                         continue
                     _blk = [_cl.strip()]
                     for _cj in range(_ci + 1, len(_chk_lines)):
