@@ -3878,7 +3878,7 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
 # Enter system console
 # ---------------------------------------------------------------------------
 
-def enter_system_console(channel):
+def enter_system_console(channel, loader_message=True):
     print("\n📺 Probing current prompt before entering system console...")
     _slog("Probing prompt before system console")
 
@@ -3968,7 +3968,8 @@ def enter_system_console(channel):
 
     drain_channel(channel, seconds=3, quiet=True)
     print("✅ System console ready.\n")
-    print("⏳ LOADER will appear. Script is continuing. Be patient.\n")
+    if loader_message:
+        print("⏳ LOADER will appear. Script is continuing. Be patient.\n")
     _slog("System console ready")
 
 
@@ -11190,7 +11191,7 @@ def _run_ontap_upgrade(log):
         print("  \U0001f4fa Entering system console (output suppressed; "
               "see log file)...")
         with _suppress_console():
-            enter_system_console(channel_41)
+            enter_system_console(channel_41, loader_message=False)
 
         # ── Step 5: cluster shell login ─────────────────────────────────────
         # _attempt_console_cluster_login (invoked from inside
