@@ -12058,6 +12058,7 @@ def _run_ontap_upgrade(log):
                         with _suppress_console():
                             _out = _run_cluster_command(
                                 channel_41,
+                                f"set -rows 0 -columns 256; "
                                 f"storage failover show -node {takeover_node} "
                                 f"-fields state-description,"
                                 f"takeover-of-possible,takeover-by-possible",
