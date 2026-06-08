@@ -9,6 +9,58 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Numbered upgrade mode prompt.** The `4a` upgrade workflow now presents
+  `validate`, `install`, and `prestage` as a numbered list (1/2/3). Both the
+  number and the keyword are accepted as valid input.
+- **`update-docs` skill (`.github/skills/update-docs/`).** A repo-level agent
+  skill that guides updating `README.md` and `CHANGELOG.md` after changes to
+  `AFX_reinit.py`. Automatically triggered when the user asks to update docs,
+  readme, or changelog.
+
+### Changed
+- **Menu reorganized into two install/admin categories.**
+  - Category **4 "Install ONTAP"** now contains only `4a` (ONTAP upgrade) and
+    `4b` (netboot install).
+  - New category **5 "Administration and maintenance"** contains `5a` (install
+    license), `5b` (SSH key setup), `5c` (config backup, formerly `4e`), `5d`
+    (BMC auth verify, formerly `4f`), and `5e` (reset to LOADER, formerly `4g`).
+  - Exit moved from option `5` to option `6`.
+  - Typing `4` or `5` at the main prompt now shows the respective sub-menu;
+    blank Enter returns to the main menu.
+- **`BMC_IP.json` listed first in config file picker with blank-enter default.**
+  When multiple config files containing BMC entries are found, `BMC_IP.json`
+  is always sorted to the top and marked `(default)`. Pressing Enter without
+  typing a number selects it automatically.
+- **Cluster-mgmt LIF prompt when multiple LIFs found.** During option `5c`
+  config gather, if more than one LIF with `cluster-mgmt` role is detected the
+  operator is now prompted to choose which one to use.
+
+### Fixed
+- **Takeover/giveback monitoring rewritten with `-fields` poll.**
+  `storage failover show` is now called with
+  `-fields state-description,takeover-of-possible,takeover-by-possible`
+  for structured, unambiguous parsing. Two-phase logic: Phase 1 waits for
+  "Waiting for giveback" then issues giveback; Phase 2 waits for
+  `takeover-of-possible=true`, `takeover-by-possible=true`, and state not
+  containing "Waiting for cluster applications to come online". SSH reconnect
+  is attempted automatically if the channel drops during polling.
+- **PTY column width set to 256 to prevent ONTAP table wrapping.** The SSH
+  channel PTY is resized to 256 columns immediately after opening, preventing
+  ONTAP's `-fields` output from wrapping at 80 characters and causing field
+  values (`takeover-by-possible`, `state-description`) to parse as `None`.
+- **Current state included in takeover/giveback elapsed/remaining output.**
+  Poll lines now show `; Current state: <state>` so the operator can see
+  the node's state while waiting.
+- **`LOADER will appear` message suppressed during `4a` upgrades.**
+  `enter_system_console()` now accepts a `loader_message` parameter (default
+  `True`). The upgrade caller passes `loader_message=False` since nodes reboot
+  directly back into ONTAP without stopping at LOADER.
+- **Node-row matching in `_wait_for_failover_state` fixed.** The previous
+  `node in line` substring check matched the node name appearing in partner
+  nodes' indented continuation lines. Now only non-indented lines that start
+  with the node name are considered.
+
+### Previously Added
 - **Screen output log (`screen_output_*.log`).** Every line printed to the
   operator's terminal during a run is now mirrored to a
   `screen_output_<timestamp>.log` file inside the session log directory.

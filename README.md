@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/4/2026  
+**Updated:** 6/8/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
 ---
@@ -46,12 +46,13 @@ All session activity is captured in a timestamped log directory with a human-rea
 | End-to-End Mode (3) | Combines 1b (primary init) + 2b (peer adds) into a single unattended run. |
 | **Bulk cluster join (`cluster add-node`)** | Peer nodes now join via ONTAP's native bulk command rather than the per-node interactive wizard. All nodes complete Option 4 / disk erase / node-mgmt in parallel; a single `cluster add-node -cluster-ips` command adds them all at once. Progress is polled every 2 minutes until all nodes show success (up to 15 min). See [End-to-End Reinit Time Estimates](#end-to-end-reinit-time-estimates) for a full comparison — at 64 nodes the new approach saves ~10h vs the old serial join method. |
 | **Per-node milestone timing** | The session summary now emits five timestamped milestones per peer node (LOADER, Option 4, disk erase, node-mgmt, cluster IP) plus per-node `cluster add-node` success time. |
-| ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence. |
+| ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence using structured `-fields` polling. SSH reconnects automatically if the channel drops mid-upgrade. |
 | Netboot Install (4b) | Automated ONTAP netboot and software installation. |
-| SSH Key Setup (4d) | Configures passwordless SSH from the script host to cluster management. |
-| Config Backup (4e) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. After gathering, the saved `reinit-config.json` includes `cluster`, `primary_node`, and `secondary_nodes` blocks, fully populated with management IPs and BMC addresses. The retained configuration summary displays Cluster LIFs and Management LIFs in separate tables. |
-| BMC Auth Verify (4f) | Batch-tests BMC SSH credentials for all nodes in the config file. |
-| Reset to LOADER (4g) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
+| Install License (5a) | Connects via BMC console and applies a pre-staged license file without running any reinit steps. |
+| SSH Key Setup (5b) | Configures passwordless SSH from the script host to cluster management. |
+| Config Backup (5c) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. After gathering, the saved `reinit-config.json` includes `cluster`, `primary_node`, and `secondary_nodes` blocks, fully populated with management IPs and BMC addresses. The retained configuration summary displays Cluster LIFs and Management LIFs in separate tables. |
+| BMC Auth Verify (5d) | Batch-tests BMC SSH credentials for all nodes in the config file. |
+| Reset to LOADER (5e) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
 | Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
 | **Screen output log** | Every line printed to the terminal during a run is captured to `screen_output_<timestamp>.log` in the session log directory. ANSI codes are stripped for clean plain-text reading. |
 | Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |
