@@ -10725,6 +10725,107 @@ def _parse_failover_show(output):
     return rows
 
 
+def _parse_sfo_fields(out, node):
+    """Parse 'storage failover show -node <node> -fields
+    state-description,takeover-of-possible,takeover-by-possible' output.
+
+    ONTAP -fields output is a regular table.  Column headers may span
+    multiple lines (e.g. "Takeover / Of / Possible"), so we accumulate
+    all pre-dashes header text per column and match by keywords.
+
+    Returns dict {"state_description": str, "tof": bool|None, "tby": bool|None}
+    or None if the node's row was not found / output unparseable.
+    """
+    lines = out.splitlines()
+
+    col_bounds = []
+    dash_idx = None
+    for i, line in enumerate(lines):
+        s = line.rstrip()
+        if s and set(s.replace(" ", "")) <= {"-"} and s.count("-") >= 8:
+            j = 0
+            while j < len(s):
+                if s[j] == "-":
+                    start = j
+                    while j < len(s) and s[j] == "-":
+                        j += 1
+                    col_bounds.append((start, j))
+                else:
+                    j += 1
+            dash_idx = i
+            break
+
+    if not col_bounds or dash_idx is None:
+        return None
+
+    def _ext(line, col_idx):
+        if col_idx >= len(col_bounds):
+            return ""
+        s, e = col_bounds[col_idx]
+        return line[s:e].strip() if len(line) > s else ""
+
+    # Accumulate header text per column from ALL lines before the dashes.
+    col_headers = [""] * len(col_bounds)
+    for i in range(dash_idx):
+        line = lines[i]
+        if not line.strip() or "::" in line:
+            continue
+        for ci in range(len(col_bounds)):
+            txt = _ext(line, ci).lower()
+            if txt:
+                col_headers[ci] = (col_headers[ci] + " " + txt).strip()
+
+    # Identify columns by keyword matching.
+    state_col = None
+    tof_col = None
+    tby_col = None
+    for ci, h in enumerate(col_headers):
+        if "state" in h or "description" in h:
+            state_col = ci
+        elif "by" in h and "possible" in h:
+            tby_col = ci
+        elif "of" in h and "possible" in h:
+            tof_col = ci
+
+    # Find the data row for `node` (non-indented, starts with node name).
+    state_parts = []
+    result_line = None
+    for line in lines[dash_idx + 1:]:
+        if not line.strip():
+            continue
+        if "entries were displayed" in line.lower() or "::" in line:
+            continue
+        if result_line is None:
+            if line[0] == " ":
+                continue
+            if not line.strip().lower().startswith(node.lower()):
+                continue
+            result_line = line
+            if state_col is not None:
+                state_parts.append(_ext(line, state_col))
+        else:
+            # Continuation line — only collect if it is indented.
+            if line[0] != " ":
+                break
+            if state_col is not None:
+                frag = _ext(line, state_col)
+                if frag:
+                    state_parts.append(frag)
+
+    if result_line is None:
+        return None
+
+    state = " ".join(p for p in state_parts if p)
+    tof_str = _ext(result_line, tof_col).lower() if tof_col is not None else ""
+    tby_str = _ext(result_line, tby_col).lower() if tby_col is not None else ""
+
+    return {
+        "state_description": state,
+        "tof": (tof_str == "true") if tof_str else None,
+        "tby": (tby_str == "true") if tby_str else None,
+    }
+
+
 def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
                              poll_interval=60, log=None, phase_label=None,
                              exclude_substrs=None, also_accept=None):
@@ -11890,158 +11991,293 @@ def _run_ontap_upgrade(log):
 
         # ── Step 11: rolling takeover/giveback ──────────────────────────────
         def _do_takeover_giveback(takeover_node, takeover_by):
-            """Take over `takeover_node` by `takeover_by`, wait for
-            'waiting for giveback', then give back and wait for reconnect.
-            Returns True on success.
+            """Take over `takeover_node` by `takeover_by`, auto-issue giveback
+            when the node reaches 'Waiting for giveback', then wait until the
+            node is fully back online.
+
+            Monitoring uses:
+              storage failover show -node <node> -fields
+                state-description,takeover-of-possible,takeover-by-possible
+
+            Phase 1: poll until "Waiting for giveback" → issue giveback.
+            Phase 2: poll until tof=true, tby=true, and state does NOT contain
+                     "Waiting for cluster applications to come online…".
+
+            If the SSH channel drops (e.g. while the main-group node reboots
+            the cluster process), the function reconnects automatically.
+
+            Returns True on success, False on timeout/error.
             """
-            print(f"\n  \U0001f504 Takeover: {takeover_by} takes over {takeover_node}...")
+            nonlocal channel_41, client_41
+
+            _WAITING_FOR_CLUSTER_APPS = (
+                "waiting for cluster applications to come online"
+            )
+
+            def _safe_poll():
+                """Run -fields poll; return (parsed_dict, raw_str).
+                Reconnects SSH once on channel error; returns (None, "")
+                if unrecoverable.
+                """
+                nonlocal channel_41, client_41
+                for _attempt in range(2):
+                    try:
+                        with _suppress_console():
+                            _out = _run_cluster_command(
+                                channel_41,
+                                f"storage failover show -node {takeover_node} "
+                                f"-fields state-description,"
+                                f"takeover-of-possible,takeover-by-possible",
+                                timeout=30,
+                            )
+                        _parsed = _parse_sfo_fields(_out, takeover_node)
+                        if log:
+                            log.log(
+                                f"SFO fields poll [{takeover_node}]: "
+                                f"{_parsed!r} | raw={_out.strip()!r}"
+                            )
+                        return _parsed, _out
+                    except Exception as _e:
+                        if _attempt == 0:
+                            print(f"  ⚠️  SSH channel error ({_e}); "
+                                  "attempting reconnect...")
+                            if log:
+                                log.log(f"SSH error: {_e}; reconnecting",
+                                        prefix="WARN")
+                            try:
+                                try:
+                                    client_41.close()
+                                except Exception:
+                                    pass
+                                _nc, _, _ = _ssh_connect_with_retry(
+                                    bmc_host, bmc_user, bmc_pass,
+                                    label="upgrade/BMC reconnect",
+                                    max_attempts=5,
+                                    interactive=False,
+                                )
+                                channel_41 = _open_shell(_nc)
+                                client_41 = _nc
+                                with _suppress_console():
+                                    enter_system_console(
+                                        channel_41, loader_message=False
+                                    )
+                                    _wait_for_cluster_prompt(
+                                        channel_41, timeout=60
+                                    )
+                                print("  ✅ Reconnected to cluster shell.")
+                                if log:
+                                    log.log("SSH reconnected successfully")
+                            except Exception as _re:
+                                if log:
+                                    log.log(f"Reconnect failed: {_re}",
+                                            prefix="ERROR")
+                                return None, ""
+                        else:
+                            return None, ""
+                return None, ""
+
+            def _send_cmd(cmd):
+                """Send a cluster command and wait for prompt (90 s max),
+                auto-answering any y/n prompts.
+                """
+                with _suppress_console():
+                    drain_channel(channel_41, seconds=0.3)
+                    channel_41.send(cmd + "\r")
+                    _buf = ""
+                    _deadline = time.monotonic() + 90
+                    while time.monotonic() < _deadline:
+                        if channel_41.recv_ready():
+                            _buf += channel_41.recv(4096).decode(
+                                "utf-8", errors="replace"
+                            )
+                            if _session_log:
+                                _session_log.log_console(_buf[-500:])
+                            if re.search(
+                                r"\{y\|n\}|\[y/n\]|\(y/n\)",
+                                _buf, re.IGNORECASE,
+                            ):
+                                channel_41.send("y\r")
+                                _buf = ""
+                            if _CLUSTER_PROMPT_RE.search(_buf[-200:]):
+                                break
+                        time.sleep(0.2)
+
+            # ── Issue takeover ───────────────────────────────────────────────
+            print(f"\n  \U0001f504 Takeover: {takeover_by} takes over "
+                  f"{takeover_node}...")
             if log:
                 log.log(f"Initiating takeover of {takeover_node} by {takeover_by}")
-            _t0_tko = time.monotonic()
-            with _suppress_console():
-                # Send the takeover command and handle any confirmation prompt
-                # that ONTAP may issue ("Do you want to continue? {y|n}:").
-                # _run_cluster_command waits for a cluster prompt; if ONTAP
-                # instead shows a y/n confirmation, we auto-answer 'y' then
-                # wait for the actual cluster prompt.
-                drain_channel(channel_41, seconds=0.3)
-                channel_41.send(
-                    f"storage failover takeover -ofnode {takeover_node} "
-                    f"-option normal -override-vetoes true\r"
-                )
-                _tko_buf = ""
-                _tko_deadline = time.monotonic() + 90
-                while time.monotonic() < _tko_deadline:
-                    if channel_41.recv_ready():
-                        _tko_buf += channel_41.recv(4096).decode("utf-8", errors="replace")
-                        if _session_log:
-                            _session_log.log_console(_tko_buf[-500:])
-                        # Auto-answer confirmation prompts
-                        if re.search(r"\{y\|n\}|\[y/n\]|\(y/n\)", _tko_buf, re.IGNORECASE):
-                            channel_41.send("y\r")
-                            _tko_buf = ""
-                        if _CLUSTER_PROMPT_RE.search(_tko_buf[-200:]):
-                            break
-                    time.sleep(0.2)
+            _t0 = time.monotonic()
+            _send_cmd(
+                f"storage failover takeover -ofnode {takeover_node} "
+                f"-option normal -override-vetoes true"
+            )
 
-            # ── Confirm takeover actually started ──────────────────────────
-            # Poll until the node leaves "connected to" state (max 90s).
-            # This guards against the case where the takeover command was
-            # silently ignored and the node is still connected — without this
-            # check, also_accept=["connected to"] in the next poll would
-            # incorrectly declare success and issue a spurious giveback.
-            print(f"  \u23f3 Confirming takeover of {takeover_node} initiated...")
-            _tko_started = False
-            _tko_start_deadline = time.monotonic() + 90
-            while time.monotonic() < _tko_start_deadline:
-                with _suppress_console():
-                    _tko_chk = _run_cluster_command(
-                        channel_41,
-                        "set advanced -c off; storage failover show -fields node,state-description",
-                        timeout=30,
+            # ── Phase 1: poll until "Waiting for giveback" ──────────────────
+            print(f"  \u23f3 Monitoring {takeover_node}: "
+                  "waiting for 'Waiting for giveback'...")
+            _PHASE1_TIMEOUT = 1800
+            _p1_start = time.monotonic()
+            _last_state = None
+
+            while True:
+                _elapsed = time.monotonic() - _p1_start
+                if _elapsed >= _PHASE1_TIMEOUT:
+                    print(f"  \u274c Timed out waiting for "
+                          f"'Waiting for giveback' on {takeover_node}.")
+                    if log:
+                        log.log(
+                            f"Phase-1 timeout: {takeover_node} never reached "
+                            "'Waiting for giveback'",
+                            prefix="ERROR",
+                        )
+                        log.add_phase_subtiming(
+                            "Upgrade Workflow",
+                            f"  [{takeover_node}] takeover (timed out)",
+                            _elapsed,
+                        )
+                    return False
+
+                _parsed, _raw = _safe_poll()
+                _state = (
+                    (_parsed.get("state_description") or "").strip()
+                    if _parsed else ""
+                )
+                _state_lower = _state.lower()
+                _tof = _parsed.get("tof") if _parsed else None
+                _tby = _parsed.get("tby") if _parsed else None
+
+                if _state_lower != _last_state:
+                    if not _state or "unknown" in _state_lower:
+                        print(f"  \u23f3 {takeover_node}: rebooting "
+                              f"(state: {_state or 'unknown'})...")
+                        if log:
+                            log.log(f"{takeover_node}: rebooting (state unknown)")
+                    else:
+                        print(f"  \u23f3 {takeover_node}: {_state!r}")
+                        if log:
+                            log.log(f"{takeover_node}: state={_state!r}")
+                    _last_state = _state_lower
+
+                if "waiting for giveback" in _state_lower:
+                    print(f"  \U0001f501 {takeover_node} reached 'Waiting for "
+                          "giveback' — issuing giveback...")
+                    if log:
+                        log.log(f"{takeover_node}: issuing giveback "
+                                f"(state={_state!r})")
+                    _send_cmd(
+                        f"storage failover giveback -ofnode {takeover_node} "
+                        f"-override-vetoes true"
                     )
-                _chk_lines = [l for l in _tko_chk.splitlines() if l.strip()]
-                for _ci, _cl in enumerate(_chk_lines):
-                    # Only match the node's own non-indented row header.
-                    if _cl and _cl[0] == " ":
-                        continue
-                    if not _cl.strip().lower().startswith(takeover_node.lower()):
-                        continue
-                    _blk = [_cl.strip()]
-                    for _cj in range(_ci + 1, len(_chk_lines)):
-                        if _chk_lines[_cj] and _chk_lines[_cj][0] != " ":
-                            break
-                        _blk.append(_chk_lines[_cj].strip())
-                    _blk_txt = " ".join(b for b in _blk if b).lower()
-                    if "connected to" not in _blk_txt:
-                        _tko_started = True
                     break
-                if _tko_started:
-                    break
-                time.sleep(10)
 
-            if not _tko_started:
-                print(f"  \u274c Takeover of {takeover_node} did not start within 90s — "
-                      "the command may have been rejected. Skipping giveback.")
-                if log:
-                    log.log(f"Takeover of {takeover_node} never started", prefix="ERROR")
-                return False
+                # Auto-giveback may have already completed
+                if (_tof and _tby
+                        and "connected to" in _state_lower
+                        and _WAITING_FOR_CLUSTER_APPS not in _state_lower):
+                    _total = time.monotonic() - _t0
+                    print(f"  \u2705 {takeover_node} auto-giveback detected — "
+                          "already online.")
+                    if log:
+                        log.log(
+                            f"{takeover_node}: auto-giveback complete "
+                            f"(total {_total:.0f}s)"
+                        )
+                        log.add_phase_subtiming(
+                            "Upgrade Workflow",
+                            f"  [{takeover_node}] takeover + giveback",
+                            _total,
+                        )
+                    return True
 
-            print(f"  \u23f3 Waiting for {takeover_node} to reach 'waiting for giveback'...")
-            if not _wait_for_failover_state(
-                channel_41, takeover_node, "waiting for giveback",
-                total_timeout=1800, poll_interval=60, log=log,
-                phase_label="takeover/giveback",
-                also_accept=["connected to"],
-            ):
-                _tko_elapsed = time.monotonic() - _t0_tko
-                print(f"  \u274c Timed out waiting for giveback state on {takeover_node}.")
-                if log:
-                    log.log(f"Timeout waiting for giveback state on {takeover_node}",
-                            prefix="ERROR")
-                    log.add_phase_subtiming(
-                        "Upgrade Workflow",
-                        f"  [{takeover_node}] takeover (timed out)",
-                        _tko_elapsed,
-                    )
-                return False
-            _tko_elapsed = time.monotonic() - _t0_tko
-            if log:
-                log.add_phase_subtiming(
-                    "Upgrade Workflow",
-                    f"  [{takeover_node}] takeover wait",
-                    _tko_elapsed,
+                _remaining = _PHASE1_TIMEOUT - _elapsed
+                print(f"  \u23f3 Waiting for takeover/giveback on {takeover_node}"
+                      f"  (elapsed {int(_elapsed)}s / remaining {int(_remaining)}s)")
+                time.sleep(60)
+
+            # ── Phase 2: poll until node fully back online ───────────────────
+            print(f"  \u23f3 Monitoring {takeover_node}: waiting for "
+                  "node to come back online...")
+            _PHASE2_TIMEOUT = 1800
+            _p2_start = time.monotonic()
+            _last_state = None
+
+            while True:
+                _elapsed2 = time.monotonic() - _p2_start
+                if _elapsed2 >= _PHASE2_TIMEOUT:
+                    print(f"  \u274c Timed out waiting for {takeover_node} "
+                          "to come back online.")
+                    if log:
+                        log.log(
+                            f"Phase-2 timeout: {takeover_node} did not "
+                            "come back online",
+                            prefix="ERROR",
+                        )
+                        log.add_phase_subtiming(
+                            "Upgrade Workflow",
+                            f"  [{takeover_node}] giveback (timed out)",
+                            _elapsed2,
+                        )
+                    return False
+
+                _parsed, _raw = _safe_poll()
+                _state = (
+                    (_parsed.get("state_description") or "").strip()
+                    if _parsed else ""
                 )
-            print(f"  \U0001f501 Giving back {takeover_node}...")
-            if log:
-                log.log(f"Issuing giveback for {takeover_node}")
-            _t0_gb = time.monotonic()
-            with _suppress_console():
-                drain_channel(channel_41, seconds=0.3)
-                channel_41.send(
-                    f"storage failover giveback -ofnode {takeover_node} "
-                    f"-override-vetoes true\r"
-                )
-                _gb_cmd_buf = ""
-                _gb_cmd_deadline = time.monotonic() + 90
-                while time.monotonic() < _gb_cmd_deadline:
-                    if channel_41.recv_ready():
-                        _gb_cmd_buf += channel_41.recv(4096).decode("utf-8", errors="replace")
-                        if _session_log:
-                            _session_log.log_console(_gb_cmd_buf[-500:])
-                        if re.search(r"\{y\|n\}|\[y/n\]|\(y/n\)", _gb_cmd_buf, re.IGNORECASE):
-                            channel_41.send("y\r")
-                            _gb_cmd_buf = ""
-                        if _CLUSTER_PROMPT_RE.search(_gb_cmd_buf[-200:]):
-                            break
-                    time.sleep(0.2)
-            print(f"  \u23f3 Waiting for cluster to be healthy after giveback of {takeover_node}...")
-            _all_nodes = list(node_image.keys())
-            if not _wait_for_cluster_healthy(
-                channel_41, _all_nodes,
-                total_timeout=1800, poll_interval=60, log=log,
-            ):
-                _gb_elapsed = time.monotonic() - _t0_gb
-                print(f"  \u274c Timed out waiting for cluster health after giveback of {takeover_node}.")
-                if log:
-                    log.log(f"Timeout waiting for cluster health after giveback of {takeover_node}",
-                            prefix="ERROR")
-                    log.add_phase_subtiming(
-                        "Upgrade Workflow",
-                        f"  [{takeover_node}] giveback (timed out)",
-                        _gb_elapsed,
-                    )
-                return False
-            _gb_elapsed = time.monotonic() - _t0_gb
-            print(f"  \u2705 {takeover_node} back online.")
-            if log:
-                log.log(f"{takeover_node} giveback complete and reconnected")
-                log.add_phase_subtiming(
-                    "Upgrade Workflow",
-                    f"  [{takeover_node}] giveback + reconnect",
-                    _gb_elapsed,
-                )
-            return True
+                _state_lower = _state.lower()
+                _tof = _parsed.get("tof") if _parsed else None
+                _tby = _parsed.get("tby") if _parsed else None
+
+                if _state_lower != _last_state:
+                    if not _state or "unknown" in _state_lower:
+                        print(f"  \u23f3 {takeover_node}: rebooting "
+                              f"(state: {_state or 'unknown'})...")
+                        if log:
+                            log.log(
+                                f"{takeover_node}: post-giveback reboot "
+                                "(state unknown)"
+                            )
+                    else:
+                        print(f"  \u23f3 {takeover_node}: {_state!r} "
+                              f"(tof={_tof}, tby={_tby})")
+                        if log:
+                            log.log(
+                                f"{takeover_node}: state={_state!r} "
+                                f"tof={_tof} tby={_tby}"
+                            )
+                    _last_state = _state_lower
+
+                _not_ready = []
+                if not _tof:
+                    _not_ready.append(f"takeover-of-possible={_tof}")
+                if not _tby:
+                    _not_ready.append(f"takeover-by-possible={_tby}")
+                if _WAITING_FOR_CLUSTER_APPS in _state_lower:
+                    _not_ready.append("waiting for cluster applications")
+
+                if not _not_ready and _parsed is not None:
+                    _total = time.monotonic() - _t0
+                    print(f"  \u2705 {takeover_node} back online. "
+                          f"(total: {int(_total)}s)")
+                    if log:
+                        log.log(
+                            f"{takeover_node}: takeover/giveback complete "
+                            f"(total {_total:.0f}s)"
+                        )
+                        log.add_phase_subtiming(
+                            "Upgrade Workflow",
+                            f"  [{takeover_node}] takeover + giveback",
+                            _total,
+                        )
+                    return True
+
+                _remaining2 = _PHASE2_TIMEOUT - _elapsed2
+                print(f"  \u23f3 Waiting for {takeover_node} to come back online"
+                      f"  (elapsed {int(_elapsed2)}s / remaining {int(_remaining2)}s)")
+                for _r in _not_ready:
+                    print(f"     \u2022 {_r}")
+                time.sleep(60)
 
         # Build a node→its_partner lookup for the takeover calls
         partner_of = {r["node"]: r["partner"] for r in fo_rows}
