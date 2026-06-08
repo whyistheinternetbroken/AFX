@@ -1963,18 +1963,20 @@ def select_operation_mode():
         print("    2c. Resume interrupted node additions.")
         print("")
         print("  3.  End to end auto initialize")
-        print("  4.  Install/manage ONTAP")
+        print("  4.  Install ONTAP")
         print("    4a. Upgrade ONTAP (rolling takeover/giveback)")
         print("    4b. Netboot and install ONTAP")
-        print("    4c. Install license file only")
-        print("    4d. Set up passwordless SSH to cluster management")
-        print("    4e. Create backup cluster configuration")
-        print("    4f. Verify BMC authentication")
-        print("    4g. Reset all nodes to LOADER prompt")
-        print("  5.  Exit")
+        print("")
+        print("  5.  Administration and maintenance")
+        print("    5a. Install license file only")
+        print("    5b. Set up passwordless SSH to cluster management")
+        print("    5c. Create backup cluster configuration")
+        print("    5d. Verify BMC authentication")
+        print("    5e. Reset all nodes to LOADER prompt")
+        print("  6.  Exit")
         print("")
         print("  " + "─" * 58)
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4g, or 5): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5e, or 6): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2120,20 +2122,15 @@ def select_operation_mode():
             print("\n  ↩️  Returning to menu...\n")
             continue
 
-        if choice in ("4", "4a", "4b", "4c", "4d", "4e", "4f", "4g"):
+        if choice in ("4", "4a", "4b"):
             if choice == "4":
                 # Show the sub-menu and re-prompt.
-                _print_banner("\U0001f4e6 Install/Manage ONTAP")
+                _print_banner("\U0001f4e6 4: Install ONTAP")
                 print("\n  4a. Upgrade ONTAP (rolling takeover/giveback)")
                 print("  4b. Netboot and install ONTAP")
-                print("  4c. Install license file only")
-                print("  4d. Set up passwordless SSH to cluster management")
-                print("  4e. Create backup cluster configuration")
-                print("  4f. Verify BMC authentication")
-                print("  4g. Reset all nodes to LOADER prompt")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (4a, 4b, 4c, 4d, 4e, 4f, 4g) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (4a, 4b) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -2172,8 +2169,22 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice == "4c":
-                _print_banner("\U0001f4dc 4c: Install license file only")
+        if choice in ("5", "5a", "5b", "5c", "5d", "5e"):
+            if choice == "5":
+                _print_banner("\U0001f6e0\ufe0f 5: Administration and maintenance")
+                print("\n  5a. Install license file only")
+                print("  5b. Set up passwordless SSH to cluster management")
+                print("  5c. Create backup cluster configuration")
+                print("  5d. Verify BMC authentication")
+                print("  5e. Reset all nodes to LOADER prompt")
+                print("")
+                print("  " + "─" * 58)
+                choice = input("  Enter sub-option (5a–5e) or blank to go back: ").strip().lower()
+                if not choice:
+                    continue
+
+            if choice == "5a":
+                _print_banner("\U0001f4dc 5a: Install license file only")
                 print("")
                 print("  Connects to the BMC, enters the system console, logs in")
                 print("  to the cluster shell, and applies a pre-staged license")
@@ -2182,13 +2193,13 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 4c: Install license file only\n")
+                    print("\n  \u2705 Confirmed. 5a: Install license file only\n")
                     return 44, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice == "4d":
-                _print_banner("\U0001f511 4d: Set up passwordless SSH to cluster management")
+            if choice == "5b":
+                _print_banner("\U0001f511 5b: Set up passwordless SSH to cluster management")
                 print("")
                 print("  Generates an RSA-4096 key pair on this host (if needed),")
                 print("  then configures the cluster to accept public-key login")
@@ -2197,13 +2208,13 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 4d: Set up passwordless SSH\n")
+                    print("\n  \u2705 Confirmed. 5b: Set up passwordless SSH\n")
                     return 45, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice == "4e":
-                _print_banner("\U0001f4be 4e: Create backup cluster configuration")
+            if choice == "5c":
+                _print_banner("\U0001f4be 5c: Create backup cluster configuration")
                 print("")
                 print("  Connects to the primary node BMC and reads the current")
                 print("  cluster configuration, then writes it to a local")
@@ -2212,12 +2223,13 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 4e: Create backup cluster configuration\n")
+                    print("\n  \u2705 Confirmed. 5c: Create backup cluster configuration\n")
                     return 46, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
+                continue
 
-            if choice == "4f":
-                _print_banner("\U0001f50d 4f: Verify BMC authentication")
+            if choice == "5d":
+                _print_banner("\U0001f50d 5d: Verify BMC authentication")
                 print("")
                 print("  Loads BMC IP addresses from BMC_IP.json (or prompts),")
                 print("  attempts SSH login to each BMC, runs 'bmc status', and")
@@ -2226,12 +2238,13 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 4f: Verify BMC authentication\n")
+                    print("\n  \u2705 Confirmed. 5d: Verify BMC authentication\n")
                     return 47, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
+                continue
 
-            if choice == "4g":
-                _print_banner("\U0001f504 4g: Reset all nodes to LOADER prompt")
+            if choice == "5e":
+                _print_banner("\U0001f504 5e: Reset all nodes to LOADER prompt")
                 print("")
                 print("  Connects to all BMC addresses in parallel, issues a")
                 print("  system reset on each node, enters the system console,")
@@ -2244,16 +2257,16 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 4g: Reset all nodes to LOADER prompt\n")
+                    print("\n  \u2705 Confirmed. 5e: Reset all nodes to LOADER prompt\n")
                     return 48, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
             continue
 
-        if choice == "5":
+        if choice == "6":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4g, or 5.")
+        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5e, or 6.")
 
 
 def get_loader_commands():
@@ -11535,7 +11548,7 @@ def _run_ontap_upgrade(log):
                     _validate_targets = list(_node_mgmt_pool)
                 else:
                     print("  \u2139\ufe0f  Could not auto-discover node-mgmt IPs. "
-                          "You can also run option 4e to generate a config file "
+                          "You can also run option 5c to generate a config file "
                           "containing these IPs for future runs.")
                     _manual_ip = _prompt(
                         "  Enter a node (or cluster) management IP to use "
@@ -16355,7 +16368,7 @@ def main():
             try:
                 _gen_ans = input(
                     "  Would you like to generate them from an existing cluster"
-                    " (option 4e)? [Y/n]: "
+                    " (option 5c)? [Y/n]: "
                 ).strip().lower()
             except (EOFError, KeyboardInterrupt):
                 _gen_ans = "n"
@@ -16364,9 +16377,9 @@ def main():
 
     # ── Mode 46 (4e): create backup cluster configuration ──────────────────
     if _operation_mode == 46:
-        _print_banner("\U0001f4be 4e: Create backup cluster configuration")
+        _print_banner("\U0001f4be 5c: Create backup cluster configuration")
         print("")
-        _make_session_log("Mode 4e: backup cluster configuration")
+        _make_session_log("Mode 5c: backup cluster configuration")
 
         # Resolve output dir early — needed throughout.
         try:
