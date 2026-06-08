@@ -5322,6 +5322,9 @@ def _resolve_mgmt_lif_from_retained(lif_type: str):
     contains both the type keyword and "mgmt". For node-mgmt, any row is
     used as a fallback when no explicit match is found.
 
+    When multiple cluster-mgmt LIFs are found the operator is prompted to
+    choose one interactively.
+
     Returns ``{port, ip, netmask, gateway}`` with missing fields as None.
     """
     cfg = {"port": None, "ip": None, "netmask": None, "gateway": None}
@@ -5335,6 +5338,28 @@ def _resolve_mgmt_lif_from_retained(lif_type: str):
     # node-mgmt: fall back to any row when no explicit match exists
     if not candidates and lif_type == "node" and rows:
         candidates = rows
+
+    # When multiple cluster-mgmt LIFs exist, ask the operator which to use.
+    if lif_type == "cluster" and len(candidates) > 1:
+        print(f"\n  \u26a0\ufe0f  Multiple cluster-mgmt LIFs found. "
+              "Select the one to use for this cluster:")
+        print(f"  {'#':<4} {'LIF name':<28} {'IP address':<18} {'Netmask':<18} {'Port'}")
+        print("  " + "-" * 82)
+        for _ci, _cr in enumerate(candidates, 1):
+            print(
+                f"  {_ci:<4} "
+                f"{(_cr.get('lif') or '-'):<28} "
+                f"{(_cr.get('address') or '-'):<18} "
+                f"{(_cr.get('netmask') or '-'):<18} "
+                f"{(_cr.get('home-port') or _cr.get('port') or '-')}"
+            )
+        while True:
+            _sel = _prompt(f"  Select LIF [1]: ", "1").strip()
+            if _sel.isdigit() and 1 <= int(_sel) <= len(candidates):
+                candidates = [candidates[int(_sel) - 1]]
+                break
+            print(f"  \u26a0\ufe0f  Please enter a number between 1 and {len(candidates)}.")
+
     if candidates:
         r = candidates[0]
         cfg["port"] = r.get("home-port") or r.get("port")
