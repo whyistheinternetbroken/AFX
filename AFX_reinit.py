@@ -12193,7 +12193,6 @@ def _run_ontap_upgrade(log):
                 )
                 _state_lower = _state.lower()
                 _tof = _parsed.get("tof") if _parsed else None
-                _tby = _parsed.get("tby") if _parsed else None
 
                 if _state_lower != _last_state:
                     if not _state or "unknown" in _state_lower:
@@ -12220,7 +12219,7 @@ def _run_ontap_upgrade(log):
                     break
 
                 # Auto-giveback may have already completed
-                if (_tof and _tby
+                if (_tof
                         and "connected to" in _state_lower
                         and _WAITING_FOR_CLUSTER_APPS not in _state_lower):
                     _total = time.monotonic() - _t0
