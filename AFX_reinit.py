@@ -10860,22 +10860,36 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
         not_clean = []
         for n in expected_nodes:
             state_block = node_state.get(n, "").lower()
-            # Must contain "connected to" and NOT contain any degraded phrases.
+            # Must contain "connected to" and ONLY that — no additional state.
+            # ONTAP appends extra state descriptions with ", " (e.g.
+            # "Connected to node-02, Partial giveback"). A comma anywhere after
+            # "connected to" therefore means there is additional state text.
             degraded = ["partial giveback", "waiting for cluster",
                         "waiting for giveback", "in takeover"]
             if "connected to" not in state_block:
-                not_clean.append(f"{n}: not yet connected ({state_block[:60]})")
+                not_clean.append(f"{n}: not yet connected ({state_block})")
             elif any(d in state_block for d in degraded):
-                not_clean.append(f"{n}: degraded state ({state_block[:80]})")
+                not_clean.append(f"{n}: degraded state ({state_block})")
+            elif "," in state_block[state_block.find("connected to"):]:
+                not_clean.append(f"{n}: extra state after 'connected to' ({state_block})")
         # Also check takeover_possible from parsed rows.
         for r in fo_rows:
             if r["node"] in expected_nodes and not r["takeover_possible"]:
                 not_clean.append(f"{r['node']}: takeover_possible=false")
 
         # ── Check 2: no aggregates to give back ─────────────────────────────
-        gb_lines = [l.strip() for l in out_gb.splitlines() if l.strip()]
+        # Use raw (non-stripped) lines so we can distinguish unindented node-name
+        # header rows (e.g. "rtp-afx1k-c01-01") from indented aggregate/status
+        # rows.  Node-name headers must be skipped; only indented lines carry
+        # actual giveback work items.
         has_pending_gb = False
-        for gl in gb_lines:
+        for gl_raw in out_gb.splitlines():
+            if not gl_raw.strip():
+                continue
+            # Skip unindented lines — these are node-name headers, not data.
+            if gl_raw[0] != " " and "::" not in gl_raw:
+                continue
+            gl = gl_raw.strip()
             gl_lower = gl.lower()
             if ("entries were displayed" in gl_lower or "::" in gl_lower
                     or gl_lower.startswith("node") or set(gl_lower) <= {"-", " "}
@@ -10885,9 +10899,9 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
                     or "storage failover" in gl_lower or "set diag" in gl_lower
                     or "(storage failover" in gl_lower):
                 continue
-            # Any other non-empty data line means pending giveback work.
+            # Any other non-empty indented data line means pending giveback work.
             has_pending_gb = True
-            not_clean.append(f"pending giveback: {gl[:80]}")
+            not_clean.append(f"pending giveback: {gl}")
             break
 
         if not not_clean:
@@ -11764,6 +11778,17 @@ def _run_ontap_upgrade(log):
                     log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] download + install", _seq_inst_elapsed)
 
         # ── Pre-stage / validate-only exits ─────────────────────────────────
+        # The HTTP server is no longer needed once all image downloads are done.
+        if httpd is not None:
+            print("\n  \U0001f310 Shutting down temporary HTTP server (downloads complete)...")
+            try:
+                httpd.shutdown()
+            except Exception:
+                pass
+            httpd = None
+            if log:
+                log.log("Temporary HTTP server stopped after image downloads")
+
         if _validate_only:
             print("\n  \u2705 Validate-only mode: all nodes validated. "
                   "Skipping install and takeover/giveback.")
