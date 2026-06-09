@@ -12540,16 +12540,57 @@ def _run_ontap_upgrade(log):
                 log.log("Remediation takeover/giveback complete")
 
         # ── Step 11c: final cluster health gate ─────────────────────────────
+        # Use a direct SSH session to the cluster-mgmt LIF so the final health
+        # check gets clean output (no ANSI/VT100 from the BMC PTY).  Fall back
+        # to channel_41 only if no cluster-mgmt IP is available.
         print("\n  \U0001f50d Final health check: all nodes connected, no pending giveback...")
         _all_upgrade_nodes = list(node_image.keys())
-        if not _wait_for_cluster_healthy(
-            channel_41, _all_upgrade_nodes,
-            total_timeout=600, poll_interval=60, log=log,
-        ):
-            print(f"\n  \u274c Cluster did not reach healthy state after upgrade.")
-            if log:
-                log.log("Final health check failed", prefix="ERROR")
-            return False
+        _health_client = None
+        _health_channel = channel_41  # default fallback
+        if _sfo_poll_ip:
+            try:
+                _health_client, _, _ = _ssh_connect_with_retry(
+                    _sfo_poll_ip, _cl_admin_user, _cl_admin_pass,
+                    label=f"health-check/{_sfo_poll_ip}",
+                    max_attempts=3, interactive=False,
+                )
+                _health_channel = _open_shell(_health_client)
+                try:
+                    _health_channel.resize_pty(width=256, height=50)
+                except Exception:
+                    pass
+                with _suppress_console():
+                    _wait_for_cluster_prompt(_health_channel, timeout=30)
+                if log:
+                    log.log(f"Health check SSH channel opened to {_sfo_poll_ip}")
+            except Exception as _hce:
+                if log:
+                    log.log(f"Health check SSH to {_sfo_poll_ip} failed ({_hce}); "
+                            "falling back to BMC channel", prefix="WARN")
+                _health_channel = channel_41
+                if _health_client:
+                    try:
+                        _health_client.close()
+                    except Exception:
+                        pass
+                    _health_client = None
+
+        try:
+            if not _wait_for_cluster_healthy(
+                _health_channel, _all_upgrade_nodes,
+                total_timeout=600, poll_interval=60, log=log,
+            ):
+                print(f"\n  \u274c Cluster did not reach healthy state after upgrade.")
+                if log:
+                    log.log("Final health check failed", prefix="ERROR")
+                return False
+        finally:
+            if _health_client:
+                try:
+                    _health_client.close()
+                except Exception:
+                    pass
+
         print("  \u2705 Cluster fully healthy.")
         if log:
             log.log("Final health check passed — all nodes connected, no pending giveback")
