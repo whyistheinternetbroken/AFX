@@ -10971,12 +10971,19 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
         remaining = total_timeout - elapsed
 
         with _suppress_console():
-            out_fo  = _run_cluster_command(channel, "storage failover show", timeout=30)
+            out_fo  = _run_cluster_command(
+                channel, "set -rows 0; storage failover show", timeout=30)
             out_gb  = _run_cluster_command(
                 channel,
                 "set diag -c off; storage failover show-giveback",
                 timeout=30,
             )
+
+        # Strip ANSI/VT100 escape codes injected by the BMC PTY — without this
+        # line[0] may be \x1b, causing node-name detection to fail or embed
+        # escape sequences in the node name key.
+        out_fo = _ANSI_RE.sub("", out_fo).replace("\r\n", "\n").replace("\r", "\n")
+        out_gb = _ANSI_RE.sub("", out_gb).replace("\r\n", "\n").replace("\r", "\n")
 
         # ── Check 1: all nodes connected cleanly ────────────────────────────
         fo_rows = _parse_failover_show(out_fo)
