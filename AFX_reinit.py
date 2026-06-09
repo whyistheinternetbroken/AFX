@@ -12228,12 +12228,14 @@ def _run_ontap_upgrade(log):
                             _reconnected = False
                             for _r in range(3):
                                 if _r > 0:
-                                    print(f"  ⏳ Poll channel reconnect "
-                                          f"round {_r + 1}/3 — waiting 15s...")
+                                    print(f"  ⏳ Waiting 15s for cluster LIF "
+                                          f"migration to complete and then retrying "
+                                          f"(round {_r + 1}/3)...")
                                     if log:
                                         log.log(
                                             f"Poll channel reconnect round "
-                                            f"{_r + 1}/3; sleeping 15s",
+                                            f"{_r + 1}/3; waiting 15s for cluster "
+                                            f"LIF migration",
                                             prefix="WARN",
                                         )
                                     time.sleep(15)
