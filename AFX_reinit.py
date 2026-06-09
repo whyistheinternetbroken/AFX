@@ -11258,7 +11258,7 @@ def _run_ontap_upgrade(log):
     if not _has_any_config:
         print("  \u26a0\ufe0f  No config files (reinit-config.json / BMC_IP.json) "
               "found on disk.")
-        print("     Option 4e can connect to your existing cluster and generate "
+        print("     Option 5c can connect to your existing cluster and generate "
               "them automatically.")
         _ans_4e = _prompt(
             "  Run the 4e config-gather workflow now? [Y/n]: ", "n"
@@ -17803,7 +17803,7 @@ def main():
         # 2. No config found — offer to gather one or ask for IP.
         if not _ch49_ip and not _49_cfg_files:
             print("\n  \u26a0\ufe0f  No reinit-config.json found on disk.")
-            print("     Option 4e can connect to your existing cluster and generate one automatically.")
+            print("     Option 5c can connect to your existing cluster and generate one automatically.")
             _ans_49 = _prompt("  Run the 4e config-gather workflow now? [Y/n]: ", "n").lower()
             if _ans_49 != "n":
                 _5f_pending_after_4e = True
