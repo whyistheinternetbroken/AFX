@@ -12043,6 +12043,61 @@ def _run_ontap_upgrade(log):
             log.log(f"Upgrade groups — partner: {partner_group}, main: {main_group}")
 
         # ── Step 11: rolling takeover/giveback ──────────────────────────────
+        # Resolve the cluster-mgmt LIF IP once before starting the rolling
+        # upgrade.  This IP floats to whichever node is alive during a
+        # takeover, so it's the right target for SFO poll commands.
+        # We query the live cluster first; fall back to config then prompt.
+        _sfo_poll_ip = None
+        try:
+            with _suppress_console():
+                _lif_out = _run_cluster_command(
+                    channel_41,
+                    "set -rows 0; network interface show -role cluster-mgmt "
+                    "-fields address",
+                    timeout=30,
+                )
+            # Parse: look for a line with an IP after the dashes row
+            _lif_lines = _ANSI_RE.sub("", _lif_out).splitlines()
+            _past_dashes = False
+            for _ll in _lif_lines:
+                _ls = _ll.strip()
+                if not _ls:
+                    continue
+                if set(_ls) <= {"-", " "}:
+                    _past_dashes = True
+                    continue
+                if not _past_dashes:
+                    continue
+                if "entries were displayed" in _ls.lower() or "::" in _ls:
+                    continue
+                # Any token that looks like an IP address
+                for _tok in _ls.split():
+                    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", _tok):
+                        _sfo_poll_ip = _tok
+                        break
+                if _sfo_poll_ip:
+                    break
+        except Exception as _lif_e:
+            if log:
+                log.log(f"cluster-mgmt LIF query failed: {_lif_e}", prefix="WARN")
+
+        if not _sfo_poll_ip:
+            _sfo_poll_ip = (
+                (_config_data.get("cluster") or {}).get("clus_mgmt_address")
+                if isinstance(_config_data, dict) else None
+            )
+        if not _sfo_poll_ip:
+            _sfo_poll_ip = _cluster_config.get("mgmt_ip")
+        if not _sfo_poll_ip:
+            print("\n  ⚠️  Could not determine cluster-mgmt LIF IP for SFO polling.")
+            _sfo_poll_ip = input(
+                "  Enter cluster management IP for SFO monitoring: "
+            ).strip() or None
+        if _sfo_poll_ip:
+            print(f"  📡 SFO poll channel will use cluster-mgmt LIF: {_sfo_poll_ip}")
+            if log:
+                log.log(f"SFO poll IP: {_sfo_poll_ip}")
+
         def _do_takeover_giveback(takeover_node, takeover_by):
             """Take over `takeover_node` by `takeover_by`, auto-issue giveback
             when the node reaches 'Waiting for giveback', then wait until the
@@ -12085,7 +12140,8 @@ def _run_ontap_upgrade(log):
                 # Fall back to _cl_mgmt_ip (user-supplied) then any node-mgmt
                 # IP as a last resort.
                 _target_ip = (
-                    _cluster_config.get("mgmt_ip")
+                    _sfo_poll_ip
+                    or _cluster_config.get("mgmt_ip")
                     or _cl_mgmt_ip
                     or next(iter(_node_ssh_targets.values()), None)
                 )
