@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/8/2026  
+**Updated:** 6/9/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
 ---
@@ -46,7 +46,7 @@ All session activity is captured in a timestamped log directory with a human-rea
 | End-to-End Mode (3) | Combines 1b (primary init) + 2b (peer adds) into a single unattended run. |
 | **Bulk cluster join (`cluster add-node`)** | Peer nodes now join via ONTAP's native bulk command rather than the per-node interactive wizard. All nodes complete Option 4 / disk erase / node-mgmt in parallel; a single `cluster add-node -cluster-ips` command adds them all at once. Progress is polled every 2 minutes until all nodes show success (up to 15 min). See [End-to-End Reinit Time Estimates](#end-to-end-reinit-time-estimates) for a full comparison — at 64 nodes the new approach saves ~10h vs the old serial join method. |
 | **Per-node milestone timing** | The session summary now emits five timestamped milestones per peer node (LOADER, Option 4, disk erase, node-mgmt, cluster IP) plus per-node `cluster add-node` success time. |
-| ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence using structured `-fields` polling. SSH reconnects automatically if the channel drops mid-upgrade. |
+| ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence using structured `-fields` polling. Connects directly to the cluster management LIF via SSH (from `reinit-config.json` or a prompted IP) for all ONTAP CLI operations; BMC console is used only as a fallback when direct SSH is unavailable. SSH reconnects automatically if the channel drops mid-upgrade. Post-upgrade version verification and cluster health checks also use the direct SSH channel for reliable, noise-free output. |
 | Netboot Install (4b) | Automated ONTAP netboot and software installation. |
 | Install License (5a) | Connects via BMC console and applies a pre-staged license file without running any reinit steps. |
 | SSH Key Setup (5b) | Configures passwordless SSH from the script host to cluster management. |

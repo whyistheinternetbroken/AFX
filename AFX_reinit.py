@@ -12566,13 +12566,53 @@ def _run_ontap_upgrade(log):
         # default image (is-default=true AND is-current=true on the same row).
         # A node where the default image is *not* current missed its takeover
         # (e.g. due to a transient timeout); take it over and give it back now.
+        #
+        # _cl_ch may have dropped while the cluster-mgmt LIF migrated during
+        # the rolling upgrade.  Open a fresh SSH session (same as 11c/12).
         print("\n  \U0001f50d Checking that all nodes are running their default image...")
-        with _suppress_console():
-            out_imgcheck = _run_cluster_command(
-                _cl_ch,
-                "set advanced -c off; system image show",
-                timeout=60,
-            )
+        _imgchk_client = None
+        _imgchk_ch = _cl_ch  # fallback if no poll IP
+        if _sfo_poll_ip:
+            try:
+                _imgchk_client, _, _ = _ssh_connect_with_retry(
+                    _sfo_poll_ip, _cl_admin_user, _cl_admin_pass,
+                    label=f"imgcheck/{_sfo_poll_ip}",
+                    max_attempts=3, interactive=False,
+                )
+                _imgchk_ch = _open_shell(_imgchk_client)
+                try:
+                    _imgchk_ch.resize_pty(width=256, height=50)
+                except Exception:
+                    pass
+                with _suppress_console():
+                    _wait_for_cluster_prompt(_imgchk_ch, timeout=30)
+            except Exception as _ice:
+                if log:
+                    log.log(f"imgcheck SSH to {_sfo_poll_ip} failed ({_ice}); "
+                            "using existing channel", prefix="WARN")
+                if _imgchk_client:
+                    try:
+                        _imgchk_client.close()
+                    except Exception:
+                        pass
+                _imgchk_client = None
+                _imgchk_ch = _cl_ch
+
+        try:
+            with _suppress_console():
+                out_imgcheck = _run_cluster_command(
+                    _imgchk_ch,
+                    "set advanced -c off; system image show",
+                    timeout=60,
+                )
+            out_imgcheck = _ANSI_RE.sub("", out_imgcheck).replace("\r\n", "\n").replace("\r", "\n")
+        finally:
+            if _imgchk_client:
+                try:
+                    _imgchk_client.close()
+                except Exception:
+                    pass
+
         if log:
             log.log(f"Post-upgrade image show:\n{out_imgcheck}")
 

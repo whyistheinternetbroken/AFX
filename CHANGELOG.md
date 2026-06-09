@@ -8,6 +8,42 @@ revision labels rather than strict [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **4a upgrade uses cluster-mgmt LIF SSH as primary channel; BMC is fallback only.**
+  The 4a ONTAP upgrade workflow now attempts a direct SSH connection to the
+  cluster management LIF (sourced from `reinit-config.json` or prompted at
+  startup) before falling back to the BMC console. All ONTAP CLI commands
+  (image show, promoted-dev-update, image update, failover show, version
+  verify, health checks) run over the clean SSH channel, eliminating the ANSI
+  / VT100 noise and PTY echoing from the BMC PTY that caused output-parsing
+  failures. BMC is opened only if the cluster-mgmt LIF is unreachable. The
+  active channel is exposed as `_cl_ch`; `channel_41` / `client_41` are only
+  set when the BMC path is taken.
+- **Final cluster health check (Step 11c) uses cluster-mgmt LIF SSH.**
+  `_wait_for_cluster_healthy` now receives a fresh SSH session to the
+  cluster-mgmt LIF (`_sfo_poll_ip`) instead of `channel_41`. This ensures
+  `_parse_failover_show` sees clean ONTAP output and can correctly determine
+  whether all nodes have returned to `Connected to <partner>` state after the
+  rolling upgrade. Falls back to `channel_41` only if no cluster-mgmt IP is
+  available.
+- **Post-upgrade version verify (Step 12) uses cluster-mgmt LIF SSH.**
+  Step 12 now opens a dedicated SSH session to `_sfo_poll_ip` for the
+  `system image show -fields version,is-current` command. Running version is
+  extracted from the `is-current=true` row rather than parsing the `version`
+  command (more reliable for RC and special builds). Falls back to `channel_41`
+  if no cluster-mgmt IP is available.
+
+### Fixed
+- **Version parse failure after upgrade.** Step 12 was using `channel_41`
+  (BMC PTY), which injected spurious `Password:` prompts and ANSI escape codes
+  into the command output, causing the version regex to fail and print
+  `(parse failed)`.
+- **Final health check always reporting "not found in failover show output".**
+  `_wait_for_cluster_healthy` was running over the BMC PTY (`channel_41`),
+  which produced ANSI/VT100-corrupted output that `_parse_failover_show` could
+  not parse, returning zero rows. Switching to a direct SSH session resolves
+  the corruption.
+
 ### Added
 - **Numbered upgrade mode prompt.** The `4a` upgrade workflow now presents
   `validate`, `install`, and `prestage` as a numbered list (1/2/3). Both the
@@ -17,7 +53,7 @@ revision labels rather than strict [SemVer](https://semver.org/).
   `AFX_reinit.py`. Automatically triggered when the user asks to update docs,
   readme, or changelog.
 
-### Changed
+### Changed (prior)
 - **Menu reorganized into two install/admin categories.**
   - Category **4 "Install ONTAP"** now contains only `4a` (ONTAP upgrade) and
     `4b` (netboot install).
