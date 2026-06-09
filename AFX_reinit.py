@@ -12080,8 +12080,13 @@ def _run_ontap_upgrade(log):
                 """Open (or reopen) a direct SSH poll connection.
                 Returns True on success, False if no usable IP is known.
                 """
+                # Always prefer the cluster-mgmt LIF — it floats to the
+                # surviving node during a takeover and is always responsive.
+                # Fall back to _cl_mgmt_ip (user-supplied) then any node-mgmt
+                # IP as a last resort.
                 _target_ip = (
-                    _cl_mgmt_ip
+                    _cluster_config.get("mgmt_ip")
+                    or _cl_mgmt_ip
                     or next(iter(_node_ssh_targets.values()), None)
                 )
                 if not _target_ip:
