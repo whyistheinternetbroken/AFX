@@ -1974,6 +1974,7 @@ def select_operation_mode():
         print("    5c. Create backup cluster configuration")
         print("    5d. Verify BMC authentication")
         print("    5e. Reset all nodes to LOADER prompt")
+        print("    5f. Cluster health and version check")
         print("")
         print("  6.  Exit")
         print("")
