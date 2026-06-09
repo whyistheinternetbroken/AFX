@@ -10758,9 +10758,18 @@ def _parse_failover_show(output):
                     possible_str = v
 
         tp = possible_str.lower() == "true"
+
+        # State description: column 3, accumulated across all lines of record.
+        state_desc = ""
+        for ln in ([first] if not first_is_node_only else []) + rec[1:]:
+            frag = _extract(ln, 3)
+            if frag:
+                state_desc = (state_desc + " " + frag).strip()
+
         if node and partner:
             rows.append({"node": node, "partner": partner,
-                         "takeover_possible": tp})
+                         "takeover_possible": tp,
+                         "state_description": state_desc})
 
     return rows
 
@@ -10990,35 +10999,17 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
         if log:
             log.log(f"Cluster health poll — failover show:\n{out_fo.strip()}")
 
-        # Build a node→state_description map from raw output (same wrapped-line
-        # logic as _wait_for_failover_state).
-        node_state = {}
-        lines = [l for l in out_fo.splitlines() if l.strip()]
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            if line and line[0] != " " and "::" not in line and "---" not in line:
-                node_name = line.strip().split()[0]
-                block_lines = [line.strip()]
-                j = i + 1
-                while j < len(lines):
-                    nl = lines[j]
-                    if nl and nl[0] != " ":
-                        break
-                    block_lines.append(nl.strip())
-                    j += 1
-                node_state[node_name] = " ".join(b for b in block_lines if b)
-                i = j
-            else:
-                i += 1
+        # Build node→row map from the already-parsed fo_rows (which use
+        # column-bound extraction and handle ANSI/wrapped-line format).
+        fo_map = {r["node"]: r for r in fo_rows}
 
         not_clean = []
         for n in expected_nodes:
-            state_block = node_state.get(n, "").lower()
-            # Must contain "connected to" and ONLY that — no additional state.
-            # ONTAP appends extra state descriptions with ", " (e.g.
-            # "Connected to node-02, Partial giveback"). A comma anywhere after
-            # "connected to" therefore means there is additional state text.
+            row = fo_map.get(n)
+            if row is None:
+                not_clean.append(f"{n}: not found in failover show output")
+                continue
+            state_block = row.get("state_description", "").lower()
             degraded = ["partial giveback", "waiting for cluster",
                         "waiting for giveback", "in takeover"]
             if "connected to" not in state_block:
