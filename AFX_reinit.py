@@ -12596,24 +12596,71 @@ def _run_ontap_upgrade(log):
             log.log("Final health check passed — all nodes connected, no pending giveback")
 
         # ── Step 12: verify version ─────────────────────────────────────────
+        # Use a fresh SSH session to the cluster-mgmt LIF (same as health
+        # check) to avoid BMC PTY noise / ANSI codes / spurious prompts.
         print("\n  \U0001f50d Verifying ONTAP version post-upgrade...")
         _t0_ver = time.monotonic()
-        with _suppress_console():
-            out_ver = _run_cluster_command(channel_41, "version", timeout=30)
-            out_img2 = _run_cluster_command(
-                channel_41,
-                "set advanced -c off; system image show -fields version",
-                timeout=60,
-            )
-        _ver_elapsed = time.monotonic() - _t0_ver
-        # Extract the version string from the 'version' command output
-        ver_match = re.search(r"NetApp Release\s+([\d\.]+[^\s:;]+)", out_ver, re.IGNORECASE)
-        running_ver = ver_match.group(1).strip() if ver_match else None
+        _ver_client = None
+        _ver_channel = channel_41  # fallback
+        if _sfo_poll_ip:
+            try:
+                _ver_client, _, _ = _ssh_connect_with_retry(
+                    _sfo_poll_ip, _cl_admin_user, _cl_admin_pass,
+                    label=f"version-check/{_sfo_poll_ip}",
+                    max_attempts=3, interactive=False,
+                )
+                _ver_channel = _open_shell(_ver_client)
+                try:
+                    _ver_channel.resize_pty(width=256, height=50)
+                except Exception:
+                    pass
+                with _suppress_console():
+                    _wait_for_cluster_prompt(_ver_channel, timeout=30)
+            except Exception as _vce:
+                if log:
+                    log.log(f"Version check SSH to {_sfo_poll_ip} failed ({_vce}); "
+                            "falling back to BMC channel", prefix="WARN")
+                _ver_channel = channel_41
+                if _ver_client:
+                    try:
+                        _ver_client.close()
+                    except Exception:
+                        pass
+                    _ver_client = None
 
-        # Extract version from image show output for the non-current (newly installed) images
+        try:
+            with _suppress_console():
+                out_img2 = _run_cluster_command(
+                    _ver_channel,
+                    "set advanced -c off; system image show -fields version,is-current",
+                    timeout=60,
+                )
+        finally:
+            if _ver_client:
+                try:
+                    _ver_client.close()
+                except Exception:
+                    pass
+
+        out_img2 = _ANSI_RE.sub("", out_img2).replace("\r\n", "\n").replace("\r", "\n")
+        _ver_elapsed = time.monotonic() - _t0_ver
+
+        # Extract running version from the image row where is-current=true.
+        running_ver = None
+        for _vl in out_img2.splitlines():
+            _vl_s = _vl.strip()
+            if "true" in _vl_s.lower():
+                _ver_tok = re.search(r"(\d+\.\d+\S+)", _vl_s)
+                if _ver_tok:
+                    running_ver = _ver_tok.group(1)
+                    break
+
+        # Filter display lines to data rows only (skip headers/prompts/noise).
         img_ver_lines = [l.strip() for l in out_img2.splitlines()
                          if l.strip() and "::" not in l
-                         and not l.strip().lower().startswith("system image")]
+                         and not l.strip().lower().startswith("system image")
+                         and "password" not in l.strip().lower()
+                         and "set advanced" not in l.strip().lower()]
         print(f"\n  Running version  : {running_ver or '(parse failed)'}")
         print("  Image show output:\n    " + "\n    ".join(img_ver_lines[-10:]))
 
