@@ -12213,6 +12213,9 @@ def _run_ontap_upgrade(log):
                             _poll_client[0].close()
                         except Exception:
                             pass
+                    # Brief initial wait to let the cluster LIF finish migrating
+                    # before the first connection attempt.
+                    time.sleep(10)
                     _pc, _, _ = _ssh_connect_with_retry(
                         _target_ip, _cl_admin_user, _cl_admin_pass,
                         label=f"sfo-poll/{_target_ip}",
@@ -12278,21 +12281,21 @@ def _run_ontap_upgrade(log):
                                 log.log(f"Poll channel error: {_e} - "
                                         "Cluster LIF migrating; reconnecting",
                                         prefix="WARN")
-                            # Retry reconnect up to 3 rounds, 15s apart.
+                            # Retry reconnect up to 3 rounds, 20s apart.
                             _reconnected = False
                             for _r in range(3):
                                 if _r > 0:
-                                    print(f"  ⏳ Waiting 15s for cluster LIF "
+                                    print(f"  ⏳ Waiting 20s for cluster LIF "
                                           f"migration to complete and then retrying "
                                           f"(round {_r + 1}/3)...")
                                     if log:
                                         log.log(
                                             f"Poll channel reconnect round "
-                                            f"{_r + 1}/3; waiting 15s for cluster "
+                                            f"{_r + 1}/3; waiting 20s for cluster "
                                             f"LIF migration",
                                             prefix="WARN",
                                         )
-                                    time.sleep(15)
+                                    time.sleep(20)
                                 if _open_poll_channel():
                                     _reconnected = True
                                     break
