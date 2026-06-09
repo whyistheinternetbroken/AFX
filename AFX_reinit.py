@@ -17811,13 +17811,31 @@ def main():
 
         # ── Health check ─────────────────────────────────────────────────
         print("\n  \U0001f50d Running cluster health check...")
-        _nodes49 = []
-        # Discover node names from failover show so we know what to expect.
+
+        # Run cluster show and storage failover show and display raw output.
         with _suppress_console():
+            _cs49_out = _run_cluster_command(
+                _ch49, "set -rows 0; cluster show", timeout=30
+            )
             _fo49_out = _run_cluster_command(
                 _ch49, "set -rows 0; storage failover show", timeout=30
             )
+        _cs49_out = _ANSI_RE.sub("", _cs49_out).replace("\r\n", "\n").replace("\r", "\n")
         _fo49_out = _ANSI_RE.sub("", _fo49_out).replace("\r\n", "\n").replace("\r", "\n")
+
+        print("\n  cluster show:")
+        for _ln in _cs49_out.splitlines():
+            _ls = _ln.strip()
+            if _ls and "::" not in _ls and "cluster show" not in _ls.lower():
+                print(f"    {_ls}")
+
+        print("\n  storage failover show:")
+        for _ln in _fo49_out.splitlines():
+            _ls = _ln.strip()
+            if _ls and "::" not in _ls and "storage failover show" not in _ls.lower():
+                print(f"    {_ls}")
+
+        _nodes49 = []
         for _r49 in _parse_failover_show(_fo49_out):
             if _r49["node"] and _r49["node"] not in _nodes49:
                 _nodes49.append(_r49["node"])
@@ -17825,7 +17843,6 @@ def main():
 
         if not _nodes49:
             print("  \u26a0\ufe0f  Could not discover node names from 'storage failover show'.")
-            print("       Health check will still run but may show 'not found' entries.")
 
         _healthy49 = _wait_for_cluster_healthy(
             _ch49, _nodes49, total_timeout=600, poll_interval=60,
@@ -17872,8 +17889,9 @@ def main():
             pass
 
         if _healthy49:
-            print("\n  \u2705 Cluster is healthy.")
-            _session_log.log("5f: cluster healthy")
+            _ver_str = f" and all nodes are running ONTAP {_running49}" if _running49 else ""
+            print(f"\n  \u2705 Cluster is healthy{_ver_str}.")
+            _session_log.log(f"5f: cluster healthy, version={_running49}")
         else:
             print("\n  \u26a0\ufe0f  Cluster did not reach fully healthy state within the timeout.")
             _session_log.log("5f: cluster not healthy within timeout", prefix="WARN")
