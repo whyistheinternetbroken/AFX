@@ -17798,8 +17798,7 @@ def main():
             print("     Option 4e can connect to your existing cluster and generate one automatically.")
             _ans_49 = _prompt("  Run the 4e config-gather workflow now? [Y/n]: ", "n").lower()
             if _ans_49 != "n":
-                global _operation_mode
-                _operation_mode = 46
+                _operation_mode = 46  # noqa: F841  (module-level var, reassigned here)
                 return
             # User said no — fall through to manual IP prompt.
 
