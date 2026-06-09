@@ -12219,11 +12219,12 @@ def _run_ontap_upgrade(log):
                         return _parsed, _out
                     except Exception as _e:
                         if _attempt == 0:
-                            print(f"  ⚠️  Poll channel error ({_e}); "
-                                  "attempting reconnect...")
+                            print(f"  ⚠️  Poll channel error ({_e} - "
+                                  "Cluster LIF migrating); attempting reconnect...")
                             if log:
-                                log.log(f"Poll channel error: {_e}; "
-                                        "reconnecting", prefix="WARN")
+                                log.log(f"Poll channel error: {_e} - "
+                                        "Cluster LIF migrating; reconnecting",
+                                        prefix="WARN")
                             # Retry reconnect up to 3 rounds, 15s apart.
                             _reconnected = False
                             for _r in range(3):
