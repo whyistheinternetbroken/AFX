@@ -12067,22 +12067,76 @@ def _run_ontap_upgrade(log):
                 "waiting for cluster applications to come online"
             )
 
-            def _safe_poll():
-                """Run -fields poll; return (parsed_dict, raw_str).
-                Reconnects SSH once on channel error; returns (None, "")
-                if unrecoverable.
+            # ── Dedicated direct-SSH poll channel ────────────────────────────
+            # channel_41 is a BMC serial console.  When the taken-over node
+            # reboots, that serial console shows boot messages and cannot
+            # respond to ONTAP commands.  We open a SEPARATE direct SSH
+            # connection to the cluster management IP (_cl_mgmt_ip) which
+            # floats to the surviving node and is always responsive.
+            _poll_client: list = [None]   # list so inner fn can rebind
+            _poll_channel: list = [None]
+
+            def _open_poll_channel():
+                """Open (or reopen) a direct SSH poll connection.
+                Returns True on success, False if no usable IP is known.
                 """
-                nonlocal channel_41, client_41
+                _target_ip = (
+                    _cl_mgmt_ip
+                    or next(iter(_node_ssh_targets.values()), None)
+                )
+                if not _target_ip:
+                    return False
+                try:
+                    if _poll_client[0]:
+                        try:
+                            _poll_client[0].close()
+                        except Exception:
+                            pass
+                    _pc, _, _ = _ssh_connect_with_retry(
+                        _target_ip, _cl_admin_user, _cl_admin_pass,
+                        label=f"sfo-poll/{_target_ip}",
+                        max_attempts=3, interactive=False,
+                    )
+                    _pch = _open_shell(_pc)
+                    try:
+                        _pch.resize_pty(width=256, height=50)
+                    except Exception:
+                        pass
+                    _poll_client[0] = _pc
+                    _poll_channel[0] = _pch
+                    with _suppress_console():
+                        _wait_for_cluster_prompt(_pch, timeout=30)
+                    if log:
+                        log.log(f"Poll channel opened to {_target_ip}")
+                    return True
+                except Exception as _pe:
+                    if log:
+                        log.log(f"Poll channel open failed ({_pe})",
+                                prefix="WARN")
+                    _poll_client[0] = None
+                    _poll_channel[0] = None
+                    return False
+
+            # Pre-open the poll channel.
+            _open_poll_channel()
+
+            def _safe_poll():
+                """Run -fields poll via a direct SSH connection to the cluster
+                management IP.  Returns (parsed_dict, raw_str).
+                Falls back to the BMC console channel if no direct IP is known.
+                Reconnects once on error; returns (None, "") if unrecoverable.
+                """
                 for _attempt in range(2):
+                    _ch = _poll_channel[0] if _poll_channel[0] else channel_41
                     try:
                         with _suppress_console():
                             # Disable pager first so the table is never
                             # truncated mid-output regardless of row count.
                             _run_cluster_command(
-                                channel_41, "set -rows 0", timeout=15,
+                                _ch, "set -rows 0", timeout=15,
                             )
                             _out = _run_cluster_command(
-                                channel_41,
+                                _ch,
                                 f"storage failover show -node {takeover_node} "
                                 f"-fields state-description,"
                                 f"takeover-of-possible",
@@ -12097,41 +12151,16 @@ def _run_ontap_upgrade(log):
                         return _parsed, _out
                     except Exception as _e:
                         if _attempt == 0:
-                            print(f"  ⚠️  SSH channel error ({_e}); "
+                            print(f"  ⚠️  Poll channel error ({_e}); "
                                   "attempting reconnect...")
                             if log:
-                                log.log(f"SSH error: {_e}; reconnecting",
-                                        prefix="WARN")
-                            try:
-                                try:
-                                    client_41.close()
-                                except Exception:
-                                    pass
-                                _nc, _, _ = _ssh_connect_with_retry(
-                                    bmc_host, bmc_user, bmc_pass,
-                                    label="upgrade/BMC reconnect",
-                                    max_attempts=5,
-                                    interactive=False,
-                                )
-                                channel_41 = _open_shell(_nc)
-                                client_41 = _nc
-                                with _suppress_console():
-                                    enter_system_console(
-                                        channel_41, loader_message=False
-                                    )
-                                    _wait_for_cluster_prompt(
-                                        channel_41, timeout=60
-                                    )
-                                print("  ✅ Reconnected to cluster shell.")
-                                if log:
-                                    log.log("SSH reconnected successfully")
-                            except Exception as _re:
-                                if log:
-                                    log.log(f"Reconnect failed: {_re}",
-                                            prefix="ERROR")
-                                return None, ""
+                                log.log(f"Poll channel error: {_e}; "
+                                        "reconnecting", prefix="WARN")
+                            _open_poll_channel()
                         else:
-                            return None, ""
+                            if log:
+                                log.log(f"Poll channel unrecoverable: {_e}",
+                                        prefix="ERROR")
                 return None, ""
 
             def _send_cmd(cmd):
@@ -12161,6 +12190,15 @@ def _run_ontap_upgrade(log):
                         time.sleep(0.2)
 
             # ── Issue takeover ───────────────────────────────────────────────
+            def _close_poll():
+                try:
+                    if _poll_client[0]:
+                        _poll_client[0].close()
+                except Exception:
+                    pass
+                _poll_client[0] = None
+                _poll_channel[0] = None
+
             print(f"\n  \U0001f504 Takeover: {takeover_by} takes over "
                   f"{takeover_node}...")
             if log:
@@ -12194,6 +12232,7 @@ def _run_ontap_upgrade(log):
                             f"  [{takeover_node}] takeover (timed out)",
                             _elapsed,
                         )
+                    _close_poll()
                     return False
 
                 _parsed, _raw = _safe_poll()
@@ -12245,6 +12284,7 @@ def _run_ontap_upgrade(log):
                             f"  [{takeover_node}] takeover + giveback",
                             _total,
                         )
+                    _close_poll()
                     return True
 
                 _remaining = _PHASE1_TIMEOUT - _elapsed
@@ -12277,6 +12317,7 @@ def _run_ontap_upgrade(log):
                             f"  [{takeover_node}] giveback (timed out)",
                             _elapsed2,
                         )
+                    _close_poll()
                     return False
 
                 _parsed, _raw = _safe_poll()
@@ -12326,6 +12367,7 @@ def _run_ontap_upgrade(log):
                             f"  [{takeover_node}] takeover + giveback",
                             _total,
                         )
+                    _close_poll()
                     return True
 
                 _remaining2 = _PHASE2_TIMEOUT - _elapsed2
