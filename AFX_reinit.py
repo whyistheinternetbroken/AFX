@@ -17784,7 +17784,7 @@ def main():
             _49_cfg_path = _49_cfg_files[0]
             try:
                 with open(_49_cfg_path, "r", encoding="utf-8") as _f49:
-                    _49_cfg_data = _json.load(_f49)
+                    _49_cfg_data = json.load(_f49)
                 print(f"  \U0001f4c4 Using config: {_49_cfg_path}")
             except Exception as _e49c:
                 print(f"  \u26a0\ufe0f  Could not read {_49_cfg_path}: {_e49c}")
