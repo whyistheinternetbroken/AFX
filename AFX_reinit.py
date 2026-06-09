@@ -1978,7 +1978,7 @@ def select_operation_mode():
         print("  6.  Exit")
         print("")
         print("  " + "─" * 58)
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5e, or 6): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5f, or 6): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2171,7 +2171,7 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-        if choice in ("5", "5a", "5b", "5c", "5d", "5e"):
+        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f"):
             if choice == "5":
                 _print_banner("\U0001f6e0\ufe0f 5: Administration and maintenance")
                 print("\n  5a. Install license file only")
@@ -2179,9 +2179,10 @@ def select_operation_mode():
                 print("  5c. Create backup cluster configuration")
                 print("  5d. Verify BMC authentication")
                 print("  5e. Reset all nodes to LOADER prompt")
+                print("  5f. Cluster health and version check")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5e) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5a–5f) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -2262,13 +2263,28 @@ def select_operation_mode():
                     print("\n  \u2705 Confirmed. 5e: Reset all nodes to LOADER prompt\n")
                     return 48, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
+
+            if choice == "5f":
+                _print_banner("\U0001f4ca 5f: Cluster health and version check")
+                print("")
+                print("  Connects directly to the cluster management LIF via SSH")
+                print("  and checks that all nodes are healthy (Connected, takeover-")
+                print("  possible, no pending giveback), then prints the running")
+                print("  ONTAP version from the 'version' command.")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  \u2705 Confirmed. 5f: Cluster health and version check\n")
+                    return 49, False, False
+                print("\n  \u21a9\ufe0f  Returning to menu...\n")
             continue
 
         if choice == "6":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5e, or 6.")
+        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5f, or 6.")
 
 
 def get_loader_commands():
@@ -17740,6 +17756,130 @@ def main():
         print(f"\U0001f4dd Session log: {_session_log.log_file}")
         sys.exit(0 if _fail48 == 0 else 1)
 
+    # ── Mode 49 (5f): cluster health and version check ─────────────────────
+    if _operation_mode == 49:
+        _print_banner("\U0001f4ca 5f: Cluster health and version check")
+        _make_session_log("Mode 5f: cluster health and version check")
+        print("")
+
+        # ── Gather connection details ────────────────────────────────────
+        # Try config file first, then prompt.
+        _ch49_ip = None
+        _ch49_user = "admin"
+        _ch49_pass = ""
+
+        if isinstance(_config_data, dict):
+            _ch49_ip = ((_config_data.get("cluster") or {}).get("clus_mgmt_address")
+                        or _cluster_config.get("mgmt_ip"))
+            _ch49_user = ((_config_data.get("cluster") or {}).get("username") or "admin")
+
+        if not _ch49_ip:
+            _ch49_ip = input("  Cluster management LIF IP: ").strip()
+            if not _ch49_ip:
+                print("  No IP entered. Exiting.")
+                sys.exit(0)
+
+        _ch49_user_in = input(f"  Cluster admin username [{_ch49_user}]: ").strip()
+        if _ch49_user_in:
+            _ch49_user = _ch49_user_in
+        import getpass as _gp49
+        _ch49_pass = _gp49.getpass(f"  Cluster admin password for {_ch49_user}@{_ch49_ip}: ")
+
+        # ── Connect ──────────────────────────────────────────────────────
+        print(f"\n  \U0001f50c Connecting to {_ch49_ip} as {_ch49_user}...")
+        try:
+            _cl49, _, _ = _ssh_connect_with_retry(
+                _ch49_ip, _ch49_user, _ch49_pass,
+                label=f"healthcheck/{_ch49_ip}",
+                max_attempts=3, interactive=False,
+            )
+        except Exception as _e49:
+            print(f"  \u274c Connection failed: {_e49}")
+            _session_log.log(f"5f: connection failed: {_e49}", prefix="ERROR")
+            sys.exit(1)
+
+        _ch49 = _open_shell(_cl49)
+        try:
+            _ch49.resize_pty(width=256, height=50)
+        except Exception:
+            pass
+        with _suppress_console():
+            _wait_for_cluster_prompt(_ch49, timeout=30)
+        print(f"  \u2705 Connected to {_ch49_ip}")
+        _session_log.log(f"5f: connected to {_ch49_ip}")
+
+        # ── Health check ─────────────────────────────────────────────────
+        print("\n  \U0001f50d Running cluster health check...")
+        _nodes49 = []
+        # Discover node names from failover show so we know what to expect.
+        with _suppress_console():
+            _fo49_out = _run_cluster_command(
+                _ch49, "set -rows 0; storage failover show", timeout=30
+            )
+        _fo49_out = _ANSI_RE.sub("", _fo49_out).replace("\r\n", "\n").replace("\r", "\n")
+        for _r49 in _parse_failover_show(_fo49_out):
+            if _r49["node"] and _r49["node"] not in _nodes49:
+                _nodes49.append(_r49["node"])
+        _session_log.log(f"5f: nodes discovered: {_nodes49}")
+
+        if not _nodes49:
+            print("  \u26a0\ufe0f  Could not discover node names from 'storage failover show'.")
+            print("       Health check will still run but may show 'not found' entries.")
+
+        _healthy49 = _wait_for_cluster_healthy(
+            _ch49, _nodes49, total_timeout=600, poll_interval=60,
+            log=_session_log,
+        )
+
+        # ── Version check ────────────────────────────────────────────────
+        print("\n  \U0001f50d Checking ONTAP version...")
+        with _suppress_console():
+            _ver49_out = _run_cluster_command(_ch49, "version", timeout=30)
+            _img49_out = _run_cluster_command(
+                _ch49,
+                "set advanced -c off; system image show -fields version,iscurrent,isdefault",
+                timeout=60,
+            )
+        _ver49_out = _ANSI_RE.sub("", _ver49_out).replace("\r\n", "\n").replace("\r", "\n")
+        _img49_out = _ANSI_RE.sub("", _img49_out).replace("\r\n", "\n").replace("\r", "\n")
+
+        _ver49_match = re.search(r"NetApp Release\s+(\S+)", _ver49_out, re.IGNORECASE)
+        _running49 = _ver49_match.group(1).rstrip(":.;") if _ver49_match else None
+
+        _img49_lines = [l.strip() for l in _img49_out.splitlines()
+                        if l.strip() and "::" not in l
+                        and not l.strip().lower().startswith("system image")
+                        and "password" not in l.strip().lower()
+                        and "set advanced" not in l.strip().lower()]
+
+        print(f"\n  Running version  : {_running49 or '(parse failed)'}")
+        if _img49_lines:
+            print("  Image show output:")
+            for _il49 in _img49_lines[-12:]:
+                print(f"    {_il49}")
+
+        _session_log.log(f"5f: running version={_running49}")
+
+        # ── Cleanup & exit ───────────────────────────────────────────────
+        try:
+            _ch49.close()
+        except Exception:
+            pass
+        try:
+            _cl49.close()
+        except Exception:
+            pass
+
+        if _healthy49:
+            print("\n  \u2705 Cluster is healthy.")
+            _session_log.log("5f: cluster healthy")
+        else:
+            print("\n  \u26a0\ufe0f  Cluster did not reach fully healthy state within the timeout.")
+            _session_log.log("5f: cluster not healthy within timeout", prefix="WARN")
+
+        print(f"\U0001f4dd Session log: {_session_log.log_file}")
+        sys.exit(0 if _healthy49 else 1)
+
     # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
     if _operation_mode == 45:
         import pathlib
@@ -18142,6 +18282,8 @@ def main():
         mode_desc = "Set up passwordless SSH to cluster management (4d)"
     elif _operation_mode == 46:
         mode_desc = "Create backup cluster configuration (4e, standalone)"
+    elif _operation_mode == 49:
+        mode_desc = "Cluster health and version check (5f)"
     elif _operation_mode == 2 and _auto_add:
         mode_desc = "Add node to existing cluster (2b, automatic join wizard)"
     else:
