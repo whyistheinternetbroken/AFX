@@ -1922,6 +1922,9 @@ _operation_mode = None
 # Set to True when 4a redirects to 4e for config creation; causes 4e to
 # continue directly into 4a after the config is written.
 _4a_pending_after_4e = False
+# Set to True when 5f redirects to 4e for config creation; causes 4e to
+# return to 5f after the config is written.
+_5f_pending_after_4e = False
 # When True (1b / 3 primary), the script auto-answers all post-option-9
 # prompts and drives the cluster setup wizard non-interactively.
 _auto_setup = False
@@ -17392,7 +17395,7 @@ def main():
         _session_log.record_completion(normal_exit=True)
         print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
 
-        global _4a_pending_after_4e
+        global _4a_pending_after_4e, _5f_pending_after_4e
         if _4a_pending_after_4e:
             _4a_pending_after_4e = False
             _operation_mode = 41
@@ -17403,7 +17406,12 @@ def main():
             print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
             sys.exit(0 if ok else 1)
 
-        sys.exit(0)
+        if _5f_pending_after_4e:
+            _5f_pending_after_4e = False
+            _operation_mode = 49
+            print("\n  \u2705 Config created. Continuing with 5f health check...\n")
+        else:
+            sys.exit(0)
 
     # ── Mode 47 (4f): verify BMC authentication ────────────────────────────
     if _operation_mode == 47:
@@ -17798,6 +17806,7 @@ def main():
             print("     Option 4e can connect to your existing cluster and generate one automatically.")
             _ans_49 = _prompt("  Run the 4e config-gather workflow now? [Y/n]: ", "n").lower()
             if _ans_49 != "n":
+                _5f_pending_after_4e = True
                 _operation_mode = 46  # noqa: F841  (module-level var, reassigned here)
                 return
             # User said no — fall through to manual IP prompt.
