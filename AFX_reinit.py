@@ -12760,9 +12760,14 @@ def _run_ontap_upgrade(log):
 
         try:
             with _suppress_console():
+                out_ver = _run_cluster_command(
+                    _ver_channel,
+                    "version",
+                    timeout=30,
+                )
                 out_img2 = _run_cluster_command(
                     _ver_channel,
-                    "set advanced -c off; system image show -fields version,is-current",
+                    "set advanced -c off; system image show -fields version,iscurrent,isdefault",
                     timeout=60,
                 )
         finally:
@@ -12772,18 +12777,13 @@ def _run_ontap_upgrade(log):
                 except Exception:
                     pass
 
+        out_ver  = _ANSI_RE.sub("", out_ver ).replace("\r\n", "\n").replace("\r", "\n")
         out_img2 = _ANSI_RE.sub("", out_img2).replace("\r\n", "\n").replace("\r", "\n")
         _ver_elapsed = time.monotonic() - _t0_ver
 
-        # Extract running version from the image row where is-current=true.
-        running_ver = None
-        for _vl in out_img2.splitlines():
-            _vl_s = _vl.strip()
-            if "true" in _vl_s.lower():
-                _ver_tok = re.search(r"(\d+\.\d+\S+)", _vl_s)
-                if _ver_tok:
-                    running_ver = _ver_tok.group(1)
-                    break
+        # Extract running version from the 'version' command output.
+        ver_match = re.search(r"NetApp Release\s+([\S]+)", out_ver, re.IGNORECASE)
+        running_ver = ver_match.group(1).rstrip(":.;") if ver_match else None
 
         # Filter display lines to data rows only (skip headers/prompts/noise).
         img_ver_lines = [l.strip() for l in out_img2.splitlines()
