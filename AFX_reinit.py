@@ -11289,7 +11289,8 @@ def _run_ontap_upgrade(log):
             if log:
                 log.log(f"Upgrade package URL (user-supplied): {pkg_url}")
 
-        # ── Step 2: BMC credentials ─────────────────────────────────────────
+        # ── Step 2: Credentials ──────────────────────────────────────────────
+        # The same credentials work for both the cluster-mgmt LIF and the BMC.
         print("")
         print("  " + "\u2500" * 58)
         bmc_host, bmc_user, bmc_pass = _pick_bmc_from_existing_config()
@@ -11301,84 +11302,145 @@ def _run_ontap_upgrade(log):
             bmc_user = input("  BMC username [admin]: ").strip() or "admin"
             bmc_pass = getpass.getpass(f"  BMC password for {bmc_user}@{bmc_host}: ")
         if log:
-            log.log(f"4a: BMC selected: {bmc_user}@{bmc_host}")
+            log.log(f"4a: credentials: {bmc_user}@{bmc_host}")
 
-        # ── Step 3: SSH to BMC ──────────────────────────────────────────────
-        if log:
-            log.start_phase("BMC Connection")
-        print(f"\n  \U0001f50c Connecting to BMC {bmc_host}...")
-        try:
-            client_41, bmc_user, bmc_pass = _ssh_connect_with_retry(
-                bmc_host, bmc_user, bmc_pass,
-                label="upgrade/BMC", max_attempts=5, interactive=True,
-            )
-        except Exception as e:
-            print(f"\n  \u274c BMC connection failed: {e}")
-            if log:
-                log.log(f"BMC connection failed: {e}", prefix="ERROR")
-            return False
-        channel_41 = _open_shell(client_41)
-        # Widen the PTY so ONTAP does not wrap table output at 80 columns.
-        try:
-            channel_41.resize_pty(width=256, height=50)
-        except Exception:
-            pass
-        # Publish the BMC credentials as the "primary" creds so the silent
-        # cluster-login candidates (_candidate_cluster_logins) can reuse them
-        # when the console hits a `login:` prompt; otherwise the operator
-        # would be re-prompted for username/password they already supplied.
+        # Publish creds for silent cluster-login candidates.
         global _primary_bmc_user, _primary_bmc_password
         _primary_bmc_user = bmc_user
         _primary_bmc_password = bmc_pass
-        if log:
-            log.end_phase()
 
-        # ── Step 4: BMC prompt + system console ─────────────────────────────
-        if not wait_for_bmc_prompt(channel_41, auto_takeover=True):
-            print("  \u274c BMC prompt not received. Exiting.")
+        # ── Step 3: Connect to cluster (prefer direct SSH, fall back to BMC) ──
+        # Direct SSH to the cluster-mgmt LIF is cleaner than BMC console:
+        # no ANSI noise, no PTY pager quirks.  BMC is used only when the
+        # cluster-mgmt LIF IP is unknown or unreachable.
+        _direct_cl_client = None   # SSH client for direct cluster-mgmt LIF
+        _direct_cl_channel = None
+        client_41 = None           # BMC SSH client (only opened on BMC path)
+        channel_41 = None          # BMC shell channel (only opened on BMC path)
+        _cl_ch = None              # active cluster command channel
+
+        # Determine cluster-mgmt IP from config, then prompt if still unknown.
+        _known_clus_mgmt_ip = (
+            ((_config_data.get("cluster") or {}).get("clus_mgmt_address")
+             if isinstance(_config_data, dict) else None)
+            or _cluster_config.get("mgmt_ip")
+        )
+        if not _known_clus_mgmt_ip:
+            print("\n  No cluster management LIF IP found in config.")
+            _clm_ans = input(
+                "  Enter cluster management LIF IP (or Enter to connect via BMC only): "
+            ).strip()
+            if _clm_ans:
+                _known_clus_mgmt_ip = _clm_ans
+                _cluster_config["mgmt_ip"] = _clm_ans
+
+        if _known_clus_mgmt_ip:
+            print(f"\n  \U0001f4e1 Trying direct SSH to cluster-mgmt LIF: "
+                  f"{_known_clus_mgmt_ip}...")
             if log:
-                log.log("BMC prompt not received", prefix="ERROR")
-            return False
-
-        if log:
-            log.start_phase("Cluster Shell Login")
-        # Suppress raw BMC/console echo while we walk through `system console`
-        # and the cluster login prompt — the chunks ("system console", "Type
-        # Ctrl-D to exit.", "login:", etc.) are still captured in the session
-        # log, but the operator's terminal stays readable.
-        print("  \U0001f4fa Entering system console (output suppressed; "
-              "see log file)...")
-        with _suppress_console():
-            enter_system_console(channel_41, loader_message=False)
-
-        # ── Step 5: cluster shell login ─────────────────────────────────────
-        # _attempt_console_cluster_login (invoked from inside
-        # _wait_for_cluster_prompt when a `login:` prompt appears) will try
-        # _primary_bmc_user/_primary_bmc_password automatically, so the
-        # operator should not see a prompt at all in the common case.
-        with _suppress_console():
-            _cluster_up = _wait_for_cluster_prompt(channel_41, timeout=60)
-        if not _cluster_up:
-            print(f"  ℹ️  Cluster prompt not detected; trying BMC credentials "
-                  f"({bmc_user}) for cluster login...")
-            if log:
-                log.log(f"Cluster login: reusing BMC credentials ({bmc_user})")
-            if not _login_primary_cluster_shell(channel_41, bmc_pass):
-                print("  ⚠️  Cluster login with BMC credentials failed; "
-                      "prompting for cluster admin password...")
+                log.start_phase("Cluster Direct Connection")
+            try:
+                _direct_cl_client, _, _ = _ssh_connect_with_retry(
+                    _known_clus_mgmt_ip, bmc_user, bmc_pass,
+                    label="upgrade/cluster-mgmt", max_attempts=3,
+                    interactive=False,
+                )
+                _direct_cl_channel = _open_shell(_direct_cl_client)
                 try:
-                    cl_pass = getpass.getpass(
-                        f"  Cluster admin password for {bmc_user}: "
-                    )
-                except (EOFError, KeyboardInterrupt):
-                    return False
-                if not _login_primary_cluster_shell(channel_41, cl_pass):
-                    print("  \u274c Cluster shell login failed. Exiting.")
-                    if log:
-                        log.log("Cluster shell login failed", prefix="ERROR")
-                    return False
-        if log:
-            log.end_phase()
+                    _direct_cl_channel.resize_pty(width=256, height=50)
+                except Exception:
+                    pass
+                with _suppress_console():
+                    _wait_for_cluster_prompt(_direct_cl_channel, timeout=30)
+                _cl_ch = _direct_cl_channel
+                print(f"  \u2705 Connected directly to cluster-mgmt LIF: "
+                      f"{_known_clus_mgmt_ip}")
+                print("  \u2139\ufe0f  BMC used only as fallback if image install "
+                      "requires console access.")
+                if log:
+                    log.log(f"Direct SSH connected to cluster-mgmt LIF: "
+                            f"{_known_clus_mgmt_ip}")
+                    log.end_phase()
+            except Exception as _dce:
+                print(f"  \u26a0\ufe0f  Direct cluster-mgmt SSH failed ({_dce}); "
+                      "falling back to BMC.")
+                if log:
+                    log.log(f"Direct cluster-mgmt SSH failed: {_dce}; "
+                            "using BMC fallback", prefix="WARN")
+                    try:
+                        log.end_phase()
+                    except Exception:
+                        pass
+                if _direct_cl_client:
+                    try:
+                        _direct_cl_client.close()
+                    except Exception:
+                        pass
+                _direct_cl_client = None
+                _direct_cl_channel = None
+
+        if _cl_ch is None:
+            # ── BMC fallback path ────────────────────────────────────────────
+            if log:
+                log.start_phase("BMC Connection")
+            print(f"\n  \U0001f50c Connecting to BMC {bmc_host}...")
+            try:
+                client_41, bmc_user, bmc_pass = _ssh_connect_with_retry(
+                    bmc_host, bmc_user, bmc_pass,
+                    label="upgrade/BMC", max_attempts=5, interactive=True,
+                )
+            except Exception as e:
+                print(f"\n  \u274c BMC connection failed: {e}")
+                if log:
+                    log.log(f"BMC connection failed: {e}", prefix="ERROR")
+                return False
+            channel_41 = _open_shell(client_41)
+            try:
+                channel_41.resize_pty(width=256, height=50)
+            except Exception:
+                pass
+            if log:
+                log.end_phase()
+
+            # ── Step 4: BMC prompt + system console ──────────────────────────
+            if not wait_for_bmc_prompt(channel_41, auto_takeover=True):
+                print("  \u274c BMC prompt not received. Exiting.")
+                if log:
+                    log.log("BMC prompt not received", prefix="ERROR")
+                return False
+
+            if log:
+                log.start_phase("Cluster Shell Login")
+            print("  \U0001f4fa Entering system console (output suppressed; "
+                  "see log file)...")
+            with _suppress_console():
+                enter_system_console(channel_41, loader_message=False)
+
+            # ── Step 5: cluster shell login ──────────────────────────────────
+            with _suppress_console():
+                _cluster_up = _wait_for_cluster_prompt(channel_41, timeout=60)
+            if not _cluster_up:
+                print(f"  \u2139\ufe0f  Cluster prompt not detected; trying BMC credentials "
+                      f"({bmc_user}) for cluster login...")
+                if log:
+                    log.log(f"Cluster login: reusing BMC credentials ({bmc_user})")
+                if not _login_primary_cluster_shell(channel_41, bmc_pass):
+                    print("  \u26a0\ufe0f  Cluster login with BMC credentials failed; "
+                          "prompting for cluster admin password...")
+                    try:
+                        cl_pass = getpass.getpass(
+                            f"  Cluster admin password for {bmc_user}: "
+                        )
+                    except (EOFError, KeyboardInterrupt):
+                        return False
+                    if not _login_primary_cluster_shell(channel_41, cl_pass):
+                        print("  \u274c Cluster shell login failed. Exiting.")
+                        if log:
+                            log.log("Cluster shell login failed", prefix="ERROR")
+                        return False
+            if log:
+                log.end_phase()
+            _cl_ch = channel_41
 
         print("  \u2705 Logged in to cluster shell.")
 
@@ -11388,7 +11450,7 @@ def _run_ontap_upgrade(log):
         print("\n  \U0001f50d Querying current images per node...")
         with _suppress_console():
             out_img = _run_cluster_command(
-                channel_41,
+                _cl_ch,
                 "set advanced -c off; system image show -iscurrent true -fields image",
                 timeout=60,
             )
@@ -11420,7 +11482,7 @@ def _run_ontap_upgrade(log):
             _t0_pdu = time.monotonic()
             with _suppress_console():
                 _run_cluster_command(
-                    channel_41,
+                    _cl_ch,
                     f"set diag -c off; system node image promoted-dev-update -node {nodename}",
                     timeout=120,
                 )
@@ -11512,7 +11574,7 @@ def _run_ontap_upgrade(log):
                 try:
                     with _suppress_console():
                         _lif_out = _run_cluster_command(
-                            channel_41,
+                            _cl_ch,
                             "set advanced -c off; network interface show "
                             "-role node-mgmt -fields node,curr-address",
                             timeout=30,
@@ -11889,7 +11951,7 @@ def _run_ontap_upgrade(log):
                 print(f"  \U0001f50e Validating update on {nodename}... (this may take 3-5 minutes)")
                 _t0_seq_val = time.monotonic()
                 with _suppress_console():
-                    out_val = _run_cluster_command(channel_41, vcmd, timeout=300)
+                    out_val = _run_cluster_command(_cl_ch, vcmd, timeout=300)
                 _seq_val_elapsed = time.monotonic() - _t0_seq_val
                 if "error" in out_val.lower() or "failed" in out_val.lower():
                     print(f"\n  \u274c Validation failed for {nodename}:\n{out_val}")
@@ -11923,7 +11985,7 @@ def _run_ontap_upgrade(log):
                 print(f"  \U0001f4e5 Downloading/installing image on {nodename} (may take several minutes)...")
                 _t0_seq_inst = time.monotonic()
                 with _suppress_console():
-                    out_upd = _run_cluster_command(channel_41, ucmd, timeout=900)
+                    out_upd = _run_cluster_command(_cl_ch, ucmd, timeout=900)
                 _seq_inst_elapsed = time.monotonic() - _t0_seq_inst
                 if "error" in out_upd.lower() or "failed" in out_upd.lower():
                     print(f"\n  \u274c Image update failed for {nodename}:\n{out_upd}")
@@ -11966,7 +12028,7 @@ def _run_ontap_upgrade(log):
         print("\n  \U0001f50d Verifying default image setting...")
         with _suppress_console():
             out_def = _run_cluster_command(
-                channel_41,
+                _cl_ch,
                 "set advanced -c off; system image show -isdefault true -fields image",
                 timeout=60,
             )
@@ -11994,7 +12056,7 @@ def _run_ontap_upgrade(log):
         print("\n  \U0001f4e1 Checking storage failover readiness...")
         with _suppress_console():
             out_fo = _run_cluster_command(
-                channel_41, "storage failover show", timeout=60
+                _cl_ch, "storage failover show", timeout=60
             )
         fo_rows = _parse_failover_show(out_fo)
         if not fo_rows:
@@ -12049,7 +12111,7 @@ def _run_ontap_upgrade(log):
         try:
             with _suppress_console():
                 _lif_out = _run_cluster_command(
-                    channel_41,
+                    _cl_ch,
                     "set -rows 0; network interface show -role cluster-mgmt "
                     "-fields address",
                     timeout=30,
@@ -12114,14 +12176,14 @@ def _run_ontap_upgrade(log):
 
             Returns True on success, False on timeout/error.
             """
-            nonlocal channel_41, client_41
 
             _WAITING_FOR_CLUSTER_APPS = (
                 "waiting for cluster applications to come online"
             )
 
             # ── Dedicated direct-SSH poll channel ────────────────────────────
-            # channel_41 is a BMC serial console.  When the taken-over node
+            # _cl_ch is the primary cluster command channel (direct SSH or BMC
+            # console).  When the taken-over node
             # reboots, that serial console shows boot messages and cannot
             # respond to ONTAP commands.  We open a SEPARATE direct SSH
             # connection to the cluster management IP (_cl_mgmt_ip) which
@@ -12186,7 +12248,7 @@ def _run_ontap_upgrade(log):
                 Reconnects once on error; returns (None, "") if unrecoverable.
                 """
                 for _attempt in range(2):
-                    _ch = _poll_channel[0] if _poll_channel[0] else channel_41
+                    _ch = _poll_channel[0] if _poll_channel[0] else _cl_ch
                     try:
                         with _suppress_console():
                             # Disable pager first so the table is never
@@ -12250,28 +12312,53 @@ def _run_ontap_upgrade(log):
             def _send_cmd(cmd):
                 """Send a cluster command and wait for prompt (90 s max),
                 auto-answering any y/n prompts.
+                Uses _cl_ch (direct cluster SSH or BMC console); if _cl_ch
+                has dropped (e.g., cluster-mgmt LIF migrated during failover),
+                falls back to the poll channel which auto-reconnects.
                 """
-                with _suppress_console():
-                    drain_channel(channel_41, seconds=0.3)
-                    channel_41.send(cmd + "\r")
-                    _buf = ""
-                    _deadline = time.monotonic() + 90
-                    while time.monotonic() < _deadline:
-                        if channel_41.recv_ready():
-                            _buf += channel_41.recv(4096).decode(
-                                "utf-8", errors="replace"
+                def _do_send(ch):
+                    with _suppress_console():
+                        drain_channel(ch, seconds=0.3)
+                        ch.send(cmd + "\r")
+                        _buf = ""
+                        _deadline = time.monotonic() + 90
+                        while time.monotonic() < _deadline:
+                            if ch.recv_ready():
+                                _buf += ch.recv(4096).decode(
+                                    "utf-8", errors="replace"
+                                )
+                                if _session_log:
+                                    _session_log.log_console(_buf[-500:])
+                                if re.search(
+                                    r"\{y\|n\}|\[y/n\]|\(y/n\)",
+                                    _buf, re.IGNORECASE,
+                                ):
+                                    ch.send("y\r")
+                                    _buf = ""
+                                if _CLUSTER_PROMPT_RE.search(_buf[-200:]):
+                                    break
+                            time.sleep(0.2)
+
+                try:
+                    _do_send(_cl_ch)
+                except Exception as _sc_err:
+                    # _cl_ch may have dropped when the cluster-mgmt LIF
+                    # migrated during the takeover.  The poll channel
+                    # auto-reconnects to the surviving node — use it.
+                    if _poll_channel[0]:
+                        if log:
+                            log.log(
+                                f"_send_cmd: primary channel error "
+                                f"({_sc_err}); retrying via poll channel",
+                                prefix="WARN",
                             )
-                            if _session_log:
-                                _session_log.log_console(_buf[-500:])
-                            if re.search(
-                                r"\{y\|n\}|\[y/n\]|\(y/n\)",
-                                _buf, re.IGNORECASE,
-                            ):
-                                channel_41.send("y\r")
-                                _buf = ""
-                            if _CLUSTER_PROMPT_RE.search(_buf[-200:]):
-                                break
-                        time.sleep(0.2)
+                        _do_send(_poll_channel[0])
+                    elif log:
+                        log.log(
+                            f"_send_cmd: channel error ({_sc_err}), "
+                            "no poll channel available",
+                            prefix="ERROR",
+                        )
 
             # ── Issue takeover ───────────────────────────────────────────────
             def _close_poll():
@@ -12482,7 +12569,7 @@ def _run_ontap_upgrade(log):
         print("\n  \U0001f50d Checking that all nodes are running their default image...")
         with _suppress_console():
             out_imgcheck = _run_cluster_command(
-                channel_41,
+                _cl_ch,
                 "set advanced -c off; system image show",
                 timeout=60,
             )
@@ -12546,7 +12633,7 @@ def _run_ontap_upgrade(log):
         print("\n  \U0001f50d Final health check: all nodes connected, no pending giveback...")
         _all_upgrade_nodes = list(node_image.keys())
         _health_client = None
-        _health_channel = channel_41  # default fallback
+        _health_channel = _cl_ch  # default fallback
         if _sfo_poll_ip:
             try:
                 _health_client, _, _ = _ssh_connect_with_retry(
@@ -12566,8 +12653,8 @@ def _run_ontap_upgrade(log):
             except Exception as _hce:
                 if log:
                     log.log(f"Health check SSH to {_sfo_poll_ip} failed ({_hce}); "
-                            "falling back to BMC channel", prefix="WARN")
-                _health_channel = channel_41
+                            "falling back to primary cluster channel", prefix="WARN")
+                _health_channel = _cl_ch
                 if _health_client:
                     try:
                         _health_client.close()
@@ -12601,7 +12688,7 @@ def _run_ontap_upgrade(log):
         print("\n  \U0001f50d Verifying ONTAP version post-upgrade...")
         _t0_ver = time.monotonic()
         _ver_client = None
-        _ver_channel = channel_41  # fallback
+        _ver_channel = _cl_ch  # fallback
         if _sfo_poll_ip:
             try:
                 _ver_client, _, _ = _ssh_connect_with_retry(
@@ -12619,8 +12706,8 @@ def _run_ontap_upgrade(log):
             except Exception as _vce:
                 if log:
                     log.log(f"Version check SSH to {_sfo_poll_ip} failed ({_vce}); "
-                            "falling back to BMC channel", prefix="WARN")
-                _ver_channel = channel_41
+                            "falling back to primary cluster channel", prefix="WARN")
+                _ver_channel = _cl_ch
                 if _ver_client:
                     try:
                         _ver_client.close()
@@ -12695,14 +12782,21 @@ def _run_ontap_upgrade(log):
             log.add_phase_subtiming("Upgrade Workflow", "  version verify", _ver_elapsed)
             log.end_phase()
 
-        try:
-            channel_41.close()
-        except Exception:
-            pass
-        try:
-            client_41.close()
-        except Exception:
-            pass
+        if channel_41:
+            try:
+                channel_41.close()
+            except Exception:
+                pass
+        if client_41:
+            try:
+                client_41.close()
+            except Exception:
+                pass
+        if _direct_cl_client:
+            try:
+                _direct_cl_client.close()
+            except Exception:
+                pass
 
         print("\n  \u2705 ONTAP upgrade workflow complete.")
         if log:
