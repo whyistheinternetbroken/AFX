@@ -17764,15 +17764,44 @@ def main():
         print("")
 
         # ── Gather connection details ────────────────────────────────────
-        # Try config file first, then prompt.
         _ch49_ip = None
         _ch49_user = "admin"
         _ch49_pass = ""
+        import getpass as _gp49
 
-        if isinstance(_config_data, dict):
+        # 1. Try to load from a reinit-config file.
+        _49_cfg_files = _find_config_files(deep_scan=True)
+        _49_cfg_data = {}
+        if _49_cfg_files:
+            _49_cfg_path = _49_cfg_files[0]
+            try:
+                with open(_49_cfg_path, "r", encoding="utf-8") as _f49:
+                    _49_cfg_data = _json.load(_f49)
+                print(f"  \U0001f4c4 Using config: {_49_cfg_path}")
+            except Exception as _e49c:
+                print(f"  \u26a0\ufe0f  Could not read {_49_cfg_path}: {_e49c}")
+                _49_cfg_data = {}
+
+        if isinstance(_49_cfg_data, dict) and _49_cfg_data:
+            _ch49_ip = ((_49_cfg_data.get("cluster") or {}).get("clus_mgmt_address")
+                        or _cluster_config.get("mgmt_ip"))
+            _ch49_user = ((_49_cfg_data.get("cluster") or {}).get("username") or "admin")
+        elif isinstance(_config_data, dict) and _config_data:
+            # fall back to already-loaded global config
             _ch49_ip = ((_config_data.get("cluster") or {}).get("clus_mgmt_address")
                         or _cluster_config.get("mgmt_ip"))
             _ch49_user = ((_config_data.get("cluster") or {}).get("username") or "admin")
+
+        # 2. No config found — offer to gather one or ask for IP.
+        if not _ch49_ip and not _49_cfg_files:
+            print("\n  \u26a0\ufe0f  No reinit-config.json found on disk.")
+            print("     Option 4e can connect to your existing cluster and generate one automatically.")
+            _ans_49 = _prompt("  Run the 4e config-gather workflow now? [Y/n]: ", "n").lower()
+            if _ans_49 != "n":
+                global _operation_mode
+                _operation_mode = 46
+                return
+            # User said no — fall through to manual IP prompt.
 
         if not _ch49_ip:
             _ch49_ip = input("  Cluster management LIF IP: ").strip()
@@ -17783,7 +17812,6 @@ def main():
         _ch49_user_in = input(f"  Cluster admin username [{_ch49_user}]: ").strip()
         if _ch49_user_in:
             _ch49_user = _ch49_user_in
-        import getpass as _gp49
         _ch49_pass = _gp49.getpass(f"  Cluster admin password for {_ch49_user}@{_ch49_ip}: ")
 
         # ── Connect ──────────────────────────────────────────────────────
