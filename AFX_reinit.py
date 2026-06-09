@@ -12217,7 +12217,29 @@ def _run_ontap_upgrade(log):
                             if log:
                                 log.log(f"Poll channel error: {_e}; "
                                         "reconnecting", prefix="WARN")
-                            _open_poll_channel()
+                            # Retry reconnect up to 3 rounds, 15s apart.
+                            _reconnected = False
+                            for _r in range(3):
+                                if _r > 0:
+                                    print(f"  ⏳ Poll channel reconnect "
+                                          f"round {_r + 1}/3 — waiting 15s...")
+                                    if log:
+                                        log.log(
+                                            f"Poll channel reconnect round "
+                                            f"{_r + 1}/3; sleeping 15s",
+                                            prefix="WARN",
+                                        )
+                                    time.sleep(15)
+                                if _open_poll_channel():
+                                    _reconnected = True
+                                    break
+                            if not _reconnected:
+                                if log:
+                                    log.log(
+                                        "Poll channel reconnect failed after "
+                                        "3 rounds; giving up",
+                                        prefix="ERROR",
+                                    )
                         else:
                             if log:
                                 log.log(f"Poll channel unrecoverable: {_e}",
