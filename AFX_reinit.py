@@ -12217,19 +12217,46 @@ def _run_ontap_upgrade(log):
                 log.log("Failed to parse storage failover show", prefix="ERROR")
             return False
 
+        _VERSION_MISMATCH_SIG = "version of software running on each node"
+
         not_ready = [r for r in fo_rows if not r["takeover_possible"]]
         if not_ready:
-            print("\n  \u274c Takeover not possible for:")
-            for r in not_ready:
-                print(f"    {r['node']} (partner: {r['partner']})")
-            print("  Resolve failover issues before retrying the upgrade.")
+            # Check if every blocked node is blocked solely due to version
+            # mismatch — if so we can proceed with allow-version-mismatch.
+            _ver_mismatch_nodes = {
+                r["node"] for r in not_ready
+                if _VERSION_MISMATCH_SIG in r.get("state_description", "").lower()
+            }
+            _other_blocked = [r for r in not_ready
+                              if r["node"] not in _ver_mismatch_nodes]
+            if _other_blocked:
+                print("\n  ❌ Takeover not possible for:")
+                for r in _other_blocked:
+                    print(f"    {r['node']} (partner: {r['partner']}): "
+                          f"{r.get('state_description','')}")
+                print("  Resolve failover issues before retrying the upgrade.")
+                if log:
+                    log.log(
+                        f"Takeover not possible (non-version reason): "
+                        f"{[r['node'] for r in _other_blocked]}",
+                        prefix="ERROR",
+                    )
+                return False
+            if _ver_mismatch_nodes:
+                print(f"\n  ⚠️   Version mismatch detected for: "
+                      f"{', '.join(sorted(_ver_mismatch_nodes))}")
+                print("  Will use -option allow-version-mismatch for affected nodes.")
+                if log:
+                    log.log(
+                        f"Version mismatch on: {sorted(_ver_mismatch_nodes)}; "
+                        "will use allow-version-mismatch",
+                        prefix="WARN",
+                    )
+        else:
+            _ver_mismatch_nodes = set()
+            print("  ✅ All nodes report takeover-possible=true.")
             if log:
-                log.log(f"Takeover not possible: {[r['node'] for r in not_ready]}",
-                        prefix="ERROR")
-            return False
-        print("  \u2705 All nodes report takeover-possible=true.")
-        if log:
-            log.log("All nodes takeover-possible")
+                log.log("All nodes takeover-possible")
 
         # ── Step 10: build rolling upgrade groups ───────────────────────────
         # Strategy: "partner" group = nodes that will be taken over first;
@@ -12310,7 +12337,8 @@ def _run_ontap_upgrade(log):
             if log:
                 log.log(f"SFO poll IP: {_sfo_poll_ip}")
 
-        def _do_takeover_giveback(takeover_node, takeover_by):
+        def _do_takeover_giveback(takeover_node, takeover_by,
+                                  allow_version_mismatch=False):
             """Take over `takeover_node` by `takeover_by`, auto-issue giveback
             when the node reaches 'Waiting for giveback', then wait until the
             node is fully back online.
@@ -12527,12 +12555,19 @@ def _run_ontap_upgrade(log):
 
             print(f"\n  \U0001f504 Takeover: {takeover_by} takes over "
                   f"{takeover_node}...")
+            if allow_version_mismatch:
+                print(f"  ℹ️   Using -option allow-version-mismatch "
+                      "(version mismatch detected).")
             if log:
-                log.log(f"Initiating takeover of {takeover_node} by {takeover_by}")
+                log.log(f"Initiating takeover of {takeover_node} by {takeover_by}"
+                        + (" (allow-version-mismatch)" if allow_version_mismatch else ""))
             _t0 = time.monotonic()
+            _takeover_option = (
+                "allow-version-mismatch" if allow_version_mismatch else "normal"
+            )
             _send_cmd(
                 f"storage failover takeover -ofnode {takeover_node} "
-                f"-option normal -override-vetoes true"
+                f"-option {_takeover_option} -override-vetoes true"
             )
 
             # ── Phase 1: poll until "Waiting for giveback" ──────────────────
@@ -12713,7 +12748,8 @@ def _run_ontap_upgrade(log):
             print(f"\n  ── Phase {phase} ─────────────────────────────────────")
             for to_node in nodes:
                 by_node = partner_of.get(to_node, "")
-                if not _do_takeover_giveback(to_node, by_node):
+                if not _do_takeover_giveback(to_node, by_node,
+                                             allow_version_mismatch=(to_node in _ver_mismatch_nodes)):
                     return False
 
         # ── Step 11b: remediation pass ──────────────────────────────────────
