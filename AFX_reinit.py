@@ -13938,16 +13938,22 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
         return True
 
     ips_str = ",".join(cluster_ips)
-    print(f"\n🔗 Running: cluster add-node -cluster-ips {ips_str}")
+    print(f"\n  ➕ Adding {len(cluster_ips)} node(s) to cluster...")
     if log:
         log.log(f"cluster add-node -cluster-ips {ips_str}")
 
-    with _primary_shell_lock:
-        _run_cluster_command(
-            primary_channel,
-            f"cluster add-node -cluster-ips {ips_str}",
-            timeout=60,
-        )
+    global _console_quiet
+    _prev_quiet = _console_quiet
+    _console_quiet = True
+    try:
+        with _primary_shell_lock:
+            _run_cluster_command(
+                primary_channel,
+                f"cluster add-node -cluster-ips {ips_str}",
+                timeout=60,
+            )
+    finally:
+        _console_quiet = _prev_quiet
 
     total_timeout = 900   # 15 minutes
     poll_interval = 120   # 2 minutes
@@ -13956,14 +13962,20 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
 
     while time.monotonic() - start < total_timeout:
         time.sleep(poll_interval)
-        with _primary_shell_lock:
-            status_out = _run_cluster_command(
-                primary_channel, "cluster add-node-status", timeout=30)
+        _prev_quiet = _console_quiet
+        _console_quiet = True
+        try:
+            with _primary_shell_lock:
+                status_out = _run_cluster_command(
+                    primary_channel, "cluster add-node-status", timeout=30)
+        finally:
+            _console_quiet = _prev_quiet
 
-        print(f"\n📊 cluster add-node-status:\n{status_out}")
         if log:
             log.log(f"cluster add-node-status:\n{status_out}")
 
+        elapsed_hdr = int(time.monotonic() - start)
+        print(f"\n  📊 Node add status ({elapsed_hdr}s elapsed):")
         in_table = False
         status_rows = []
         for _sl in status_out.splitlines():
@@ -13982,6 +13994,15 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                     continue
                 row_lower = stripped.lower()
                 status_rows.append(row_lower)
+                # Print per-node status to screen in a clean format.
+                parts = stripped.split()
+                if len(parts) >= 3:
+                    _node_name = parts[0]
+                    _node_status = parts[2]
+                    _node_err = " ".join(parts[3:]) if len(parts) > 3 else ""
+                    _icon = "✅" if _node_status.lower() == "success" else "⏳"
+                    _err_suffix = f" ({_node_err})" if _node_err else ""
+                    print(f"    {_icon} {_node_name}: {_node_status}{_err_suffix}")
                 # Track per-node first-success timestamp.
                 if 'success' in row_lower and node_timings_out is not None:
                     parts = stripped.split()
@@ -13993,8 +14014,8 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
 
         if status_rows and all('success' in row for row in status_rows):
             elapsed_total = round(time.monotonic() - start, 1)
-            print(f"\n✅ All {len(cluster_ips)} node(s) added successfully "
-                  f"({elapsed_total}s after add-node command).")
+            print(f"\n  ✅ All {len(cluster_ips)} node(s) added successfully "
+                  f"({elapsed_total}s).")
             if log:
                 log.log(f"cluster add-node: {len(cluster_ips)} node(s) all success "
                         f"in {elapsed_total}s")
@@ -14002,10 +14023,10 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
 
         elapsed = int(time.monotonic() - start)
         remaining = max(0, total_timeout - elapsed)
-        print(f"\n⏳ Waiting for all nodes to report success "
+        print(f"\n  ⏳ Waiting for all nodes to report success "
               f"({elapsed}s elapsed, up to {remaining}s remaining)...")
 
-    print(f"\n⚠️  cluster add-node-status did not show success for all "
+    print(f"\n  ⚠️  cluster add-node did not complete for all "
           f"{len(cluster_ips)} node(s) within 15 minutes.")
     if log:
         log.log("cluster add-node: timeout waiting for success status", prefix="WARN")
