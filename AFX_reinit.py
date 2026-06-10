@@ -373,6 +373,10 @@ _BOOT_MENU_SIGS = [
 # Used to detect accidental console drops mid-wait.
 _BMC_PROMPT_SIG = "bmc>"
 
+# Message the SP/BMC sends when it kills our session to hand control to
+# another user or higher-priority session.
+_BMC_PREEMPTED_SIG = "this cli session is being preempted"
+
 # Regex that matches any bare BMC/SP shell prompt on its own line.
 # Covers: "bmc>", "localhost>", "node-bmc>", "rtp-afx1k-c01-01>", etc.
 # Pattern: optional whitespace, then one or more word/hyphen/dot chars, then ">",
@@ -385,8 +389,9 @@ _BMC_PROMPT_RE = re.compile(
 
 def _looks_like_bmc_drop(chunk: str) -> bool:
     """Return True if *chunk* contains what appears to be a bare BMC/SP shell
-    prompt — indicating that system console has exited and the channel has
-    dropped back to the BMC CLI.
+    prompt or a session-preemption notice — indicating that system console has
+    exited and the channel has dropped back to the BMC CLI, or that the SP has
+    forcibly ended our session.
 
     Matches:
       - Any token ending in ``>`` that contains ``bmc`` (e.g. ``node-bmc>``)
@@ -395,8 +400,12 @@ def _looks_like_bmc_drop(chunk: str) -> bool:
         ``rtp-afx1k-c01-01>``) — the regex guards against false positives from
         ONTAP CLI output (``::>``, ``*>``, ``(X)>`` etc.) by requiring the line
         to contain only the prompt token.
+      - "This CLI session is being preempted by another user/session"
     """
     cl = chunk.lower()
+    # Session preemption notice — SP is kicking us out
+    if _BMC_PREEMPTED_SIG in cl:
+        return True
     # Fast path: explicit "bmc" substring
     if _BMC_PROMPT_SIG in cl:
         return True
@@ -3430,16 +3439,19 @@ def keepalive_loop(client):
 # ---------------------------------------------------------------------------
 
 def _reclaim_system_console(channel, node_log=None):
-    """Re-enter system console after an unexpected drop to the BMC prompt.
+    """Re-enter system console after an unexpected drop to the BMC prompt
+    or a session-preemption notice.
     Auto-answers 'y' to any existing-session takeover question.
-    Called from within the read loops when _BMC_PROMPT_SIG is detected.
+    Called from within the read loops when _looks_like_bmc_drop() fires.
     """
-    print("\n⚠️  BMC prompt detected – reconnecting to system console...")
-    _slog("BMC prompt seen mid-wait; re-sending 'system console'", prefix="WARN")
+    print("\n⚠️  BMC prompt/preemption detected – reconnecting to system console...")
+    _slog("BMC prompt or session preemption seen mid-wait; re-sending 'system console'",
+          prefix="WARN")
+    # Brief pause to let the SP finish its preemption message before we send.
+    time.sleep(1)
     channel.send("system console\r")
     if _session_log:
         _session_log.log_sent("system console")
-    time.sleep(0.5)
     buf = ""
     _rc_deadline = time.monotonic() + 15
     while time.monotonic() < _rc_deadline:
@@ -9542,10 +9554,12 @@ def _run_4b_standalone(log, resuming: bool = False):
                     # boot output.  Detect and re-enter system console.
                     _bmc_drop6 = _looks_like_bmc_drop(_chunk)
                     if _bmc_drop6 and not any(s in _chunk.lower() for s in _all_boot_sigs_lower):
-                        _status(f"  ⚠️  [{ip}] BMC prompt detected during boot wait – "
+                        _preempted6 = _BMC_PREEMPTED_SIG in _chunk.lower()
+                        _drop_reason = "session preempted" if _preempted6 else "BMC prompt detected"
+                        _status(f"  ⚠️  [{ip}] {_drop_reason} during boot wait – "
                                 "re-entering system console...")
                         if log:
-                            log.log(f"[{ip}] BMC prompt seen during option 6 boot wait; "
+                            log.log(f"[{ip}] {_drop_reason} during option 6 boot wait; "
                                     "re-sending system console", prefix="WARN")
                         if _nf6:
                             _par_write(_nf6, "\n>>> [bmc-drop] system console\n")
@@ -9757,10 +9771,12 @@ def _run_4b_standalone(log, resuming: bool = False):
                         # ── BMC-drop detection ────────────────────────────────
                         _bmc_drop4 = _looks_like_bmc_drop(_chunk4)
                         if _bmc_drop4 and not any(s in _chunk4.lower() for s in _opt4_sigs_lower):
-                            _status(f"  ⚠️  [{ip}] BMC prompt detected during option 4 boot wait – "
+                            _preempted4 = _BMC_PREEMPTED_SIG in _chunk4.lower()
+                            _drop_reason4 = "session preempted" if _preempted4 else "BMC prompt detected"
+                            _status(f"  ⚠️  [{ip}] {_drop_reason4} during option 4 boot wait – "
                                     "re-entering system console...")
                             if log:
-                                log.log(f"[{ip}] BMC prompt seen during option 4 boot wait; "
+                                log.log(f"[{ip}] {_drop_reason4} during option 4 boot wait; "
                                         "re-sending system console", prefix="WARN")
                             if _nf6:
                                 _par_write(_nf6, "\n>>> [bmc-drop] system console\n")
