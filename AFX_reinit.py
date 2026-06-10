@@ -716,15 +716,27 @@ def _ctx_sync_from_globals() -> None:
         _run_context.refresh_from_globals()
 
 
+class _ReturnToMenu(Exception):
+    """Raised when the user types 'menu' at any interactive prompt to escape
+    back to the main selection menu without completing the current operation."""
+
+
 def _prompt(prompt: str, default: str = "") -> str:
     """``input(prompt).strip()`` with EOFError/KeyboardInterrupt swallowed.
 
     Returns ``default`` if the user interrupts (Ctrl+C/Ctrl+D). Whitespace
     is always trimmed from the real input. Callers that need lowercase can
     chain ``.lower()`` on the return value.
+
+    Typing ``menu`` at any prompt raises ``_ReturnToMenu`` which the main
+    dispatch loop catches to return to the option selection menu.
     """
     try:
-        return input(prompt).strip()
+        val = input(prompt).strip()
+        if val.lower() == "menu":
+            print("  ↩️  Returning to main menu...")
+            raise _ReturnToMenu
+        return val
     except (EOFError, KeyboardInterrupt):
         return default
 
@@ -1982,6 +1994,7 @@ def select_operation_mode():
         print("  6.  Exit")
         print("")
         print("  " + "─" * 58)
+        print("  (type 'menu' at any prompt to return here)")
         choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5f, or 6): ").strip().lower()
 
         if choice == "1a":
@@ -16467,2647 +16480,2902 @@ def main():
                   f"{_resume_cp._path}; falling back to the start menu.")
             _resume_cp = None
 
-    if not _resume_autodispatch:
-        # ── Mode shortcut flags: bypass the interactive menu ──────────────
-        _shortcut_mode = None
-        _shortcut_auto_setup = False
-        _shortcut_auto_add = False
-        if args.first_node:
-            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 1, True, False
-            print("\n  ⚡ --first-node: launching mode 1b (automated first-node init).")
-        elif args.add_nodes:
-            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 2, False, True
-            print("\n  ⚡ --add-nodes: launching mode 2b (automated node add).")
-        elif args.reinit:
-            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 3, True, True
-            print("\n  ⚡ --reinit: launching mode 3 (end-to-end automated reinit).")
-        elif args.netboot_install:
-            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 42, False, False
-            print("\n  ⚡ --netboot-install: launching mode 4b (netboot and install ONTAP).")
-        elif args.add_lic:
-            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 44, False, False
-            print("\n  ⚡ --add-lic: launching mode 4c (install license).")
-        elif args.passwordless:
-            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 45, False, False
-            print("\n  ⚡ --passwordless: launching mode 4d (passwordless SSH setup).")
-        elif args.backup:
-            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 46, False, False
-            print("\n  ⚡ --backup: launching mode 4e (config backup).")
-        elif args.verify:
-            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 47, False, False
-            print("\n  ⚡ --verify: launching mode 4f (BMC auth verify).")
-        elif args.loader:
-            _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 48, False, False
-            print("\n  ⚡ --loader: launching mode 4g (reset all nodes to LOADER).")
+    while True:  # main menu return loop
+        try:
+            if not _resume_autodispatch:
+                # ── Mode shortcut flags: bypass the interactive menu ──────────────
+                _shortcut_mode = None
+                _shortcut_auto_setup = False
+                _shortcut_auto_add = False
+                if args.first_node:
+                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 1, True, False
+                    print("\n  ⚡ --first-node: launching mode 1b (automated first-node init).")
+                elif args.add_nodes:
+                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 2, False, True
+                    print("\n  ⚡ --add-nodes: launching mode 2b (automated node add).")
+                elif args.reinit:
+                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 3, True, True
+                    print("\n  ⚡ --reinit: launching mode 3 (end-to-end automated reinit).")
+                elif args.netboot_install:
+                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 42, False, False
+                    print("\n  ⚡ --netboot-install: launching mode 4b (netboot and install ONTAP).")
+                elif args.add_lic:
+                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 44, False, False
+                    print("\n  ⚡ --add-lic: launching mode 4c (install license).")
+                elif args.passwordless:
+                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 45, False, False
+                    print("\n  ⚡ --passwordless: launching mode 4d (passwordless SSH setup).")
+                elif args.backup:
+                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 46, False, False
+                    print("\n  ⚡ --backup: launching mode 4e (config backup).")
+                elif args.verify:
+                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 47, False, False
+                    print("\n  ⚡ --verify: launching mode 4f (BMC auth verify).")
+                elif args.loader:
+                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 48, False, False
+                    print("\n  ⚡ --loader: launching mode 4g (reset all nodes to LOADER).")
 
-        if _shortcut_mode is not None:
-            _operation_mode = _shortcut_mode
-            _auto_setup = _shortcut_auto_setup
-            _auto_add = _shortcut_auto_add
-            # Modes that reinit the primary node (1, 3) need the same up-front
-            # prompts that select_operation_mode() normally handles.
-        else:
-            _operation_mode, _auto_setup, _auto_add = select_operation_mode()
-    else:
-        pass  # _resume_autodispatch already set _operation_mode above
-    # Remember the mode the operator explicitly chose at startup.  Mid-run
-    # transitions (e.g. 1b → add nodes) change _operation_mode but leave
-    # _initial_operation_mode intact so mode-specific up-front prompts only
-    # fire when the operator actually started in that mode.
-    _initial_operation_mode = _operation_mode
+                if _shortcut_mode is not None:
+                    _operation_mode = _shortcut_mode
+                    _auto_setup = _shortcut_auto_setup
+                    _auto_add = _shortcut_auto_add
+                    # Modes that reinit the primary node (1, 3) need the same up-front
+                    # prompts that select_operation_mode() normally handles.
+                else:
+                    _operation_mode, _auto_setup, _auto_add = select_operation_mode()
+            else:
+                pass  # _resume_autodispatch already set _operation_mode above
+            # Remember the mode the operator explicitly chose at startup.  Mid-run
+            # transitions (e.g. 1b → add nodes) change _operation_mode but leave
+            # _initial_operation_mode intact so mode-specific up-front prompts only
+            # fire when the operator actually started in that mode.
+            _initial_operation_mode = _operation_mode
 
-    # ── RunContext: snapshot current globals into a single state object ──
-    # Phase 2 of the RunContext refactor. The context is the migration
-    # target for the heavy globals listed in _RUN_CONTEXT_FIELD_TO_GLOBAL;
-    # legacy code paths still read/write the globals directly. Container
-    # fields (dicts/lists) share identity with their globals so in-place
-    # mutations stay visible through both views during the migration.
-    # Migrated helpers will mutate _run_context and call apply_to_globals()
-    # at the end so any downstream legacy code still sees fresh values.
-    _run_context = RunContext.from_globals()
+            # ── RunContext: snapshot current globals into a single state object ──
+            # Phase 2 of the RunContext refactor. The context is the migration
+            # target for the heavy globals listed in _RUN_CONTEXT_FIELD_TO_GLOBAL;
+            # legacy code paths still read/write the globals directly. Container
+            # fields (dicts/lists) share identity with their globals so in-place
+            # mutations stay visible through both views during the migration.
+            # Migrated helpers will mutate _run_context and call apply_to_globals()
+            # at the end so any downstream legacy code still sees fresh values.
+            _run_context = RunContext.from_globals()
 
-    # Mode 4 (4b/4c): not yet implemented placeholders.
-    if _operation_mode == 4:
-        _print_banner("\U0001f4e6 This ONTAP install sub-option is not yet implemented.")
-        print("  Please check back in a future release.")
-        sys.exit(0)
+            # Mode 4 (4b/4c): not yet implemented placeholders.
+            if _operation_mode == 4:
+                _print_banner("\U0001f4e6 This ONTAP install sub-option is not yet implemented.")
+                print("  Please check back in a future release.")
+                sys.exit(0)
 
-    # ── Mode 26 (2c): Resume interrupted node additions ───────────────────
-    if _operation_mode == 26:
-        ok = _run_2c_resume()
-        if _session_log:
-            _session_log.record_completion(normal_exit=ok)
-            print(f"\n📝 Session log saved to: {_session_log.log_file}")
-        sys.exit(0 if ok else 1)
+            # ── Mode 26 (2c): Resume interrupted node additions ───────────────────
+            if _operation_mode == 26:
+                ok = _run_2c_resume()
+                if _session_log:
+                    _session_log.record_completion(normal_exit=ok)
+                    print(f"\n📝 Session log saved to: {_session_log.log_file}")
+                sys.exit(0 if ok else 1)
 
-    # ── Mode 42 (4b): Netboot and install ONTAP ────────────────────────────
-    if _operation_mode == 42:
-        # ── Resume detection ──────────────────────────────────────────────
-        # Reuse the checkpoint already loaded by the --resume auto-dispatch
-        # path so we do not re-read the file or re-prompt for confirmation.
-        _cp = _resume_cp or CheckpointManager()
-        _resuming = False
-        if _resume_autodispatch and _resume_cp is not None:
-            # --resume + valid checkpoint: skip the confirmation prompt and
-            # resume directly. Operator already opted in via the CLI flag.
-            _resuming = True
-            _checkpoint = _cp
-            print("\n  ✅ Resuming from checkpoint (--resume).")
-        elif args.resume or (not args.resume and _cp.load()):
-            # If --resume was explicit, or a checkpoint file auto-detected,
-            # confirm with the operator before using it.
-            if _cp.load():
-                _cp_age = ""
-                try:
-                    _cp_dt = datetime.fromisoformat(_cp.created)
-                    _cp_mins = int((datetime.now() - _cp_dt).total_seconds() // 60)
-                    _cp_age = f" from {_cp_mins} minute(s) ago"
-                except Exception:
-                    pass
-                _install_done_ips = _cp.nodes_done_for("install_done")
-                _reinit_done_ips  = _cp.nodes_done_for("reinit_loader")
-                _opt4_done_ips    = _cp.nodes_done_for("peer_option4_done")
-                _joined_ips       = _cp.nodes_done_for("peer_joined")
-                print("\n" + "=" * 60)
-                print("  🔖 Checkpoint found" + _cp_age)
-                print(f"     Mode    : {_cp.mode}")
-                print(f"     BMC IPs : {', '.join(_cp.bmc_ips)}")
-                print(f"     Log dir : {_cp.log_dir}")
-                if _install_done_ips:
-                    print(f"     install_done          : {', '.join(_install_done_ips)}")
-                if _reinit_done_ips:
-                    print(f"     reinit_loader         : {', '.join(_reinit_done_ips)}")
-                if _opt4_done_ips:
-                    print(f"     peer_option4_done     : {', '.join(_opt4_done_ips)}")
-                if _joined_ips:
-                    print(f"     peer_joined           : {', '.join(_joined_ips)}")
-                if _cp.is_done("primary_bootmenu_done"):
-                    print("     primary_bootmenu_done : ✅")
-                if _cp.is_done("cluster_formed"):
-                    print("     cluster_formed        : ✅")
-                if _cp.is_done("primary_setup_done"):
-                    print("     primary_setup_done    : ✅")
-                if _cp.is_done("option3_complete"):
-                    print("     option3_complete      : ✅")
-                print("=" * 60)
-                _resume_ans = _prompt(
-                    "\n  Resume from checkpoint? [Y/n]: "
-                , "n").lower()
-                if _resume_ans != "n":
+            # ── Mode 42 (4b): Netboot and install ONTAP ────────────────────────────
+            if _operation_mode == 42:
+                # ── Resume detection ──────────────────────────────────────────────
+                # Reuse the checkpoint already loaded by the --resume auto-dispatch
+                # path so we do not re-read the file or re-prompt for confirmation.
+                _cp = _resume_cp or CheckpointManager()
+                _resuming = False
+                if _resume_autodispatch and _resume_cp is not None:
+                    # --resume + valid checkpoint: skip the confirmation prompt and
+                    # resume directly. Operator already opted in via the CLI flag.
                     _resuming = True
                     _checkpoint = _cp
-                    print("  ✅ Resuming from checkpoint.")
+                    print("\n  ✅ Resuming from checkpoint (--resume).")
+                elif args.resume or (not args.resume and _cp.load()):
+                    # If --resume was explicit, or a checkpoint file auto-detected,
+                    # confirm with the operator before using it.
+                    if _cp.load():
+                        _cp_age = ""
+                        try:
+                            _cp_dt = datetime.fromisoformat(_cp.created)
+                            _cp_mins = int((datetime.now() - _cp_dt).total_seconds() // 60)
+                            _cp_age = f" from {_cp_mins} minute(s) ago"
+                        except Exception:
+                            pass
+                        _install_done_ips = _cp.nodes_done_for("install_done")
+                        _reinit_done_ips  = _cp.nodes_done_for("reinit_loader")
+                        _opt4_done_ips    = _cp.nodes_done_for("peer_option4_done")
+                        _joined_ips       = _cp.nodes_done_for("peer_joined")
+                        print("\n" + "=" * 60)
+                        print("  🔖 Checkpoint found" + _cp_age)
+                        print(f"     Mode    : {_cp.mode}")
+                        print(f"     BMC IPs : {', '.join(_cp.bmc_ips)}")
+                        print(f"     Log dir : {_cp.log_dir}")
+                        if _install_done_ips:
+                            print(f"     install_done          : {', '.join(_install_done_ips)}")
+                        if _reinit_done_ips:
+                            print(f"     reinit_loader         : {', '.join(_reinit_done_ips)}")
+                        if _opt4_done_ips:
+                            print(f"     peer_option4_done     : {', '.join(_opt4_done_ips)}")
+                        if _joined_ips:
+                            print(f"     peer_joined           : {', '.join(_joined_ips)}")
+                        if _cp.is_done("primary_bootmenu_done"):
+                            print("     primary_bootmenu_done : ✅")
+                        if _cp.is_done("cluster_formed"):
+                            print("     cluster_formed        : ✅")
+                        if _cp.is_done("primary_setup_done"):
+                            print("     primary_setup_done    : ✅")
+                        if _cp.is_done("option3_complete"):
+                            print("     option3_complete      : ✅")
+                        print("=" * 60)
+                        _resume_ans = _prompt(
+                            "\n  Resume from checkpoint? [Y/n]: "
+                        , "n").lower()
+                        if _resume_ans != "n":
+                            _resuming = True
+                            _checkpoint = _cp
+                            print("  ✅ Resuming from checkpoint.")
+                        else:
+                            _cp.clear()
+                            print("  ℹ️  Starting fresh run.")
+                if not _resuming:
+                    _checkpoint = CheckpointManager()
+
+                _make_session_log("Mode 42: netboot and install ONTAP (4b)")
+                ok = _run_4b_standalone(_session_log, resuming=_resuming)
+                _session_log.record_completion(normal_exit=ok)
+                if ok:
+                    _checkpoint.clear()
+                print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
+                sys.exit(0 if ok else 1)
+
+            # ── Mode 41 (4a): ONTAP upgrade ────────────────────────────────────────
+            if _operation_mode == 41:
+                _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
+                ok = _run_ontap_upgrade(_session_log)
+                if ok is None and _operation_mode == 46:
+                    # User chose to run 4e config-gather first; fall through to mode 46.
+                    pass
                 else:
-                    _cp.clear()
-                    print("  ℹ️  Starting fresh run.")
-        if not _resuming:
-            _checkpoint = CheckpointManager()
+                    _session_log.record_completion(normal_exit=ok)
+                    print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
+                    sys.exit(0 if ok else 1)
 
-        _make_session_log("Mode 42: netboot and install ONTAP (4b)")
-        ok = _run_4b_standalone(_session_log, resuming=_resuming)
-        _session_log.record_completion(normal_exit=ok)
-        if ok:
-            _checkpoint.clear()
-        print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
-        sys.exit(0 if ok else 1)
-
-    # ── Mode 41 (4a): ONTAP upgrade ────────────────────────────────────────
-    if _operation_mode == 41:
-        _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
-        ok = _run_ontap_upgrade(_session_log)
-        if ok is None and _operation_mode == 46:
-            # User chose to run 4e config-gather first; fall through to mode 46.
-            pass
-        else:
-            _session_log.record_completion(normal_exit=ok)
-            print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
-            sys.exit(0 if ok else 1)
-
-    # ── Mode 44 (4c): standalone license-only install ──────────────────────
-    if _operation_mode == 44:
-        _collect_license_config(_run_context)
-        if not _license_mode:
-            print("\n  No license configured; nothing to do. Exiting.")
-            sys.exit(0)
-
-        # Optional config file for BMC credentials.
-        config_path_44 = args.config
-        if not config_path_44:
-            _found_44 = _find_config_files(
-                candidate_names=("reinit-config.json", "reinit_config.json",
-                                 "reinit-afx-config.json", "reinit_afx_config.json",
-                                 "config.json"),
-            )
-            if _found_44:
-                config_path_44 = _found_44[0]
-        if config_path_44:
-            try:
-                _config_data = load_config_file(config_path_44)
-                print(f"\U0001f4c4 Loaded config: {config_path_44}")
-            except ValueError:
-                _config_data = {}
-        else:
-            _config_data = {}
-        _ctx_sync_from_globals()
-
-        _make_session_log("Mode 4c: standalone license install")
-
-        # BMC credentials from config or interactive prompts.
-        primary_node_44 = {}
-        if isinstance(_config_data, dict):
-            nl = _config_data.get("nodes") or []
-            if nl and isinstance(nl[0], dict):
-                primary_node_44 = nl[0]
-
-        sp_host = _cfg_str(primary_node_44.get("bmc"))
-        if sp_host:
-            _check_bmc_reachable(sp_host)
-        else:
-            sp_host = _prompt_bmc_host(
-                "  Enter BMC hostname/IP or cluster management IP address: "
-            )
-        sp_user = _cfg_str(primary_node_44.get("bmc_user")) or input("  BMC username [admin]: ").strip() or "admin"
-        if "bmc_password" in primary_node_44 and isinstance(primary_node_44["bmc_password"], str):
-            sp_pass = primary_node_44["bmc_password"]
-        else:
-            sp_pass = getpass.getpass("  BMC password: ")
-
-        _session_log.log(f"Target BMC: {sp_host} (user={sp_user})")
-
-        # Connect to BMC.
-        _session_log.start_phase("SSH Connection")
-        client_44, sp_user, sp_pass = connect_to_sp(sp_host, sp_user, sp_pass)
-        channel_44 = _open_shell(client_44)
-        keepalive_thread_44 = threading.Thread(
-            target=keepalive_loop, args=(client_44,), daemon=True
-        )
-        keepalive_thread_44.start()
-        _session_log.end_phase()
-
-        if not wait_for_bmc_prompt(channel_44, auto_takeover=True):
-            print("\n  \u274c BMC prompt not received. Exiting.")
-            _session_log.set_outcome("FAIL", "BMC prompt not received")
-            _session_log.close()
-            sys.exit(1)
-
-        # Enter system console and login to cluster shell.
-        _session_log.start_phase("Cluster Shell Login")
-        enter_system_console(channel_44)
-        if not _wait_for_cluster_prompt(channel_44, timeout=60):
-            print("\n  \u26a0\ufe0f  Cluster prompt not detected; trying admin login...")
-            admin_pw_44 = _cluster_config.get("admin_password") or ""
-            if not admin_pw_44:
-                admin_pw_44 = getpass.getpass("  Cluster admin password: ")
-            if not _login_primary_cluster_shell(channel_44, admin_pw_44):
-                print("  \u274c Cluster shell login failed. Exiting.")
-                _session_log.set_outcome("FAIL", "Cluster shell login failed")
-                _session_log.close()
-                sys.exit(1)
-        _session_log.end_phase()
-
-        # Apply license(s).
-        _apply_license(channel_44)
-
-        try:
-            channel_44.close()
-        except Exception:
-            pass
-        try:
-            client_44.close()
-        except Exception:
-            pass
-
-        print("\n\U0001f512 SSH session closed.")
-        _session_log.record_completion(normal_exit=True)
-        print(f"\n\U0001f4dd Full session log saved to: {_session_log.log_file}")
-        sys.exit(0)
-
-    # ── Pre-check: offer 4e when mode 1/3 finds no config files ───────────
-    # Checked here — before the mode 46 block — so that changing
-    # _operation_mode to 46 causes the 4e block immediately below to run.
-    if _operation_mode in (1, 3) and not args.config:
-        _precheck_dirs = _default_config_search_dirs()
-        _precheck_configs = _find_config_files(
-            search_dirs=_precheck_dirs, deep_scan=True
-        )
-        _bmc_ip_exists = any(
-            os.path.isfile(os.path.join(d, "BMC_IP.json"))
-            for d in _precheck_dirs
-        )
-        if not _precheck_configs and not _bmc_ip_exists:
-            print(
-                "\n⚠️  No reinit-config or BMC_IP files were detected in the "
-                "search paths."
-            )
-            try:
-                _gen_ans = input(
-                    "  Would you like to generate them from an existing cluster"
-                    " (option 5c)? [Y/n]: "
-                ).strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                _gen_ans = "n"
-            if _gen_ans != "n":
-                _operation_mode = 46
-
-    # ── Mode 46 (4e): create backup cluster configuration ──────────────────
-    if _operation_mode == 46:
-        _print_banner("\U0001f4be 5c: Create backup cluster configuration")
-        print("")
-        _make_session_log("Mode 5c: backup cluster configuration")
-
-        # Resolve output dir early — needed throughout.
-        try:
-            _snap_dir46 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
-        except NameError:
-            _snap_dir46 = os.path.join(os.getcwd(), "configs")
-        os.makedirs(_snap_dir46, exist_ok=True)
-
-        # ── Top-level: gather from cluster vs. build manually ─────────────
-        print("  How would you like to build the configuration file?\n")
-        print("    gather  - Connect to an existing cluster and read its config")
-        print("    build   - Enter the configuration manually\n")
-        while True:
-            _mode46 = _prompt("  Your choice [gather/build]: ").lower()
-            if _mode46 in ("gather", "build"):
-                break
-            print("  ⚠️  Please enter 'gather' or 'build'.")
-        _session_log.log(f"4e choice: {_mode46}")
-
-        # ── GATHER PATH: connect to cluster via BMC or cluster mgmt IP ──────
-        if _mode46 == "gather":
-            print("")
-            print("  ⚠️  Backup configuration will only work on a cluster")
-            print("       that has an existing configuration.")
-            print("")
-
-            # Optional config file for pre-filling credentials.
-            _cfg46 = {}
-            _found_46 = _find_config_files(
-                candidate_names=("reinit-config.json", "reinit_config.json",
-                                 "reinit-afx-config.json", "reinit_afx_config.json",
-                                 "config.json"),
-            )
-            if _found_46:
-                _c46 = _found_46[0]
-                try:
-                    _cfg46 = load_config_file(_c46)
-                    print(f"  \U0001f4c4 Loaded config: {_c46}")
-                except ValueError:
-                    _cfg46 = {}
-
-            # Resolve primary node block from new or legacy format.
-            _pn46 = (_cfg46.get("primary_node")
-                     if isinstance(_cfg46.get("primary_node"), dict)
-                     else ((_cfg46.get("nodes") or [None])[0]
-                           if isinstance(_cfg46.get("nodes"), list) else None)) or {}
-
-            # Prefer a BMC address from config; otherwise prompt for any
-            # reachable interface (BMC, cluster mgmt IP, or hostname).
-            sp_host46 = _cfg_str(_pn46.get("bmc"))
-            if sp_host46:
-                _check_bmc_reachable(sp_host46)
-            else:
-                while True:
-                    sp_host46 = input(
-                        "  Cluster interface (BMC, cluster management IP or hostname): "
-                    ).strip()
-                    if not sp_host46:
-                        print("  ⚠️  A host address is required.")
-                        continue
-                    if _check_bmc_reachable(sp_host46):
-                        break
-                    print("  ⚠️  Host not reachable. Please check the address and try again.")
-            if not sp_host46:
-                print("  No address entered. Exiting.")
-                sys.exit(0)
-
-            # Generic credential prompt (works for both BMC and cluster mgmt SSH).
-            sp_user46 = (_cfg_str(_pn46.get("bmc_user"))
-                         or input("  Username [admin]: ").strip()
-                         or "admin")
-            if "bmc_password" in _pn46 and isinstance(_pn46["bmc_password"], str):
-                sp_pass46 = _pn46["bmc_password"]
-            else:
-                sp_pass46 = getpass.getpass("  Password (blank = none): ")
-
-            _session_log.log(f"4e gather: target={sp_host46} (user={sp_user46})")
-
-            # Connect via SSH – works for both BMC and cluster mgmt endpoints.
-            _session_log.start_phase("SSH Connection")
-            try:
-                _client46, sp_user46, sp_pass46 = _ssh_connect_with_retry(
-                    sp_host46, sp_user46, sp_pass46,
-                    label=f"4e/{sp_host46}", max_attempts=1, interactive=False,
-                )
-            except Exception as _e46:
-                print(f"  \u274c SSH connection failed: {_e46}")
-                print("  Check credentials and try again.")
-                _session_log.set_outcome("FAIL", f"SSH failed: {_e46}")
-                _session_log.close()
-                sys.exit(1)
-
-            # Make credentials available to the cluster-login fallback chain.
-            _primary_bmc_user = sp_user46
-            _primary_bmc_password = sp_pass46
-            if not _cluster_config.get("admin_user"):
-                _cluster_config["admin_user"] = sp_user46
-            if not _cluster_config.get("admin_password"):
-                _cluster_config["admin_password"] = sp_pass46
-
-            _ch46 = _open_shell(_client46)
-            _kt46 = threading.Thread(target=keepalive_loop, args=(_client46,), daemon=True)
-            _kt46.start()
-            _session_log.end_phase()
-
-            # Detect whether we landed on a BMC prompt or a cluster shell
-            # so we know whether to navigate via 'system console' or not.
-            _session_log.start_phase("Cluster Inventory Capture")
-            _ch46.send("\r")
-            _probe46, _ = direct_read_until_any(
-                _ch46, ["::>", "::*>", "login:", "bmc", ">"], timeout=10,
-            )
-            _is_direct46 = ("::>" in _probe46 or "::*>" in _probe46
-                            or "login:" in _probe46.lower())
-
-            if _is_direct46:
-                # Direct cluster-mgmt SSH: already at cluster shell or login
-                # prompt. Authenticate if needed, then run inventory commands.
-                _session_log.log("4e: direct cluster SSH detected; skipping BMC console path")
-                print("  ✅ Cluster management SSH detected.")
-                if "login:" in _probe46.lower() and "::>" not in _probe46:
-                    # Genuine login: prompt (not just banner text like "Last login:")
-                    if not _attempt_console_cluster_login(_ch46):
-                        print("  ❌ Cluster login failed. Exiting.")
-                        _session_log.set_outcome("FAIL", "cluster login failed")
-                        _session_log.close()
-                        sys.exit(1)
-                # Drain any residual SSH login banner text (e.g. "Last login:",
-                # "Unsuccessful login attempts...") so _wait_for_cluster_prompt
-                # inside collect_retain_data does not mistake banner lines for
-                # an actual login: prompt and attempt to re-authenticate.
-                drain_channel(_ch46, seconds=1)
-                # Confirm we are at the cluster shell before handing off.
-                _ch46.send("\r")
-                _confirm46, _ = direct_read_until_any(
-                    _ch46, ["::>", "::*>"], timeout=10,
-                )
-                if "::>" not in _confirm46 and "::*>" not in _confirm46:
-                    print("  ❌ Could not confirm cluster shell prompt. Exiting.")
-                    _session_log.set_outcome("FAIL", "cluster shell prompt not confirmed")
-                    _session_log.close()
-                    sys.exit(1)
-            else:
-                # BMC connection: need to have the BMC '>' prompt before
-                # entering system console.  The probe above may have already
-                # consumed it (direct read until '>'), so only call
-                # wait_for_bmc_prompt when the probe did NOT see '>'.
-                _session_log.log("4e: BMC connection detected; entering system console")
-                _bmc_prompt_in_probe = ">" in _probe46
-                if _bmc_prompt_in_probe:
-                    print("  ✅ BMC prompt detected.")
-                    _session_log.log(
-                        "4e: BMC prompt already consumed by probe; skipping wait"
-                    )
-                elif not wait_for_bmc_prompt(_ch46, auto_takeover=True):
-                    print("  \u274c BMC prompt not received. Exiting.")
-                    _session_log.set_outcome("FAIL", "BMC prompt not received")
-                    _session_log.close()
-                    sys.exit(1)
-
-            # Run the full retain capture (name + network + peer SPs).
-            _cname46r, _net46, _peers46 = collect_retain_data(
-                _ch46,
-                retain_name=True,
-                retain_network=True,
-                collect_peer_sps=True,
-                direct_cluster_ssh=_is_direct46,
-            )
-            _session_log.end_phase()
-
-            try:
-                _ch46.close()
-            except Exception:
-                pass
-            try:
-                _client46.close()
-            except Exception:
-                pass
-
-            # Merge all captured data into _config_data.
-            _config_data = dict(_cfg46)  # start from any file values
-            _ctx_sync_from_globals()
-            apply_retained_to_cluster_config()
-
-            # _peers46 holds the SP/BMC IPs from 'service-processor show'.
-            _sp_ips46 = list(_peers46) if _peers46 else []
-
-            # When we connected via cluster mgmt (not BMC), sp_host46 is a
-            # mgmt IP/hostname — not a real BMC address. Resolve the primary
-            # node's actual BMC IP from the SP list by:
-            #   1. Matching the SP's node-mgmt IP against config's primary_node.node_mgmt_ip
-            #   2. Picking the SP whose ONTAP node name ends in "-01" (primary convention)
-            #   3. Picking the SP whose node name sorts lowest alphabetically
-            _primary_bmc46 = sp_host46  # default: what we connected with
-            if _is_direct46 and _sp_ips46:
-                _cfg_primary_node_mgmt_ip = _cfg_str(
-                    _pn46.get("node_mgmt_ip") or _pn46.get("ip")
-                )
-                _matched_bmc = None
-                # Strategy 1: match via pre-existing config node_mgmt_ip
-                for _sp in _sp_ips46:
-                    _mgmt = _retained_node_mgmt_for(_sp)
-                    if _mgmt and _cfg_primary_node_mgmt_ip:
-                        if _mgmt.get("ip") == _cfg_primary_node_mgmt_ip:
-                            _matched_bmc = _sp
-                            break
-                # Strategy 2: use SP→node name map; primary is conventionally *-01
-                if not _matched_bmc and _retained_sp_to_node:
-                    _sp_node_pairs = [
-                        (sp, _retained_sp_to_node.get(sp, ""))
-                        for sp in _sp_ips46
-                        if sp in _retained_sp_to_node
-                    ]
-                    if _sp_node_pairs:
-                        # Sort by node name; primary node typically has lowest suffix (-01)
-                        _sp_node_pairs.sort(key=lambda x: x[1])
-                        _matched_bmc = _sp_node_pairs[0][0]
-                        _session_log.log(
-                            f"4e: primary BMC resolved by node name sort: "
-                            f"{_matched_bmc} -> {_sp_node_pairs[0][1]}"
-                        )
-                if _matched_bmc:
-                    _primary_bmc46 = _matched_bmc
-                    print(f"  ℹ️  Resolved primary BMC from SP list: {_primary_bmc46}")
-                    _session_log.log(f"4e: primary BMC resolved from SP list: {_primary_bmc46}")
-                else:
-                    # Final fallback: first SP IP
-                    _primary_bmc46 = _sp_ips46[0]
-                    print(f"  ⚠️  Could not match primary BMC from SP list; using first: {_primary_bmc46}")
-                    _session_log.log(f"4e: primary BMC fallback to first SP IP: {_primary_bmc46}",
-                                     prefix="WARN")
-                # Update the primary_node bmc field in config so it's saved correctly.
-                if isinstance(_config_data.get("primary_node"), dict):
-                    _config_data["primary_node"]["bmc"] = _primary_bmc46
-                elif isinstance(_config_data.get("nodes"), list) and _config_data["nodes"]:
-                    _config_data["nodes"][0]["bmc"] = _primary_bmc46
-
-            apply_retained_to_node_configs(primary_bmc=_primary_bmc46)
-            if _sp_ips46:
-                print(f"  \U0001f4cb SP/BMC addresses from cluster: {', '.join(_sp_ips46)}")
-                _session_log.log(f"SP IPs from cluster: {_sp_ips46}")
-
-        # ── BUILD PATH: manual entry ─────────────────────────────────────
-        else:
-            print("")
-            print("  Create a new cluster configuration or add nodes to an existing one?\n")
-            print("    create  - Enter all cluster details from scratch")
-            print("    add     - Connect to a cluster and list new nodes to add\n")
-            while True:
-                _build46 = _prompt("  Your choice [create/add]: ").lower()
-                if _build46 in ("create", "add"):
-                    break
-                print("  ⚠️  Please enter 'create' or 'add'.")
-            _session_log.log(f"4e build sub-choice: {_build46}")
-
-            _config_data = {}
-
-            if _build46 == "create":
-                # ── Cluster-level details ──────────────────────────────────
-                print("\n" + "─" * 60)
-                print("  Cluster configuration")
-                print("─" * 60)
-                _b_name  = input("  Cluster name: ").strip()
-                _b_mport = input("  Cluster management interface port [e0M]: ").strip() or "e0M"
-                _b_mip   = input("  Cluster management IP address: ").strip()
-                _b_mmask = input("  Cluster management netmask: ").strip()
-                _b_mgw   = input("  Cluster management gateway: ").strip()
-                _b_dns_d = input("  DNS domain names (comma separated): ").strip()
-                _b_dns_s = input("  DNS servers (comma separated): ").strip()
-                _b_loc   = input("  Controller location (optional): ").strip()
-                _b_pw    = getpass.getpass("  Cluster admin password: ")
-
-                _config_data["cluster"] = {
-                    "name": _b_name,
-                    "clus_mgmt_port": _b_mport,
-                    "clus_mgmt_address": _b_mip,
-                    "clus_mgmt_mask": _b_mmask,
-                    "clus_mgmt_gw": _b_mgw,
-                    "dns_domains": _b_dns_d,
-                    "dns_servers": _b_dns_s,
-                    "location": _b_loc,
-                    "password": _b_pw,
-                }
-
-                # ── Primary node ───────────────────────────────────────────
-                print("\n" + "─" * 60)
-                print("  Primary node BMC")
-                print("─" * 60)
-                _b_pbmc = _prompt_bmc_host()
-                _b_puser = input("  BMC username [admin]: ").strip() or "admin"
-                _b_ppw   = getpass.getpass("  BMC password (blank = none): ")
-                _b_pport = input("  Node management port [e0M]: ").strip() or "e0M"
-                _b_pip   = input("  Node management IP: ").strip()
-                _b_pmask = input("  Node management netmask: ").strip()
-                _b_pgw   = input("  Node management gateway: ").strip()
-                _config_data["primary_node"] = {
-                    "bmc": _b_pbmc,
-                    "bmc_user": _b_puser,
-                    "bmc_password": _b_ppw,
-                    "node_mgmt_port": _b_pport,
-                    "node_mgmt_ip": _b_pip,
-                    "node_mgmt_netmask": _b_pmask,
-                    "node_mgmt_gateway": _b_pgw,
-                }
-                _config_data["secondary_nodes"] = []
-                _session_log.log("4e build/create: manual cluster config collected")
-                _sp_ips46 = []  # No cluster shell in create path; no SP addresses available.
-
-            else:
-                # ── ADD PATH ─────────────────────────────────────────────
-                # Goal: patch cluster_network_ip into an existing config file
-                # and append the new nodes to secondary_nodes so the file can
-                # immediately drive option 2a/2b.
-                # We only need the cluster shell to get a cluster-network IP;
-                # we do NOT call collect_retain_data so primary_node and all
-                # cluster fields are preserved exactly as-is.
-
-                # 1. Load an existing config file (same search as gather path).
-                print("")
-                _cfg46_add = {}
-                _cfg46_add_path = None
-                _found_46a = _find_config_files(
-                    candidate_names=("reinit-config.json", "reinit_config.json",
-                                     "reinit-afx-config.json", "reinit_afx_config.json",
-                                     "config.json"),
-                )
-                if _found_46a:
-                    _c46a = _found_46a[0]
-                    try:
-                        _cfg46_add = load_config_file(_c46a)
-                        _cfg46_add_path = _c46a
-                        print(f"  \U0001f4c4 Loaded existing config: {_c46a}")
-                    except ValueError:
-                        _cfg46_add = {}
-
-                if not _cfg46_add_path:
-                    print("  \u2139\ufe0f  No existing config file found. A new one will be created.")
-
-                # Start _config_data from whatever was loaded (preserves all
-                # existing sections: cluster, primary_node, secondary_nodes …).
-                _config_data = dict(_cfg46_add)
-                _ctx_sync_from_globals()
-
-                # 2. Resolve the primary node BMC from config (or prompt).
-                _pn46a = (_config_data.get("primary_node")
-                          if isinstance(_config_data.get("primary_node"), dict)
-                          else ((_config_data.get("nodes") or [None])[0]
-                                if isinstance(_config_data.get("nodes"), list)
-                                else None)) or {}
-
-                print("\n" + "─" * 60)
-                print("  Primary node BMC  (existing cluster)")
-                print("─" * 60)
-                _b_pbmc_default = _cfg_str(_pn46a.get("bmc"))
-                if _b_pbmc_default:
-                    print(f"  \U0001f4c4 BMC from config: {_b_pbmc_default}")
-                    _b_pbmc = _b_pbmc_default
-                    _check_bmc_reachable(_b_pbmc)
-                else:
-                    _b_pbmc = _prompt_bmc_host(allow_blank=True)
-                if not _b_pbmc:
-                    print("  No BMC address entered. Exiting.")
+            # ── Mode 44 (4c): standalone license-only install ──────────────────────
+            if _operation_mode == 44:
+                _collect_license_config(_run_context)
+                if not _license_mode:
+                    print("\n  No license configured; nothing to do. Exiting.")
                     sys.exit(0)
 
-                _b_puser_default = _cfg_str(_pn46a.get("bmc_user"))
-                if _b_puser_default:
-                    print(f"  \U0001f4c4 BMC username from config: {_b_puser_default}")
-                    _b_puser = _b_puser_default
-                else:
-                    _b_puser = input("  BMC username [admin]: ").strip() or "admin"
-
-                if "bmc_password" in _pn46a and isinstance(_pn46a["bmc_password"], str):
-                    _b_ppw = _pn46a["bmc_password"]
-                    print("  \U0001f4c4 BMC password from config.")
-                else:
-                    _b_ppw = getpass.getpass("  BMC password (blank = none): ")
-
-                _session_log.log(f"4e build/add: connecting to BMC {_b_pbmc} (user={_b_puser})")
-                _session_log.start_phase("SSH Connection (primary BMC)")
-                try:
-                    _bclient46, _b_puser, _b_ppw = _ssh_connect_with_retry(
-                        _b_pbmc, _b_puser, _b_ppw,
-                        label=f"BMC/{_b_pbmc}", max_attempts=1, interactive=False,
+                # Optional config file for BMC credentials.
+                config_path_44 = args.config
+                if not config_path_44:
+                    _found_44 = _find_config_files(
+                        candidate_names=("reinit-config.json", "reinit_config.json",
+                                         "reinit-afx-config.json", "reinit_afx_config.json",
+                                         "config.json"),
                     )
-                except Exception as _be46:
-                    print(f"  \u274c SSH connection failed: {_be46}")
-                    print("  Check credentials and try again.")
-                    _session_log.set_outcome("FAIL", f"SSH failed: {_be46}")
-                    _session_log.close()
-                    sys.exit(1)
+                    if _found_44:
+                        config_path_44 = _found_44[0]
+                if config_path_44:
+                    try:
+                        _config_data = load_config_file(config_path_44)
+                        print(f"\U0001f4c4 Loaded config: {config_path_44}")
+                    except ValueError:
+                        _config_data = {}
+                else:
+                    _config_data = {}
+                _ctx_sync_from_globals()
 
-                _primary_bmc_user = _b_puser
-                _primary_bmc_password = _b_ppw
-                if not _cluster_config.get("admin_password"):
-                    _cluster_config["admin_password"] = _b_ppw
+                _make_session_log("Mode 4c: standalone license install")
 
-                _bch46 = _open_shell(_bclient46)
-                _bkt46 = threading.Thread(target=keepalive_loop, args=(_bclient46,), daemon=True)
-                _bkt46.start()
+                # BMC credentials from config or interactive prompts.
+                primary_node_44 = {}
+                if isinstance(_config_data, dict):
+                    nl = _config_data.get("nodes") or []
+                    if nl and isinstance(nl[0], dict):
+                        primary_node_44 = nl[0]
+
+                sp_host = _cfg_str(primary_node_44.get("bmc"))
+                if sp_host:
+                    _check_bmc_reachable(sp_host)
+                else:
+                    sp_host = _prompt_bmc_host(
+                        "  Enter BMC hostname/IP or cluster management IP address: "
+                    )
+                sp_user = _cfg_str(primary_node_44.get("bmc_user")) or input("  BMC username [admin]: ").strip() or "admin"
+                if "bmc_password" in primary_node_44 and isinstance(primary_node_44["bmc_password"], str):
+                    sp_pass = primary_node_44["bmc_password"]
+                else:
+                    sp_pass = getpass.getpass("  BMC password: ")
+
+                _session_log.log(f"Target BMC: {sp_host} (user={sp_user})")
+
+                # Connect to BMC.
+                _session_log.start_phase("SSH Connection")
+                client_44, sp_user, sp_pass = connect_to_sp(sp_host, sp_user, sp_pass)
+                channel_44 = _open_shell(client_44)
+                keepalive_thread_44 = threading.Thread(
+                    target=keepalive_loop, args=(client_44,), daemon=True
+                )
+                keepalive_thread_44.start()
                 _session_log.end_phase()
 
-                if not wait_for_bmc_prompt(_bch46, auto_takeover=True):
-                    print("  \u274c BMC prompt not received. Exiting.")
+                if not wait_for_bmc_prompt(channel_44, auto_takeover=True):
+                    print("\n  \u274c BMC prompt not received. Exiting.")
                     _session_log.set_outcome("FAIL", "BMC prompt not received")
                     _session_log.close()
                     sys.exit(1)
 
-                # 3. Enter cluster shell and query the cluster-network IP.
-                _session_log.start_phase("Cluster Shell (cluster-network IP)")
-                enter_system_console(_bch46)
-                if not _wait_for_cluster_prompt(_bch46, timeout=60):
-                    if not _attempt_console_cluster_login(_bch46):
-                        print("  \u274c Could not log into cluster shell. Exiting.")
-                        _session_log.set_outcome("FAIL", "cluster shell login failed")
+                # Enter system console and login to cluster shell.
+                _session_log.start_phase("Cluster Shell Login")
+                enter_system_console(channel_44)
+                if not _wait_for_cluster_prompt(channel_44, timeout=60):
+                    print("\n  \u26a0\ufe0f  Cluster prompt not detected; trying admin login...")
+                    admin_pw_44 = _cluster_config.get("admin_password") or ""
+                    if not admin_pw_44:
+                        admin_pw_44 = getpass.getpass("  Cluster admin password: ")
+                    if not _login_primary_cluster_shell(channel_44, admin_pw_44):
+                        print("  \u274c Cluster shell login failed. Exiting.")
+                        _session_log.set_outcome("FAIL", "Cluster shell login failed")
+                        _session_log.close()
+                        sys.exit(1)
+                _session_log.end_phase()
+
+                # Apply license(s).
+                _apply_license(channel_44)
+
+                try:
+                    channel_44.close()
+                except Exception:
+                    pass
+                try:
+                    client_44.close()
+                except Exception:
+                    pass
+
+                print("\n\U0001f512 SSH session closed.")
+                _session_log.record_completion(normal_exit=True)
+                print(f"\n\U0001f4dd Full session log saved to: {_session_log.log_file}")
+                sys.exit(0)
+
+            # ── Pre-check: offer 4e when mode 1/3 finds no config files ───────────
+            # Checked here — before the mode 46 block — so that changing
+            # _operation_mode to 46 causes the 4e block immediately below to run.
+            if _operation_mode in (1, 3) and not args.config:
+                _precheck_dirs = _default_config_search_dirs()
+                _precheck_configs = _find_config_files(
+                    search_dirs=_precheck_dirs, deep_scan=True
+                )
+                _bmc_ip_exists = any(
+                    os.path.isfile(os.path.join(d, "BMC_IP.json"))
+                    for d in _precheck_dirs
+                )
+                if not _precheck_configs and not _bmc_ip_exists:
+                    print(
+                        "\n⚠️  No reinit-config or BMC_IP files were detected in the "
+                        "search paths."
+                    )
+                    try:
+                        _gen_ans = input(
+                            "  Would you like to generate them from an existing cluster"
+                            " (option 5c)? [Y/n]: "
+                        ).strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        _gen_ans = "n"
+                    if _gen_ans != "n":
+                        _operation_mode = 46
+
+            # ── Mode 46 (4e): create backup cluster configuration ──────────────────
+            if _operation_mode == 46:
+                _print_banner("\U0001f4be 5c: Create backup cluster configuration")
+                print("")
+                _make_session_log("Mode 5c: backup cluster configuration")
+
+                # Resolve output dir early — needed throughout.
+                try:
+                    _snap_dir46 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
+                except NameError:
+                    _snap_dir46 = os.path.join(os.getcwd(), "configs")
+                os.makedirs(_snap_dir46, exist_ok=True)
+
+                # ── Top-level: gather from cluster vs. build manually ─────────────
+                print("  How would you like to build the configuration file?\n")
+                print("    gather  - Connect to an existing cluster and read its config")
+                print("    build   - Enter the configuration manually\n")
+                while True:
+                    _mode46 = _prompt("  Your choice [gather/build]: ").lower()
+                    if _mode46 in ("gather", "build"):
+                        break
+                    print("  ⚠️  Please enter 'gather' or 'build'.")
+                _session_log.log(f"4e choice: {_mode46}")
+
+                # ── GATHER PATH: connect to cluster via BMC or cluster mgmt IP ──────
+                if _mode46 == "gather":
+                    print("")
+                    print("  ⚠️  Backup configuration will only work on a cluster")
+                    print("       that has an existing configuration.")
+                    print("")
+
+                    # Optional config file for pre-filling credentials.
+                    _cfg46 = {}
+                    _found_46 = _find_config_files(
+                        candidate_names=("reinit-config.json", "reinit_config.json",
+                                         "reinit-afx-config.json", "reinit_afx_config.json",
+                                         "config.json"),
+                    )
+                    if _found_46:
+                        _c46 = _found_46[0]
+                        try:
+                            _cfg46 = load_config_file(_c46)
+                            print(f"  \U0001f4c4 Loaded config: {_c46}")
+                        except ValueError:
+                            _cfg46 = {}
+
+                    # Resolve primary node block from new or legacy format.
+                    _pn46 = (_cfg46.get("primary_node")
+                             if isinstance(_cfg46.get("primary_node"), dict)
+                             else ((_cfg46.get("nodes") or [None])[0]
+                                   if isinstance(_cfg46.get("nodes"), list) else None)) or {}
+
+                    # Prefer a BMC address from config; otherwise prompt for any
+                    # reachable interface (BMC, cluster mgmt IP, or hostname).
+                    sp_host46 = _cfg_str(_pn46.get("bmc"))
+                    if sp_host46:
+                        _check_bmc_reachable(sp_host46)
+                    else:
+                        while True:
+                            sp_host46 = input(
+                                "  Cluster interface (BMC, cluster management IP or hostname): "
+                            ).strip()
+                            if not sp_host46:
+                                print("  ⚠️  A host address is required.")
+                                continue
+                            if _check_bmc_reachable(sp_host46):
+                                break
+                            print("  ⚠️  Host not reachable. Please check the address and try again.")
+                    if not sp_host46:
+                        print("  No address entered. Exiting.")
+                        sys.exit(0)
+
+                    # Generic credential prompt (works for both BMC and cluster mgmt SSH).
+                    sp_user46 = (_cfg_str(_pn46.get("bmc_user"))
+                                 or input("  Username [admin]: ").strip()
+                                 or "admin")
+                    if "bmc_password" in _pn46 and isinstance(_pn46["bmc_password"], str):
+                        sp_pass46 = _pn46["bmc_password"]
+                    else:
+                        sp_pass46 = getpass.getpass("  Password (blank = none): ")
+
+                    _session_log.log(f"4e gather: target={sp_host46} (user={sp_user46})")
+
+                    # Connect via SSH – works for both BMC and cluster mgmt endpoints.
+                    _session_log.start_phase("SSH Connection")
+                    try:
+                        _client46, sp_user46, sp_pass46 = _ssh_connect_with_retry(
+                            sp_host46, sp_user46, sp_pass46,
+                            label=f"4e/{sp_host46}", max_attempts=1, interactive=False,
+                        )
+                    except Exception as _e46:
+                        print(f"  \u274c SSH connection failed: {_e46}")
+                        print("  Check credentials and try again.")
+                        _session_log.set_outcome("FAIL", f"SSH failed: {_e46}")
                         _session_log.close()
                         sys.exit(1)
 
-                print("\n  \U0001f50d Querying cluster-network interfaces...")
-                _bch46.send("net int show -role cluster -fields address\r")
-                _clus_out46 = direct_read_until(_bch46, "::", timeout=30)
-                _clus_ip46 = None
-                for _cline46 in _clus_out46.splitlines():
-                    _cm46 = re.search(r'(\d{1,3}(?:\.\d{1,3}){3})', _cline46)
-                    if _cm46:
-                        _clus_ip46 = _cm46.group(1)
-                        break
-                if _clus_ip46:
-                    print(f"  \u2705 Cluster-network IP found: {_clus_ip46}")
-                    _session_log.log(f"Cluster-network IP: {_clus_ip46}")
-                else:
-                    print("  \u26a0\ufe0f  Could not detect cluster-network IP automatically.")
-                    try:
-                        _clus_ip46 = input(
-                            "  Enter cluster-network IP manually (or blank to skip): "
-                        ).strip() or None
-                    except (EOFError, KeyboardInterrupt):
-                        _clus_ip46 = None
+                    # Make credentials available to the cluster-login fallback chain.
+                    _primary_bmc_user = sp_user46
+                    _primary_bmc_password = sp_pass46
+                    if not _cluster_config.get("admin_user"):
+                        _cluster_config["admin_user"] = sp_user46
+                    if not _cluster_config.get("admin_password"):
+                        _cluster_config["admin_password"] = sp_pass46
 
-                _session_log.end_phase()
+                    _ch46 = _open_shell(_client46)
+                    _kt46 = threading.Thread(target=keepalive_loop, args=(_client46,), daemon=True)
+                    _kt46.start()
+                    _session_log.end_phase()
 
-                try:
-                    _bch46.close()
-                except Exception:
-                    pass
-                try:
-                    _bclient46.close()
-                except Exception:
-                    pass
-
-                # 4. Patch cluster_network_ip into primary_node — preserve all
-                #    other existing fields; create a minimal stub only if needed.
-                if not isinstance(_config_data.get("primary_node"), dict):
-                    _config_data["primary_node"] = {}
-                if _clus_ip46:
-                    _config_data["primary_node"]["cluster_network_ip"] = _clus_ip46
-
-                # 5. Prompt for new node BMC addresses (nodes to be joined).
-                print("\n" + "─" * 60)
-                print("  Nodes to join to the cluster (not yet joined)")
-                print("  Enter BMC details for each new node; blank BMC IP to finish.")
-                print("─" * 60)
-                if not isinstance(_config_data.get("secondary_nodes"), list):
-                    _config_data["secondary_nodes"] = []
-                _nadd_idx46 = 1
-                while True:
-                    _nadd_bmc46 = _prompt(f"\n  Node {_nadd_idx46} BMC hostname/IP (blank to finish): ")
-                    if not _nadd_bmc46:
-                        break
-                    _check_bmc_reachable(_nadd_bmc46)
-                    def _prompt_ip46(label):
-                        """Prompt until a non-blank string is entered. Ctrl+C raises."""
-                        while True:
-                            val = input(f"  {label}: ").strip()
-                            if val:
-                                return val
-                            print("    ⚠️  Value cannot be blank. Press Ctrl+C to cancel this node.")
-                    try:
-                        _nadd_user46 = input(f"  Node {_nadd_idx46} BMC username [admin]: ").strip() or "admin"
-                        _nadd_pw46   = getpass.getpass(f"  Node {_nadd_idx46} BMC password (blank = none): ")
-                        _nadd_port46 = input(f"  Node {_nadd_idx46} mgmt port [e0M]: ").strip() or "e0M"
-                        _nadd_ip46   = _prompt_ip46(f"Node {_nadd_idx46} mgmt IP")
-                        _nadd_mask46 = _prompt_ip46(f"Node {_nadd_idx46} mgmt netmask")
-                        _nadd_gw46   = _prompt_ip46(f"Node {_nadd_idx46} mgmt gateway")
-                    except (EOFError, KeyboardInterrupt):
-                        print("\n  ↩️  Node entry cancelled.")
-                        break
-                    _nadd_entry46 = {
-                        "bmc": _nadd_bmc46,
-                        "bmc_user": _nadd_user46,
-                        "bmc_password": _nadd_pw46,
-                        "node_mgmt_port": _nadd_port46,
-                        "node_mgmt_ip": _nadd_ip46,
-                        "node_mgmt_netmask": _nadd_mask46,
-                        "node_mgmt_gateway": _nadd_gw46,
-                    }
-                    _config_data["secondary_nodes"].append(_nadd_entry46)
-                    print(f"  \u2705 Node {_nadd_idx46} ({_nadd_bmc46}) added.")
-                    _nadd_idx46 += 1
-                print(f"\n  {_nadd_idx46 - 1} new node(s) added.")
-                _session_log.log(f"4e build/add: {_nadd_idx46-1} secondary node(s) entered")
-                _sp_ips46 = []  # SP IPs not queried in add path (no service-processor show needed)
-
-        # ══════════════════════════════════════════════════════════════════
-        # COMMON TAIL: optional "add extra nodes" (gather/create paths),
-        # BMC_IP.json, write config
-        # ══════════════════════════════════════════════════════════════════
-        _skip_extra_nodes = (_mode46 == "build" and _build46 == "add")
-        if not _skip_extra_nodes:
-            # ── Prompt to add additional nodes ──────────────────────────────
-            print("")
-            print("  " + "─" * 58)
-            _add_nodes46 = _prompt(
-                "  Add additional nodes to the configuration? [y/N]: "
-            , "n").lower()
-
-            if _add_nodes46 == "y":
-                print("")
-                print("  Enter node details below.")
-                print("  Leave BMC IP blank and press Enter when finished.\n")
-
-                # Ensure secondary_nodes list exists in _config_data.
-                if "secondary_nodes" not in _config_data:
-                    _config_data["secondary_nodes"] = []
-
-                _node_idx46 = 1
-                while True:
-                    _nbmc46 = _prompt(
-                        f"  Node {_node_idx46} BMC IP (blank = done): "
+                    # Detect whether we landed on a BMC prompt or a cluster shell
+                    # so we know whether to navigate via 'system console' or not.
+                    _session_log.start_phase("Cluster Inventory Capture")
+                    _ch46.send("\r")
+                    _probe46, _ = direct_read_until_any(
+                        _ch46, ["::>", "::*>", "login:", "bmc", ">"], timeout=10,
                     )
-                    if not _nbmc46:
-                        break
+                    _is_direct46 = ("::>" in _probe46 or "::*>" in _probe46
+                                    or "login:" in _probe46.lower())
 
-                    def _prompt_req46(label):
-                        """Prompt until a non-blank value is entered. Ctrl+C raises."""
-                        while True:
-                            val = input(f"  {label}: ").strip()
-                            if val:
-                                return val
-                            print("    ⚠️  Value cannot be blank. Press Ctrl+C to cancel this node.")
-                    try:
-                        _nuser46 = input(
-                            f"  Node {_node_idx46} BMC username [admin]: "
-                        ).strip() or "admin"
-                        _npass46 = getpass.getpass(
-                            f"  Node {_node_idx46} BMC password (blank = none): "
+                    if _is_direct46:
+                        # Direct cluster-mgmt SSH: already at cluster shell or login
+                        # prompt. Authenticate if needed, then run inventory commands.
+                        _session_log.log("4e: direct cluster SSH detected; skipping BMC console path")
+                        print("  ✅ Cluster management SSH detected.")
+                        if "login:" in _probe46.lower() and "::>" not in _probe46:
+                            # Genuine login: prompt (not just banner text like "Last login:")
+                            if not _attempt_console_cluster_login(_ch46):
+                                print("  ❌ Cluster login failed. Exiting.")
+                                _session_log.set_outcome("FAIL", "cluster login failed")
+                                _session_log.close()
+                                sys.exit(1)
+                        # Drain any residual SSH login banner text (e.g. "Last login:",
+                        # "Unsuccessful login attempts...") so _wait_for_cluster_prompt
+                        # inside collect_retain_data does not mistake banner lines for
+                        # an actual login: prompt and attempt to re-authenticate.
+                        drain_channel(_ch46, seconds=1)
+                        # Confirm we are at the cluster shell before handing off.
+                        _ch46.send("\r")
+                        _confirm46, _ = direct_read_until_any(
+                            _ch46, ["::>", "::*>"], timeout=10,
                         )
-                        _nport46 = input(
-                            f"  Node {_node_idx46} management port [e0M]: "
-                        ).strip() or "e0M"
-                        _nip46   = _prompt_req46(f"Node {_node_idx46} management IP")
-                        _nmask46 = _prompt_req46(f"Node {_node_idx46} management netmask")
-                        _ngw46   = _prompt_req46(f"Node {_node_idx46} management gateway")
-                    except (EOFError, KeyboardInterrupt):
-                        print("\n  ↩️  Node entry cancelled.")
-                        break
+                        if "::>" not in _confirm46 and "::*>" not in _confirm46:
+                            print("  ❌ Could not confirm cluster shell prompt. Exiting.")
+                            _session_log.set_outcome("FAIL", "cluster shell prompt not confirmed")
+                            _session_log.close()
+                            sys.exit(1)
+                    else:
+                        # BMC connection: need to have the BMC '>' prompt before
+                        # entering system console.  The probe above may have already
+                        # consumed it (direct read until '>'), so only call
+                        # wait_for_bmc_prompt when the probe did NOT see '>'.
+                        _session_log.log("4e: BMC connection detected; entering system console")
+                        _bmc_prompt_in_probe = ">" in _probe46
+                        if _bmc_prompt_in_probe:
+                            print("  ✅ BMC prompt detected.")
+                            _session_log.log(
+                                "4e: BMC prompt already consumed by probe; skipping wait"
+                            )
+                        elif not wait_for_bmc_prompt(_ch46, auto_takeover=True):
+                            print("  \u274c BMC prompt not received. Exiting.")
+                            _session_log.set_outcome("FAIL", "BMC prompt not received")
+                            _session_log.close()
+                            sys.exit(1)
 
-                    _nentry46 = {
-                        "bmc": _nbmc46,
-                        "bmc_user": _nuser46,
-                        "bmc_password": _npass46,
-                        "node_mgmt_port": _nport46,
-                        "node_mgmt_ip": _nip46,
-                        "node_mgmt_netmask": _nmask46,
-                        "node_mgmt_gateway": _ngw46,
-                    }
-
-                    _config_data["secondary_nodes"].append(_nentry46)
-                    print(f"  ✅ Node {_node_idx46} ({_nbmc46}) added.\n")
-                    _node_idx46 += 1
-
-                print(f"  {_node_idx46 - 1} node(s) added to configuration.")
-
-        # ── Optionally create BMC_IP.json from SP addresses ─────────────
-        print("")
-        print("  " + "─" * 58)
-        if _sp_ips46:
-            print(f"  SP/BMC addresses gathered from 'service-processor show' ({len(_sp_ips46)}):")
-            for _sip46 in _sp_ips46:
-                print(f"    • {_sip46}")
-            _bmc_ip_ans = _prompt(
-                "  Write these to BMC_IP.json? [Y/n]: "
-            , "y").lower()
-        else:
-            print("  ℹ️  No SP/BMC addresses were collected from the cluster shell.")
-            _bmc_ip_ans = "n"
-
-        if _bmc_ip_ans in ("", "y", "yes"):
-            _bmc_ip_ips = _sp_ips46
-
-            if _bmc_ip_ips:
-                _bmc_ip_default = os.path.join(_snap_dir46, "BMC_IP.json")
-                _bmc_ip_path = _prompt(
-                    f"  Save to [{_bmc_ip_default}] (Enter to accept or type a new path): "
-                )
-                if _bmc_ip_path:
-                    _bmc_ip_path = os.path.expanduser(os.path.expandvars(_bmc_ip_path))
-                else:
-                    _bmc_ip_path = _bmc_ip_default
-
-                try:
-                    os.makedirs(os.path.dirname(_bmc_ip_path), exist_ok=True)
-                    with open(_bmc_ip_path, "w", encoding="utf-8") as _bmc_ip_f:
-                        json.dump({"netboot_bmcs": _bmc_ip_ips}, _bmc_ip_f, indent=2)
-                    print(f"\n  \u2705 BMC_IP.json written to: {_bmc_ip_path}")
-                    _session_log.log(f"BMC_IP.json written: {_bmc_ip_path} ({_bmc_ip_ips})")
-                except Exception as _bmc_ip_err:
-                    print(f"  \u26a0\ufe0f  Could not write BMC_IP.json: {_bmc_ip_err}")
-                    _session_log.log(f"BMC_IP.json write failed: {_bmc_ip_err}", prefix="WARN")
-            else:
-                print("  \u26a0\ufe0f  No BMC addresses collected; BMC_IP.json not written.")
-
-        # Determine output path.
-        # For build paths: always default to configs/add_nodes.json so the
-        # source config file is never overwritten.  All other paths default to
-        # configs/reinit-config.json.
-        _snap_path46_default = (
-            os.path.join(_snap_dir46, "add_nodes.json")
-            if _mode46 == "build"
-            else os.path.join(_snap_dir46, "reinit-config.json")
-        )
-        _custom46 = _prompt(
-            f"  Save config to [{_snap_path46_default}] (Enter to accept or type a new path): "
-        )
-        _snap_path46 = (
-            os.path.expanduser(os.path.expandvars(_custom46))
-            if _custom46
-            else _snap_path46_default
-        )
-
-        _written46 = write_config_snapshot(_snap_path46)
-        if _written46:
-            print(f"\n  \u2705 Backup configuration written to: {_written46}")
-            _session_log.log(f"Config snapshot written to: {_written46}")
-            _session_log.set_outcome("PASS", "backup config created")
-        else:
-            print("  \u26a0\ufe0f  Nothing was written (no cluster data captured).")
-            _session_log.set_outcome("WARN", "no data captured; snapshot not written")
-
-        _session_log.record_completion(normal_exit=True)
-        print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
-
-        global _4a_pending_after_4e, _5f_pending_after_4e
-        if _4a_pending_after_4e:
-            _4a_pending_after_4e = False
-            _operation_mode = 41
-            print("\n  \u2705 Config created. Continuing with 4a upgrade workflow...\n")
-            _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
-            ok = _run_ontap_upgrade(_session_log)
-            _session_log.record_completion(normal_exit=ok)
-            print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
-            sys.exit(0 if ok else 1)
-
-        if _5f_pending_after_4e:
-            _5f_pending_after_4e = False
-            _operation_mode = 49
-            print("\n  \u2705 Config created. Continuing with 5f health check...\n")
-        else:
-            sys.exit(0)
-
-    # ── Mode 47 (4f): verify BMC authentication ────────────────────────────
-    if _operation_mode == 47:
-        _print_banner("\U0001f50d 4f: Verify BMC authentication")
-        print("")
-
-        # ── Locate BMC IP list ────────────────────────────────────────────
-        # Search for BMC_IP.json or a full reinit-config that has node BMC IPs.
-        _bmc_ips47 = []
-        _found_file47 = None
-        for _p47 in _find_config_files(
-            candidate_names=("BMC_IP.json",
-                             "reinit-config.json", "reinit_config.json",
-                             "reinit-afx-config.json", "add_nodes.json"),
-        ):
-            try:
-                with open(_p47, "r", encoding="utf-8") as _f47:
-                    _d47data = json.load(_f47)
-            except Exception:
-                continue
-            if isinstance(_d47data.get("netboot_bmcs"), list):
-                _bmc_ips47 = [str(x) for x in _d47data["netboot_bmcs"] if x]
-            else:
-                _pn47 = _d47data.get("primary_node")
-                if isinstance(_pn47, dict) and _pn47.get("bmc"):
-                    _bmc_ips47.append(str(_pn47["bmc"]))
-                for _sn47 in (_d47data.get("secondary_nodes") or []):
-                    if isinstance(_sn47, dict) and _sn47.get("bmc"):
-                        _bmc_ips47.append(str(_sn47["bmc"]))
-                # Legacy nodes[]
-                if not _bmc_ips47:
-                    for _n47 in (_d47data.get("nodes") or []):
-                        if isinstance(_n47, dict) and _n47.get("bmc"):
-                            _bmc_ips47.append(str(_n47["bmc"]))
-            if _bmc_ips47:
-                _found_file47 = _p47
-                break
-
-        if _found_file47:
-            print(f"  \U0001f4c4 Loaded {len(_bmc_ips47)} BMC address(es) from: {_found_file47}")
-            for _ip47 in _bmc_ips47:
-                print(f"     \u2022 {_ip47}")
-        else:
-            print("  \u2139\ufe0f  No BMC IP file found. Enter BMC addresses manually.")
-            print("  (Leave blank and press Enter when done.)\n")
-            _idx47 = 1
-            while True:
-                _entry47 = _prompt(f"  BMC {_idx47} hostname/IP (blank to finish): ")
-                if not _entry47:
-                    break
-                _bmc_ips47.append(_entry47)
-                _idx47 += 1
-
-        if not _bmc_ips47:
-            print("  No BMC addresses to test. Exiting.")
-            sys.exit(0)
-
-        # ── Credentials ──────────────────────────────────────────────────
-        print("")
-        _same_creds47 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
-        _creds47 = {}   # ip -> (user, password)
-        if _same_creds47 != "n":
-            _shared_user47 = input("  BMC username [admin]: ").strip() or "admin"
-            _shared_pass47 = getpass.getpass("  BMC password (blank = none): ")
-            for _ip47 in _bmc_ips47:
-                _creds47[_ip47] = (_shared_user47, _shared_pass47)
-        else:
-            for _ip47 in _bmc_ips47:
-                print(f"\n  Credentials for {_ip47}:")
-                _u47 = input("    Username [admin]: ").strip() or "admin"
-                _p47 = getpass.getpass("    Password (blank = none): ")
-                _creds47[_ip47] = (_u47, _p47)
-        print("")
-
-        # ── Test each BMC concurrently ────────────────────────────────────
-        print("  " + "─" * 58)
-        print(f"  Testing {len(_bmc_ips47)} BMC(s)…\n")
-
-        _results47 = {}   # ip -> {"status": "PASS"|"FAIL", "detail": str}
-        _results_lock47 = threading.Lock()
-
-        def _test_bmc47(ip):
-            detail = ""
-            status = "FAIL"
-            client47 = None
-            ch47 = None
-            _ip_user47, _ip_pass47 = _creds47.get(ip, ("admin", ""))
-            try:
-                client47 = paramiko.SSHClient()
-                client47.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                client47.connect(
-                    hostname=ip, username=_ip_user47, password=_ip_pass47,
-                    timeout=20, banner_timeout=30, auth_timeout=20,
-                    disabled_algorithms={"pubkeys": ["ssh-dss"]},
-                )
-                ch47 = _open_shell(client47)
-
-                # Wait for BMC prompt
-                _buf47 = ""
-                _t47 = time.monotonic()
-                while time.monotonic() - _t47 < 15:
-                    if ch47.recv_ready():
-                        _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
-                        if ">" in _buf47:
-                            break
-                    time.sleep(0.1)
-
-                # Handle takeover prompt silently
-                if "y/n" in _buf47.lower():
-                    ch47.send("y\r")
-                    _buf47 = ""
-                    _t47 = time.monotonic()
-                    while time.monotonic() - _t47 < 10:
-                        if ch47.recv_ready():
-                            _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
-                            if ">" in _buf47:
-                                break
-                        time.sleep(0.1)
-
-                # Run 'bmc status'
-                ch47.send("bmc status\r")
-                _out47 = ""
-                _t47 = time.monotonic()
-                while time.monotonic() - _t47 < 15:
-                    if ch47.recv_ready():
-                        chunk = ch47.recv(4096).decode("utf-8", errors="replace")
-                        _out47 += chunk
-                        if ">" in _out47[_out47.find("bmc status"):] if "bmc status" in _out47 else ">" in _out47:
-                            break
-                    time.sleep(0.1)
-
-                # Parse IP from 'bmc status' output.
-                # Look for lines like "  IP Address: 10.192.160.29"
-                _found_ip47 = None
-                for _ln47 in _out47.splitlines():
-                    _m47 = re.search(
-                        r'(?:ip\s*address|bmc\s*ip|address)\s*[:\s]+(\d{1,3}(?:\.\d{1,3}){3})',
-                        _ln47, re.IGNORECASE,
+                    # Run the full retain capture (name + network + peer SPs).
+                    _cname46r, _net46, _peers46 = collect_retain_data(
+                        _ch46,
+                        retain_name=True,
+                        retain_network=True,
+                        collect_peer_sps=True,
+                        direct_cluster_ssh=_is_direct46,
                     )
-                    if _m47:
-                        _found_ip47 = _m47.group(1)
+                    _session_log.end_phase()
+
+                    try:
+                        _ch46.close()
+                    except Exception:
+                        pass
+                    try:
+                        _client46.close()
+                    except Exception:
+                        pass
+
+                    # Merge all captured data into _config_data.
+                    _config_data = dict(_cfg46)  # start from any file values
+                    _ctx_sync_from_globals()
+                    apply_retained_to_cluster_config()
+
+                    # _peers46 holds the SP/BMC IPs from 'service-processor show'.
+                    _sp_ips46 = list(_peers46) if _peers46 else []
+
+                    # When we connected via cluster mgmt (not BMC), sp_host46 is a
+                    # mgmt IP/hostname — not a real BMC address. Resolve the primary
+                    # node's actual BMC IP from the SP list by:
+                    #   1. Matching the SP's node-mgmt IP against config's primary_node.node_mgmt_ip
+                    #   2. Picking the SP whose ONTAP node name ends in "-01" (primary convention)
+                    #   3. Picking the SP whose node name sorts lowest alphabetically
+                    _primary_bmc46 = sp_host46  # default: what we connected with
+                    if _is_direct46 and _sp_ips46:
+                        _cfg_primary_node_mgmt_ip = _cfg_str(
+                            _pn46.get("node_mgmt_ip") or _pn46.get("ip")
+                        )
+                        _matched_bmc = None
+                        # Strategy 1: match via pre-existing config node_mgmt_ip
+                        for _sp in _sp_ips46:
+                            _mgmt = _retained_node_mgmt_for(_sp)
+                            if _mgmt and _cfg_primary_node_mgmt_ip:
+                                if _mgmt.get("ip") == _cfg_primary_node_mgmt_ip:
+                                    _matched_bmc = _sp
+                                    break
+                        # Strategy 2: use SP→node name map; primary is conventionally *-01
+                        if not _matched_bmc and _retained_sp_to_node:
+                            _sp_node_pairs = [
+                                (sp, _retained_sp_to_node.get(sp, ""))
+                                for sp in _sp_ips46
+                                if sp in _retained_sp_to_node
+                            ]
+                            if _sp_node_pairs:
+                                # Sort by node name; primary node typically has lowest suffix (-01)
+                                _sp_node_pairs.sort(key=lambda x: x[1])
+                                _matched_bmc = _sp_node_pairs[0][0]
+                                _session_log.log(
+                                    f"4e: primary BMC resolved by node name sort: "
+                                    f"{_matched_bmc} -> {_sp_node_pairs[0][1]}"
+                                )
+                        if _matched_bmc:
+                            _primary_bmc46 = _matched_bmc
+                            print(f"  ℹ️  Resolved primary BMC from SP list: {_primary_bmc46}")
+                            _session_log.log(f"4e: primary BMC resolved from SP list: {_primary_bmc46}")
+                        else:
+                            # Final fallback: first SP IP
+                            _primary_bmc46 = _sp_ips46[0]
+                            print(f"  ⚠️  Could not match primary BMC from SP list; using first: {_primary_bmc46}")
+                            _session_log.log(f"4e: primary BMC fallback to first SP IP: {_primary_bmc46}",
+                                             prefix="WARN")
+                        # Update the primary_node bmc field in config so it's saved correctly.
+                        if isinstance(_config_data.get("primary_node"), dict):
+                            _config_data["primary_node"]["bmc"] = _primary_bmc46
+                        elif isinstance(_config_data.get("nodes"), list) and _config_data["nodes"]:
+                            _config_data["nodes"][0]["bmc"] = _primary_bmc46
+
+                    apply_retained_to_node_configs(primary_bmc=_primary_bmc46)
+                    if _sp_ips46:
+                        print(f"  \U0001f4cb SP/BMC addresses from cluster: {', '.join(_sp_ips46)}")
+                        _session_log.log(f"SP IPs from cluster: {_sp_ips46}")
+
+                # ── BUILD PATH: manual entry ─────────────────────────────────────
+                else:
+                    print("")
+                    print("  Create a new cluster configuration or add nodes to an existing one?\n")
+                    print("    create  - Enter all cluster details from scratch")
+                    print("    add     - Connect to a cluster and list new nodes to add\n")
+                    while True:
+                        _build46 = _prompt("  Your choice [create/add]: ").lower()
+                        if _build46 in ("create", "add"):
+                            break
+                        print("  ⚠️  Please enter 'create' or 'add'.")
+                    _session_log.log(f"4e build sub-choice: {_build46}")
+
+                    _config_data = {}
+
+                    if _build46 == "create":
+                        # ── Cluster-level details ──────────────────────────────────
+                        print("\n" + "─" * 60)
+                        print("  Cluster configuration")
+                        print("─" * 60)
+                        _b_name  = input("  Cluster name: ").strip()
+                        _b_mport = input("  Cluster management interface port [e0M]: ").strip() or "e0M"
+                        _b_mip   = input("  Cluster management IP address: ").strip()
+                        _b_mmask = input("  Cluster management netmask: ").strip()
+                        _b_mgw   = input("  Cluster management gateway: ").strip()
+                        _b_dns_d = input("  DNS domain names (comma separated): ").strip()
+                        _b_dns_s = input("  DNS servers (comma separated): ").strip()
+                        _b_loc   = input("  Controller location (optional): ").strip()
+                        _b_pw    = getpass.getpass("  Cluster admin password: ")
+
+                        _config_data["cluster"] = {
+                            "name": _b_name,
+                            "clus_mgmt_port": _b_mport,
+                            "clus_mgmt_address": _b_mip,
+                            "clus_mgmt_mask": _b_mmask,
+                            "clus_mgmt_gw": _b_mgw,
+                            "dns_domains": _b_dns_d,
+                            "dns_servers": _b_dns_s,
+                            "location": _b_loc,
+                            "password": _b_pw,
+                        }
+
+                        # ── Primary node ───────────────────────────────────────────
+                        print("\n" + "─" * 60)
+                        print("  Primary node BMC")
+                        print("─" * 60)
+                        _b_pbmc = _prompt_bmc_host()
+                        _b_puser = input("  BMC username [admin]: ").strip() or "admin"
+                        _b_ppw   = getpass.getpass("  BMC password (blank = none): ")
+                        _b_pport = input("  Node management port [e0M]: ").strip() or "e0M"
+                        _b_pip   = input("  Node management IP: ").strip()
+                        _b_pmask = input("  Node management netmask: ").strip()
+                        _b_pgw   = input("  Node management gateway: ").strip()
+                        _config_data["primary_node"] = {
+                            "bmc": _b_pbmc,
+                            "bmc_user": _b_puser,
+                            "bmc_password": _b_ppw,
+                            "node_mgmt_port": _b_pport,
+                            "node_mgmt_ip": _b_pip,
+                            "node_mgmt_netmask": _b_pmask,
+                            "node_mgmt_gateway": _b_pgw,
+                        }
+                        _config_data["secondary_nodes"] = []
+                        _session_log.log("4e build/create: manual cluster config collected")
+                        _sp_ips46 = []  # No cluster shell in create path; no SP addresses available.
+
+                    else:
+                        # ── ADD PATH ─────────────────────────────────────────────
+                        # Goal: patch cluster_network_ip into an existing config file
+                        # and append the new nodes to secondary_nodes so the file can
+                        # immediately drive option 2a/2b.
+                        # We only need the cluster shell to get a cluster-network IP;
+                        # we do NOT call collect_retain_data so primary_node and all
+                        # cluster fields are preserved exactly as-is.
+
+                        # 1. Load an existing config file (same search as gather path).
+                        print("")
+                        _cfg46_add = {}
+                        _cfg46_add_path = None
+                        _found_46a = _find_config_files(
+                            candidate_names=("reinit-config.json", "reinit_config.json",
+                                             "reinit-afx-config.json", "reinit_afx_config.json",
+                                             "config.json"),
+                        )
+                        if _found_46a:
+                            _c46a = _found_46a[0]
+                            try:
+                                _cfg46_add = load_config_file(_c46a)
+                                _cfg46_add_path = _c46a
+                                print(f"  \U0001f4c4 Loaded existing config: {_c46a}")
+                            except ValueError:
+                                _cfg46_add = {}
+
+                        if not _cfg46_add_path:
+                            print("  \u2139\ufe0f  No existing config file found. A new one will be created.")
+
+                        # Start _config_data from whatever was loaded (preserves all
+                        # existing sections: cluster, primary_node, secondary_nodes …).
+                        _config_data = dict(_cfg46_add)
+                        _ctx_sync_from_globals()
+
+                        # 2. Resolve the primary node BMC from config (or prompt).
+                        _pn46a = (_config_data.get("primary_node")
+                                  if isinstance(_config_data.get("primary_node"), dict)
+                                  else ((_config_data.get("nodes") or [None])[0]
+                                        if isinstance(_config_data.get("nodes"), list)
+                                        else None)) or {}
+
+                        print("\n" + "─" * 60)
+                        print("  Primary node BMC  (existing cluster)")
+                        print("─" * 60)
+                        _b_pbmc_default = _cfg_str(_pn46a.get("bmc"))
+                        if _b_pbmc_default:
+                            print(f"  \U0001f4c4 BMC from config: {_b_pbmc_default}")
+                            _b_pbmc = _b_pbmc_default
+                            _check_bmc_reachable(_b_pbmc)
+                        else:
+                            _b_pbmc = _prompt_bmc_host(allow_blank=True)
+                        if not _b_pbmc:
+                            print("  No BMC address entered. Exiting.")
+                            sys.exit(0)
+
+                        _b_puser_default = _cfg_str(_pn46a.get("bmc_user"))
+                        if _b_puser_default:
+                            print(f"  \U0001f4c4 BMC username from config: {_b_puser_default}")
+                            _b_puser = _b_puser_default
+                        else:
+                            _b_puser = input("  BMC username [admin]: ").strip() or "admin"
+
+                        if "bmc_password" in _pn46a and isinstance(_pn46a["bmc_password"], str):
+                            _b_ppw = _pn46a["bmc_password"]
+                            print("  \U0001f4c4 BMC password from config.")
+                        else:
+                            _b_ppw = getpass.getpass("  BMC password (blank = none): ")
+
+                        _session_log.log(f"4e build/add: connecting to BMC {_b_pbmc} (user={_b_puser})")
+                        _session_log.start_phase("SSH Connection (primary BMC)")
+                        try:
+                            _bclient46, _b_puser, _b_ppw = _ssh_connect_with_retry(
+                                _b_pbmc, _b_puser, _b_ppw,
+                                label=f"BMC/{_b_pbmc}", max_attempts=1, interactive=False,
+                            )
+                        except Exception as _be46:
+                            print(f"  \u274c SSH connection failed: {_be46}")
+                            print("  Check credentials and try again.")
+                            _session_log.set_outcome("FAIL", f"SSH failed: {_be46}")
+                            _session_log.close()
+                            sys.exit(1)
+
+                        _primary_bmc_user = _b_puser
+                        _primary_bmc_password = _b_ppw
+                        if not _cluster_config.get("admin_password"):
+                            _cluster_config["admin_password"] = _b_ppw
+
+                        _bch46 = _open_shell(_bclient46)
+                        _bkt46 = threading.Thread(target=keepalive_loop, args=(_bclient46,), daemon=True)
+                        _bkt46.start()
+                        _session_log.end_phase()
+
+                        if not wait_for_bmc_prompt(_bch46, auto_takeover=True):
+                            print("  \u274c BMC prompt not received. Exiting.")
+                            _session_log.set_outcome("FAIL", "BMC prompt not received")
+                            _session_log.close()
+                            sys.exit(1)
+
+                        # 3. Enter cluster shell and query the cluster-network IP.
+                        _session_log.start_phase("Cluster Shell (cluster-network IP)")
+                        enter_system_console(_bch46)
+                        if not _wait_for_cluster_prompt(_bch46, timeout=60):
+                            if not _attempt_console_cluster_login(_bch46):
+                                print("  \u274c Could not log into cluster shell. Exiting.")
+                                _session_log.set_outcome("FAIL", "cluster shell login failed")
+                                _session_log.close()
+                                sys.exit(1)
+
+                        print("\n  \U0001f50d Querying cluster-network interfaces...")
+                        _bch46.send("net int show -role cluster -fields address\r")
+                        _clus_out46 = direct_read_until(_bch46, "::", timeout=30)
+                        _clus_ip46 = None
+                        for _cline46 in _clus_out46.splitlines():
+                            _cm46 = re.search(r'(\d{1,3}(?:\.\d{1,3}){3})', _cline46)
+                            if _cm46:
+                                _clus_ip46 = _cm46.group(1)
+                                break
+                        if _clus_ip46:
+                            print(f"  \u2705 Cluster-network IP found: {_clus_ip46}")
+                            _session_log.log(f"Cluster-network IP: {_clus_ip46}")
+                        else:
+                            print("  \u26a0\ufe0f  Could not detect cluster-network IP automatically.")
+                            try:
+                                _clus_ip46 = input(
+                                    "  Enter cluster-network IP manually (or blank to skip): "
+                                ).strip() or None
+                            except (EOFError, KeyboardInterrupt):
+                                _clus_ip46 = None
+
+                        _session_log.end_phase()
+
+                        try:
+                            _bch46.close()
+                        except Exception:
+                            pass
+                        try:
+                            _bclient46.close()
+                        except Exception:
+                            pass
+
+                        # 4. Patch cluster_network_ip into primary_node — preserve all
+                        #    other existing fields; create a minimal stub only if needed.
+                        if not isinstance(_config_data.get("primary_node"), dict):
+                            _config_data["primary_node"] = {}
+                        if _clus_ip46:
+                            _config_data["primary_node"]["cluster_network_ip"] = _clus_ip46
+
+                        # 5. Prompt for new node BMC addresses (nodes to be joined).
+                        print("\n" + "─" * 60)
+                        print("  Nodes to join to the cluster (not yet joined)")
+                        print("  Enter BMC details for each new node; blank BMC IP to finish.")
+                        print("─" * 60)
+                        if not isinstance(_config_data.get("secondary_nodes"), list):
+                            _config_data["secondary_nodes"] = []
+                        _nadd_idx46 = 1
+                        while True:
+                            _nadd_bmc46 = _prompt(f"\n  Node {_nadd_idx46} BMC hostname/IP (blank to finish): ")
+                            if not _nadd_bmc46:
+                                break
+                            _check_bmc_reachable(_nadd_bmc46)
+                            def _prompt_ip46(label):
+                                """Prompt until a non-blank string is entered. Ctrl+C raises."""
+                                while True:
+                                    val = input(f"  {label}: ").strip()
+                                    if val:
+                                        return val
+                                    print("    ⚠️  Value cannot be blank. Press Ctrl+C to cancel this node.")
+                            try:
+                                _nadd_user46 = input(f"  Node {_nadd_idx46} BMC username [admin]: ").strip() or "admin"
+                                _nadd_pw46   = getpass.getpass(f"  Node {_nadd_idx46} BMC password (blank = none): ")
+                                _nadd_port46 = input(f"  Node {_nadd_idx46} mgmt port [e0M]: ").strip() or "e0M"
+                                _nadd_ip46   = _prompt_ip46(f"Node {_nadd_idx46} mgmt IP")
+                                _nadd_mask46 = _prompt_ip46(f"Node {_nadd_idx46} mgmt netmask")
+                                _nadd_gw46   = _prompt_ip46(f"Node {_nadd_idx46} mgmt gateway")
+                            except (EOFError, KeyboardInterrupt):
+                                print("\n  ↩️  Node entry cancelled.")
+                                break
+                            _nadd_entry46 = {
+                                "bmc": _nadd_bmc46,
+                                "bmc_user": _nadd_user46,
+                                "bmc_password": _nadd_pw46,
+                                "node_mgmt_port": _nadd_port46,
+                                "node_mgmt_ip": _nadd_ip46,
+                                "node_mgmt_netmask": _nadd_mask46,
+                                "node_mgmt_gateway": _nadd_gw46,
+                            }
+                            _config_data["secondary_nodes"].append(_nadd_entry46)
+                            print(f"  \u2705 Node {_nadd_idx46} ({_nadd_bmc46}) added.")
+                            _nadd_idx46 += 1
+                        print(f"\n  {_nadd_idx46 - 1} new node(s) added.")
+                        _session_log.log(f"4e build/add: {_nadd_idx46-1} secondary node(s) entered")
+                        _sp_ips46 = []  # SP IPs not queried in add path (no service-processor show needed)
+
+                # ══════════════════════════════════════════════════════════════════
+                # COMMON TAIL: optional "add extra nodes" (gather/create paths),
+                # BMC_IP.json, write config
+                # ══════════════════════════════════════════════════════════════════
+                _skip_extra_nodes = (_mode46 == "build" and _build46 == "add")
+                if not _skip_extra_nodes:
+                    # ── Prompt to add additional nodes ──────────────────────────────
+                    print("")
+                    print("  " + "─" * 58)
+                    _add_nodes46 = _prompt(
+                        "  Add additional nodes to the configuration? [y/N]: "
+                    , "n").lower()
+
+                    if _add_nodes46 == "y":
+                        print("")
+                        print("  Enter node details below.")
+                        print("  Leave BMC IP blank and press Enter when finished.\n")
+
+                        # Ensure secondary_nodes list exists in _config_data.
+                        if "secondary_nodes" not in _config_data:
+                            _config_data["secondary_nodes"] = []
+
+                        _node_idx46 = 1
+                        while True:
+                            _nbmc46 = _prompt(
+                                f"  Node {_node_idx46} BMC IP (blank = done): "
+                            )
+                            if not _nbmc46:
+                                break
+
+                            def _prompt_req46(label):
+                                """Prompt until a non-blank value is entered. Ctrl+C raises."""
+                                while True:
+                                    val = input(f"  {label}: ").strip()
+                                    if val:
+                                        return val
+                                    print("    ⚠️  Value cannot be blank. Press Ctrl+C to cancel this node.")
+                            try:
+                                _nuser46 = input(
+                                    f"  Node {_node_idx46} BMC username [admin]: "
+                                ).strip() or "admin"
+                                _npass46 = getpass.getpass(
+                                    f"  Node {_node_idx46} BMC password (blank = none): "
+                                )
+                                _nport46 = input(
+                                    f"  Node {_node_idx46} management port [e0M]: "
+                                ).strip() or "e0M"
+                                _nip46   = _prompt_req46(f"Node {_node_idx46} management IP")
+                                _nmask46 = _prompt_req46(f"Node {_node_idx46} management netmask")
+                                _ngw46   = _prompt_req46(f"Node {_node_idx46} management gateway")
+                            except (EOFError, KeyboardInterrupt):
+                                print("\n  ↩️  Node entry cancelled.")
+                                break
+
+                            _nentry46 = {
+                                "bmc": _nbmc46,
+                                "bmc_user": _nuser46,
+                                "bmc_password": _npass46,
+                                "node_mgmt_port": _nport46,
+                                "node_mgmt_ip": _nip46,
+                                "node_mgmt_netmask": _nmask46,
+                                "node_mgmt_gateway": _ngw46,
+                            }
+
+                            _config_data["secondary_nodes"].append(_nentry46)
+                            print(f"  ✅ Node {_node_idx46} ({_nbmc46}) added.\n")
+                            _node_idx46 += 1
+
+                        print(f"  {_node_idx46 - 1} node(s) added to configuration.")
+
+                # ── Optionally create BMC_IP.json from SP addresses ─────────────
+                print("")
+                print("  " + "─" * 58)
+                if _sp_ips46:
+                    print(f"  SP/BMC addresses gathered from 'service-processor show' ({len(_sp_ips46)}):")
+                    for _sip46 in _sp_ips46:
+                        print(f"    • {_sip46}")
+                    _bmc_ip_ans = _prompt(
+                        "  Write these to BMC_IP.json? [Y/n]: "
+                    , "y").lower()
+                else:
+                    print("  ℹ️  No SP/BMC addresses were collected from the cluster shell.")
+                    _bmc_ip_ans = "n"
+
+                if _bmc_ip_ans in ("", "y", "yes"):
+                    _bmc_ip_ips = _sp_ips46
+
+                    if _bmc_ip_ips:
+                        _bmc_ip_default = os.path.join(_snap_dir46, "BMC_IP.json")
+                        _bmc_ip_path = _prompt(
+                            f"  Save to [{_bmc_ip_default}] (Enter to accept or type a new path): "
+                        )
+                        if _bmc_ip_path:
+                            _bmc_ip_path = os.path.expanduser(os.path.expandvars(_bmc_ip_path))
+                        else:
+                            _bmc_ip_path = _bmc_ip_default
+
+                        try:
+                            os.makedirs(os.path.dirname(_bmc_ip_path), exist_ok=True)
+                            with open(_bmc_ip_path, "w", encoding="utf-8") as _bmc_ip_f:
+                                json.dump({"netboot_bmcs": _bmc_ip_ips}, _bmc_ip_f, indent=2)
+                            print(f"\n  \u2705 BMC_IP.json written to: {_bmc_ip_path}")
+                            _session_log.log(f"BMC_IP.json written: {_bmc_ip_path} ({_bmc_ip_ips})")
+                        except Exception as _bmc_ip_err:
+                            print(f"  \u26a0\ufe0f  Could not write BMC_IP.json: {_bmc_ip_err}")
+                            _session_log.log(f"BMC_IP.json write failed: {_bmc_ip_err}", prefix="WARN")
+                    else:
+                        print("  \u26a0\ufe0f  No BMC addresses collected; BMC_IP.json not written.")
+
+                # Determine output path.
+                # For build paths: always default to configs/add_nodes.json so the
+                # source config file is never overwritten.  All other paths default to
+                # configs/reinit-config.json.
+                _snap_path46_default = (
+                    os.path.join(_snap_dir46, "add_nodes.json")
+                    if _mode46 == "build"
+                    else os.path.join(_snap_dir46, "reinit-config.json")
+                )
+                _custom46 = _prompt(
+                    f"  Save config to [{_snap_path46_default}] (Enter to accept or type a new path): "
+                )
+                _snap_path46 = (
+                    os.path.expanduser(os.path.expandvars(_custom46))
+                    if _custom46
+                    else _snap_path46_default
+                )
+
+                _written46 = write_config_snapshot(_snap_path46)
+                if _written46:
+                    print(f"\n  \u2705 Backup configuration written to: {_written46}")
+                    _session_log.log(f"Config snapshot written to: {_written46}")
+                    _session_log.set_outcome("PASS", "backup config created")
+                else:
+                    print("  \u26a0\ufe0f  Nothing was written (no cluster data captured).")
+                    _session_log.set_outcome("WARN", "no data captured; snapshot not written")
+
+                _session_log.record_completion(normal_exit=True)
+                print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
+
+                global _4a_pending_after_4e, _5f_pending_after_4e
+                if _4a_pending_after_4e:
+                    _4a_pending_after_4e = False
+                    _operation_mode = 41
+                    print("\n  \u2705 Config created. Continuing with 4a upgrade workflow...\n")
+                    _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
+                    ok = _run_ontap_upgrade(_session_log)
+                    _session_log.record_completion(normal_exit=ok)
+                    print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
+                    sys.exit(0 if ok else 1)
+
+                if _5f_pending_after_4e:
+                    _5f_pending_after_4e = False
+                    _operation_mode = 49
+                    print("\n  \u2705 Config created. Continuing with 5f health check...\n")
+                else:
+                    sys.exit(0)
+
+            # ── Mode 47 (4f): verify BMC authentication ────────────────────────────
+            if _operation_mode == 47:
+                _print_banner("\U0001f50d 4f: Verify BMC authentication")
+                print("")
+
+                # ── Locate BMC IP list ────────────────────────────────────────────
+                # Search for BMC_IP.json or a full reinit-config that has node BMC IPs.
+                _bmc_ips47 = []
+                _found_file47 = None
+                for _p47 in _find_config_files(
+                    candidate_names=("BMC_IP.json",
+                                     "reinit-config.json", "reinit_config.json",
+                                     "reinit-afx-config.json", "add_nodes.json"),
+                ):
+                    try:
+                        with open(_p47, "r", encoding="utf-8") as _f47:
+                            _d47data = json.load(_f47)
+                    except Exception:
+                        continue
+                    if isinstance(_d47data.get("netboot_bmcs"), list):
+                        _bmc_ips47 = [str(x) for x in _d47data["netboot_bmcs"] if x]
+                    else:
+                        _pn47 = _d47data.get("primary_node")
+                        if isinstance(_pn47, dict) and _pn47.get("bmc"):
+                            _bmc_ips47.append(str(_pn47["bmc"]))
+                        for _sn47 in (_d47data.get("secondary_nodes") or []):
+                            if isinstance(_sn47, dict) and _sn47.get("bmc"):
+                                _bmc_ips47.append(str(_sn47["bmc"]))
+                        # Legacy nodes[]
+                        if not _bmc_ips47:
+                            for _n47 in (_d47data.get("nodes") or []):
+                                if isinstance(_n47, dict) and _n47.get("bmc"):
+                                    _bmc_ips47.append(str(_n47["bmc"]))
+                    if _bmc_ips47:
+                        _found_file47 = _p47
                         break
 
-                if _found_ip47 is None:
-                    # Fallback: any IPv4 in the output that isn't 0.0.0.0
-                    for _m47 in re.finditer(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b', _out47):
-                        _cand47 = _m47.group(1)
-                        if _cand47 != "0.0.0.0":
-                            _found_ip47 = _cand47
-                            break
-
-                if _found_ip47 and _found_ip47 == ip:
-                    status = "PASS"
-                    detail = f"bmc status IP matched ({_found_ip47})"
-                elif _found_ip47:
-                    status = "FAIL"
-                    detail = f"IP mismatch: expected {ip}, got {_found_ip47}"
+                if _found_file47:
+                    print(f"  \U0001f4c4 Loaded {len(_bmc_ips47)} BMC address(es) from: {_found_file47}")
+                    for _ip47 in _bmc_ips47:
+                        print(f"     \u2022 {_ip47}")
                 else:
+                    print("  \u2139\ufe0f  No BMC IP file found. Enter BMC addresses manually.")
+                    print("  (Leave blank and press Enter when done.)\n")
+                    _idx47 = 1
+                    while True:
+                        _entry47 = _prompt(f"  BMC {_idx47} hostname/IP (blank to finish): ")
+                        if not _entry47:
+                            break
+                        _bmc_ips47.append(_entry47)
+                        _idx47 += 1
+
+                if not _bmc_ips47:
+                    print("  No BMC addresses to test. Exiting.")
+                    sys.exit(0)
+
+                # ── Credentials ──────────────────────────────────────────────────
+                print("")
+                _same_creds47 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
+                _creds47 = {}   # ip -> (user, password)
+                if _same_creds47 != "n":
+                    _shared_user47 = input("  BMC username [admin]: ").strip() or "admin"
+                    _shared_pass47 = getpass.getpass("  BMC password (blank = none): ")
+                    for _ip47 in _bmc_ips47:
+                        _creds47[_ip47] = (_shared_user47, _shared_pass47)
+                else:
+                    for _ip47 in _bmc_ips47:
+                        print(f"\n  Credentials for {_ip47}:")
+                        _u47 = input("    Username [admin]: ").strip() or "admin"
+                        _p47 = getpass.getpass("    Password (blank = none): ")
+                        _creds47[_ip47] = (_u47, _p47)
+                print("")
+
+                # ── Test each BMC concurrently ────────────────────────────────────
+                print("  " + "─" * 58)
+                print(f"  Testing {len(_bmc_ips47)} BMC(s)…\n")
+
+                _results47 = {}   # ip -> {"status": "PASS"|"FAIL", "detail": str}
+                _results_lock47 = threading.Lock()
+
+                def _test_bmc47(ip):
+                    detail = ""
                     status = "FAIL"
-                    detail = "could not parse IP from 'bmc status' output"
+                    client47 = None
+                    ch47 = None
+                    _ip_user47, _ip_pass47 = _creds47.get(ip, ("admin", ""))
+                    try:
+                        client47 = paramiko.SSHClient()
+                        client47.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                        client47.connect(
+                            hostname=ip, username=_ip_user47, password=_ip_pass47,
+                            timeout=20, banner_timeout=30, auth_timeout=20,
+                            disabled_algorithms={"pubkeys": ["ssh-dss"]},
+                        )
+                        ch47 = _open_shell(client47)
 
-            except paramiko.AuthenticationException as _ex47a:
-                status = "FAIL"
-                detail = _classify_auth_failure(_ex47a)
-            except Exception as _ex47:
-                status = "FAIL"
-                detail = _classify_auth_failure(_ex47)
-            finally:
-                try:
-                    if ch47:
-                        ch47.close()
-                    if client47:
-                        client47.close()
-                except Exception:
-                    pass
+                        # Wait for BMC prompt
+                        _buf47 = ""
+                        _t47 = time.monotonic()
+                        while time.monotonic() - _t47 < 15:
+                            if ch47.recv_ready():
+                                _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
+                                if ">" in _buf47:
+                                    break
+                            time.sleep(0.1)
 
-            with _results_lock47:
-                _results47[ip] = {"status": status, "detail": detail}
+                        # Handle takeover prompt silently
+                        if "y/n" in _buf47.lower():
+                            ch47.send("y\r")
+                            _buf47 = ""
+                            _t47 = time.monotonic()
+                            while time.monotonic() - _t47 < 10:
+                                if ch47.recv_ready():
+                                    _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
+                                    if ">" in _buf47:
+                                        break
+                                time.sleep(0.1)
 
-        _run_parallel(_bmc_ips47, _test_bmc47, join_timeout=60)
+                        # Run 'bmc status'
+                        ch47.send("bmc status\r")
+                        _out47 = ""
+                        _t47 = time.monotonic()
+                        while time.monotonic() - _t47 < 15:
+                            if ch47.recv_ready():
+                                chunk = ch47.recv(4096).decode("utf-8", errors="replace")
+                                _out47 += chunk
+                                if ">" in _out47[_out47.find("bmc status"):] if "bmc status" in _out47 else ">" in _out47:
+                                    break
+                            time.sleep(0.1)
 
-        # ── Results table ─────────────────────────────────────────────────
-        print("\n  " + "─" * 58)
-        print(f"  {'BMC IP':<22}  {'Result':<6}  Detail")
-        print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
-        _pass_count47 = 0
-        _fail_count47 = 0
-        for _ip47 in _bmc_ips47:
-            _r47 = _results47.get(_ip47, {"status": "FAIL", "detail": "no result (timeout?)"})
-            _icon47 = "\u2705" if _r47["status"] == "PASS" else "\u274c"
-            print(f"  {_ip47:<22}  {_icon47} {_r47['status']:<4}  {_r47['detail']}")
-            if _r47["status"] == "PASS":
-                _pass_count47 += 1
-            else:
-                _fail_count47 += 1
-        print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
-        print(f"\n  {_pass_count47} PASS  /  {_fail_count47} FAIL  (of {len(_bmc_ips47)} tested)\n")
+                        # Parse IP from 'bmc status' output.
+                        # Look for lines like "  IP Address: 10.192.160.29"
+                        _found_ip47 = None
+                        for _ln47 in _out47.splitlines():
+                            _m47 = re.search(
+                                r'(?:ip\s*address|bmc\s*ip|address)\s*[:\s]+(\d{1,3}(?:\.\d{1,3}){3})',
+                                _ln47, re.IGNORECASE,
+                            )
+                            if _m47:
+                                _found_ip47 = _m47.group(1)
+                                break
 
-        # ── Offer SSH diagnostic for any failing BMC(s) ──────────────────
-        # Reuses the same helper as the netboot-BMC verification flow so
-        # an operator can identify stale local SSH sockets (and optionally
-        # clean them) without leaving 4f.
-        _failing47 = [
-            _ip for _ip in _bmc_ips47
-            if _results47.get(_ip, {}).get("status") != "PASS"
-        ]
-        if _failing47:
-            # Build a {ip: password} map from per-IP creds for the helper.
-            _pw_map47 = {_ip: _creds47.get(_ip, ("", ""))[1] for _ip in _failing47}
-            # Pick a representative username; the helper only uses it for
-            # ipmitool sol deactivate, which expects a single (user, pass).
-            _rep_user47 = next(
-                (_creds47[_ip][0] for _ip in _failing47 if _ip in _creds47),
-                "admin",
-            )
-            with suppress(Exception):
-                _offer_bmc_ssh_diagnostic(_failing47, _rep_user47, _pw_map47)
+                        if _found_ip47 is None:
+                            # Fallback: any IPv4 in the output that isn't 0.0.0.0
+                            for _m47 in re.finditer(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b', _out47):
+                                _cand47 = _m47.group(1)
+                                if _cand47 != "0.0.0.0":
+                                    _found_ip47 = _cand47
+                                    break
 
-        sys.exit(0)
+                        if _found_ip47 and _found_ip47 == ip:
+                            status = "PASS"
+                            detail = f"bmc status IP matched ({_found_ip47})"
+                        elif _found_ip47:
+                            status = "FAIL"
+                            detail = f"IP mismatch: expected {ip}, got {_found_ip47}"
+                        else:
+                            status = "FAIL"
+                            detail = "could not parse IP from 'bmc status' output"
 
-    # ── Mode 48 (4g): reset all nodes to LOADER prompt ─────────────────────
-    if _operation_mode == 48:
-        _print_banner("\U0001f504 4g: Reset all nodes to LOADER prompt")
-        print("")
+                    except paramiko.AuthenticationException as _ex47a:
+                        status = "FAIL"
+                        detail = _classify_auth_failure(_ex47a)
+                    except Exception as _ex47:
+                        status = "FAIL"
+                        detail = _classify_auth_failure(_ex47)
+                    finally:
+                        try:
+                            if ch47:
+                                ch47.close()
+                            if client47:
+                                client47.close()
+                        except Exception:
+                            pass
 
-        # ── Locate BMC IP list (same logic as mode 47) ───────────────────
-        _bmc_ips48 = []
-        _found_file48 = None
-        for _p48 in _find_config_files(
-            candidate_names=("BMC_IP.json",
-                             "reinit-config.json", "reinit_config.json",
-                             "reinit-afx-config.json", "add_nodes.json"),
-        ):
-            try:
-                with open(_p48, "r", encoding="utf-8") as _f48:
-                    _d48data = json.load(_f48)
-            except Exception:
-                continue
-            if isinstance(_d48data.get("netboot_bmcs"), list):
-                _bmc_ips48 = [str(x) for x in _d48data["netboot_bmcs"] if x]
-            else:
-                _pn48 = _d48data.get("primary_node")
-                if isinstance(_pn48, dict) and _pn48.get("bmc"):
-                    _bmc_ips48.append(str(_pn48["bmc"]))
-                for _sn48 in (_d48data.get("secondary_nodes") or []):
-                    if isinstance(_sn48, dict) and _sn48.get("bmc"):
-                        _bmc_ips48.append(str(_sn48["bmc"]))
-                if not _bmc_ips48:
-                    for _n48 in (_d48data.get("nodes") or []):
-                        if isinstance(_n48, dict) and _n48.get("bmc"):
-                            _bmc_ips48.append(str(_n48["bmc"]))
-            if _bmc_ips48:
-                _found_file48 = _p48
-                break
+                    with _results_lock47:
+                        _results47[ip] = {"status": status, "detail": detail}
 
-        if _found_file48:
-            print(f"  \U0001f4c4 Loaded {len(_bmc_ips48)} BMC address(es) from: {_found_file48}")
-            for _ip48 in _bmc_ips48:
-                print(f"     \u2022 {_ip48}")
-        else:
-            print("  \u2139\ufe0f  No BMC IP file found. Enter BMC addresses manually.")
-            print("  (Leave blank and press Enter when done.)\n")
-            _idx48 = 1
-            while True:
-                _entry48 = _prompt(f"  BMC {_idx48} hostname/IP (blank to finish): ")
-                if not _entry48:
-                    break
-                _bmc_ips48.append(_entry48)
-                _idx48 += 1
+                _run_parallel(_bmc_ips47, _test_bmc47, join_timeout=60)
 
-        if not _bmc_ips48:
-            print("  No BMC addresses entered. Exiting.")
-            sys.exit(0)
+                # ── Results table ─────────────────────────────────────────────────
+                print("\n  " + "─" * 58)
+                print(f"  {'BMC IP':<22}  {'Result':<6}  Detail")
+                print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
+                _pass_count47 = 0
+                _fail_count47 = 0
+                for _ip47 in _bmc_ips47:
+                    _r47 = _results47.get(_ip47, {"status": "FAIL", "detail": "no result (timeout?)"})
+                    _icon47 = "\u2705" if _r47["status"] == "PASS" else "\u274c"
+                    print(f"  {_ip47:<22}  {_icon47} {_r47['status']:<4}  {_r47['detail']}")
+                    if _r47["status"] == "PASS":
+                        _pass_count47 += 1
+                    else:
+                        _fail_count47 += 1
+                print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
+                print(f"\n  {_pass_count47} PASS  /  {_fail_count47} FAIL  (of {len(_bmc_ips47)} tested)\n")
 
-        # ── Credentials ──────────────────────────────────────────────────
-        print("")
-        _same_creds48 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
-        _creds48 = {}   # ip -> (user, password)
-        if _same_creds48 != "n":
-            _shared_user48 = input("  BMC username [admin]: ").strip() or "admin"
-            _shared_pass48 = getpass.getpass("  BMC password (blank = none): ")
-            for _ip48 in _bmc_ips48:
-                _creds48[_ip48] = (_shared_user48, _shared_pass48)
-        else:
-            for _ip48 in _bmc_ips48:
-                print(f"\n  Credentials for {_ip48}:")
-                _u48 = input("    Username [admin]: ").strip() or "admin"
-                _p48 = getpass.getpass("    Password (blank = none): ")
-                _creds48[_ip48] = (_u48, _p48)
-        print("")
+                # ── Offer SSH diagnostic for any failing BMC(s) ──────────────────
+                # Reuses the same helper as the netboot-BMC verification flow so
+                # an operator can identify stale local SSH sockets (and optionally
+                # clean them) without leaving 4f.
+                _failing47 = [
+                    _ip for _ip in _bmc_ips47
+                    if _results47.get(_ip, {}).get("status") != "PASS"
+                ]
+                if _failing47:
+                    # Build a {ip: password} map from per-IP creds for the helper.
+                    _pw_map47 = {_ip: _creds47.get(_ip, ("", ""))[1] for _ip in _failing47}
+                    # Pick a representative username; the helper only uses it for
+                    # ipmitool sol deactivate, which expects a single (user, pass).
+                    _rep_user47 = next(
+                        (_creds47[_ip][0] for _ip in _failing47 if _ip in _creds47),
+                        "admin",
+                    )
+                    with suppress(Exception):
+                        _offer_bmc_ssh_diagnostic(_failing47, _rep_user47, _pw_map47)
 
-        _make_session_log("4g: reset all nodes to LOADER")
-
-        # ── Reset each node to LOADER in parallel ────────────────────────
-        _print_banner(f"\U0001f504 Resetting {len(_bmc_ips48)} node(s) to LOADER prompt")
-        print(f"  Nodes: {', '.join(_bmc_ips48)}\n")
-        _session_log.start_phase("Reset to LOADER")
-
-        _log_dir48 = _session_log.log_dir if _session_log else os.getcwd()
-        _node_logs48 = {}
-        for _ip48 in _bmc_ips48:
-            try:
-                _nf48 = _node_log_open(_ip48, _log_dir48, prefix="mode4g_loader")
-                _node_logs48[_ip48] = _nf48
-                print(f"  \U0001f4dd [{_ip48}] Log \u2192 {_nf48.name}")
-            except Exception:
-                _node_logs48[_ip48] = None
-
-        _results48 = {}
-        _results_lock48 = threading.Lock()
-
-        def _loader_worker48(ip):
-            u48, p48 = _creds48.get(ip, ("admin", ""))
-            # Populate _peer_bmc_creds so reset_peer_to_loader can update them.
-            _peer_bmc_creds[ip] = {"user": u48, "password": p48}
-            ok = reset_peer_to_loader(
-                ip, u48, p48,
-                node_log=_node_logs48.get(ip),
-            )
-            with _results_lock48:
-                _results48[ip] = ok
-
-        _run_parallel(_bmc_ips48, _loader_worker48)
-
-        for _nf48 in _node_logs48.values():
-            if _nf48:
-                try:
-                    _nf48.close()
-                except Exception:
-                    pass
-
-        # ── Results summary ───────────────────────────────────────────────
-        print("\n  " + "─" * 58)
-        print(f"  {'BMC IP':<24}  Result")
-        print(f"  {'─'*24}  {'─'*20}")
-        _pass48 = _fail48 = 0
-        for _ip48 in _bmc_ips48:
-            _ok48 = _results48.get(_ip48, False)
-            _icon48 = "\u2705" if _ok48 else "\u274c"
-            _label48 = "LOADER reached" if _ok48 else "FAILED"
-            print(f"  {_ip48:<24}  {_icon48} {_label48}")
-            if _ok48:
-                _pass48 += 1
-            else:
-                _fail48 += 1
-        print(f"  {'─'*24}  {'─'*20}")
-        print(f"\n  {_pass48} reached LOADER  /  {_fail48} failed  (of {len(_bmc_ips48)} nodes)\n")
-
-        _session_log.end_phase()
-        _session_log.record_completion(normal_exit=(_fail48 == 0))
-        print(f"\U0001f4dd Session log: {_session_log.log_file}")
-        sys.exit(0 if _fail48 == 0 else 1)
-
-    # ── Mode 49 (5f): cluster health and version check ─────────────────────
-    if _operation_mode == 49:
-        _print_banner("\U0001f4ca 5f: Cluster health and version check")
-        _make_session_log("Mode 5f: cluster health and version check")
-        print("")
-
-        # ── Gather connection details ────────────────────────────────────
-        _ch49_ip = None
-        _ch49_user = "admin"
-        _ch49_pass = ""
-        import getpass as _gp49
-
-        # 1. Try to load from a reinit-config file.
-        _49_cfg_files = _find_config_files(deep_scan=True)
-        _49_cfg_data = {}
-        if _49_cfg_files:
-            _49_cfg_path = _49_cfg_files[0]
-            try:
-                with open(_49_cfg_path, "r", encoding="utf-8") as _f49:
-                    _49_cfg_data = json.load(_f49)
-                print(f"  \U0001f4c4 Using config: {_49_cfg_path}")
-            except Exception as _e49c:
-                print(f"  \u26a0\ufe0f  Could not read {_49_cfg_path}: {_e49c}")
-                _49_cfg_data = {}
-
-        if isinstance(_49_cfg_data, dict) and _49_cfg_data:
-            _ch49_ip = ((_49_cfg_data.get("cluster") or {}).get("clus_mgmt_address")
-                        or _cluster_config.get("mgmt_ip"))
-            _ch49_user = ((_49_cfg_data.get("cluster") or {}).get("username") or "admin")
-        elif isinstance(_config_data, dict) and _config_data:
-            # fall back to already-loaded global config
-            _ch49_ip = ((_config_data.get("cluster") or {}).get("clus_mgmt_address")
-                        or _cluster_config.get("mgmt_ip"))
-            _ch49_user = ((_config_data.get("cluster") or {}).get("username") or "admin")
-
-        # 2. No config found — offer to gather one or ask for IP.
-        if not _ch49_ip and not _49_cfg_files:
-            print("\n  \u26a0\ufe0f  No reinit-config.json found on disk.")
-            print("     Option 5c can connect to your existing cluster and generate one automatically.")
-            _ans_49 = _prompt("  Run the 4e config-gather workflow now? [Y/n]: ", "n").lower()
-            if _ans_49 != "n":
-                _5f_pending_after_4e = True
-                _operation_mode = 46  # noqa: F841  (module-level var, reassigned here)
-                return
-            # User said no — fall through to manual IP prompt.
-
-        if not _ch49_ip:
-            _ch49_ip = input("  Cluster management LIF IP: ").strip()
-            if not _ch49_ip:
-                print("  No IP entered. Exiting.")
                 sys.exit(0)
 
-        _ch49_user_in = input(f"  Cluster admin username [{_ch49_user}]: ").strip()
-        if _ch49_user_in:
-            _ch49_user = _ch49_user_in
-        _ch49_pass = _gp49.getpass(f"  Cluster admin password for {_ch49_user}@{_ch49_ip}: ")
-
-        # ── Connect ──────────────────────────────────────────────────────
-        print(f"\n  \U0001f50c Connecting to {_ch49_ip} as {_ch49_user}...")
-        try:
-            _cl49, _, _ = _ssh_connect_with_retry(
-                _ch49_ip, _ch49_user, _ch49_pass,
-                label=f"healthcheck/{_ch49_ip}",
-                max_attempts=3, interactive=False,
-            )
-        except Exception as _e49:
-            print(f"  \u274c Connection failed: {_e49}")
-            _session_log.log(f"5f: connection failed: {_e49}", prefix="ERROR")
-            sys.exit(1)
-
-        _ch49 = _open_shell(_cl49)
-        try:
-            _ch49.resize_pty(width=256, height=50)
-        except Exception:
-            pass
-        with _suppress_console():
-            _wait_for_cluster_prompt(_ch49, timeout=30)
-        print(f"  \u2705 Connected to {_ch49_ip}")
-        _session_log.log(f"5f: connected to {_ch49_ip}")
-
-        # ── Health check ─────────────────────────────────────────────────
-        print("\n  \U0001f50d Running cluster health check...")
-
-        # Run cluster show and storage failover show and display raw output.
-        with _suppress_console():
-            _cs49_out = _run_cluster_command(
-                _ch49, "set -rows 0; cluster show", timeout=30
-            )
-            _fo49_out = _run_cluster_command(
-                _ch49, "set -rows 0; storage failover show", timeout=30
-            )
-        _cs49_out = _ANSI_RE.sub("", _cs49_out).replace("\r\n", "\n").replace("\r", "\n")
-        _fo49_out = _ANSI_RE.sub("", _fo49_out).replace("\r\n", "\n").replace("\r", "\n")
-
-        print("\n  cluster show:")
-        for _ln in _cs49_out.splitlines():
-            _ls = _ln.strip()
-            if _ls and "::" not in _ls and "cluster show" not in _ls.lower():
-                print(f"    {_ls}")
-
-        print("\n  storage failover show:")
-        for _ln in _fo49_out.splitlines():
-            _ls = _ln.strip()
-            if _ls and "::" not in _ls and "storage failover show" not in _ls.lower():
-                print(f"    {_ls}")
-
-        _nodes49 = []
-        for _r49 in _parse_failover_show(_fo49_out):
-            if _r49["node"] and _r49["node"] not in _nodes49:
-                _nodes49.append(_r49["node"])
-        _session_log.log(f"5f: nodes discovered: {_nodes49}")
-
-        if not _nodes49:
-            print("  \u26a0\ufe0f  Could not discover node names from 'storage failover show'.")
-
-        _healthy49 = _wait_for_cluster_healthy(
-            _ch49, _nodes49, total_timeout=600, poll_interval=60,
-            log=_session_log,
-        )
-
-        # ── Version check ────────────────────────────────────────────────
-        print("\n  \U0001f50d Checking ONTAP version...")
-        with _suppress_console():
-            _ver49_out = _run_cluster_command(_ch49, "version", timeout=30)
-            _img49_out = _run_cluster_command(
-                _ch49,
-                "set advanced -c off; system image show -fields version,iscurrent,isdefault",
-                timeout=60,
-            )
-        _ver49_out = _ANSI_RE.sub("", _ver49_out).replace("\r\n", "\n").replace("\r", "\n")
-        _img49_out = _ANSI_RE.sub("", _img49_out).replace("\r\n", "\n").replace("\r", "\n")
-
-        _ver49_match = re.search(r"NetApp Release\s+(\S+)", _ver49_out, re.IGNORECASE)
-        _running49 = _ver49_match.group(1).rstrip(":.;") if _ver49_match else None
-
-        _img49_lines = [l.strip() for l in _img49_out.splitlines()
-                        if l.strip() and "::" not in l
-                        and not l.strip().lower().startswith("system image")
-                        and "password" not in l.strip().lower()
-                        and "set advanced" not in l.strip().lower()]
-
-        print(f"\n  Running version  : {_running49 or '(parse failed)'}")
-        if _img49_lines:
-            print("  Image show output:")
-            for _il49 in _img49_lines[-12:]:
-                print(f"    {_il49}")
-
-        _session_log.log(f"5f: running version={_running49}")
-
-        # ── Cleanup & exit ───────────────────────────────────────────────
-        try:
-            _ch49.close()
-        except Exception:
-            pass
-        try:
-            _cl49.close()
-        except Exception:
-            pass
-
-        if _healthy49:
-            _ver_str = f" and all nodes are running ONTAP {_running49}" if _running49 else ""
-            print(f"\n  \u2705 Cluster is healthy{_ver_str}.")
-            _session_log.log(f"5f: cluster healthy, version={_running49}")
-        else:
-            print("\n  \u26a0\ufe0f  Cluster did not reach fully healthy state within the timeout.")
-            _session_log.log("5f: cluster not healthy within timeout", prefix="WARN")
-
-        print(f"\U0001f4dd Session log: {_session_log.log_file}")
-        sys.exit(0 if _healthy49 else 1)
-
-    # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
-    if _operation_mode == 45:
-        import pathlib
-
-        _print_banner("\U0001f511 Setting up passwordless SSH to cluster management")
-
-        # Gather target details.
-        mgmt_ip = input("\n  Cluster management IP address: ").strip()
-        if not mgmt_ip:
-            print("  No IP entered. Exiting.")
-            sys.exit(0)
-        ssh_user = input("  SSH username to configure: ").strip()
-        if not ssh_user:
-            print("  No username entered. Exiting.")
-            sys.exit(0)
-
-        # 1. Remove any existing known_hosts entries for this IP.
-        known_hosts = pathlib.Path.home() / ".ssh" / "known_hosts"
-        if known_hosts.exists():
-            print(f"\n  \U0001f5d1\ufe0f  Removing existing known_hosts entries for {mgmt_ip}...")
-            try:
-                subprocess.run(
-                    ["ssh-keygen", "-R", mgmt_ip],
-                    check=False, capture_output=True,
-                )
-                print("  \u2705 Done.")
-            except FileNotFoundError:
-                print("  \u26a0\ufe0f  ssh-keygen not found on PATH; skipping known_hosts cleanup.")
-
-        # 2. Generate RSA-4096 key if ~/.ssh/id_rsa doesn't already exist.
-        id_rsa = pathlib.Path.home() / ".ssh" / "id_rsa"
-        id_rsa_pub = pathlib.Path.home() / ".ssh" / "id_rsa.pub"
-        if id_rsa.exists():
-            print(f"\n  \u2139\ufe0f  Key pair already exists at {id_rsa}; skipping keygen.")
-        else:
-            print("\n  \U0001f511 Generating RSA-4096 key pair (no passphrase)...")
-            (pathlib.Path.home() / ".ssh").mkdir(mode=0o700, parents=True, exist_ok=True)
-            keygen_result = subprocess.run(
-                ["ssh-keygen", "-t", "rsa", "-b", "4096",
-                 "-f", str(id_rsa), "-N", ""],
-                capture_output=True, text=True,
-            )
-            if keygen_result.returncode != 0:
-                print(f"  \u274c ssh-keygen failed:\n{keygen_result.stderr}")
-                sys.exit(1)
-            print("  \u2705 Key pair generated.")
-
-        # 3. Read the public key.
-        if not id_rsa_pub.exists():
-            print(f"  \u274c Public key not found at {id_rsa_pub}. Exiting.")
-            sys.exit(1)
-        pub_key = id_rsa_pub.read_text(encoding="utf-8").strip()
-        print(f"\n  \U0001f4cb Public key:\n     {pub_key}")
-
-        # 4. Connect via BMC and configure the public key on the cluster shell.
-        print("\n  \U0001f4bb Connecting via BMC to configure cluster account...")
-
-        # BMC credentials from config or interactive prompts.
-        primary_node_45 = {}
-        if isinstance(_config_data, dict):
-            nl_45 = _config_data.get("nodes") or []
-            if nl_45 and isinstance(nl_45[0], dict):
-                primary_node_45 = nl_45[0]
-
-        sp_host_45 = _cfg_str(primary_node_45.get("bmc"))
-        if sp_host_45:
-            _check_bmc_reachable(sp_host_45)
-        else:
-            sp_host_45 = _prompt_bmc_host()
-        sp_user_45 = _cfg_str(primary_node_45.get("bmc_user")) or input("  BMC username: ").strip()
-        if "bmc_password" in primary_node_45 and isinstance(primary_node_45["bmc_password"], str):
-            sp_pass_45 = primary_node_45["bmc_password"]
-        else:
-            sp_pass_45 = getpass.getpass("  BMC password: ")
-
-        _make_session_log("Mode 4d: set up passwordless SSH")
-
-        _session_log.start_phase("SSH Connection (BMC)")
-        client_45, sp_user_45, sp_pass_45 = connect_to_sp(sp_host_45, sp_user_45, sp_pass_45)
-        ch_45 = _open_shell(client_45)
-        threading.Thread(target=keepalive_loop, args=(client_45,), daemon=True).start()
-        _session_log.end_phase()
-
-        # Read the initial banner/prompt after shell open.  We watch for:
-        #   ::>  / ::*>   – already at the cluster shell (console passthrough)
-        #   y/n           – existing BMC session takeover prompt
-        #   >             – plain BMC prompt (SP> or similar)
-        # We do NOT call wait_for_bmc_prompt() because it consumes the ::>
-        # and then the probe below can't see it.
-        _session_log.start_phase("Cluster Shell Login")
-        _init_out, _init_match = direct_read_until_any(
-            ch_45,
-            ["::>", "::*>", "y/n", ">"],
-            timeout=20,
-        )
-        _already_at_cluster = False
-        if _init_match and ("::>" in _init_match or "::*>" in _init_match):
-            # Console is already in passthrough mode — no need for system console.
-            _already_at_cluster = True
-            print("  \u2705 Cluster shell prompt detected directly.")
-        elif _init_match and "y/n" in _init_match.lower():
-            # Existing session takeover prompt.
-            print("\n  \u26a0\ufe0f  An existing BMC session is active.")
-            _takeover = input("     Disconnect the other session? [Y/N]: ").strip().lower()
-            if _takeover == "y":
-                ch_45.send("y\r")
-            else:
-                print("  \u274c Cannot continue without taking over session. Exiting.")
-                sys.exit(1)
-            # Wait for BMC prompt after takeover.
-            _to_out, _to_match = direct_read_until_any(
-                ch_45, ["::>", "::*>", ">"], timeout=15
-            )
-            if _to_match and ("::>" in _to_match or "::*>" in _to_match):
-                _already_at_cluster = True
-        elif not _init_match:
-            print("  \u274c No prompt received after BMC login. Exiting.")
-            sys.exit(1)
-
-        if not _already_at_cluster:
-            enter_system_console(ch_45)
-
-        if not _wait_for_cluster_prompt(ch_45, timeout=60):
-            admin_pw_45 = _cluster_config.get("admin_password") or ""
-            if not admin_pw_45:
-                admin_pw_45 = getpass.getpass("  Cluster admin password: ")
-            if not _login_primary_cluster_shell(ch_45, admin_pw_45):
-                print("  \u274c Cluster shell login failed. Exiting.")
-                sys.exit(1)
-        _session_log.end_phase()
-
-        # Get cluster name from the shell prompt itself — the ONTAP prompt
-        # is "<clustername>::>" so this is more reliable than parsing command
-        # output (which has column headers like "cluster" that look like data).
-        ch_45.send("\r")
-        _prompt_out, _ = direct_read_until_any(
-            ch_45, ["::>", "::*>"], timeout=15
-        )
-        cluster_name_45 = ""
-        for _pline in reversed((_prompt_out or "").splitlines()):
-            _pm = re.match(r'^(\S+)::\*?>\s*$', _pline.strip())
-            if _pm:
-                cluster_name_45 = _pm.group(1)
-                break
-        if cluster_name_45:
-            print(f"  \u2705 Cluster name detected from prompt: {cluster_name_45}")
-        else:
-            cluster_name_45 = input(
-                "  Could not detect cluster name from prompt. Enter it manually: "
-            ).strip()
-
-        # Check whether the user has an SSH/publickey login entry.
-        # Always check — even for admin — because the ssh application entry
-        # may not exist even if the account does.
-        print(f"\n  \U0001f50d Checking if '{ssh_user}' has an ssh/publickey login entry...")
-        show_out = _run_cluster_command(
-            ch_45,
-            f"security login show {ssh_user} -application ssh "
-            f"-authentication-method publickey",
-            timeout=30,
-        )
-        ssh_login_exists = "no entries matching" not in show_out.lower()
-
-        if not ssh_login_exists:
-            print(f"  \U0001f194 No ssh login entry for '{ssh_user}'. Creating...")
-            _run_cluster_command(
-                ch_45,
-                f"security login create -user-or-group-name {ssh_user} "
-                f"-application ssh -authentication-method publickey "
-                f"-role {'admin' if ssh_user.lower() == 'admin' else 'vsadmin'} "
-                f"-vserver {cluster_name_45}",
-                timeout=30,
-            )
-            print(f"  \u2705 SSH login entry created for '{ssh_user}'.")
-        else:
-            print(f"  \u2139\ufe0f  SSH login entry already exists for '{ssh_user}'.")
-        print(f"\n  \U0001f511 Installing public key for '{ssh_user}' on cluster '{cluster_name_45}'...")
-        _run_cluster_command(
-            ch_45,
-            f'security login publickey create -vserver {cluster_name_45} '
-            f'-username {ssh_user} -publickey "{pub_key}"',
-            timeout=30,
-        )
-        print("  \u2705 Public key installed on cluster.")
-
-        # Close the BMC session — no longer needed.
-        try:
-            ch_45.close()
-        except Exception:
-            pass
-        try:
-            client_45.close()
-        except Exception:
-            pass
-
-        # Test passwordless login from this host — open an interactive shell
-        # and wait for the cluster prompt (::>) without a password prompt.
-        print(f"\n  \U0001f50e Testing ssh {ssh_user}@{mgmt_ip}...")
-        try:
-            _pk_path_45 = os.path.expanduser("~/.ssh/id_rsa")
-            _tc_45 = paramiko.SSHClient()
-            _tc_45.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            _tc_45.connect(
-                mgmt_ip, username=ssh_user,
-                key_filename=_pk_path_45,
-                look_for_keys=True, allow_agent=False,
-                timeout=20,
-                disabled_algorithms={"pubkeys": ["ssh-dss"]},
-            )
-            _tch_45 = _tc_45.invoke_shell(width=200, height=50)
-            _tout_45, _tmatch_45 = direct_read_until_any(
-                _tch_45, ["::>", r"::\*>", "password:", "Password:"], timeout=30
-            )
-            try:
-                _tch_45.close()
-            except Exception:
-                pass
-            _tc_45.close()
-            if "::" in _tmatch_45:
-                print("  \u2705 Passwordless login configuration complete!")
-                _slog(f"Passwordless SSH verified: {ssh_user}@{mgmt_ip}")
-            else:
-                print(
-                    f"  \u26a0\ufe0f  Cluster prompted for a password — "
-                    f"key may need a moment to activate.\n"
-                    f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
-                )
-                _slog("SSH test: password prompt appeared", prefix="WARN")
-        except paramiko.AuthenticationException:
-            print(
-                f"  \u26a0\ufe0f  Authentication failed — public key not accepted yet.\n"
-                f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
-            )
-            _slog("SSH test: AuthenticationException", prefix="WARN")
-        except Exception as _te_45:
-            print(
-                f"  \u26a0\ufe0f  SSH test failed: {_te_45}\n"
-                f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
-            )
-            _slog(f"SSH test exception: {_te_45}", prefix="WARN")
-
-        _session_log.record_completion(normal_exit=True)
-        print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
-        sys.exit(0)
-
-    # Optional configuration file. CLI flag takes precedence; otherwise we
-    # offer to load one interactively. Type '?' at the prompt to view the
-    # expected JSON schema.
-    config_path = args.config
-
-    # Auto-detect a default config file via the shared discovery helper
-    # (searches configs/, script dir, then CWD with the canonical filename
-    # list and a deep-scan fallback for oddly-named JSONs containing the
-    # cluster+nodes schema).
-    search_dirs = _default_config_search_dirs()
-    detected_configs = _find_config_files(
-        search_dirs=search_dirs, deep_scan=True
-    )
-
-    if config_path:
-        # CLI-supplied path: validate before continuing.
-        if not os.path.isfile(config_path):
-            print(f"❌ --config path is not a file: {config_path}")
-            sys.exit(1)
-    else:
-        # Offer the auto-detected default(s) first.
-        # Mode 2 (add nodes) also participates: a config file supplies node
-        # management IPs, netmask, gateway and the cluster management IP so
-        # the join wizard can be fully automated without manual prompts.
-        if detected_configs:
-            config_path = _select_config_path_interactive(
-                detected_configs, indent="", header_emoji="📄"
-            )
-        else:
-            # Nothing auto-detected — tell the user where we looked so they
-            # can spot a wrong directory or filename quickly.
-            print("\nℹ️  No config file auto-detected. Searched:")
-            for d in search_dirs:
-                print(f"     {d}")
-            print(f"     (looking for: {', '.join(_DEFAULT_CONFIG_FILENAMES)})")
-
-        if not config_path:
-            while True:
-                ans = _prompt(
-                    "\nUse a JSON config file for inputs? "
-                    "Enter path, '?' for example, or blank to skip: "
-                )
-                if ans == "?":
-                    print(_CONFIG_FILE_EXAMPLE)
-                    continue
-                if not ans:
-                    break
-                # Strip surrounding quotes that shells/users often paste in.
-                if (len(ans) >= 2 and ans[0] == ans[-1]
-                        and ans[0] in ("'", '"')):
-                    ans = ans[1:-1]
-                expanded = os.path.expanduser(os.path.expandvars(ans))
-                if not os.path.isfile(expanded):
-                    print(f"  ⚠️  Not a valid file path: {ans}")
-                    print("     Enter an existing file, '?' for example, "
-                          "or blank to skip.")
-                    continue
-                config_path = expanded
-                break
-
-    # ---- No config file? Offer the "reuse existing cluster configuration"
-    # path up-front. The retain capture itself still runs later (after the
-    # BMC connection is up), but asking the question here lets the script
-    # skip a duplicate prompt mid-run AND, when the operator answers yes,
-    # the retained values flow straight into the in-memory config so the
-    # rest of the pipeline behaves as if the JSON had supplied them.
-    # Retain-from-existing-cluster only makes sense when we're going to
-    # initialize the cluster (modes 1 and 3); mode 2/4/5 skip it.
-
-    if config_path:
-        try:
-            _config_data = load_config_file(config_path)
-            print(f"📄 Loaded config: {config_path}")
-            # Config file supplies all cluster values — no need to pull them
-            # from a running cluster later. Mark retain as "no" so the
-            # mid-run retain prompt is suppressed.
-            _run_context.config_data = _config_data
-            _run_context.retain_preselected = (False, False, False)
-            _run_context.apply_to_globals()
-        except ValueError as e:
-            print(f"⚠️  {e}")
-            print("   Continuing without a config file (manual prompts).")
-            _config_data = {}
-            _run_context.config_data = _config_data
-            _run_context.apply_to_globals()
-
-    if not config_path and _operation_mode in (1, 3):
-        _print_banner("💾 No config file in use — reuse existing cluster config?")
-        print("\n  If this BMC's node is part of a running cluster, the script")
-        print("  can pull the existing cluster name and management/network IPs")
-        print("  from it and use them as the new configuration so you don't")
-        print("  have to re-enter them.")
-        ans1 = _prompt(
-            "\n  Reuse the existing cluster name? [Y/N]: "
-        , "n").lower()
-        retain_name = (ans1 == "y")
-
-        ans2 = _prompt(
-            "  Reuse the existing management and cluster network IPs? "
-            "[Y/N]: "
-        , "n").lower()
-        retain_network = (ans2 == "y")
-
-        ans3 = _prompt(
-            "  Reuse the BMC admin user and password as the cluster "
-            "admin user and password? [Y/N]: "
-        , "n").lower()
-        retain_creds = (ans3 == "y")
-
-        _run_context.retain_preselected = (retain_name, retain_network, retain_creds)
-        _run_context.apply_to_globals()
-        if retain_name or retain_network or retain_creds:
-            print("\n  ↩️  Will pull the requested values from the running cluster")
-            print("     (and/or reuse BMC credentials) after connecting to the BMC,")
-            print("     then build the runtime config from them.")
-        else:
-            print("\n  ↩️  Will not retain any existing cluster configuration.")
-
-    # ── Pre-reinit prompts: physical zeroing and diagnostic bootargs ─────
-    # Asked here — right after config/retain selection, before any BMC
-    # connection — so all up-front questions are grouped together.
-    if _operation_mode in (1, 3):
-        print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
-        try:
-            _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            _pz_ans = ""
-        _physical_zeroing = (_pz_ans == "y")
-        if _physical_zeroing:
-            print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
-        if _diag_mode:
-            _diag_bootargs = _load_diag_bootargs()
-
-    # License: collect key(s) or validate the license file path now, before
-    # the BMC session starts, so the operator can fix issues early.
-    if _operation_mode in (1, 3):
-        _collect_license_config(_run_context)
-
-    _make_session_log("Session start")
-
-    if _config_data:
-        _session_log.log(f"Loaded config file: {config_path}")
-
-    if _operation_mode == 3:
-        mode_desc = "End-to-end auto initialize (1b primary + parallel auto-add peers)"
-    elif _operation_mode == 1 and _auto_setup:
-        mode_desc = "Initialize + format + setup first node (1b, fully automated)"
-    elif _operation_mode == 1:
-        mode_desc = "Initialize first node (1a, option 9, destroy storage pods)"
-    elif _operation_mode == 41:
-        mode_desc = "ONTAP upgrade - rolling takeover/giveback (4a)"
-    elif _operation_mode == 44:
-        mode_desc = "Install license file only (4c, standalone)"
-    elif _operation_mode == 45:
-        mode_desc = "Set up passwordless SSH to cluster management (4d)"
-    elif _operation_mode == 46:
-        mode_desc = "Create backup cluster configuration (4e, standalone)"
-    elif _operation_mode == 49:
-        mode_desc = "Cluster health and version check (5f)"
-    elif _operation_mode == 2 and _auto_add:
-        mode_desc = "Add node to existing cluster (2b, automatic join wizard)"
-    else:
-        mode_desc = "Add node to existing cluster (2a, option 4, interactive)"
-    _session_log.log(
-        f"Operation mode: {_operation_mode} (auto_setup={_auto_setup}, "
-        f"auto_add={_auto_add}) – {mode_desc}"
-    )
-
-    # Primary BMC: the node this script will connect to and operate on.
-    # For modes 1/3/4x: prefer "primary_node" (new format) or nodes[0] (legacy).
-    # For mode 2 (add node): the target is a *secondary* node — use nodes[]
-    #   (new or legacy), NOT primary_node (which is the existing cluster node
-    #   that must never be reinitialised).
-    primary_node = {}
-    if isinstance(_config_data, dict):
-        if _operation_mode == 2:
-            # Mode 2: pick first entry from secondary_nodes or nodes[] only.
-            _sn2 = _config_data.get("secondary_nodes")
-            if isinstance(_sn2, list) and _sn2 and isinstance(_sn2[0], dict):
-                primary_node = _sn2[0]
-            else:
-                _nl2 = _config_data.get("nodes") or []
-                if _nl2 and isinstance(_nl2[0], dict):
-                    primary_node = _nl2[0]
-        elif isinstance(_config_data.get("primary_node"), dict):
-            primary_node = _config_data["primary_node"]
-        else:
-            nodes_list = _config_data.get("nodes") or []
-            if nodes_list and isinstance(nodes_list[0], dict):
-                primary_node = nodes_list[0]
-
-    # Three-state handling for each config field:
-    #   * key absent / non-string  -> prompt the operator
-    #   * key present but empty/whitespace -> use as-is (e.g. "" means
-    #     literally no password, for BMCs that don't require one)
-    #   * non-empty string         -> use the provided value
-    # (_cfg_str is defined at module level; _cfg_get_or_prompt is local
-    # because it closes over `primary_node`.)
-    def _cfg_get_or_prompt(key, prompt_label, hidden=False):
-        if key in primary_node and isinstance(primary_node[key], str):
-            return primary_node[key]
-        if hidden:
-            return getpass.getpass(prompt_label)
-        return input(prompt_label)
-
-    sp_host = _cfg_str(primary_node.get("bmc"))
-    if sp_host:
-        _check_bmc_reachable(sp_host)
-    else:
-        sp_host = _prompt_bmc_host("Enter BMC hostname/IP or primary node (this will be the first node in the cluster): ")
-    sp_user = _cfg_str(primary_node.get("bmc_user")) or input("Enter BMC username [admin]: ").strip() or "admin"
-    sp_pass = _cfg_get_or_prompt("bmc_password", "Enter BMC password: ", hidden=True)
-    if primary_node.get("bmc"):
-        _pn_src = "primary_node" if isinstance(_config_data.get("primary_node"), dict) else "nodes[0]"
-        print(f"📄 Using primary BMC from config {_pn_src}: {sp_host} (user={sp_user})")
-        if "bmc_password" in primary_node and not (
-                isinstance(primary_node["bmc_password"], str)
-                and primary_node["bmc_password"].strip()):
-            print("📄 Primary BMC password from config is blank "
-                  "(will attempt SSH with no password).")
-
-    _session_log.log(f"Target BMC: {sp_host}")
-    _session_log.log(f"Username: {sp_user}")
-    _session_log.log(f"Debug mode: {args.debug}")
-
-    # Phase: SSH Connection
-    _session_log.start_phase("SSH Connection")
-    client, sp_user, sp_pass = connect_to_sp(sp_host, sp_user, sp_pass)
-    channel = _open_shell(client)
-
-    keepalive_thread = threading.Thread(
-        target=keepalive_loop, args=(client,), daemon=True
-    )
-    keepalive_thread.start()
-    _session_log.log("Keepalive thread started")
-    _session_log.end_phase()
-
-    # Phase: BMC Prompt & Validation
-    _session_log.start_phase("BMC Prompt & Validation")
-    if not wait_for_bmc_prompt(channel, auto_takeover=True):
-        _session_log.set_outcome("FAIL", "BMC prompt not received")
-        _session_log.close()
-        sys.exit(1)
-
-    print("\nValidating BMC status...")
-    _session_log.log("Validating BMC status")
-    drain_channel(channel, seconds=1)
-    output = direct_send_and_wait(channel, "bmc status", ">", timeout=15)
-    if sp_host in output:
-        print(f"\n✅ BMC validation successful – found '{sp_host}' in status output.")
-        _session_log.log(f"BMC validation successful – found '{sp_host}'")
-    else:
-        print(f"\n⚠️  Warning: '{sp_host}' not found verbatim in bmc status output.")
-        print(f"   Output received:\n{output}")
-        _session_log.log(f"BMC validation warning – '{sp_host}' not found", prefix="WARN")
-        answer = input("\n   Does this look like the correct BMC? [Y/N]: ").strip().lower()
-        _session_log.log_user_input(f"BMC validation confirmation: {answer}")
-        if answer != "y":
-            print("❌ BMC validation rejected. Exiting.")
-            _session_log.log("BMC validation rejected", prefix="ERROR")
-            _session_log.set_outcome("FAIL", "BMC validation rejected by operator")
-            _session_log.close()
-            sys.exit(1)
-        print("✅ BMC validation confirmed by user.")
-        _session_log.log("BMC validation confirmed by user")
-    _session_log.end_phase()
-
-    # Mode 1 / 3: ask retain prompts, then ALWAYS attempt peer-BMC discovery
-    # (even if the user answered 'n' to both retain prompts, and regardless
-    # of whether retain captures succeed or fail). Discovery may itself fail
-    # if the node is already down – in that case we proceed with no peer
-    # reset / peer add.
-    if _operation_mode in (1, 3):
-        if _retain_preselected is not None:
-            retain_name, retain_network, retain_creds = _retain_preselected
-            # When a config file was loaded all three are False — just note
-            # that retain is not needed and move on without extra output.
-            if not (retain_name or retain_network or retain_creds):
-                _session_log.log(
-                    "Retain skipped: config file in use"
-                )
-            else:
-                # Operator answered up-front (no config file path used).
-                print("\n" + "=" * 60)
-                print("  \U0001f4be Retain Existing Cluster Configuration "
-                      "(pre-answered above)")
-                print("=" * 60)
-                print(f"  Retain cluster name : {'yes' if retain_name else 'no'}")
-                print(f"  Retain network IPs  : {'yes' if retain_network else 'no'}")
-                print(f"  Reuse BMC creds     : {'yes' if retain_creds else 'no'}")
-                _session_log.log(
-                    f"Retain choices pre-selected (no config file): "
-                    f"name={retain_name}, network={retain_network}, "
-                    f"creds={retain_creds}"
-                )
-        else:
-            _print_banner("💾 Retain Existing Cluster Configuration?")
-            ans1 = input("\n  Do you want to retain the cluster name? [Y/N]: ").strip().lower()
-            _session_log.log_user_input(f"Retain cluster name? {ans1}")
-            retain_name = (ans1 == "y")
-
-            ans2 = input(
-                "  Do you want to retain the same management and cluster network IPs\n"
-                "  from your existing cluster? [Y/N]: "
-            ).strip().lower()
-            _session_log.log_user_input(f"Retain network IPs? {ans2}")
-            retain_network = (ans2 == "y")
-
-            ans3 = input(
-                "  Reuse the BMC admin user and password as the cluster\n"
-                "  admin user and password? [Y/N]: "
-            ).strip().lower()
-            _session_log.log_user_input(f"Reuse BMC creds as cluster admin? {ans3}")
-            retain_creds = (ans3 == "y")
-
-        # If the operator opted to reuse BMC creds for the cluster admin,
-        # promote them into the in-memory cluster config so the rest of
-        # the script (cluster setup wizard, peer-add, etc.) treats them
-        # as "from config" with no further prompting.
-        if retain_creds:
-            cc_block = _config_data.setdefault("cluster", {}) if isinstance(_config_data, dict) else None
-            if isinstance(cc_block, dict):
-                if not cc_block.get("user") and _primary_bmc_user:
-                    cc_block["user"] = _primary_bmc_user
-                # Always overwrite any blank/missing password; if the
-                # operator explicitly provided a different one in the
-                # config we leave it alone.
-                if not cc_block.get("password") and _primary_bmc_password is not None:
-                    cc_block["password"] = _primary_bmc_password
-                _session_log.log(
-                    "Reused BMC admin user/password as cluster admin "
-                    "credentials in runtime config"
-                )
-                print("\n  🔐 Cluster admin user/password will reuse the BMC "
-                      "login credentials.")
-
-        if not (retain_name or retain_network):
-            print("\n  ↩️  Skipping retain capture; will still discover peer BMC")
-            print("     addresses so peer nodes can be reset to LOADER.")
-            _session_log.log("User declined retain; proceeding with peer SP discovery only")
-
-        # If peer BMC addresses are already present in the config file we can
-        # skip the cluster-shell login entirely (no need to probe the console).
-        # Also skip entirely when a config file was loaded (_retain_preselected
-        # is the (False, False, False) sentinel) — the config is the source of
-        # truth; no cluster-shell probing is needed.
-        _cfg_has_peers = False
-        if isinstance(_config_data, dict):
-            _sn_check = _config_data.get("secondary_nodes")
-            if isinstance(_sn_check, list) and any(
-                isinstance(n, dict) and n.get("bmc") for n in _sn_check
-            ):
-                _cfg_has_peers = True
-            else:
-                _nodes_check = _config_data.get("nodes") or []
-                if len([n for n in _nodes_check if isinstance(n, dict) and n.get("bmc")]) > 1:
-                    _cfg_has_peers = True
-
-        _config_file_loaded = (_retain_preselected == (False, False, False))
-
-        if not (retain_name or retain_network) and (_cfg_has_peers or _config_file_loaded):
-            if _config_file_loaded:
-                print("\n  📄 Config file in use — skipping cluster-shell discovery.")
-            else:
-                print("\n  📄 Peer BMC addresses already available in config file.")
-                print("     Skipping cluster-shell discovery.")
-            _session_log.log("Skipping collect_retain_data: config file supplied peer BMCs")
-            peer_addresses = []
-        else:
-            # Peer SP discovery is independent of the retain answers and runs in
-            # the same console session for efficiency. If the cluster shell can't
-            # be reached, all captures (retain + peer SPs) are skipped gracefully.
-            _, _, peer_addresses = collect_retain_data(
-                channel, retain_name, retain_network, collect_peer_sps=True
-            )
-
-        # Promote any retained cluster details (name, cluster-mgmt LIF,
-        # default gateway) into the in-memory JSON config so the cluster
-        # setup wizard treats them as "from config" without re-prompting.
-        # Any field already supplied by the operator's config file is left
-        # alone. When the retain capture failed, this is a no-op and the
-        # operator falls through to manual prompts later.
-        apply_retained_to_cluster_config()
-
-        # Likewise, promote per-node management LIFs (port, IP, netmask,
-        # gateway) into the corresponding _config_data["nodes"] entries
-        # using the SP-address -> node-name mapping captured alongside.
-        # This lets the per-BMC node-mgmt collector use retained values
-        # as defaults / silent values, including for peer BMCs that the
-        # operator didn't pre-list in the JSON config.
-        apply_retained_to_node_configs(primary_bmc=sp_host)
-
-        # Resolve the primary BMC to an IP once so hostname/IP mismatches
-        # don't cause it to leak into the peer list.
-        def _bmc_ip(addr):
-            try:
-                return socket.gethostbyname(addr)
-            except Exception:
-                return addr
-        _sp_host_ip = _bmc_ip(sp_host)
-
-        # Build the unique peer-BMC list. Sources, in priority order:
-        #   1. SP addresses discovered from the running cluster.
-        #   2. `nodes[]` entries from the JSON config file.
-        # Any entry matching the primary BMC (`sp_host`) is dropped so the
-        # script never tries to "add" the node it just initialized, and
-        # duplicates are removed while preserving order.
-        seen_peers = {sp_host, _sp_host_ip}
-        other_sps = []
-
-        for a in (peer_addresses or []):
-            if not a:
-                continue
-            _a_ip = _bmc_ip(a)
-            if a in seen_peers or _a_ip in seen_peers:
-                if a == sp_host or _a_ip == _sp_host_ip:
-                    _session_log.log(
-                        f"Discovered peer entry matches primary BMC ({a}); "
-                        "treating as primary only.",
-                    )
-                continue
-            seen_peers.add(a)
-            seen_peers.add(_a_ip)
-            other_sps.append(a)
-
-        cfg_nodes = []
-        if isinstance(_config_data, dict):
-            # New format: secondary_nodes only (primary is never a peer).
-            _sn = _config_data.get("secondary_nodes")
-            if isinstance(_sn, list):
-                cfg_nodes = [n for n in _sn if isinstance(n, dict)]
-            else:
-                # Legacy format: walk ALL nodes[] entries. The primary is
-                # filtered out below via the `bmc == sp_host` check, so
-                # nodes[0] is included here — it may be a peer when the
-                # actual primary BMC was entered manually and doesn't match
-                # any config entry.
-                _all_nodes = _config_data.get("nodes") or []
-                cfg_nodes = [n for n in _all_nodes if isinstance(n, dict)]
-        cfg_peer_added = []
-        for node in cfg_nodes:
-            if not isinstance(node, dict):
-                continue
-            bmc = (node.get("bmc") or "").strip()
-            if not bmc:
-                continue
-            _bmc_resolved = _bmc_ip(bmc)
-            if bmc == sp_host or _bmc_resolved == _sp_host_ip:
-                _session_log.log(
-                    f"Config 'nodes[]' entry {bmc} matches primary BMC "
-                    f"({sp_host}); treating as primary only.",
-                )
-                continue
-            if bmc in seen_peers or _bmc_resolved in seen_peers:
-                continue
-            seen_peers.add(bmc)
-            seen_peers.add(_bmc_resolved)
-            other_sps.append(bmc)
-            cfg_peer_added.append(bmc)
-
-        if cfg_peer_added:
-            print(f"\n  📄 Added {len(cfg_peer_added)} peer BMC(s) from config: "
-                  f"{', '.join(cfg_peer_added)}")
-            _session_log.log(f"Peers added from config nodes[]: {cfg_peer_added}")
-
-        # If neither discovery nor the config file yielded peer BMCs (single
-        # node, node already down, or capture failed), look for JSON files in
-        # the configs/ directory before falling back to manual entry.
-        if not other_sps:
-            print("\n  ℹ️  No peer service-processor addresses discovered")
-            print("     (single-node cluster, node already down, or capture failed).")
-            _session_log.log("No peer SP addresses auto-discovered; checking configs dir")
-
-            # Search configs/ and script dir for JSON files with BMC entries.
-            import json as _json_pb
-            _pb_candidates = []
-            try:
-                _pb_script_dir = os.path.dirname(os.path.abspath(__file__))
-            except NameError:
-                _pb_script_dir = os.getcwd()
-            _pb_configs_dir = os.path.join(_pb_script_dir, "configs")
-            for _pb_dir in [_pb_configs_dir, _pb_script_dir]:
-                if not os.path.isdir(_pb_dir):
-                    continue
-                for _pb_fname in sorted(os.listdir(_pb_dir)):
-                    if not _pb_fname.lower().endswith(".json"):
-                        continue
-                    _pb_fpath = os.path.abspath(os.path.join(_pb_dir, _pb_fname))
-                    try:
-                        with open(_pb_fpath, "r", encoding="utf-8") as _pbf:
-                            _pb_data = _json_pb.load(_pbf)
-                        _pb_ips = []
-                        _pbn = _pb_data.get("primary_node")
-                        _pbsn = _pb_data.get("secondary_nodes")
-                        _pbnodes = _pb_data.get("nodes")
-                        if isinstance(_pbn, dict) and _pbn.get("bmc"):
-                            _pb_ips.append(str(_pbn["bmc"]))
-                        for _n in (_pbsn or []):
-                            if isinstance(_n, dict) and _n.get("bmc"):
-                                _pb_ips.append(str(_n["bmc"]))
-                        if not _pb_ips and isinstance(_pbnodes, list):
-                            _pb_ips = [str(n["bmc"]) for n in _pbnodes
-                                       if isinstance(n, dict) and n.get("bmc")]
-                        if isinstance(_pb_data.get("netboot_bmcs"), list):
-                            _pb_ips = [str(x) for x in _pb_data["netboot_bmcs"] if x]
-                        # Only include files that have peer BMCs beyond sp_host.
-                        _pb_peers = [ip for ip in _pb_ips
-                                     if ip and ip not in seen_peers and ip != sp_host]
-                        if _pb_peers:
-                            _pb_candidates.append((_pb_fpath, _pb_data, _pb_peers))
-                    except Exception:
-                        pass
-
-            if _pb_candidates:
-                print(f"\n  Found {len(_pb_candidates)} config file(s) with peer BMC addresses:")
-                for _pbi, (_pb_fpath, _, _pb_peers) in enumerate(_pb_candidates, 1):
-                    print(f"    {_pbi}. {_pb_fpath}  "
-                          f"({len(_pb_peers)} peer(s): {', '.join(_pb_peers)})")
-                print("    0. Enter peer BMC addresses manually")
+            # ── Mode 48 (4g): reset all nodes to LOADER prompt ─────────────────────
+            if _operation_mode == 48:
+                _print_banner("\U0001f504 4g: Reset all nodes to LOADER prompt")
                 print("")
-                while True:
-                    _pb_sel = _prompt("  Load peers from a file? [1] or 0 for manual: ", "0")
-                    if _pb_sel == "" and len(_pb_candidates) == 1:
-                        _pb_sel = "1"
-                    if _pb_sel == "0":
-                        break
-                    if _pb_sel.isdigit() and 1 <= int(_pb_sel) <= len(_pb_candidates):
-                        _, _, _pb_peers = _pb_candidates[int(_pb_sel) - 1]
-                        for _pb_ip in _pb_peers:
-                            seen_peers.add(_pb_ip)
-                            other_sps.append(_pb_ip)
-                        print(f"\n  ✅ Loaded {len(_pb_peers)} peer BMC(s): "
-                              f"{', '.join(_pb_peers)}")
-                        _session_log.log(f"Peer BMCs loaded from file: {_pb_peers}")
-                        break
-                    print("  ⚠️  Invalid selection.")
 
-            if not other_sps:
-                # No files found or operator chose manual entry.
-                print("\n  You may enter peer BMC IPs/hostnames manually so this script")
-                print("  can reset them to LOADER. Enter one per prompt; press Enter on")
-                print("  an empty line to finish and continue.")
-
-                i = 1
-                while True:
-                    entry = input(f"\n  Peer BMC #{i} (blank to finish): ").strip()
-                    _session_log.log_user_input(f"Manual peer BMC #{i}: {entry!r}")
-                    if not entry:
-                        break
-                    if entry in seen_peers:
-                        print(f"  ⚠️  '{entry}' already added or is the primary BMC; skipping.")
-                        _session_log.log(f"Duplicate/primary peer BMC entry skipped: {entry}")
-                        continue
-                    seen_peers.add(entry)
-                    other_sps.append(entry)
-                    print(f"  ✅ Added peer BMC: {entry}")
-                    _session_log.log(f"Manually added peer BMC: {entry}")
-                    i += 1
-
-            if other_sps:
-                print(f"\n  ✅ Will reset {len(other_sps)} peer BMC(s) to LOADER: "
-                      f"{', '.join(other_sps)}")
-                _session_log.log(f"Peer BMCs to reset: {other_sps}")
-            else:
-                print("\n  ↩️  No peer BMCs entered; proceeding with reset of this node only.")
-                _session_log.log("User entered no peer BMCs manually")
-
-        # ---- Confirm the discovered peer count, with the option to add
-        # more node entries on the fly. New entries are written back into
-        # the in-memory _config_data["nodes"] list so the rest of the
-        # pipeline (per-node mgmt collection, peer credential lookup, etc.)
-        # treats them identically to anything that was in the JSON to
-        # begin with.
-        def _prompt_with_default(label, default=None):
-            suffix = f" [{default}]" if default else ""
-            val = _prompt(f"    {label}{suffix}: ")
-            return val or (default or "")
-
-        if _operation_mode == 1:
-            # Mode 1a/1b only touches the first node — skip the summary/confirm loop
-            global _initial_node_count
-            _initial_node_count = 1
-            if other_sps:
-                ignored_list = ", ".join(other_sps)
-                print(f"\n  ℹ️  Secondary nodes [{ignored_list}] ignored")
-            _session_log.log(f"Mode 1 — initial node count set to 1; peers ignored: {other_sps}")
-        else:
-          while True:
-            _print_banner("📋 Cluster node summary")
-            print(f"  BMC of first node in the cluster : {sp_host} (user={sp_user})")
-            if other_sps:
-                print(f"  Nodes to add after cluster init  ({len(other_sps)}):")
-                for a in other_sps:
-                    print(f"    - {a}")
-            else:
-                print("  Nodes to add after cluster init  : (none)")
-            print(f"  Total nodes                      : {1 + len(other_sps)}")
-            ans = _prompt("\n  Is this the correct number of nodes? [Y/N]: ", "y").lower()
-            _session_log.log_user_input(f"Confirm node count ({1 + len(other_sps)}): {ans}")
-            if ans in ("", "y", "yes"):
-                _initial_node_count = 1 + len(other_sps)
-                _session_log.log(f"Initial node count confirmed: {_initial_node_count}")
-                break
-
-            print("\n  ➕ Add one or more additional peer node(s). Enter the same")
-            print("     fields used by the JSON config file. Blank BMC ends entry.")
-            added_this_round = 0
-            while True:
-                new_bmc = _prompt("\n    New peer BMC IP/hostname (blank to finish): ")
-                if not new_bmc:
-                    break
-                if new_bmc == sp_host or new_bmc in seen_peers:
-                    print(f"    ⚠️  '{new_bmc}' is already the primary or a known peer; skipping.")
-                    _session_log.log(f"Duplicate add-peer entry skipped: {new_bmc}")
-                    continue
-                new_user = _prompt_with_default(f"BMC username for {new_bmc}", sp_user)
-                try:
-                    new_pass = getpass.getpass(
-                        f"    BMC password for {new_user}@{new_bmc} "
-                        "(blank = no password): "
-                    )
-                except (EOFError, KeyboardInterrupt):
-                    new_pass = ""
-                new_port = _prompt_with_default(
-                    f"Node mgmt port for {new_bmc}", "e0M")
-                new_ip = _prompt_with_default(f"Node mgmt IP for {new_bmc}")
-                new_mask = _prompt_with_default(
-                    f"Node mgmt netmask for {new_bmc}", "255.255.255.0")
-                new_gw = _prompt_with_default(f"Node mgmt gateway for {new_bmc}")
-
-                new_entry = {
-                    "bmc": new_bmc,
-                    "bmc_user": new_user,
-                    "bmc_password": new_pass,
-                    "node_mgmt_port": new_port,
-                    "node_mgmt_ip": new_ip,
-                    "node_mgmt_netmask": new_mask,
-                    "node_mgmt_gateway": new_gw,
-                }
-
-                # Persist into the in-memory config so _node_cfg_for() picks
-                # it up later. We never write back to disk; the JSON file
-                # itself is left untouched.
-                if isinstance(_config_data.get("secondary_nodes"), list):
-                    _config_data["secondary_nodes"].append(new_entry)
-                elif "primary_node" in _config_data:
-                    _config_data.setdefault("secondary_nodes", []).append(new_entry)
-                else:
-                    _config_data.setdefault("nodes", []).append(new_entry)
-
-                seen_peers.add(new_bmc)
-                other_sps.append(new_bmc)
-                added_this_round += 1
-                print(f"    ✅ Added peer BMC: {new_bmc}")
-                _session_log.log(
-                    f"Operator added peer BMC at confirmation step: {new_bmc} "
-                    f"(user={new_user}, port={new_port}, ip={new_ip})"
-                )
-
-            if added_this_round == 0:
-                print("\n  (No new peers entered; re-confirming current list.)")
-
-        # Collect node-management network info for every BMC (primary +
-        # peers) up-front so mode 1b can auto-answer the per-node prompts.
-        # This also runs in mode 1a so the data is captured in the log even
-        # though it won't be auto-applied.
-        collect_node_mgmt_per_bmc(sp_host, other_sps)
-
-        # Mode 1b also needs the cluster-level setup wizard answers up-front.
-        if _auto_setup:
-            collect_cluster_config()
-
-        if other_sps and _operation_mode != 1:
-            _print_banner("🔐 Peer BMC SSH Credentials")
-            print("\n  Provide SSH credentials for each peer BMC. Press Enter")
-            print(f"  to reuse the primary BMC username '{sp_user}' / password.")
-
-            # Ask if all peers share the same credentials as the primary.
-            try:
-                _same_creds_ans = input(
-                    f"\n  Use the same BMC username '{sp_user}' and password"
-                    " for all peer nodes? [Y/n]: "
-                ).strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                _same_creds_ans = ""
-            _same_creds_all = (_same_creds_ans != "n")
-
-            for addr in other_sps:
-                node_cfg = _node_cfg_for(addr)
-                # Three-state handling for each field:
-                #   * Key absent / non-string  -> prompt the operator.
-                #   * Key present (even empty) -> use the value as-is. An
-                #     empty string means literally "no password" for BMCs
-                #     that don't require one (or accept passthrough creds).
-                #   * Non-empty string         -> use as-is.
-                user_in_cfg = (
-                    "bmc_user" in node_cfg
-                    and isinstance(node_cfg["bmc_user"], str)
-                )
-                pass_in_cfg = (
-                    "bmc_password" in node_cfg
-                    and isinstance(node_cfg["bmc_password"], str)
-                )
-
-                if _same_creds_all:
-                    # Use primary credentials for all peers (no per-node prompt).
-                    u = sp_user
-                    p = sp_pass
-                else:
-                    print(f"\n  ── Peer BMC {addr} ──")
-                    # Resolve username.
-                    if user_in_cfg:
-                        u = node_cfg["bmc_user"].strip() or sp_user
-                        if not node_cfg["bmc_user"].strip():
-                            print(f"    📄 Username blank in config for {addr}; "
-                                  f"reusing primary user '{sp_user}'.")
-                    else:
-                        try:
-                            u = input(
-                                f"    Username for {addr} "
-                                f"[hit enter to re-use {sp_user}]: "
-                            ).strip() or sp_user
-                        except (EOFError, KeyboardInterrupt):
-                            u = sp_user
-
-                    # Resolve password.
-                    if pass_in_cfg:
-                        p = node_cfg["bmc_password"]
-                        if p:
-                            print(f"    📄 Using config credentials for {addr} (user={u})")
-                        else:
-                            print(f"    📄 Password blank in config for {addr}; "
-                                  "will attempt SSH with no password.")
-                    else:
-                        p = getpass.getpass(
-                            f"    Password for {addr} (blank to reuse primary): "
-                        )
-                        if not p:
-                            p = sp_pass
-
-                _peer_bmc_creds[addr] = {"user": u, "password": p}
-                if p == sp_pass:
-                    pw_desc = "<reused-primary>"
-                elif p == "":
-                    pw_desc = "<blank>"
-                else:
-                    pw_desc = "<custom>"
-                _session_log.log(
-                    f"Captured credentials for peer BMC {addr} (user={u}, "
-                    f"password={pw_desc})"
-                )
-            if _same_creds_all:
-                print(f"  ✅ Using primary credentials (user={sp_user}) for all"
-                      f" {len(other_sps)} peer node(s).")
-
-        if _operation_mode == 3:
-            # Mode 3: peers will be auto-added in parallel AFTER the primary's
-            # cluster create completes. Stash the peer list for the wizard
-            # post-step.
-            # Refresh first so apply_to_globals() doesn't clobber _session_log
-            # (or other globals set after the RunContext was last synced).
-            _run_context.refresh_from_globals()
-            _run_context.peer_bmc_list = list(other_sps)
-            _run_context.apply_to_globals()
-            if other_sps:
-                print(f"\n  🧩 Mode 3: {len(other_sps)} peer node(s) will be"
-                      " auto-added in parallel after primary cluster is up:")
-                print(f"     {', '.join(other_sps)}")
-                _session_log.log(f"Mode 3 peer add list: {other_sps}")
-
-        # Reset every peer BMC to LOADER up-front (mode 3 needs peers parked at
-        # LOADER before the parallel auto-add kicks in). Mode 1 (1a/1b) only
-        # operates on the first node — skip peer resets entirely.
-        if other_sps and _operation_mode == 3:
-            _print_banner(f"🔁 Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
-            print(f"  Peer BMCs: {', '.join(other_sps)}")
-            _session_log.start_phase("Peer Node Reset to LOADER")
-            _session_log.log(f"Peer BMCs to reset: {other_sps}")
-
-            # Open a dedicated log file per peer so parallel console streams
-            # don't interleave on the terminal.
-            _pr_log_dir = _session_log.log_dir if _session_log else os.getcwd()
-            _pr_node_logs: dict = {}
-            for addr in other_sps:
-                try:
-                    _pr_nf = _node_log_open(addr, _pr_log_dir, prefix="peer_reset")
-                    _pr_node_logs[addr] = _pr_nf
-                    print(f"  📝 [{addr}] Reset log → {_pr_nf.name}")
-                    _session_log.log(f"[{addr}] reset log: {_pr_nf.name}")
-                except Exception as _pr_e:
-                    _pr_node_logs[addr] = None
-                    print(f"  ⚠️  [{addr}] Could not open reset log: {_pr_e}")
-
-            _pr_results: dict = {}
-            _pr_lock = threading.Lock()
-
-            def _pr_worker(addr):
-                creds = _peer_bmc_creds.get(addr, {"user": sp_user, "password": sp_pass})
-                ok = reset_peer_to_loader(
-                    addr, creds["user"], creds["password"],
-                    node_log=_pr_node_logs.get(addr),
-                )
-                with _pr_lock:
-                    _pr_results[addr] = ok
-
-            _run_parallel(other_sps, _pr_worker)
-
-            for addr, nf in _pr_node_logs.items():
-                if nf:
+                # ── Locate BMC IP list (same logic as mode 47) ───────────────────
+                _bmc_ips48 = []
+                _found_file48 = None
+                for _p48 in _find_config_files(
+                    candidate_names=("BMC_IP.json",
+                                     "reinit-config.json", "reinit_config.json",
+                                     "reinit-afx-config.json", "add_nodes.json"),
+                ):
                     try:
-                        nf.close()
+                        with open(_p48, "r", encoding="utf-8") as _f48:
+                            _d48data = json.load(_f48)
+                    except Exception:
+                        continue
+                    if isinstance(_d48data.get("netboot_bmcs"), list):
+                        _bmc_ips48 = [str(x) for x in _d48data["netboot_bmcs"] if x]
+                    else:
+                        _pn48 = _d48data.get("primary_node")
+                        if isinstance(_pn48, dict) and _pn48.get("bmc"):
+                            _bmc_ips48.append(str(_pn48["bmc"]))
+                        for _sn48 in (_d48data.get("secondary_nodes") or []):
+                            if isinstance(_sn48, dict) and _sn48.get("bmc"):
+                                _bmc_ips48.append(str(_sn48["bmc"]))
+                        if not _bmc_ips48:
+                            for _n48 in (_d48data.get("nodes") or []):
+                                if isinstance(_n48, dict) and _n48.get("bmc"):
+                                    _bmc_ips48.append(str(_n48["bmc"]))
+                    if _bmc_ips48:
+                        _found_file48 = _p48
+                        break
+
+                if _found_file48:
+                    print(f"  \U0001f4c4 Loaded {len(_bmc_ips48)} BMC address(es) from: {_found_file48}")
+                    for _ip48 in _bmc_ips48:
+                        print(f"     \u2022 {_ip48}")
+                else:
+                    print("  \u2139\ufe0f  No BMC IP file found. Enter BMC addresses manually.")
+                    print("  (Leave blank and press Enter when done.)\n")
+                    _idx48 = 1
+                    while True:
+                        _entry48 = _prompt(f"  BMC {_idx48} hostname/IP (blank to finish): ")
+                        if not _entry48:
+                            break
+                        _bmc_ips48.append(_entry48)
+                        _idx48 += 1
+
+                if not _bmc_ips48:
+                    print("  No BMC addresses entered. Exiting.")
+                    sys.exit(0)
+
+                # ── Credentials ──────────────────────────────────────────────────
+                print("")
+                _same_creds48 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
+                _creds48 = {}   # ip -> (user, password)
+                if _same_creds48 != "n":
+                    _shared_user48 = input("  BMC username [admin]: ").strip() or "admin"
+                    _shared_pass48 = getpass.getpass("  BMC password (blank = none): ")
+                    for _ip48 in _bmc_ips48:
+                        _creds48[_ip48] = (_shared_user48, _shared_pass48)
+                else:
+                    for _ip48 in _bmc_ips48:
+                        print(f"\n  Credentials for {_ip48}:")
+                        _u48 = input("    Username [admin]: ").strip() or "admin"
+                        _p48 = getpass.getpass("    Password (blank = none): ")
+                        _creds48[_ip48] = (_u48, _p48)
+                print("")
+
+                _make_session_log("4g: reset all nodes to LOADER")
+
+                # ── Reset each node to LOADER in parallel ────────────────────────
+                _print_banner(f"\U0001f504 Resetting {len(_bmc_ips48)} node(s) to LOADER prompt")
+                print(f"  Nodes: {', '.join(_bmc_ips48)}\n")
+                _session_log.start_phase("Reset to LOADER")
+
+                _log_dir48 = _session_log.log_dir if _session_log else os.getcwd()
+                _node_logs48 = {}
+                for _ip48 in _bmc_ips48:
+                    try:
+                        _nf48 = _node_log_open(_ip48, _log_dir48, prefix="mode4g_loader")
+                        _node_logs48[_ip48] = _nf48
+                        print(f"  \U0001f4dd [{_ip48}] Log \u2192 {_nf48.name}")
+                    except Exception:
+                        _node_logs48[_ip48] = None
+
+                _results48 = {}
+                _results_lock48 = threading.Lock()
+
+                def _loader_worker48(ip):
+                    u48, p48 = _creds48.get(ip, ("admin", ""))
+                    # Populate _peer_bmc_creds so reset_peer_to_loader can update them.
+                    _peer_bmc_creds[ip] = {"user": u48, "password": p48}
+                    ok = reset_peer_to_loader(
+                        ip, u48, p48,
+                        node_log=_node_logs48.get(ip),
+                    )
+                    with _results_lock48:
+                        _results48[ip] = ok
+
+                _run_parallel(_bmc_ips48, _loader_worker48)
+
+                for _nf48 in _node_logs48.values():
+                    if _nf48:
+                        try:
+                            _nf48.close()
+                        except Exception:
+                            pass
+
+                # ── Results summary ───────────────────────────────────────────────
+                print("\n  " + "─" * 58)
+                print(f"  {'BMC IP':<24}  Result")
+                print(f"  {'─'*24}  {'─'*20}")
+                _pass48 = _fail48 = 0
+                for _ip48 in _bmc_ips48:
+                    _ok48 = _results48.get(_ip48, False)
+                    _icon48 = "\u2705" if _ok48 else "\u274c"
+                    _label48 = "LOADER reached" if _ok48 else "FAILED"
+                    print(f"  {_ip48:<24}  {_icon48} {_label48}")
+                    if _ok48:
+                        _pass48 += 1
+                    else:
+                        _fail48 += 1
+                print(f"  {'─'*24}  {'─'*20}")
+                print(f"\n  {_pass48} reached LOADER  /  {_fail48} failed  (of {len(_bmc_ips48)} nodes)\n")
+
+                _session_log.end_phase()
+                _session_log.record_completion(normal_exit=(_fail48 == 0))
+                print(f"\U0001f4dd Session log: {_session_log.log_file}")
+                sys.exit(0 if _fail48 == 0 else 1)
+
+            # ── Mode 49 (5f): cluster health and version check ─────────────────────
+            if _operation_mode == 49:
+                _print_banner("\U0001f4ca 5f: Cluster health and version check")
+                _make_session_log("Mode 5f: cluster health and version check")
+                print("")
+
+                # ── Gather connection details ────────────────────────────────────
+                _ch49_ip = None
+                _ch49_user = "admin"
+                _ch49_pass = ""
+                import getpass as _gp49
+
+                # 1. Try to load from a reinit-config file.
+                _49_cfg_files = _find_config_files(deep_scan=True)
+                _49_cfg_data = {}
+                if _49_cfg_files:
+                    _49_cfg_path = _49_cfg_files[0]
+                    try:
+                        with open(_49_cfg_path, "r", encoding="utf-8") as _f49:
+                            _49_cfg_data = json.load(_f49)
+                        print(f"  \U0001f4c4 Using config: {_49_cfg_path}")
+                    except Exception as _e49c:
+                        print(f"  \u26a0\ufe0f  Could not read {_49_cfg_path}: {_e49c}")
+                        _49_cfg_data = {}
+
+                if isinstance(_49_cfg_data, dict) and _49_cfg_data:
+                    _ch49_ip = ((_49_cfg_data.get("cluster") or {}).get("clus_mgmt_address")
+                                or _cluster_config.get("mgmt_ip"))
+                    _ch49_user = ((_49_cfg_data.get("cluster") or {}).get("username") or "admin")
+                elif isinstance(_config_data, dict) and _config_data:
+                    # fall back to already-loaded global config
+                    _ch49_ip = ((_config_data.get("cluster") or {}).get("clus_mgmt_address")
+                                or _cluster_config.get("mgmt_ip"))
+                    _ch49_user = ((_config_data.get("cluster") or {}).get("username") or "admin")
+
+                # 2. No config found — offer to gather one or ask for IP.
+                if not _ch49_ip and not _49_cfg_files:
+                    print("\n  \u26a0\ufe0f  No reinit-config.json found on disk.")
+                    print("     Option 5c can connect to your existing cluster and generate one automatically.")
+                    _ans_49 = _prompt("  Run the 4e config-gather workflow now? [Y/n]: ", "n").lower()
+                    if _ans_49 != "n":
+                        _5f_pending_after_4e = True
+                        _operation_mode = 46  # noqa: F841  (module-level var, reassigned here)
+                        return
+                    # User said no — fall through to manual IP prompt.
+
+                if not _ch49_ip:
+                    _ch49_ip = input("  Cluster management LIF IP: ").strip()
+                    if not _ch49_ip:
+                        print("  No IP entered. Exiting.")
+                        sys.exit(0)
+
+                _ch49_user_in = input(f"  Cluster admin username [{_ch49_user}]: ").strip()
+                if _ch49_user_in:
+                    _ch49_user = _ch49_user_in
+                _ch49_pass = _gp49.getpass(f"  Cluster admin password for {_ch49_user}@{_ch49_ip}: ")
+
+                # ── Connect ──────────────────────────────────────────────────────
+                print(f"\n  \U0001f50c Connecting to {_ch49_ip} as {_ch49_user}...")
+                try:
+                    _cl49, _, _ = _ssh_connect_with_retry(
+                        _ch49_ip, _ch49_user, _ch49_pass,
+                        label=f"healthcheck/{_ch49_ip}",
+                        max_attempts=3, interactive=False,
+                    )
+                except Exception as _e49:
+                    print(f"  \u274c Connection failed: {_e49}")
+                    _session_log.log(f"5f: connection failed: {_e49}", prefix="ERROR")
+                    sys.exit(1)
+
+                _ch49 = _open_shell(_cl49)
+                try:
+                    _ch49.resize_pty(width=256, height=50)
+                except Exception:
+                    pass
+                with _suppress_console():
+                    _wait_for_cluster_prompt(_ch49, timeout=30)
+                print(f"  \u2705 Connected to {_ch49_ip}")
+                _session_log.log(f"5f: connected to {_ch49_ip}")
+
+                # ── Health check ─────────────────────────────────────────────────
+                print("\n  \U0001f50d Running cluster health check...")
+
+                # Run cluster show and storage failover show and display raw output.
+                with _suppress_console():
+                    _cs49_out = _run_cluster_command(
+                        _ch49, "set -rows 0; cluster show", timeout=30
+                    )
+                    _fo49_out = _run_cluster_command(
+                        _ch49, "set -rows 0; storage failover show", timeout=30
+                    )
+                _cs49_out = _ANSI_RE.sub("", _cs49_out).replace("\r\n", "\n").replace("\r", "\n")
+                _fo49_out = _ANSI_RE.sub("", _fo49_out).replace("\r\n", "\n").replace("\r", "\n")
+
+                print("\n  cluster show:")
+                for _ln in _cs49_out.splitlines():
+                    _ls = _ln.strip()
+                    if _ls and "::" not in _ls and "cluster show" not in _ls.lower():
+                        print(f"    {_ls}")
+
+                print("\n  storage failover show:")
+                for _ln in _fo49_out.splitlines():
+                    _ls = _ln.strip()
+                    if _ls and "::" not in _ls and "storage failover show" not in _ls.lower():
+                        print(f"    {_ls}")
+
+                _nodes49 = []
+                for _r49 in _parse_failover_show(_fo49_out):
+                    if _r49["node"] and _r49["node"] not in _nodes49:
+                        _nodes49.append(_r49["node"])
+                _session_log.log(f"5f: nodes discovered: {_nodes49}")
+
+                if not _nodes49:
+                    print("  \u26a0\ufe0f  Could not discover node names from 'storage failover show'.")
+
+                _healthy49 = _wait_for_cluster_healthy(
+                    _ch49, _nodes49, total_timeout=600, poll_interval=60,
+                    log=_session_log,
+                )
+
+                # ── Version check ────────────────────────────────────────────────
+                print("\n  \U0001f50d Checking ONTAP version...")
+                with _suppress_console():
+                    _ver49_out = _run_cluster_command(_ch49, "version", timeout=30)
+                    _img49_out = _run_cluster_command(
+                        _ch49,
+                        "set advanced -c off; system image show -fields version,iscurrent,isdefault",
+                        timeout=60,
+                    )
+                _ver49_out = _ANSI_RE.sub("", _ver49_out).replace("\r\n", "\n").replace("\r", "\n")
+                _img49_out = _ANSI_RE.sub("", _img49_out).replace("\r\n", "\n").replace("\r", "\n")
+
+                _ver49_match = re.search(r"NetApp Release\s+(\S+)", _ver49_out, re.IGNORECASE)
+                _running49 = _ver49_match.group(1).rstrip(":.;") if _ver49_match else None
+
+                _img49_lines = [l.strip() for l in _img49_out.splitlines()
+                                if l.strip() and "::" not in l
+                                and not l.strip().lower().startswith("system image")
+                                and "password" not in l.strip().lower()
+                                and "set advanced" not in l.strip().lower()]
+
+                print(f"\n  Running version  : {_running49 or '(parse failed)'}")
+                if _img49_lines:
+                    print("  Image show output:")
+                    for _il49 in _img49_lines[-12:]:
+                        print(f"    {_il49}")
+
+                _session_log.log(f"5f: running version={_running49}")
+
+                # ── Cleanup & exit ───────────────────────────────────────────────
+                try:
+                    _ch49.close()
+                except Exception:
+                    pass
+                try:
+                    _cl49.close()
+                except Exception:
+                    pass
+
+                if _healthy49:
+                    _ver_str = f" and all nodes are running ONTAP {_running49}" if _running49 else ""
+                    print(f"\n  \u2705 Cluster is healthy{_ver_str}.")
+                    _session_log.log(f"5f: cluster healthy, version={_running49}")
+                else:
+                    print("\n  \u26a0\ufe0f  Cluster did not reach fully healthy state within the timeout.")
+                    _session_log.log("5f: cluster not healthy within timeout", prefix="WARN")
+
+                print(f"\U0001f4dd Session log: {_session_log.log_file}")
+                sys.exit(0 if _healthy49 else 1)
+
+            # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
+            if _operation_mode == 45:
+                import pathlib
+
+                _print_banner("\U0001f511 Setting up passwordless SSH to cluster management")
+
+                # Gather target details.
+                mgmt_ip = input("\n  Cluster management IP address: ").strip()
+                if not mgmt_ip:
+                    print("  No IP entered. Exiting.")
+                    sys.exit(0)
+                ssh_user = input("  SSH username to configure: ").strip()
+                if not ssh_user:
+                    print("  No username entered. Exiting.")
+                    sys.exit(0)
+
+                # 1. Remove any existing known_hosts entries for this IP.
+                known_hosts = pathlib.Path.home() / ".ssh" / "known_hosts"
+                if known_hosts.exists():
+                    print(f"\n  \U0001f5d1\ufe0f  Removing existing known_hosts entries for {mgmt_ip}...")
+                    try:
+                        subprocess.run(
+                            ["ssh-keygen", "-R", mgmt_ip],
+                            check=False, capture_output=True,
+                        )
+                        print("  \u2705 Done.")
+                    except FileNotFoundError:
+                        print("  \u26a0\ufe0f  ssh-keygen not found on PATH; skipping known_hosts cleanup.")
+
+                # 2. Generate RSA-4096 key if ~/.ssh/id_rsa doesn't already exist.
+                id_rsa = pathlib.Path.home() / ".ssh" / "id_rsa"
+                id_rsa_pub = pathlib.Path.home() / ".ssh" / "id_rsa.pub"
+                if id_rsa.exists():
+                    print(f"\n  \u2139\ufe0f  Key pair already exists at {id_rsa}; skipping keygen.")
+                else:
+                    print("\n  \U0001f511 Generating RSA-4096 key pair (no passphrase)...")
+                    (pathlib.Path.home() / ".ssh").mkdir(mode=0o700, parents=True, exist_ok=True)
+                    keygen_result = subprocess.run(
+                        ["ssh-keygen", "-t", "rsa", "-b", "4096",
+                         "-f", str(id_rsa), "-N", ""],
+                        capture_output=True, text=True,
+                    )
+                    if keygen_result.returncode != 0:
+                        print(f"  \u274c ssh-keygen failed:\n{keygen_result.stderr}")
+                        sys.exit(1)
+                    print("  \u2705 Key pair generated.")
+
+                # 3. Read the public key.
+                if not id_rsa_pub.exists():
+                    print(f"  \u274c Public key not found at {id_rsa_pub}. Exiting.")
+                    sys.exit(1)
+                pub_key = id_rsa_pub.read_text(encoding="utf-8").strip()
+                print(f"\n  \U0001f4cb Public key:\n     {pub_key}")
+
+                # 4. Connect via BMC and configure the public key on the cluster shell.
+                print("\n  \U0001f4bb Connecting via BMC to configure cluster account...")
+
+                # BMC credentials from config or interactive prompts.
+                primary_node_45 = {}
+                if isinstance(_config_data, dict):
+                    nl_45 = _config_data.get("nodes") or []
+                    if nl_45 and isinstance(nl_45[0], dict):
+                        primary_node_45 = nl_45[0]
+
+                sp_host_45 = _cfg_str(primary_node_45.get("bmc"))
+                if sp_host_45:
+                    _check_bmc_reachable(sp_host_45)
+                else:
+                    sp_host_45 = _prompt_bmc_host()
+                sp_user_45 = _cfg_str(primary_node_45.get("bmc_user")) or input("  BMC username: ").strip()
+                if "bmc_password" in primary_node_45 and isinstance(primary_node_45["bmc_password"], str):
+                    sp_pass_45 = primary_node_45["bmc_password"]
+                else:
+                    sp_pass_45 = getpass.getpass("  BMC password: ")
+
+                _make_session_log("Mode 4d: set up passwordless SSH")
+
+                _session_log.start_phase("SSH Connection (BMC)")
+                client_45, sp_user_45, sp_pass_45 = connect_to_sp(sp_host_45, sp_user_45, sp_pass_45)
+                ch_45 = _open_shell(client_45)
+                threading.Thread(target=keepalive_loop, args=(client_45,), daemon=True).start()
+                _session_log.end_phase()
+
+                # Read the initial banner/prompt after shell open.  We watch for:
+                #   ::>  / ::*>   – already at the cluster shell (console passthrough)
+                #   y/n           – existing BMC session takeover prompt
+                #   >             – plain BMC prompt (SP> or similar)
+                # We do NOT call wait_for_bmc_prompt() because it consumes the ::>
+                # and then the probe below can't see it.
+                _session_log.start_phase("Cluster Shell Login")
+                _init_out, _init_match = direct_read_until_any(
+                    ch_45,
+                    ["::>", "::*>", "y/n", ">"],
+                    timeout=20,
+                )
+                _already_at_cluster = False
+                if _init_match and ("::>" in _init_match or "::*>" in _init_match):
+                    # Console is already in passthrough mode — no need for system console.
+                    _already_at_cluster = True
+                    print("  \u2705 Cluster shell prompt detected directly.")
+                elif _init_match and "y/n" in _init_match.lower():
+                    # Existing session takeover prompt.
+                    print("\n  \u26a0\ufe0f  An existing BMC session is active.")
+                    _takeover = input("     Disconnect the other session? [Y/N]: ").strip().lower()
+                    if _takeover == "y":
+                        ch_45.send("y\r")
+                    else:
+                        print("  \u274c Cannot continue without taking over session. Exiting.")
+                        sys.exit(1)
+                    # Wait for BMC prompt after takeover.
+                    _to_out, _to_match = direct_read_until_any(
+                        ch_45, ["::>", "::*>", ">"], timeout=15
+                    )
+                    if _to_match and ("::>" in _to_match or "::*>" in _to_match):
+                        _already_at_cluster = True
+                elif not _init_match:
+                    print("  \u274c No prompt received after BMC login. Exiting.")
+                    sys.exit(1)
+
+                if not _already_at_cluster:
+                    enter_system_console(ch_45)
+
+                if not _wait_for_cluster_prompt(ch_45, timeout=60):
+                    admin_pw_45 = _cluster_config.get("admin_password") or ""
+                    if not admin_pw_45:
+                        admin_pw_45 = getpass.getpass("  Cluster admin password: ")
+                    if not _login_primary_cluster_shell(ch_45, admin_pw_45):
+                        print("  \u274c Cluster shell login failed. Exiting.")
+                        sys.exit(1)
+                _session_log.end_phase()
+
+                # Get cluster name from the shell prompt itself — the ONTAP prompt
+                # is "<clustername>::>" so this is more reliable than parsing command
+                # output (which has column headers like "cluster" that look like data).
+                ch_45.send("\r")
+                _prompt_out, _ = direct_read_until_any(
+                    ch_45, ["::>", "::*>"], timeout=15
+                )
+                cluster_name_45 = ""
+                for _pline in reversed((_prompt_out or "").splitlines()):
+                    _pm = re.match(r'^(\S+)::\*?>\s*$', _pline.strip())
+                    if _pm:
+                        cluster_name_45 = _pm.group(1)
+                        break
+                if cluster_name_45:
+                    print(f"  \u2705 Cluster name detected from prompt: {cluster_name_45}")
+                else:
+                    cluster_name_45 = input(
+                        "  Could not detect cluster name from prompt. Enter it manually: "
+                    ).strip()
+
+                # Check whether the user has an SSH/publickey login entry.
+                # Always check — even for admin — because the ssh application entry
+                # may not exist even if the account does.
+                print(f"\n  \U0001f50d Checking if '{ssh_user}' has an ssh/publickey login entry...")
+                show_out = _run_cluster_command(
+                    ch_45,
+                    f"security login show {ssh_user} -application ssh "
+                    f"-authentication-method publickey",
+                    timeout=30,
+                )
+                ssh_login_exists = "no entries matching" not in show_out.lower()
+
+                if not ssh_login_exists:
+                    print(f"  \U0001f194 No ssh login entry for '{ssh_user}'. Creating...")
+                    _run_cluster_command(
+                        ch_45,
+                        f"security login create -user-or-group-name {ssh_user} "
+                        f"-application ssh -authentication-method publickey "
+                        f"-role {'admin' if ssh_user.lower() == 'admin' else 'vsadmin'} "
+                        f"-vserver {cluster_name_45}",
+                        timeout=30,
+                    )
+                    print(f"  \u2705 SSH login entry created for '{ssh_user}'.")
+                else:
+                    print(f"  \u2139\ufe0f  SSH login entry already exists for '{ssh_user}'.")
+                print(f"\n  \U0001f511 Installing public key for '{ssh_user}' on cluster '{cluster_name_45}'...")
+                _run_cluster_command(
+                    ch_45,
+                    f'security login publickey create -vserver {cluster_name_45} '
+                    f'-username {ssh_user} -publickey "{pub_key}"',
+                    timeout=30,
+                )
+                print("  \u2705 Public key installed on cluster.")
+
+                # Close the BMC session — no longer needed.
+                try:
+                    ch_45.close()
+                except Exception:
+                    pass
+                try:
+                    client_45.close()
+                except Exception:
+                    pass
+
+                # Test passwordless login from this host — open an interactive shell
+                # and wait for the cluster prompt (::>) without a password prompt.
+                print(f"\n  \U0001f50e Testing ssh {ssh_user}@{mgmt_ip}...")
+                try:
+                    _pk_path_45 = os.path.expanduser("~/.ssh/id_rsa")
+                    _tc_45 = paramiko.SSHClient()
+                    _tc_45.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    _tc_45.connect(
+                        mgmt_ip, username=ssh_user,
+                        key_filename=_pk_path_45,
+                        look_for_keys=True, allow_agent=False,
+                        timeout=20,
+                        disabled_algorithms={"pubkeys": ["ssh-dss"]},
+                    )
+                    _tch_45 = _tc_45.invoke_shell(width=200, height=50)
+                    _tout_45, _tmatch_45 = direct_read_until_any(
+                        _tch_45, ["::>", r"::\*>", "password:", "Password:"], timeout=30
+                    )
+                    try:
+                        _tch_45.close()
                     except Exception:
                         pass
+                    _tc_45.close()
+                    if "::" in _tmatch_45:
+                        print("  \u2705 Passwordless login configuration complete!")
+                        _slog(f"Passwordless SSH verified: {ssh_user}@{mgmt_ip}")
+                    else:
+                        print(
+                            f"  \u26a0\ufe0f  Cluster prompted for a password — "
+                            f"key may need a moment to activate.\n"
+                            f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
+                        )
+                        _slog("SSH test: password prompt appeared", prefix="WARN")
+                except paramiko.AuthenticationException:
+                    print(
+                        f"  \u26a0\ufe0f  Authentication failed — public key not accepted yet.\n"
+                        f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
+                    )
+                    _slog("SSH test: AuthenticationException", prefix="WARN")
+                except Exception as _te_45:
+                    print(
+                        f"  \u26a0\ufe0f  SSH test failed: {_te_45}\n"
+                        f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
+                    )
+                    _slog(f"SSH test exception: {_te_45}", prefix="WARN")
 
-            print("")
-            for addr in other_sps:
-                ok = _pr_results.get(addr, False)
-                sym = "✅" if ok else "⚠️ "
-                _session_log.log(
-                    f"[{addr}] peer reset {'reached LOADER' if ok else 'did NOT reach LOADER'}"
-                )
-                print(f"  {sym} [{addr}] Peer reset {'reached LOADER' if ok else 'did NOT reach LOADER'}")
+                _session_log.record_completion(normal_exit=True)
+                print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
+                sys.exit(0)
+
+            # Optional configuration file. CLI flag takes precedence; otherwise we
+            # offer to load one interactively. Type '?' at the prompt to view the
+            # expected JSON schema.
+            config_path = args.config
+
+            # Auto-detect a default config file via the shared discovery helper
+            # (searches configs/, script dir, then CWD with the canonical filename
+            # list and a deep-scan fallback for oddly-named JSONs containing the
+            # cluster+nodes schema).
+            search_dirs = _default_config_search_dirs()
+            detected_configs = _find_config_files(
+                search_dirs=search_dirs, deep_scan=True
+            )
+
+            if config_path:
+                # CLI-supplied path: validate before continuing.
+                if not os.path.isfile(config_path):
+                    print(f"❌ --config path is not a file: {config_path}")
+                    sys.exit(1)
+            else:
+                # Offer the auto-detected default(s) first.
+                # Mode 2 (add nodes) also participates: a config file supplies node
+                # management IPs, netmask, gateway and the cluster management IP so
+                # the join wizard can be fully automated without manual prompts.
+                if detected_configs:
+                    config_path = _select_config_path_interactive(
+                        detected_configs, indent="", header_emoji="📄"
+                    )
+                else:
+                    # Nothing auto-detected — tell the user where we looked so they
+                    # can spot a wrong directory or filename quickly.
+                    print("\nℹ️  No config file auto-detected. Searched:")
+                    for d in search_dirs:
+                        print(f"     {d}")
+                    print(f"     (looking for: {', '.join(_DEFAULT_CONFIG_FILENAMES)})")
+
+                if not config_path:
+                    while True:
+                        ans = _prompt(
+                            "\nUse a JSON config file for inputs? "
+                            "Enter path, '?' for example, or blank to skip: "
+                        )
+                        if ans == "?":
+                            print(_CONFIG_FILE_EXAMPLE)
+                            continue
+                        if not ans:
+                            break
+                        # Strip surrounding quotes that shells/users often paste in.
+                        if (len(ans) >= 2 and ans[0] == ans[-1]
+                                and ans[0] in ("'", '"')):
+                            ans = ans[1:-1]
+                        expanded = os.path.expanduser(os.path.expandvars(ans))
+                        if not os.path.isfile(expanded):
+                            print(f"  ⚠️  Not a valid file path: {ans}")
+                            print("     Enter an existing file, '?' for example, "
+                                  "or blank to skip.")
+                            continue
+                        config_path = expanded
+                        break
+
+            # ---- No config file? Offer the "reuse existing cluster configuration"
+            # path up-front. The retain capture itself still runs later (after the
+            # BMC connection is up), but asking the question here lets the script
+            # skip a duplicate prompt mid-run AND, when the operator answers yes,
+            # the retained values flow straight into the in-memory config so the
+            # rest of the pipeline behaves as if the JSON had supplied them.
+            # Retain-from-existing-cluster only makes sense when we're going to
+            # initialize the cluster (modes 1 and 3); mode 2/4/5 skip it.
+
+            if config_path:
+                try:
+                    _config_data = load_config_file(config_path)
+                    print(f"📄 Loaded config: {config_path}")
+                    # Config file supplies all cluster values — no need to pull them
+                    # from a running cluster later. Mark retain as "no" so the
+                    # mid-run retain prompt is suppressed.
+                    _run_context.config_data = _config_data
+                    _run_context.retain_preselected = (False, False, False)
+                    _run_context.apply_to_globals()
+                except ValueError as e:
+                    print(f"⚠️  {e}")
+                    print("   Continuing without a config file (manual prompts).")
+                    _config_data = {}
+                    _run_context.config_data = _config_data
+                    _run_context.apply_to_globals()
+
+            if not config_path and _operation_mode in (1, 3):
+                _print_banner("💾 No config file in use — reuse existing cluster config?")
+                print("\n  If this BMC's node is part of a running cluster, the script")
+                print("  can pull the existing cluster name and management/network IPs")
+                print("  from it and use them as the new configuration so you don't")
+                print("  have to re-enter them.")
+                ans1 = _prompt(
+                    "\n  Reuse the existing cluster name? [Y/N]: "
+                , "n").lower()
+                retain_name = (ans1 == "y")
+
+                ans2 = _prompt(
+                    "  Reuse the existing management and cluster network IPs? "
+                    "[Y/N]: "
+                , "n").lower()
+                retain_network = (ans2 == "y")
+
+                ans3 = _prompt(
+                    "  Reuse the BMC admin user and password as the cluster "
+                    "admin user and password? [Y/N]: "
+                , "n").lower()
+                retain_creds = (ans3 == "y")
+
+                _run_context.retain_preselected = (retain_name, retain_network, retain_creds)
+                _run_context.apply_to_globals()
+                if retain_name or retain_network or retain_creds:
+                    print("\n  ↩️  Will pull the requested values from the running cluster")
+                    print("     (and/or reuse BMC credentials) after connecting to the BMC,")
+                    print("     then build the runtime config from them.")
+                else:
+                    print("\n  ↩️  Will not retain any existing cluster configuration.")
+
+            # ── Pre-reinit prompts: physical zeroing and diagnostic bootargs ─────
+            # Asked here — right after config/retain selection, before any BMC
+            # connection — so all up-front questions are grouped together.
+            if _operation_mode in (1, 3):
+                print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
+                try:
+                    _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    _pz_ans = ""
+                _physical_zeroing = (_pz_ans == "y")
+                if _physical_zeroing:
+                    print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+                if _diag_mode:
+                    _diag_bootargs = _load_diag_bootargs()
+
+            # License: collect key(s) or validate the license file path now, before
+            # the BMC session starts, so the operator can fix issues early.
+            if _operation_mode in (1, 3):
+                _collect_license_config(_run_context)
+
+            _make_session_log("Session start")
+
+            if _config_data:
+                _session_log.log(f"Loaded config file: {config_path}")
+
+            if _operation_mode == 3:
+                mode_desc = "End-to-end auto initialize (1b primary + parallel auto-add peers)"
+            elif _operation_mode == 1 and _auto_setup:
+                mode_desc = "Initialize + format + setup first node (1b, fully automated)"
+            elif _operation_mode == 1:
+                mode_desc = "Initialize first node (1a, option 9, destroy storage pods)"
+            elif _operation_mode == 41:
+                mode_desc = "ONTAP upgrade - rolling takeover/giveback (4a)"
+            elif _operation_mode == 44:
+                mode_desc = "Install license file only (4c, standalone)"
+            elif _operation_mode == 45:
+                mode_desc = "Set up passwordless SSH to cluster management (4d)"
+            elif _operation_mode == 46:
+                mode_desc = "Create backup cluster configuration (4e, standalone)"
+            elif _operation_mode == 49:
+                mode_desc = "Cluster health and version check (5f)"
+            elif _operation_mode == 2 and _auto_add:
+                mode_desc = "Add node to existing cluster (2b, automatic join wizard)"
+            else:
+                mode_desc = "Add node to existing cluster (2a, option 4, interactive)"
+            _session_log.log(
+                f"Operation mode: {_operation_mode} (auto_setup={_auto_setup}, "
+                f"auto_add={_auto_add}) – {mode_desc}"
+            )
+
+            # Primary BMC: the node this script will connect to and operate on.
+            # For modes 1/3/4x: prefer "primary_node" (new format) or nodes[0] (legacy).
+            # For mode 2 (add node): the target is a *secondary* node — use nodes[]
+            #   (new or legacy), NOT primary_node (which is the existing cluster node
+            #   that must never be reinitialised).
+            primary_node = {}
+            if isinstance(_config_data, dict):
+                if _operation_mode == 2:
+                    # Mode 2: pick first entry from secondary_nodes or nodes[] only.
+                    _sn2 = _config_data.get("secondary_nodes")
+                    if isinstance(_sn2, list) and _sn2 and isinstance(_sn2[0], dict):
+                        primary_node = _sn2[0]
+                    else:
+                        _nl2 = _config_data.get("nodes") or []
+                        if _nl2 and isinstance(_nl2[0], dict):
+                            primary_node = _nl2[0]
+                elif isinstance(_config_data.get("primary_node"), dict):
+                    primary_node = _config_data["primary_node"]
+                else:
+                    nodes_list = _config_data.get("nodes") or []
+                    if nodes_list and isinstance(nodes_list[0], dict):
+                        primary_node = nodes_list[0]
+
+            # Three-state handling for each config field:
+            #   * key absent / non-string  -> prompt the operator
+            #   * key present but empty/whitespace -> use as-is (e.g. "" means
+            #     literally no password, for BMCs that don't require one)
+            #   * non-empty string         -> use the provided value
+            # (_cfg_str is defined at module level; _cfg_get_or_prompt is local
+            # because it closes over `primary_node`.)
+            def _cfg_get_or_prompt(key, prompt_label, hidden=False):
+                if key in primary_node and isinstance(primary_node[key], str):
+                    return primary_node[key]
+                if hidden:
+                    return getpass.getpass(prompt_label)
+                return input(prompt_label)
+
+            sp_host = _cfg_str(primary_node.get("bmc"))
+            if sp_host:
+                _check_bmc_reachable(sp_host)
+            else:
+                sp_host = _prompt_bmc_host("Enter BMC hostname/IP or primary node (this will be the first node in the cluster): ")
+            sp_user = _cfg_str(primary_node.get("bmc_user")) or input("Enter BMC username [admin]: ").strip() or "admin"
+            sp_pass = _cfg_get_or_prompt("bmc_password", "Enter BMC password: ", hidden=True)
+            if primary_node.get("bmc"):
+                _pn_src = "primary_node" if isinstance(_config_data.get("primary_node"), dict) else "nodes[0]"
+                print(f"📄 Using primary BMC from config {_pn_src}: {sp_host} (user={sp_user})")
+                if "bmc_password" in primary_node and not (
+                        isinstance(primary_node["bmc_password"], str)
+                        and primary_node["bmc_password"].strip()):
+                    print("📄 Primary BMC password from config is blank "
+                          "(will attempt SSH with no password).")
+
+            _session_log.log(f"Target BMC: {sp_host}")
+            _session_log.log(f"Username: {sp_user}")
+            _session_log.log(f"Debug mode: {args.debug}")
+
+            # Phase: SSH Connection
+            _session_log.start_phase("SSH Connection")
+            client, sp_user, sp_pass = connect_to_sp(sp_host, sp_user, sp_pass)
+            channel = _open_shell(client)
+
+            keepalive_thread = threading.Thread(
+                target=keepalive_loop, args=(client,), daemon=True
+            )
+            keepalive_thread.start()
+            _session_log.log("Keepalive thread started")
             _session_log.end_phase()
 
-    # Mode 2 (2a/2b): collect node-management network info for THIS node
-    # up-front (before option 4 runs) so the join wizard prompts can be
-    # auto-answered from the config file or operator-entered values, matching
-    # mode 1b's behavior. Mode 2a captures it for log fidelity even though
-    # it won't be auto-applied.
-    if _operation_mode == 2:
-        # Ensure the cluster management IP is known before the join wizard
-        # runs — avoids the mid-session prompt inside _fetch_existing_cluster_ip.
-        # Only prompt when mode 2 was the original selection; mid-run
-        # transitions (e.g. after 1b) already have mgmt_ip populated.
-        if _initial_operation_mode == 2 and not _cluster_config.get("mgmt_ip"):
-            cfg_cluster_2 = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
-            _pre_mgmt_ip = cfg_cluster_2.get("clus_mgmt_address") or ""
-            if not _pre_mgmt_ip:
-                _print_banner("\U0001f4e1 Existing Cluster Details")
-                try:
-                    print("  " + "─" * 58)
-                    _pre_mgmt_ip = input(
-                        "\n  Cluster management IP (needed to look up the "
-                        "cluster-network IP): "
-                    ).strip()
-                except (EOFError, KeyboardInterrupt):
-                    _pre_mgmt_ip = ""
-            if _pre_mgmt_ip:
-                _cluster_config["mgmt_ip"] = _pre_mgmt_ip
-                _session_log.log(f"Mode 2: cluster mgmt IP set up-front: {_pre_mgmt_ip}")
+            # Phase: BMC Prompt & Validation
+            _session_log.start_phase("BMC Prompt & Validation")
+            if not wait_for_bmc_prompt(channel, auto_takeover=True):
+                _session_log.set_outcome("FAIL", "BMC prompt not received")
+                _session_log.close()
+                sys.exit(1)
 
-        # Ensure cluster admin credentials are known upfront so
-        # _fetch_existing_cluster_ip() can authenticate silently during
-        # the join wizard (avoids the mid-run "no credentials found" prompt).
-        if _initial_operation_mode == 2:
-            cfg_cluster_2 = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
-            _has_creds = (
-                _cluster_config.get("admin_user") and _cluster_config.get("admin_password")
-            ) or (
-                cfg_cluster_2.get("user") and cfg_cluster_2.get("password")
-            ) or (
-                sp_pass  # BMC creds are always a fallback candidate
-            )
-            if not _has_creds:
-                _print_banner("\U0001f510 Existing Cluster Admin Credentials")
-                print("\n  These are needed to look up the cluster-network IP")
-                print("  during the join wizard. Enter blank to use the BMC")
-                print("  credentials as a fallback.")
-                try:
-                    _pre_cl_user = input(
-                        "\n  Cluster admin username [admin]: "
-                    ).strip() or "admin"
-                    _pre_cl_pass = getpass.getpass(
-                        "  Cluster admin password (blank = use BMC password): "
-                    )
-                except (EOFError, KeyboardInterrupt):
-                    _pre_cl_user = "admin"
-                    _pre_cl_pass = ""
-                if _pre_cl_pass:
-                    _cluster_config["admin_user"] = _pre_cl_user
-                    _cluster_config["admin_password"] = _pre_cl_pass
-                    _session_log.log(
-                        f"Mode 2: cluster admin credentials collected upfront "
-                        f"(user={_pre_cl_user})"
-                    )
-                else:
-                    _session_log.log(
-                        "Mode 2: no cluster admin password entered; "
-                        "will fall back to BMC credentials"
-                    )
-
-        collect_node_mgmt_per_bmc(sp_host, [])
-
-    # ── Mode 2b multi-node: run parallel add when config has >1 secondary ──
-    # If the config file lists multiple secondary nodes AND the operator
-    # chose 2b (auto_add), collect all peers, confirm, and run every node
-    # through LOADER → option 4 → join in parallel (joins serialized).
-    # Single-node 2b falls through to the existing sequential path below.
-    if _operation_mode == 2 and _auto_add:
-        _2b_extra_peers = []
-        if isinstance(_config_data, dict):
-            _sn_list = _config_data.get("secondary_nodes")
-            if isinstance(_sn_list, list):
-                _2b_extra_peers = [
-                    str(n["bmc"]) for n in _sn_list
-                    if isinstance(n, dict) and n.get("bmc")
-                    and str(n["bmc"]) != sp_host
-                ]
+            print("\nValidating BMC status...")
+            _session_log.log("Validating BMC status")
+            drain_channel(channel, seconds=1)
+            output = direct_send_and_wait(channel, "bmc status", ">", timeout=15)
+            if sp_host in output:
+                print(f"\n✅ BMC validation successful – found '{sp_host}' in status output.")
+                _session_log.log(f"BMC validation successful – found '{sp_host}'")
             else:
-                _all_nodes_2b = _config_data.get("nodes") or []
-                _2b_extra_peers = [
-                    str(n["bmc"]) for n in _all_nodes_2b
-                    if isinstance(n, dict) and n.get("bmc")
-                    and str(n["bmc"]) != sp_host
-                ]
-        if _2b_extra_peers:
-            _2b_all_peers = [sp_host] + _2b_extra_peers
+                print(f"\n⚠️  Warning: '{sp_host}' not found verbatim in bmc status output.")
+                print(f"   Output received:\n{output}")
+                _session_log.log(f"BMC validation warning – '{sp_host}' not found", prefix="WARN")
+                answer = input("\n   Does this look like the correct BMC? [Y/N]: ").strip().lower()
+                _session_log.log_user_input(f"BMC validation confirmation: {answer}")
+                if answer != "y":
+                    print("❌ BMC validation rejected. Exiting.")
+                    _session_log.log("BMC validation rejected", prefix="ERROR")
+                    _session_log.set_outcome("FAIL", "BMC validation rejected by operator")
+                    _session_log.close()
+                    sys.exit(1)
+                print("✅ BMC validation confirmed by user.")
+                _session_log.log("BMC validation confirmed by user")
+            _session_log.end_phase()
 
-            # Collect node-mgmt info for each extra peer.
-            for _ep in _2b_extra_peers:
-                collect_node_mgmt_per_bmc(_ep, [])
+            # Mode 1 / 3: ask retain prompts, then ALWAYS attempt peer-BMC discovery
+            # (even if the user answered 'n' to both retain prompts, and regardless
+            # of whether retain captures succeed or fail). Discovery may itself fail
+            # if the node is already down – in that case we proceed with no peer
+            # reset / peer add.
+            if _operation_mode in (1, 3):
+                if _retain_preselected is not None:
+                    retain_name, retain_network, retain_creds = _retain_preselected
+                    # When a config file was loaded all three are False — just note
+                    # that retain is not needed and move on without extra output.
+                    if not (retain_name or retain_network or retain_creds):
+                        _session_log.log(
+                            "Retain skipped: config file in use"
+                        )
+                    else:
+                        # Operator answered up-front (no config file path used).
+                        print("\n" + "=" * 60)
+                        print("  \U0001f4be Retain Existing Cluster Configuration "
+                              "(pre-answered above)")
+                        print("=" * 60)
+                        print(f"  Retain cluster name : {'yes' if retain_name else 'no'}")
+                        print(f"  Retain network IPs  : {'yes' if retain_network else 'no'}")
+                        print(f"  Reuse BMC creds     : {'yes' if retain_creds else 'no'}")
+                        _session_log.log(
+                            f"Retain choices pre-selected (no config file): "
+                            f"name={retain_name}, network={retain_network}, "
+                            f"creds={retain_creds}"
+                        )
+                else:
+                    _print_banner("💾 Retain Existing Cluster Configuration?")
+                    ans1 = input("\n  Do you want to retain the cluster name? [Y/N]: ").strip().lower()
+                    _session_log.log_user_input(f"Retain cluster name? {ans1}")
+                    retain_name = (ans1 == "y")
 
-            # Register sp_host credentials so the thread can look them up.
-            if sp_host not in _peer_bmc_creds:
-                _peer_bmc_creds[sp_host] = {"user": sp_user, "password": sp_pass}
+                    ans2 = input(
+                        "  Do you want to retain the same management and cluster network IPs\n"
+                        "  from your existing cluster? [Y/N]: "
+                    ).strip().lower()
+                    _session_log.log_user_input(f"Retain network IPs? {ans2}")
+                    retain_network = (ans2 == "y")
 
-            # Close the already-open channel for sp_host; _add_peer_node_thread
-            # will establish its own fresh BMC connection for every peer.
+                    ans3 = input(
+                        "  Reuse the BMC admin user and password as the cluster\n"
+                        "  admin user and password? [Y/N]: "
+                    ).strip().lower()
+                    _session_log.log_user_input(f"Reuse BMC creds as cluster admin? {ans3}")
+                    retain_creds = (ans3 == "y")
+
+                # If the operator opted to reuse BMC creds for the cluster admin,
+                # promote them into the in-memory cluster config so the rest of
+                # the script (cluster setup wizard, peer-add, etc.) treats them
+                # as "from config" with no further prompting.
+                if retain_creds:
+                    cc_block = _config_data.setdefault("cluster", {}) if isinstance(_config_data, dict) else None
+                    if isinstance(cc_block, dict):
+                        if not cc_block.get("user") and _primary_bmc_user:
+                            cc_block["user"] = _primary_bmc_user
+                        # Always overwrite any blank/missing password; if the
+                        # operator explicitly provided a different one in the
+                        # config we leave it alone.
+                        if not cc_block.get("password") and _primary_bmc_password is not None:
+                            cc_block["password"] = _primary_bmc_password
+                        _session_log.log(
+                            "Reused BMC admin user/password as cluster admin "
+                            "credentials in runtime config"
+                        )
+                        print("\n  🔐 Cluster admin user/password will reuse the BMC "
+                              "login credentials.")
+
+                if not (retain_name or retain_network):
+                    print("\n  ↩️  Skipping retain capture; will still discover peer BMC")
+                    print("     addresses so peer nodes can be reset to LOADER.")
+                    _session_log.log("User declined retain; proceeding with peer SP discovery only")
+
+                # If peer BMC addresses are already present in the config file we can
+                # skip the cluster-shell login entirely (no need to probe the console).
+                # Also skip entirely when a config file was loaded (_retain_preselected
+                # is the (False, False, False) sentinel) — the config is the source of
+                # truth; no cluster-shell probing is needed.
+                _cfg_has_peers = False
+                if isinstance(_config_data, dict):
+                    _sn_check = _config_data.get("secondary_nodes")
+                    if isinstance(_sn_check, list) and any(
+                        isinstance(n, dict) and n.get("bmc") for n in _sn_check
+                    ):
+                        _cfg_has_peers = True
+                    else:
+                        _nodes_check = _config_data.get("nodes") or []
+                        if len([n for n in _nodes_check if isinstance(n, dict) and n.get("bmc")]) > 1:
+                            _cfg_has_peers = True
+
+                _config_file_loaded = (_retain_preselected == (False, False, False))
+
+                if not (retain_name or retain_network) and (_cfg_has_peers or _config_file_loaded):
+                    if _config_file_loaded:
+                        print("\n  📄 Config file in use — skipping cluster-shell discovery.")
+                    else:
+                        print("\n  📄 Peer BMC addresses already available in config file.")
+                        print("     Skipping cluster-shell discovery.")
+                    _session_log.log("Skipping collect_retain_data: config file supplied peer BMCs")
+                    peer_addresses = []
+                else:
+                    # Peer SP discovery is independent of the retain answers and runs in
+                    # the same console session for efficiency. If the cluster shell can't
+                    # be reached, all captures (retain + peer SPs) are skipped gracefully.
+                    _, _, peer_addresses = collect_retain_data(
+                        channel, retain_name, retain_network, collect_peer_sps=True
+                    )
+
+                # Promote any retained cluster details (name, cluster-mgmt LIF,
+                # default gateway) into the in-memory JSON config so the cluster
+                # setup wizard treats them as "from config" without re-prompting.
+                # Any field already supplied by the operator's config file is left
+                # alone. When the retain capture failed, this is a no-op and the
+                # operator falls through to manual prompts later.
+                apply_retained_to_cluster_config()
+
+                # Likewise, promote per-node management LIFs (port, IP, netmask,
+                # gateway) into the corresponding _config_data["nodes"] entries
+                # using the SP-address -> node-name mapping captured alongside.
+                # This lets the per-BMC node-mgmt collector use retained values
+                # as defaults / silent values, including for peer BMCs that the
+                # operator didn't pre-list in the JSON config.
+                apply_retained_to_node_configs(primary_bmc=sp_host)
+
+                # Resolve the primary BMC to an IP once so hostname/IP mismatches
+                # don't cause it to leak into the peer list.
+                def _bmc_ip(addr):
+                    try:
+                        return socket.gethostbyname(addr)
+                    except Exception:
+                        return addr
+                _sp_host_ip = _bmc_ip(sp_host)
+
+                # Build the unique peer-BMC list. Sources, in priority order:
+                #   1. SP addresses discovered from the running cluster.
+                #   2. `nodes[]` entries from the JSON config file.
+                # Any entry matching the primary BMC (`sp_host`) is dropped so the
+                # script never tries to "add" the node it just initialized, and
+                # duplicates are removed while preserving order.
+                seen_peers = {sp_host, _sp_host_ip}
+                other_sps = []
+
+                for a in (peer_addresses or []):
+                    if not a:
+                        continue
+                    _a_ip = _bmc_ip(a)
+                    if a in seen_peers or _a_ip in seen_peers:
+                        if a == sp_host or _a_ip == _sp_host_ip:
+                            _session_log.log(
+                                f"Discovered peer entry matches primary BMC ({a}); "
+                                "treating as primary only.",
+                            )
+                        continue
+                    seen_peers.add(a)
+                    seen_peers.add(_a_ip)
+                    other_sps.append(a)
+
+                cfg_nodes = []
+                if isinstance(_config_data, dict):
+                    # New format: secondary_nodes only (primary is never a peer).
+                    _sn = _config_data.get("secondary_nodes")
+                    if isinstance(_sn, list):
+                        cfg_nodes = [n for n in _sn if isinstance(n, dict)]
+                    else:
+                        # Legacy format: walk ALL nodes[] entries. The primary is
+                        # filtered out below via the `bmc == sp_host` check, so
+                        # nodes[0] is included here — it may be a peer when the
+                        # actual primary BMC was entered manually and doesn't match
+                        # any config entry.
+                        _all_nodes = _config_data.get("nodes") or []
+                        cfg_nodes = [n for n in _all_nodes if isinstance(n, dict)]
+                cfg_peer_added = []
+                for node in cfg_nodes:
+                    if not isinstance(node, dict):
+                        continue
+                    bmc = (node.get("bmc") or "").strip()
+                    if not bmc:
+                        continue
+                    _bmc_resolved = _bmc_ip(bmc)
+                    if bmc == sp_host or _bmc_resolved == _sp_host_ip:
+                        _session_log.log(
+                            f"Config 'nodes[]' entry {bmc} matches primary BMC "
+                            f"({sp_host}); treating as primary only.",
+                        )
+                        continue
+                    if bmc in seen_peers or _bmc_resolved in seen_peers:
+                        continue
+                    seen_peers.add(bmc)
+                    seen_peers.add(_bmc_resolved)
+                    other_sps.append(bmc)
+                    cfg_peer_added.append(bmc)
+
+                if cfg_peer_added:
+                    print(f"\n  📄 Added {len(cfg_peer_added)} peer BMC(s) from config: "
+                          f"{', '.join(cfg_peer_added)}")
+                    _session_log.log(f"Peers added from config nodes[]: {cfg_peer_added}")
+
+                # If neither discovery nor the config file yielded peer BMCs (single
+                # node, node already down, or capture failed), look for JSON files in
+                # the configs/ directory before falling back to manual entry.
+                if not other_sps:
+                    print("\n  ℹ️  No peer service-processor addresses discovered")
+                    print("     (single-node cluster, node already down, or capture failed).")
+                    _session_log.log("No peer SP addresses auto-discovered; checking configs dir")
+
+                    # Search configs/ and script dir for JSON files with BMC entries.
+                    import json as _json_pb
+                    _pb_candidates = []
+                    try:
+                        _pb_script_dir = os.path.dirname(os.path.abspath(__file__))
+                    except NameError:
+                        _pb_script_dir = os.getcwd()
+                    _pb_configs_dir = os.path.join(_pb_script_dir, "configs")
+                    for _pb_dir in [_pb_configs_dir, _pb_script_dir]:
+                        if not os.path.isdir(_pb_dir):
+                            continue
+                        for _pb_fname in sorted(os.listdir(_pb_dir)):
+                            if not _pb_fname.lower().endswith(".json"):
+                                continue
+                            _pb_fpath = os.path.abspath(os.path.join(_pb_dir, _pb_fname))
+                            try:
+                                with open(_pb_fpath, "r", encoding="utf-8") as _pbf:
+                                    _pb_data = _json_pb.load(_pbf)
+                                _pb_ips = []
+                                _pbn = _pb_data.get("primary_node")
+                                _pbsn = _pb_data.get("secondary_nodes")
+                                _pbnodes = _pb_data.get("nodes")
+                                if isinstance(_pbn, dict) and _pbn.get("bmc"):
+                                    _pb_ips.append(str(_pbn["bmc"]))
+                                for _n in (_pbsn or []):
+                                    if isinstance(_n, dict) and _n.get("bmc"):
+                                        _pb_ips.append(str(_n["bmc"]))
+                                if not _pb_ips and isinstance(_pbnodes, list):
+                                    _pb_ips = [str(n["bmc"]) for n in _pbnodes
+                                               if isinstance(n, dict) and n.get("bmc")]
+                                if isinstance(_pb_data.get("netboot_bmcs"), list):
+                                    _pb_ips = [str(x) for x in _pb_data["netboot_bmcs"] if x]
+                                # Only include files that have peer BMCs beyond sp_host.
+                                _pb_peers = [ip for ip in _pb_ips
+                                             if ip and ip not in seen_peers and ip != sp_host]
+                                if _pb_peers:
+                                    _pb_candidates.append((_pb_fpath, _pb_data, _pb_peers))
+                            except Exception:
+                                pass
+
+                    if _pb_candidates:
+                        print(f"\n  Found {len(_pb_candidates)} config file(s) with peer BMC addresses:")
+                        for _pbi, (_pb_fpath, _, _pb_peers) in enumerate(_pb_candidates, 1):
+                            print(f"    {_pbi}. {_pb_fpath}  "
+                                  f"({len(_pb_peers)} peer(s): {', '.join(_pb_peers)})")
+                        print("    0. Enter peer BMC addresses manually")
+                        print("")
+                        while True:
+                            _pb_sel = _prompt("  Load peers from a file? [1] or 0 for manual: ", "0")
+                            if _pb_sel == "" and len(_pb_candidates) == 1:
+                                _pb_sel = "1"
+                            if _pb_sel == "0":
+                                break
+                            if _pb_sel.isdigit() and 1 <= int(_pb_sel) <= len(_pb_candidates):
+                                _, _, _pb_peers = _pb_candidates[int(_pb_sel) - 1]
+                                for _pb_ip in _pb_peers:
+                                    seen_peers.add(_pb_ip)
+                                    other_sps.append(_pb_ip)
+                                print(f"\n  ✅ Loaded {len(_pb_peers)} peer BMC(s): "
+                                      f"{', '.join(_pb_peers)}")
+                                _session_log.log(f"Peer BMCs loaded from file: {_pb_peers}")
+                                break
+                            print("  ⚠️  Invalid selection.")
+
+                    if not other_sps:
+                        # No files found or operator chose manual entry.
+                        print("\n  You may enter peer BMC IPs/hostnames manually so this script")
+                        print("  can reset them to LOADER. Enter one per prompt; press Enter on")
+                        print("  an empty line to finish and continue.")
+
+                        i = 1
+                        while True:
+                            entry = input(f"\n  Peer BMC #{i} (blank to finish): ").strip()
+                            _session_log.log_user_input(f"Manual peer BMC #{i}: {entry!r}")
+                            if not entry:
+                                break
+                            if entry in seen_peers:
+                                print(f"  ⚠️  '{entry}' already added or is the primary BMC; skipping.")
+                                _session_log.log(f"Duplicate/primary peer BMC entry skipped: {entry}")
+                                continue
+                            seen_peers.add(entry)
+                            other_sps.append(entry)
+                            print(f"  ✅ Added peer BMC: {entry}")
+                            _session_log.log(f"Manually added peer BMC: {entry}")
+                            i += 1
+
+                    if other_sps:
+                        print(f"\n  ✅ Will reset {len(other_sps)} peer BMC(s) to LOADER: "
+                              f"{', '.join(other_sps)}")
+                        _session_log.log(f"Peer BMCs to reset: {other_sps}")
+                    else:
+                        print("\n  ↩️  No peer BMCs entered; proceeding with reset of this node only.")
+                        _session_log.log("User entered no peer BMCs manually")
+
+                # ---- Confirm the discovered peer count, with the option to add
+                # more node entries on the fly. New entries are written back into
+                # the in-memory _config_data["nodes"] list so the rest of the
+                # pipeline (per-node mgmt collection, peer credential lookup, etc.)
+                # treats them identically to anything that was in the JSON to
+                # begin with.
+                def _prompt_with_default(label, default=None):
+                    suffix = f" [{default}]" if default else ""
+                    val = _prompt(f"    {label}{suffix}: ")
+                    return val or (default or "")
+
+                if _operation_mode == 1:
+                    # Mode 1a/1b only touches the first node — skip the summary/confirm loop
+                    global _initial_node_count
+                    _initial_node_count = 1
+                    if other_sps:
+                        ignored_list = ", ".join(other_sps)
+                        print(f"\n  ℹ️  Secondary nodes [{ignored_list}] ignored")
+                    _session_log.log(f"Mode 1 — initial node count set to 1; peers ignored: {other_sps}")
+                else:
+                  while True:
+                    _print_banner("📋 Cluster node summary")
+                    print(f"  BMC of first node in the cluster : {sp_host} (user={sp_user})")
+                    if other_sps:
+                        print(f"  Nodes to add after cluster init  ({len(other_sps)}):")
+                        for a in other_sps:
+                            print(f"    - {a}")
+                    else:
+                        print("  Nodes to add after cluster init  : (none)")
+                    print(f"  Total nodes                      : {1 + len(other_sps)}")
+                    ans = _prompt("\n  Is this the correct number of nodes? [Y/N]: ", "y").lower()
+                    _session_log.log_user_input(f"Confirm node count ({1 + len(other_sps)}): {ans}")
+                    if ans in ("", "y", "yes"):
+                        _initial_node_count = 1 + len(other_sps)
+                        _session_log.log(f"Initial node count confirmed: {_initial_node_count}")
+                        break
+
+                    print("\n  ➕ Add one or more additional peer node(s). Enter the same")
+                    print("     fields used by the JSON config file. Blank BMC ends entry.")
+                    added_this_round = 0
+                    while True:
+                        new_bmc = _prompt("\n    New peer BMC IP/hostname (blank to finish): ")
+                        if not new_bmc:
+                            break
+                        if new_bmc == sp_host or new_bmc in seen_peers:
+                            print(f"    ⚠️  '{new_bmc}' is already the primary or a known peer; skipping.")
+                            _session_log.log(f"Duplicate add-peer entry skipped: {new_bmc}")
+                            continue
+                        new_user = _prompt_with_default(f"BMC username for {new_bmc}", sp_user)
+                        try:
+                            new_pass = getpass.getpass(
+                                f"    BMC password for {new_user}@{new_bmc} "
+                                "(blank = no password): "
+                            )
+                        except (EOFError, KeyboardInterrupt):
+                            new_pass = ""
+                        new_port = _prompt_with_default(
+                            f"Node mgmt port for {new_bmc}", "e0M")
+                        new_ip = _prompt_with_default(f"Node mgmt IP for {new_bmc}")
+                        new_mask = _prompt_with_default(
+                            f"Node mgmt netmask for {new_bmc}", "255.255.255.0")
+                        new_gw = _prompt_with_default(f"Node mgmt gateway for {new_bmc}")
+
+                        new_entry = {
+                            "bmc": new_bmc,
+                            "bmc_user": new_user,
+                            "bmc_password": new_pass,
+                            "node_mgmt_port": new_port,
+                            "node_mgmt_ip": new_ip,
+                            "node_mgmt_netmask": new_mask,
+                            "node_mgmt_gateway": new_gw,
+                        }
+
+                        # Persist into the in-memory config so _node_cfg_for() picks
+                        # it up later. We never write back to disk; the JSON file
+                        # itself is left untouched.
+                        if isinstance(_config_data.get("secondary_nodes"), list):
+                            _config_data["secondary_nodes"].append(new_entry)
+                        elif "primary_node" in _config_data:
+                            _config_data.setdefault("secondary_nodes", []).append(new_entry)
+                        else:
+                            _config_data.setdefault("nodes", []).append(new_entry)
+
+                        seen_peers.add(new_bmc)
+                        other_sps.append(new_bmc)
+                        added_this_round += 1
+                        print(f"    ✅ Added peer BMC: {new_bmc}")
+                        _session_log.log(
+                            f"Operator added peer BMC at confirmation step: {new_bmc} "
+                            f"(user={new_user}, port={new_port}, ip={new_ip})"
+                        )
+
+                    if added_this_round == 0:
+                        print("\n  (No new peers entered; re-confirming current list.)")
+
+                # Collect node-management network info for every BMC (primary +
+                # peers) up-front so mode 1b can auto-answer the per-node prompts.
+                # This also runs in mode 1a so the data is captured in the log even
+                # though it won't be auto-applied.
+                collect_node_mgmt_per_bmc(sp_host, other_sps)
+
+                # Mode 1b also needs the cluster-level setup wizard answers up-front.
+                if _auto_setup:
+                    collect_cluster_config()
+
+                if other_sps and _operation_mode != 1:
+                    _print_banner("🔐 Peer BMC SSH Credentials")
+                    print("\n  Provide SSH credentials for each peer BMC. Press Enter")
+                    print(f"  to reuse the primary BMC username '{sp_user}' / password.")
+
+                    # Ask if all peers share the same credentials as the primary.
+                    try:
+                        _same_creds_ans = input(
+                            f"\n  Use the same BMC username '{sp_user}' and password"
+                            " for all peer nodes? [Y/n]: "
+                        ).strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        _same_creds_ans = ""
+                    _same_creds_all = (_same_creds_ans != "n")
+
+                    for addr in other_sps:
+                        node_cfg = _node_cfg_for(addr)
+                        # Three-state handling for each field:
+                        #   * Key absent / non-string  -> prompt the operator.
+                        #   * Key present (even empty) -> use the value as-is. An
+                        #     empty string means literally "no password" for BMCs
+                        #     that don't require one (or accept passthrough creds).
+                        #   * Non-empty string         -> use as-is.
+                        user_in_cfg = (
+                            "bmc_user" in node_cfg
+                            and isinstance(node_cfg["bmc_user"], str)
+                        )
+                        pass_in_cfg = (
+                            "bmc_password" in node_cfg
+                            and isinstance(node_cfg["bmc_password"], str)
+                        )
+
+                        if _same_creds_all:
+                            # Use primary credentials for all peers (no per-node prompt).
+                            u = sp_user
+                            p = sp_pass
+                        else:
+                            print(f"\n  ── Peer BMC {addr} ──")
+                            # Resolve username.
+                            if user_in_cfg:
+                                u = node_cfg["bmc_user"].strip() or sp_user
+                                if not node_cfg["bmc_user"].strip():
+                                    print(f"    📄 Username blank in config for {addr}; "
+                                          f"reusing primary user '{sp_user}'.")
+                            else:
+                                try:
+                                    u = input(
+                                        f"    Username for {addr} "
+                                        f"[hit enter to re-use {sp_user}]: "
+                                    ).strip() or sp_user
+                                except (EOFError, KeyboardInterrupt):
+                                    u = sp_user
+
+                            # Resolve password.
+                            if pass_in_cfg:
+                                p = node_cfg["bmc_password"]
+                                if p:
+                                    print(f"    📄 Using config credentials for {addr} (user={u})")
+                                else:
+                                    print(f"    📄 Password blank in config for {addr}; "
+                                          "will attempt SSH with no password.")
+                            else:
+                                p = getpass.getpass(
+                                    f"    Password for {addr} (blank to reuse primary): "
+                                )
+                                if not p:
+                                    p = sp_pass
+
+                        _peer_bmc_creds[addr] = {"user": u, "password": p}
+                        if p == sp_pass:
+                            pw_desc = "<reused-primary>"
+                        elif p == "":
+                            pw_desc = "<blank>"
+                        else:
+                            pw_desc = "<custom>"
+                        _session_log.log(
+                            f"Captured credentials for peer BMC {addr} (user={u}, "
+                            f"password={pw_desc})"
+                        )
+                    if _same_creds_all:
+                        print(f"  ✅ Using primary credentials (user={sp_user}) for all"
+                              f" {len(other_sps)} peer node(s).")
+
+                if _operation_mode == 3:
+                    # Mode 3: peers will be auto-added in parallel AFTER the primary's
+                    # cluster create completes. Stash the peer list for the wizard
+                    # post-step.
+                    # Refresh first so apply_to_globals() doesn't clobber _session_log
+                    # (or other globals set after the RunContext was last synced).
+                    _run_context.refresh_from_globals()
+                    _run_context.peer_bmc_list = list(other_sps)
+                    _run_context.apply_to_globals()
+                    if other_sps:
+                        print(f"\n  🧩 Mode 3: {len(other_sps)} peer node(s) will be"
+                              " auto-added in parallel after primary cluster is up:")
+                        print(f"     {', '.join(other_sps)}")
+                        _session_log.log(f"Mode 3 peer add list: {other_sps}")
+
+                # Reset every peer BMC to LOADER up-front (mode 3 needs peers parked at
+                # LOADER before the parallel auto-add kicks in). Mode 1 (1a/1b) only
+                # operates on the first node — skip peer resets entirely.
+                if other_sps and _operation_mode == 3:
+                    _print_banner(f"🔁 Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
+                    print(f"  Peer BMCs: {', '.join(other_sps)}")
+                    _session_log.start_phase("Peer Node Reset to LOADER")
+                    _session_log.log(f"Peer BMCs to reset: {other_sps}")
+
+                    # Open a dedicated log file per peer so parallel console streams
+                    # don't interleave on the terminal.
+                    _pr_log_dir = _session_log.log_dir if _session_log else os.getcwd()
+                    _pr_node_logs: dict = {}
+                    for addr in other_sps:
+                        try:
+                            _pr_nf = _node_log_open(addr, _pr_log_dir, prefix="peer_reset")
+                            _pr_node_logs[addr] = _pr_nf
+                            print(f"  📝 [{addr}] Reset log → {_pr_nf.name}")
+                            _session_log.log(f"[{addr}] reset log: {_pr_nf.name}")
+                        except Exception as _pr_e:
+                            _pr_node_logs[addr] = None
+                            print(f"  ⚠️  [{addr}] Could not open reset log: {_pr_e}")
+
+                    _pr_results: dict = {}
+                    _pr_lock = threading.Lock()
+
+                    def _pr_worker(addr):
+                        creds = _peer_bmc_creds.get(addr, {"user": sp_user, "password": sp_pass})
+                        ok = reset_peer_to_loader(
+                            addr, creds["user"], creds["password"],
+                            node_log=_pr_node_logs.get(addr),
+                        )
+                        with _pr_lock:
+                            _pr_results[addr] = ok
+
+                    _run_parallel(other_sps, _pr_worker)
+
+                    for addr, nf in _pr_node_logs.items():
+                        if nf:
+                            try:
+                                nf.close()
+                            except Exception:
+                                pass
+
+                    print("")
+                    for addr in other_sps:
+                        ok = _pr_results.get(addr, False)
+                        sym = "✅" if ok else "⚠️ "
+                        _session_log.log(
+                            f"[{addr}] peer reset {'reached LOADER' if ok else 'did NOT reach LOADER'}"
+                        )
+                        print(f"  {sym} [{addr}] Peer reset {'reached LOADER' if ok else 'did NOT reach LOADER'}")
+                    _session_log.end_phase()
+
+            # Mode 2 (2a/2b): collect node-management network info for THIS node
+            # up-front (before option 4 runs) so the join wizard prompts can be
+            # auto-answered from the config file or operator-entered values, matching
+            # mode 1b's behavior. Mode 2a captures it for log fidelity even though
+            # it won't be auto-applied.
+            if _operation_mode == 2:
+                # Ensure the cluster management IP is known before the join wizard
+                # runs — avoids the mid-session prompt inside _fetch_existing_cluster_ip.
+                # Only prompt when mode 2 was the original selection; mid-run
+                # transitions (e.g. after 1b) already have mgmt_ip populated.
+                if _initial_operation_mode == 2 and not _cluster_config.get("mgmt_ip"):
+                    cfg_cluster_2 = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
+                    _pre_mgmt_ip = cfg_cluster_2.get("clus_mgmt_address") or ""
+                    if not _pre_mgmt_ip:
+                        _print_banner("\U0001f4e1 Existing Cluster Details")
+                        try:
+                            print("  " + "─" * 58)
+                            _pre_mgmt_ip = input(
+                                "\n  Cluster management IP (needed to look up the "
+                                "cluster-network IP): "
+                            ).strip()
+                        except (EOFError, KeyboardInterrupt):
+                            _pre_mgmt_ip = ""
+                    if _pre_mgmt_ip:
+                        _cluster_config["mgmt_ip"] = _pre_mgmt_ip
+                        _session_log.log(f"Mode 2: cluster mgmt IP set up-front: {_pre_mgmt_ip}")
+
+                # Ensure cluster admin credentials are known upfront so
+                # _fetch_existing_cluster_ip() can authenticate silently during
+                # the join wizard (avoids the mid-run "no credentials found" prompt).
+                if _initial_operation_mode == 2:
+                    cfg_cluster_2 = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
+                    _has_creds = (
+                        _cluster_config.get("admin_user") and _cluster_config.get("admin_password")
+                    ) or (
+                        cfg_cluster_2.get("user") and cfg_cluster_2.get("password")
+                    ) or (
+                        sp_pass  # BMC creds are always a fallback candidate
+                    )
+                    if not _has_creds:
+                        _print_banner("\U0001f510 Existing Cluster Admin Credentials")
+                        print("\n  These are needed to look up the cluster-network IP")
+                        print("  during the join wizard. Enter blank to use the BMC")
+                        print("  credentials as a fallback.")
+                        try:
+                            _pre_cl_user = input(
+                                "\n  Cluster admin username [admin]: "
+                            ).strip() or "admin"
+                            _pre_cl_pass = getpass.getpass(
+                                "  Cluster admin password (blank = use BMC password): "
+                            )
+                        except (EOFError, KeyboardInterrupt):
+                            _pre_cl_user = "admin"
+                            _pre_cl_pass = ""
+                        if _pre_cl_pass:
+                            _cluster_config["admin_user"] = _pre_cl_user
+                            _cluster_config["admin_password"] = _pre_cl_pass
+                            _session_log.log(
+                                f"Mode 2: cluster admin credentials collected upfront "
+                                f"(user={_pre_cl_user})"
+                            )
+                        else:
+                            _session_log.log(
+                                "Mode 2: no cluster admin password entered; "
+                                "will fall back to BMC credentials"
+                            )
+
+                collect_node_mgmt_per_bmc(sp_host, [])
+
+            # ── Mode 2b multi-node: run parallel add when config has >1 secondary ──
+            # If the config file lists multiple secondary nodes AND the operator
+            # chose 2b (auto_add), collect all peers, confirm, and run every node
+            # through LOADER → option 4 → join in parallel (joins serialized).
+            # Single-node 2b falls through to the existing sequential path below.
+            if _operation_mode == 2 and _auto_add:
+                _2b_extra_peers = []
+                if isinstance(_config_data, dict):
+                    _sn_list = _config_data.get("secondary_nodes")
+                    if isinstance(_sn_list, list):
+                        _2b_extra_peers = [
+                            str(n["bmc"]) for n in _sn_list
+                            if isinstance(n, dict) and n.get("bmc")
+                            and str(n["bmc"]) != sp_host
+                        ]
+                    else:
+                        _all_nodes_2b = _config_data.get("nodes") or []
+                        _2b_extra_peers = [
+                            str(n["bmc"]) for n in _all_nodes_2b
+                            if isinstance(n, dict) and n.get("bmc")
+                            and str(n["bmc"]) != sp_host
+                        ]
+                if _2b_extra_peers:
+                    _2b_all_peers = [sp_host] + _2b_extra_peers
+
+                    # Collect node-mgmt info for each extra peer.
+                    for _ep in _2b_extra_peers:
+                        collect_node_mgmt_per_bmc(_ep, [])
+
+                    # Register sp_host credentials so the thread can look them up.
+                    if sp_host not in _peer_bmc_creds:
+                        _peer_bmc_creds[sp_host] = {"user": sp_user, "password": sp_pass}
+
+                    # Close the already-open channel for sp_host; _add_peer_node_thread
+                    # will establish its own fresh BMC connection for every peer.
+                    try:
+                        channel.close()
+                    except Exception:
+                        pass
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+
+                    ok = _run_2b_parallel_add(
+                        _2b_all_peers, sp_user,
+                        {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "")
+                         for ip in _2b_all_peers},
+                        _session_log,
+                    )
+                    _session_log.record_completion(normal_exit=ok)
+                    print(f"\n📝 Session log: {_session_log.log_file}")
+                    sys.exit(0 if ok else 1)
+
+            # ── Mode 2a: parallel add with interactive broker ───────────────────────
+            # Mode 2a always uses the parallel thread infrastructure (same as 2b) so
+            # that multi-node configs are handled correctly, but threads pause and ask
+            # the operator whenever a confirmation is required rather than
+            # auto-answering.  Even a single-node 2a benefits from summary output
+            # instead of raw BMC console pass-through.
+            if _operation_mode == 2 and not _auto_add:
+                _2a_extra_peers = []
+                if isinstance(_config_data, dict):
+                    _sn_list = _config_data.get("secondary_nodes")
+                    if isinstance(_sn_list, list):
+                        _2a_extra_peers = [
+                            str(n["bmc"]) for n in _sn_list
+                            if isinstance(n, dict) and n.get("bmc")
+                            and str(n["bmc"]) != sp_host
+                        ]
+                    else:
+                        _all_nodes_2a = _config_data.get("nodes") or []
+                        _2a_extra_peers = [
+                            str(n["bmc"]) for n in _all_nodes_2a
+                            if isinstance(n, dict) and n.get("bmc")
+                            and str(n["bmc"]) != sp_host
+                        ]
+
+                _2a_all_peers = [sp_host] + _2a_extra_peers
+
+                # Collect node-mgmt info for extra peers upfront.
+                for _ep in _2a_extra_peers:
+                    collect_node_mgmt_per_bmc(_ep, [])
+
+                if sp_host not in _peer_bmc_creds:
+                    _peer_bmc_creds[sp_host] = {"user": sp_user, "password": sp_pass}
+
+                # Close the already-open channel; threads open their own connections.
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+                ok = _run_2a_parallel_add(
+                    _2a_all_peers, sp_user,
+                    {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "")
+                     for ip in _2a_all_peers},
+                    _session_log,
+                )
+                _session_log.record_completion(normal_exit=ok)
+                print(f"\n📝 Session log: {_session_log.log_file}")
+                sys.exit(0 if ok else 1)
+
+            # If we captured retain data from an existing cluster (and the operator
+            # didn't load a JSON config off disk), persist the merged in-memory
+            # config to the default auto-detect location so the next run picks it
+            # up automatically instead of having to scrape the cluster again.
+            retain_captured = any((
+                _retained_cluster_name,
+                _retained_net_config,
+                _retained_default_gateway,
+                _retained_cluster_contact,
+                _retained_cluster_location,
+                _retained_dns_domains,
+                _retained_dns_servers,
+                _retained_ntp_servers,
+                _retained_sp_to_node,
+            ))
+            if retain_captured and not config_path:
+                try:
+                    snap_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
+                except NameError:
+                    snap_dir = os.path.join(os.getcwd(), "configs")
+                os.makedirs(snap_dir, exist_ok=True)
+                snap_path = os.path.join(snap_dir, "reinit-config.json")
+                write_config_snapshot(snap_path)
+
+            # ── Option 3 checkpoint init (before destructive ops) ────────────────
+            # The actual primary-setup phases are not skipped on resume (re-running
+            # system-reset on a primary whose cluster is already up would be
+            # destructive); on resume we detect primary_setup_done and steer the
+            # operator to option 2c instead. Per-peer skip in add_peer_nodes_parallel
+            # still prevents re-joining nodes that already completed.
+            if _operation_mode == 3 and _checkpoint is None:
+                _option3_init_checkpoint(_run_context, sp_host, _peer_bmc_list, config_path)
+
+            # Phase: System Reset
+            _session_log.start_phase("System Reset")
+            print("\n🔄 Sending 'system reset' command...")
+            _session_log.log("Sending 'system reset' command")
+            direct_send_and_wait(channel, "system reset", "y/n", timeout=15, auto_respond="y")
+
+            print("\n⏳ System reset in process. Script may appear hung, but be"
+                  " patient — reboot will happen soon.")
+            _session_log.log("System reset issued; waiting for reboot")
+            time.sleep(3)
+
+            print("Waiting for BMC prompt after reset...")
+            _session_log.log("Waiting for BMC prompt after reset")
+            output = direct_read_until(channel, ">", timeout=15)
+            if ">" in output:
+                print("✅ BMC prompt returned.")
+                _session_log.log("BMC prompt returned after reset")
+            else:
+                print("⚠️  BMC prompt not seen after reset, continuing anyway...")
+                _session_log.log("BMC prompt not seen after reset", prefix="WARN")
+            _session_log.end_phase()
+
+            # Phase: Enter System Console
+            _session_log.start_phase("Enter System Console")
+            enter_system_console(channel)
+            print("Now monitoring boot output...\n")
+            _session_log.log("Starting boot monitoring")
+            _session_log.end_phase()
+
+            # Install per-node log writer so detailed boot/init output goes to a
+            # dedicated file instead of flooding the terminal.  Milestone lines
+            # (✅ / ⚠️ / 🤖 etc.) are still echoed to the screen.  Interactive
+            # modes (1a/2a) run in pass-through so the operator sees everything.
+            _is_auto_mode = _auto_setup or _auto_add or _operation_mode == 3
+            _nlw_log_dir = _session_log.log_dir if _session_log else os.getcwd()
+            _nlw_node_file = _node_log_open(
+                sp_host, _nlw_log_dir,
+                prefix="option2b_add_node" if _operation_mode == 2 else f"mode{_operation_mode}_node",
+            )
+            _nlw = _NodeLogWriter(_nlw_node_file, interactive=not _is_auto_mode)
+            sys.stdout = _nlw
+            _real_stdout.write(
+                f"\n  📝 [{sp_host}] Detailed node output → {_nlw_node_file.name}\n"
+            )
+            _real_stdout.flush()
+
+            # Phase: AUTOBOOT/LOADER Monitoring
+            # (sub-phases LOADER Commands, Boot Menu, Interactive are handled inside)
+            _session_log.start_phase("AUTOBOOT/LOADER Monitoring")
+            monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass)
+
+            # Mode 2b: support adding additional nodes within the same run. The join
+            # automation may set _add_another_node_request to (host, user, password)
+            # to drive a fresh BMC through the same pipeline.
+            while _add_another_node_request is not None:
+                next_host, next_user, next_pass = _add_another_node_request
+                _add_another_node_request = None
+                _shutdown_event.clear()
+
+                _print_banner(f"▶️  Adding next node: {next_host}")
+                _slog(f"Switching to next node: {next_host}")
+
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+                sp_host, sp_user, sp_pass = next_host, next_user, next_pass
+
+                _session_log.start_phase(f"SSH Connection ({sp_host})")
+                client, sp_user, sp_pass = connect_to_sp(sp_host, sp_user, sp_pass)
+                channel = _open_shell(client)
+                threading.Thread(
+                    target=keepalive_loop, args=(client,), daemon=True
+                ).start()
+                _session_log.log("Keepalive thread started for next node")
+                _session_log.end_phase()
+
+                _session_log.start_phase(f"BMC Prompt ({sp_host})")
+                if not wait_for_bmc_prompt(channel):
+                    print(f"⚠️  Could not reach BMC prompt on {sp_host}; aborting.")
+                    _session_log.log(f"BMC prompt timeout on {sp_host}; aborting next-node",
+                                     prefix="ERROR")
+                    _session_log.end_phase()
+                    break
+                drain_channel(channel, seconds=1)
+                _session_log.end_phase()
+
+                # Collect node-management info for this new BMC up front.
+                collect_node_mgmt_per_bmc(sp_host, [])
+
+                _session_log.start_phase(f"System Reset ({sp_host})")
+                print("\n🔄 Sending 'system reset' command...")
+                _session_log.log("Sending 'system reset' command")
+                direct_send_and_wait(channel, "system reset", "y/n", timeout=15,
+                                     auto_respond="y")
+                print("\n⏳ System reset in process. Script may appear hung, but"
+                      " be patient — reboot will happen soon.")
+                _session_log.log("System reset issued; waiting for reboot")
+                time.sleep(3)
+                direct_read_until(channel, ">", timeout=15)
+                _session_log.end_phase()
+
+                _session_log.start_phase(f"Enter System Console ({sp_host})")
+                enter_system_console(channel)
+                print("Now monitoring boot output...\n")
+                _session_log.log("Starting boot monitoring for next node")
+                _session_log.end_phase()
+
+                # Close the previous node's log writer and open a fresh one for this node.
+                if isinstance(sys.stdout, _NodeLogWriter):
+                    try:
+                        sys.stdout._nf.close()
+                    except Exception:
+                        pass
+                _nlw_node_file2 = _node_log_open(
+                    sp_host, _nlw_log_dir,
+                    prefix="option2b_add_node" if _operation_mode == 2 else f"mode{_operation_mode}_node",
+                )
+                _nlw2 = _NodeLogWriter(_nlw_node_file2, interactive=not _is_auto_mode)
+                sys.stdout = _nlw2
+                _real_stdout.write(
+                    f"\n  📝 [{sp_host}] Detailed node output → {_nlw_node_file2.name}\n"
+                )
+                _real_stdout.flush()
+
+                _session_log.start_phase(f"AUTOBOOT/LOADER Monitoring ({sp_host})")
+                monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass)
+
+            # Restore real stdout and close per-node log file.
+            if isinstance(sys.stdout, _NodeLogWriter):
+                try:
+                    sys.stdout._nf.close()
+                except Exception:
+                    pass
+                sys.stdout = _real_stdout
+
+            # Cleanup
+            _shutdown_event.set()
+            print("⏳ Cleaning up... (press Ctrl+C again to force exit)")
+            if _session_log:
+                _session_log.end_phase()
+                _session_log.log("Shutting down")
+
             try:
                 channel.close()
             except Exception:
@@ -19117,265 +19385,16 @@ def main():
             except Exception:
                 pass
 
-            ok = _run_2b_parallel_add(
-                _2b_all_peers, sp_user,
-                {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "")
-                 for ip in _2b_all_peers},
-                _session_log,
-            )
-            _session_log.record_completion(normal_exit=ok)
-            print(f"\n📝 Session log: {_session_log.log_file}")
-            sys.exit(0 if ok else 1)
+            print("🔒 SSH session closed.")
+            if _session_log:
+                _session_log.log("SSH session closed")
+                _session_log.record_completion(normal_exit=True)
+                print(f"\n📝 Full session log saved to: {_session_log.log_file}")
 
-    # ── Mode 2a: parallel add with interactive broker ───────────────────────
-    # Mode 2a always uses the parallel thread infrastructure (same as 2b) so
-    # that multi-node configs are handled correctly, but threads pause and ask
-    # the operator whenever a confirmation is required rather than
-    # auto-answering.  Even a single-node 2a benefits from summary output
-    # instead of raw BMC console pass-through.
-    if _operation_mode == 2 and not _auto_add:
-        _2a_extra_peers = []
-        if isinstance(_config_data, dict):
-            _sn_list = _config_data.get("secondary_nodes")
-            if isinstance(_sn_list, list):
-                _2a_extra_peers = [
-                    str(n["bmc"]) for n in _sn_list
-                    if isinstance(n, dict) and n.get("bmc")
-                    and str(n["bmc"]) != sp_host
-                ]
-            else:
-                _all_nodes_2a = _config_data.get("nodes") or []
-                _2a_extra_peers = [
-                    str(n["bmc"]) for n in _all_nodes_2a
-                    if isinstance(n, dict) and n.get("bmc")
-                    and str(n["bmc"]) != sp_host
-                ]
-
-        _2a_all_peers = [sp_host] + _2a_extra_peers
-
-        # Collect node-mgmt info for extra peers upfront.
-        for _ep in _2a_extra_peers:
-            collect_node_mgmt_per_bmc(_ep, [])
-
-        if sp_host not in _peer_bmc_creds:
-            _peer_bmc_creds[sp_host] = {"user": sp_user, "password": sp_pass}
-
-        # Close the already-open channel; threads open their own connections.
-        try:
-            channel.close()
-        except Exception:
-            pass
-        try:
-            client.close()
-        except Exception:
-            pass
-
-        ok = _run_2a_parallel_add(
-            _2a_all_peers, sp_user,
-            {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "")
-             for ip in _2a_all_peers},
-            _session_log,
-        )
-        _session_log.record_completion(normal_exit=ok)
-        print(f"\n📝 Session log: {_session_log.log_file}")
-        sys.exit(0 if ok else 1)
-
-    # If we captured retain data from an existing cluster (and the operator
-    # didn't load a JSON config off disk), persist the merged in-memory
-    # config to the default auto-detect location so the next run picks it
-    # up automatically instead of having to scrape the cluster again.
-    retain_captured = any((
-        _retained_cluster_name,
-        _retained_net_config,
-        _retained_default_gateway,
-        _retained_cluster_contact,
-        _retained_cluster_location,
-        _retained_dns_domains,
-        _retained_dns_servers,
-        _retained_ntp_servers,
-        _retained_sp_to_node,
-    ))
-    if retain_captured and not config_path:
-        try:
-            snap_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
-        except NameError:
-            snap_dir = os.path.join(os.getcwd(), "configs")
-        os.makedirs(snap_dir, exist_ok=True)
-        snap_path = os.path.join(snap_dir, "reinit-config.json")
-        write_config_snapshot(snap_path)
-
-    # ── Option 3 checkpoint init (before destructive ops) ────────────────
-    # The actual primary-setup phases are not skipped on resume (re-running
-    # system-reset on a primary whose cluster is already up would be
-    # destructive); on resume we detect primary_setup_done and steer the
-    # operator to option 2c instead. Per-peer skip in add_peer_nodes_parallel
-    # still prevents re-joining nodes that already completed.
-    if _operation_mode == 3 and _checkpoint is None:
-        _option3_init_checkpoint(_run_context, sp_host, _peer_bmc_list, config_path)
-
-    # Phase: System Reset
-    _session_log.start_phase("System Reset")
-    print("\n🔄 Sending 'system reset' command...")
-    _session_log.log("Sending 'system reset' command")
-    direct_send_and_wait(channel, "system reset", "y/n", timeout=15, auto_respond="y")
-
-    print("\n⏳ System reset in process. Script may appear hung, but be"
-          " patient — reboot will happen soon.")
-    _session_log.log("System reset issued; waiting for reboot")
-    time.sleep(3)
-
-    print("Waiting for BMC prompt after reset...")
-    _session_log.log("Waiting for BMC prompt after reset")
-    output = direct_read_until(channel, ">", timeout=15)
-    if ">" in output:
-        print("✅ BMC prompt returned.")
-        _session_log.log("BMC prompt returned after reset")
-    else:
-        print("⚠️  BMC prompt not seen after reset, continuing anyway...")
-        _session_log.log("BMC prompt not seen after reset", prefix="WARN")
-    _session_log.end_phase()
-
-    # Phase: Enter System Console
-    _session_log.start_phase("Enter System Console")
-    enter_system_console(channel)
-    print("Now monitoring boot output...\n")
-    _session_log.log("Starting boot monitoring")
-    _session_log.end_phase()
-
-    # Install per-node log writer so detailed boot/init output goes to a
-    # dedicated file instead of flooding the terminal.  Milestone lines
-    # (✅ / ⚠️ / 🤖 etc.) are still echoed to the screen.  Interactive
-    # modes (1a/2a) run in pass-through so the operator sees everything.
-    _is_auto_mode = _auto_setup or _auto_add or _operation_mode == 3
-    _nlw_log_dir = _session_log.log_dir if _session_log else os.getcwd()
-    _nlw_node_file = _node_log_open(
-        sp_host, _nlw_log_dir,
-        prefix="option2b_add_node" if _operation_mode == 2 else f"mode{_operation_mode}_node",
-    )
-    _nlw = _NodeLogWriter(_nlw_node_file, interactive=not _is_auto_mode)
-    sys.stdout = _nlw
-    _real_stdout.write(
-        f"\n  📝 [{sp_host}] Detailed node output → {_nlw_node_file.name}\n"
-    )
-    _real_stdout.flush()
-
-    # Phase: AUTOBOOT/LOADER Monitoring
-    # (sub-phases LOADER Commands, Boot Menu, Interactive are handled inside)
-    _session_log.start_phase("AUTOBOOT/LOADER Monitoring")
-    monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass)
-
-    # Mode 2b: support adding additional nodes within the same run. The join
-    # automation may set _add_another_node_request to (host, user, password)
-    # to drive a fresh BMC through the same pipeline.
-    while _add_another_node_request is not None:
-        next_host, next_user, next_pass = _add_another_node_request
-        _add_another_node_request = None
-        _shutdown_event.clear()
-
-        _print_banner(f"▶️  Adding next node: {next_host}")
-        _slog(f"Switching to next node: {next_host}")
-
-        try:
-            channel.close()
-        except Exception:
-            pass
-        try:
-            client.close()
-        except Exception:
-            pass
-
-        sp_host, sp_user, sp_pass = next_host, next_user, next_pass
-
-        _session_log.start_phase(f"SSH Connection ({sp_host})")
-        client, sp_user, sp_pass = connect_to_sp(sp_host, sp_user, sp_pass)
-        channel = _open_shell(client)
-        threading.Thread(
-            target=keepalive_loop, args=(client,), daemon=True
-        ).start()
-        _session_log.log("Keepalive thread started for next node")
-        _session_log.end_phase()
-
-        _session_log.start_phase(f"BMC Prompt ({sp_host})")
-        if not wait_for_bmc_prompt(channel):
-            print(f"⚠️  Could not reach BMC prompt on {sp_host}; aborting.")
-            _session_log.log(f"BMC prompt timeout on {sp_host}; aborting next-node",
-                             prefix="ERROR")
-            _session_log.end_phase()
-            break
-        drain_channel(channel, seconds=1)
-        _session_log.end_phase()
-
-        # Collect node-management info for this new BMC up front.
-        collect_node_mgmt_per_bmc(sp_host, [])
-
-        _session_log.start_phase(f"System Reset ({sp_host})")
-        print("\n🔄 Sending 'system reset' command...")
-        _session_log.log("Sending 'system reset' command")
-        direct_send_and_wait(channel, "system reset", "y/n", timeout=15,
-                             auto_respond="y")
-        print("\n⏳ System reset in process. Script may appear hung, but"
-              " be patient — reboot will happen soon.")
-        _session_log.log("System reset issued; waiting for reboot")
-        time.sleep(3)
-        direct_read_until(channel, ">", timeout=15)
-        _session_log.end_phase()
-
-        _session_log.start_phase(f"Enter System Console ({sp_host})")
-        enter_system_console(channel)
-        print("Now monitoring boot output...\n")
-        _session_log.log("Starting boot monitoring for next node")
-        _session_log.end_phase()
-
-        # Close the previous node's log writer and open a fresh one for this node.
-        if isinstance(sys.stdout, _NodeLogWriter):
-            try:
-                sys.stdout._nf.close()
-            except Exception:
-                pass
-        _nlw_node_file2 = _node_log_open(
-            sp_host, _nlw_log_dir,
-            prefix="option2b_add_node" if _operation_mode == 2 else f"mode{_operation_mode}_node",
-        )
-        _nlw2 = _NodeLogWriter(_nlw_node_file2, interactive=not _is_auto_mode)
-        sys.stdout = _nlw2
-        _real_stdout.write(
-            f"\n  📝 [{sp_host}] Detailed node output → {_nlw_node_file2.name}\n"
-        )
-        _real_stdout.flush()
-
-        _session_log.start_phase(f"AUTOBOOT/LOADER Monitoring ({sp_host})")
-        monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass)
-
-    # Restore real stdout and close per-node log file.
-    if isinstance(sys.stdout, _NodeLogWriter):
-        try:
-            sys.stdout._nf.close()
-        except Exception:
-            pass
-        sys.stdout = _real_stdout
-
-    # Cleanup
-    _shutdown_event.set()
-    print("⏳ Cleaning up... (press Ctrl+C again to force exit)")
-    if _session_log:
-        _session_log.end_phase()
-        _session_log.log("Shutting down")
-
-    try:
-        channel.close()
-    except Exception:
-        pass
-    try:
-        client.close()
-    except Exception:
-        pass
-
-    print("🔒 SSH session closed.")
-    if _session_log:
-        _session_log.log("SSH session closed")
-        _session_log.record_completion(normal_exit=True)
-        print(f"\n📝 Full session log saved to: {_session_log.log_file}")
-
+        except _ReturnToMenu:
+            print("\n  \u21a9\ufe0f  Returning to main menu...\n")
+            _resume_autodispatch = False
+            continue
 
 if __name__ == "__main__":
     main()

@@ -31,6 +31,7 @@ The script automates the following core tasks:
 - Configures passwordless SSH access to cluster management
 - Creates and saves cluster configuration backups
 - Verifies BMC authentication
+- Runs standalone cluster health and version checks
 
 All session activity is captured in a timestamped log directory with a human-readable summary report and a full screen-output transcript.
 
@@ -53,6 +54,7 @@ All session activity is captured in a timestamped log directory with a human-rea
 | Config Backup (5c) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. After gathering, the saved `reinit-config.json` includes `cluster`, `primary_node`, and `secondary_nodes` blocks, fully populated with management IPs and BMC addresses. The retained configuration summary displays Cluster LIFs and Management LIFs in separate tables. |
 | BMC Auth Verify (5d) | Batch-tests BMC SSH credentials for all nodes in the config file. |
 | Reset to LOADER (5e) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
+| **Cluster Health Check (5f)** | Connects to the cluster management LIF via SSH and runs `cluster show`, `storage failover show`, and `system image show` to confirm all nodes are healthy and report the running ONTAP version. Auto-loads connection details from `reinit-config.json`; if no config is present it offers to run 5c (config gather) first, then returns to the health check automatically. |
 | Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
 | **Screen output log** | Every line printed to the terminal during a run is captured to `screen_output_<timestamp>.log` in the session log directory. ANSI codes are stripped for clean plain-text reading. |
 | Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |

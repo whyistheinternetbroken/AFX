@@ -45,6 +45,17 @@ revision labels rather than strict [SemVer](https://semver.org/).
   the corruption.
 
 ### Added
+- **Option 5f: standalone cluster health and version check.** A new menu option
+  under category 5 that connects to the cluster management LIF via SSH, runs
+  `cluster show`, `storage failover show`, and `system image show`, and reports
+  whether the cluster is healthy and which ONTAP version all nodes are running.
+  Suitable for a quick post-upgrade or ad-hoc health verification without
+  running a full upgrade workflow.
+- **5f auto-loads connection details from `reinit-config.json`.** On startup,
+  5f searches for a `reinit-config.json` in the standard config directories and
+  pre-populates the cluster management LIF IP and username. If no config is
+  found it offers to launch the 5c config-gather workflow first, then returns
+  to the health check automatically after the config is written.
 - **Numbered upgrade mode prompt.** The `4a` upgrade workflow now presents
   `validate`, `install`, and `prestage` as a numbered list (1/2/3). Both the
   number and the keyword are accepted as valid input.
@@ -52,6 +63,19 @@ revision labels rather than strict [SemVer](https://semver.org/).
   skill that guides updating `README.md` and `CHANGELOG.md` after changes to
   `AFX_reinit.py`. Automatically triggered when the user asks to update docs,
   readme, or changelog.
+
+### Fixed
+- **5f `_json` NameError on config read.** The config file loader in mode 49
+  was calling `_json.load()` instead of `json.load()`, raising a `NameError`
+  on any run where a `reinit-config.json` was found.
+- **5f → 5c redirect returned to summary log instead of resuming 5f.** Setting
+  `_operation_mode = 46` and returning was a no-op because the dispatch block
+  had already passed. Fixed by adding a `_5f_pending_after_4e` flag (mirroring
+  the existing `_4a_pending_after_4e` pattern); when 5c completes it checks the
+  flag and falls through to the mode 49 block instead of calling `sys.exit(0)`.
+- **"Option 4e" label in no-config prompts.** Two prompts that referred to the
+  config-gather workflow as "Option 4e" were updated to "Option 5c" to match
+  the current menu numbering.
 
 ### Changed (prior)
 - **Menu reorganized into two install/admin categories.**
