@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/9/2026  
+**Updated:** 6/10/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
 ---
@@ -32,6 +32,7 @@ The script automates the following core tasks:
 - Creates and saves cluster configuration backups
 - Verifies BMC authentication
 - Runs standalone cluster health and version checks
+- Lists and cleans up stale BMC SSH sessions interactively
 
 All session activity is captured in a timestamped log directory with a human-readable summary report and a full screen-output transcript.
 
@@ -55,13 +56,14 @@ All session activity is captured in a timestamped log directory with a human-rea
 | BMC Auth Verify (5d) | Batch-tests BMC SSH credentials for all nodes in the config file. |
 | Reset to LOADER (5e) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
 | **Cluster Health Check (5f)** | Connects to the cluster management LIF via SSH and runs `cluster show`, `storage failover show`, and `system image show` to confirm all nodes are healthy and report the running ONTAP version. Auto-loads connection details from `reinit-config.json`; if no config is present it offers to run 5c (config gather) first, then returns to the health check automatically. |
+| **Stale BMC Session Cleanup (5g)** | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. Diagnoses stale socket connections, runs `ipmitool sol deactivate`, and optionally SIGTERMs prior-run Python processes holding open BMC TCP connections. Returns to main menu when done. |
 | Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
 | **Screen output log** | Every line printed to the terminal during a run is captured to `screen_output_<timestamp>.log` in the session log directory. ANSI codes are stripped for clean plain-text reading. |
 | Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |
 | Screen Mode | `--screen` flag: automatically re-launches the script inside a detached GNU screen session. Protects against SSH disconnections and terminal timeouts. Implies `--bg`. |
 | Node add resume | Resumes interrupted node add processes. |
 | Physical disk zeroing | Adds option to physically zero disks rather than fast zero (which helps ensure performance consistency). |
-| BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 4f offers an interactive cleanup pass when BMC verification fails. |
+| BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 5d offers an interactive cleanup pass when BMC verification fails. Use option 5g for a standalone interactive stale-session cleanup tool. |
 | Diagnostic bootarg injection (`--diag`) | Injects custom LOADER `setenv` bootargs (from a `bootargs.txt` or `bootargs` file in `configs/` or the script directory, or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Accepts any `option_name value` format (not just `bootarg.` prefix). All entries printed and confirmed before proceeding. Validates format, detects LOADER errors on apply, and checkpoints the bootarg list for resume. |
 
 ---
@@ -168,7 +170,7 @@ pip install paramiko
 | Port | Protocol | Direction | Purpose |
 |---|---|---|---|
 | 22 | TCP | Client → BMC/SP | SSH connection to each node's BMC or Service Processor |
-| 22 | TCP | Client → Cluster Mgmt IP | SSH connection to ONTAP cluster management (modes 4a–4f) |
+| 22 | TCP | Client → Cluster Mgmt IP | SSH connection to ONTAP cluster management (modes 4a–5g) |
 
 ### Firewall Configuration
 
@@ -317,11 +319,13 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **3** | End-to-End Auto Reinit | Runs mode 1b on the primary node, then runs mode 2b on all secondary nodes in parallel. Fully unattended with a config file. |
 | **4a** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. See [Why 4a uses the BMC](#why-4a-uses-the-bmc). |
 | **4b** | Netboot Install | Boots a node via the network and installs a new ONTAP image from a netboot server. |
-| **4c** | License Install | Installs ONTAP licenses on an existing cluster. |
-| **4d** | SSH Key Setup | Configures passwordless SSH from the script host to the cluster management interface. |
-| **4e** | Config Backup | Connects to the cluster and captures its current configuration (name, IPs, licenses, nodes) to a JSON file. Can also build a config file manually from user prompts. |
-| **4f** | BMC Auth Verify | Tests BMC SSH authentication for all nodes defined in the config file and reports pass/fail. |
-| **4g** | Reset to LOADER | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging all nodes before a manual reinit or netboot run. |
+| **5a** | License Install | Installs ONTAP licenses on an existing cluster. |
+| **5b** | SSH Key Setup | Configures passwordless SSH from the script host to the cluster management interface. |
+| **5c** | Config Backup | Connects to the cluster and captures its current configuration (name, IPs, licenses, nodes) to a JSON file. Can also build a config file manually from user prompts. |
+| **5d** | BMC Auth Verify | Tests BMC SSH authentication for all nodes defined in the config file and reports pass/fail. |
+| **5e** | Reset to LOADER | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging all nodes before a manual reinit or netboot run. |
+| **5f** | Cluster Health Check | Connects to the cluster management LIF via SSH and checks health/version. |
+| **5g** | Stale BMC Session Cleanup | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. |
 
 > **Warning:** Options 1a and 1b destroy all storage on the target node and reinitialize the cluster. If a cluster already exists, use option 2 instead.
 
@@ -478,11 +482,11 @@ These flags bypass the interactive menu and launch directly into the specified m
 | `--add-nodes` | 2b | Add node(s) to an existing cluster automatically. |
 | `--reinit` | 3 | End-to-end automated reinit: 1b on primary + parallel node adds. |
 | `--netboot-install` | 4b | Netboot and install ONTAP. |
-| `--add-lic` | 4c | Install license file only. |
-| `--passwordless` | 4d | Configure passwordless SSH to cluster management. |
-| `--backup` | 4e | Create a backup cluster configuration file. |
-| `--verify` | 4f | Verify BMC authentication for all configured nodes. |
-| `--loader` | 4g | Reset all nodes to the LOADER prompt in parallel via BMC. |
+| `--add-lic` | 5a | Install license file only. |
+| `--passwordless` | 5b | Configure passwordless SSH to cluster management. |
+| `--backup` | 5c | Create a backup cluster configuration file. |
+| `--verify` | 5d | Verify BMC authentication for all configured nodes. |
+| `--loader` | 5e | Reset all nodes to the LOADER prompt in parallel via BMC. |
 
 **Examples:**
 
@@ -537,7 +541,7 @@ cd ~/afx-reinit
 
 For automated or multi-node runs, create a `reinit-config.json`. There are three ways:
 
-> **Tip:** If no config file or `BMC_IP.json` is found when you start modes 1 (initialize) or 3 (full reinit), the script will automatically ask whether you'd like to generate one from an existing cluster before proceeding — choosing **Y** launches option 4e inline.
+> **Tip:** If no config file or `BMC_IP.json` is found when you start modes 1 (initialize) or 3 (full reinit), the script will automatically ask whether you'd like to generate one from an existing cluster before proceeding — choosing **Y** launches option 5c inline.
 
 **Option A — Back up from a live cluster (recommended):** If the cluster is currently running, use `--backup` to capture its configuration automatically:
 
@@ -787,9 +791,9 @@ When this flag is set, the banner-retry cleanup additionally:
 
 > **Caution:** This can terminate a concurrent script invocation run by another operator on the same jump host. Use it only when you are certain no other active run shares the same host.
 
-### Interactive cleanup (mode 4f)
+### Interactive cleanup (mode 5d)
 
-When **mode 4f** (BMC Auth Verify) reports failures and you decline to re-enter addresses, the script offers an interactive diagnostic and cleanup pass:
+When **mode 5d** (BMC Auth Verify) reports failures and you decline to re-enter addresses, the script offers an interactive diagnostic and cleanup pass:
 
 ```
   🔍 Diagnosing SSH state for 192.168.2.10...
@@ -892,7 +896,7 @@ sudo dnf install python3-paramiko   # RHEL/Fedora
 - Double-check the BMC username and password
 - Some BMC firmware defaults to `admin` / `admin`; others use `ADMIN` / `ADMIN`
 - The script supports empty passwords (for BMCs with no password configured) by setting `bmc_password: ""` in the config file
-- Run mode 4f (BMC Auth Verify) to test credentials for all nodes without starting a reinit
+- Run mode 5d (BMC Auth Verify) to test credentials for all nodes without starting a reinit
 
 ### Script hangs waiting for LOADER prompt
 
@@ -1012,9 +1016,9 @@ For mode 4b, the validated bootarg list is saved to the checkpoint file. On `--r
 
 ---
 
-## Reset to LOADER (`--loader` / mode 4g)
+## Reset to LOADER (`--loader` / mode 5e)
 
-Mode 4g resets every configured node to the `LOADER>` prompt in parallel via BMC. It is a lightweight staging utility — it does not begin a reinit, install software, or modify any configuration. Use it to prepare all nodes before starting a manual reinit, netboot, or any workflow that requires nodes to be sitting at LOADER.
+Mode 5e resets every configured node to the `LOADER>` prompt in parallel via BMC. It is a lightweight staging utility — it does not begin a reinit, install software, or modify any configuration. Use it to prepare all nodes before starting a manual reinit, netboot, or any workflow that requires nodes to be sitting at LOADER.
 
 ### How it works
 

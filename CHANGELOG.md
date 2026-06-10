@@ -45,7 +45,17 @@ revision labels rather than strict [SemVer](https://semver.org/).
   the corruption.
 
 ### Added
-- **Option 5f: standalone cluster health and version check.** A new menu option
+- **Option 5g: list and clean up stale BMC SSH sessions.** A new menu option
+  under category 5 that diagnoses stale SSH socket connections to BMC/SP
+  addresses, deactivates stuck SOL sessions via `ipmitool sol deactivate`,
+  and optionally SIGTERMs stale prior-run Python processes holding open TCP
+  connections to the BMC. Presents an interactive loop with options to list,
+  clean up, or exit back to the main menu.
+- **All option 5 jobs return to the main menu after completion.** Options 5a–5g
+  now raise `_ReturnToMenu` instead of calling `sys.exit()`, so the operator
+  is returned to the main menu after each standalone utility finishes (success
+  or failure) rather than the script exiting.
+- **Option 5f: standalone cluster health and version check.**A new menu option
   under category 5 that connects to the cluster management LIF via SSH, runs
   `cluster show`, `storage failover show`, and `system image show`, and reports
   whether the cluster is healthy and which ONTAP version all nodes are running.
