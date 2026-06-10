@@ -15227,9 +15227,101 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
             session_log.log(f"option 3 checkpoint init failed: {exc}", prefix="WARN")
 
 
+def _find_post_scripts() -> list:
+    """Return a sorted list of absolute paths to Python scripts found in the
+    same directory as this script and its immediate subdirectories.
+
+    ``AFX_reinit.py`` itself (and any ``__pycache__`` trees) are excluded.
+    """
+    base = _script_dir()
+    try:
+        this_script = os.path.abspath(__file__)
+    except NameError:
+        this_script = None
+    found = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames
+                       if not d.startswith(".") and d != "__pycache__"]
+        for fname in sorted(filenames):
+            if not fname.endswith(".py"):
+                continue
+            full = os.path.abspath(os.path.join(dirpath, fname))
+            if this_script and full == this_script:
+                continue
+            found.append(full)
+    return sorted(found)
+
+
+def _prompt_and_run_post_script(session_log=None):
+    """After option 3 completes, offer to run an additional Python script.
+
+    Searches the script directory (and subfolders) for ``*.py`` files and
+    lists them numerically.  If none are found, prompts for a manual path.
+    The selected script is executed with the same Python interpreter.  After
+    the script finishes the prompt repeats so the user can run another or
+    skip.
+    """
+    while True:
+        ans = _prompt("\n  Run an additional script now? [y/N]: ").strip().lower()
+        if ans not in ("y", "yes"):
+            return
+
+        scripts = _find_post_scripts()
+        chosen_path = None
+
+        if scripts:
+            print("\n  Python scripts found:")
+            for idx, path in enumerate(scripts, start=1):
+                # Show path relative to script dir for readability
+                try:
+                    rel = os.path.relpath(path, _script_dir())
+                except ValueError:
+                    rel = path
+                print(f"    {idx}. {rel}")
+            print(f"    {len(scripts) + 1}. Enter a custom path")
+            print(f"    0. Skip")
+            sel = _prompt(f"\n  Select [0–{len(scripts) + 1}]: ").strip()
+            if sel == "0" or sel == "":
+                return
+            if sel.isdigit() and 1 <= int(sel) <= len(scripts):
+                chosen_path = scripts[int(sel) - 1]
+            elif sel == str(len(scripts) + 1):
+                chosen_path = None  # fall through to custom-path prompt
+            else:
+                print("  ⚠️  Invalid selection.")
+                continue
+        else:
+            print("  ℹ️  No Python scripts found in the script directory or subfolders.")
+
+        if chosen_path is None:
+            raw = _prompt("  Enter the full path to the script: ").strip()
+            if not raw:
+                continue
+            chosen_path = os.path.abspath(raw)
+
+        if not os.path.isfile(chosen_path):
+            print(f"  ⚠️  File not found: {chosen_path}")
+            continue
+
+        print(f"\n  ▶️  Running: {chosen_path}")
+        if session_log:
+            session_log.log(f"Running post-script: {chosen_path}")
+        try:
+            result = subprocess.run([sys.executable, chosen_path])
+            rc = result.returncode
+            status = "✅ completed" if rc == 0 else f"⚠️  exited with code {rc}"
+            print(f"\n  {status}: {os.path.basename(chosen_path)}")
+            if session_log:
+                session_log.log(f"Post-script {chosen_path} exited with code {rc}")
+        except Exception as exc:
+            print(f"  ❌  Error running script: {exc}")
+            if session_log:
+                session_log.log(f"Post-script error: {exc}", prefix="WARN")
+
+
 def _option3_finalize(ctx, cluster_mgmt_ip):
     """Mark option 3 complete, clear the checkpoint, print the completion
-    block, close the session log, and exit cleanly.
+    block, optionally run post-scripts, close the session log, and exit.
     """
     checkpoint = ctx.checkpoint
     session_log = ctx.session_log
@@ -15248,6 +15340,10 @@ def _option3_finalize(ctx, cluster_mgmt_ip):
         session_log.log("Mode 3 end-to-end completed successfully")
         session_log.log(f"SSH to {mgmt_ip} or https://{mgmt_ip}")
         session_log.set_outcome("PASS", "end-to-end auto initialize complete")
+
+    _prompt_and_run_post_script(session_log=session_log)
+
+    if session_log:
         try:
             session_log.close()
         except Exception:
