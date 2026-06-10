@@ -1990,12 +1990,13 @@ def select_operation_mode():
         print("    5d. Verify BMC authentication")
         print("    5e. Reset all nodes to LOADER prompt")
         print("    5f. Cluster health and version check")
+        print("    5g. List and clean up stale BMC SSH sessions")
         print("")
         print("  6.  Exit")
         print("")
         print("  " + "─" * 58)
         print("  (type 'menu' at any prompt to return here)")
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5f, or 6): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5g, or 6): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2188,7 +2189,7 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f"):
+        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g"):
             if choice == "5":
                 _print_banner("\U0001f6e0\ufe0f 5: Administration and maintenance")
                 print("\n  5a. Install license file only")
@@ -2197,9 +2198,10 @@ def select_operation_mode():
                 print("  5d. Verify BMC authentication")
                 print("  5e. Reset all nodes to LOADER prompt")
                 print("  5f. Cluster health and version check")
+                print("  5g. List and clean up stale BMC SSH sessions")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5f) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5a–5g) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -2295,13 +2297,28 @@ def select_operation_mode():
                     print("\n  \u2705 Confirmed. 5f: Cluster health and version check\n")
                     return 49, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
+
+            if choice == "5g":
+                _print_banner("\U0001f9f9 5g: List and clean up stale BMC SSH sessions")
+                print("")
+                print("  Diagnoses stale SSH socket connections to BMC/SP ports,")
+                print("  deactivates any stuck SOL sessions via ipmitool, and")
+                print("  optionally SIGTERMs stale prior-run python processes holding")
+                print("  open TCP connections to the BMC.")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  \u2705 Confirmed. 5g: List and clean up stale BMC SSH sessions\n")
+                    return 50, False, False
+                print("\n  \u21a9\ufe0f  Returning to menu...\n")
             continue
 
         if choice == "6":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5f, or 6.")
+        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5g, or 6.")
 
 
 def get_loader_commands():
@@ -16654,7 +16671,7 @@ def main():
                 _collect_license_config(_run_context)
                 if not _license_mode:
                     print("\n  No license configured; nothing to do. Exiting.")
-                    sys.exit(0)
+                    raise _ReturnToMenu
 
                 # Optional config file for BMC credentials.
                 config_path_44 = args.config
@@ -16714,7 +16731,7 @@ def main():
                     print("\n  \u274c BMC prompt not received. Exiting.")
                     _session_log.set_outcome("FAIL", "BMC prompt not received")
                     _session_log.close()
-                    sys.exit(1)
+                    raise _ReturnToMenu
 
                 # Enter system console and login to cluster shell.
                 _session_log.start_phase("Cluster Shell Login")
@@ -16728,7 +16745,7 @@ def main():
                         print("  \u274c Cluster shell login failed. Exiting.")
                         _session_log.set_outcome("FAIL", "Cluster shell login failed")
                         _session_log.close()
-                        sys.exit(1)
+                        raise _ReturnToMenu
                 _session_log.end_phase()
 
                 # Apply license(s).
@@ -16746,7 +16763,7 @@ def main():
                 print("\n\U0001f512 SSH session closed.")
                 _session_log.record_completion(normal_exit=True)
                 print(f"\n\U0001f4dd Full session log saved to: {_session_log.log_file}")
-                sys.exit(0)
+                raise _ReturnToMenu
 
             # ── Pre-check: offer 4e when mode 1/3 finds no config files ───────────
             # Checked here — before the mode 46 block — so that changing
@@ -17430,14 +17447,14 @@ def main():
                     ok = _run_ontap_upgrade(_session_log)
                     _session_log.record_completion(normal_exit=ok)
                     print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
-                    sys.exit(0 if ok else 1)
+                    raise _ReturnToMenu
 
                 if _5f_pending_after_4e:
                     _5f_pending_after_4e = False
                     _operation_mode = 49
                     print("\n  \u2705 Config created. Continuing with 5f health check...\n")
                 else:
-                    sys.exit(0)
+                    raise _ReturnToMenu
 
             # ── Mode 47 (4f): verify BMC authentication ────────────────────────────
             if _operation_mode == 47:
@@ -17656,7 +17673,7 @@ def main():
                     with suppress(Exception):
                         _offer_bmc_ssh_diagnostic(_failing47, _rep_user47, _pw_map47)
 
-                sys.exit(0)
+                raise _ReturnToMenu
 
             # ── Mode 48 (4g): reset all nodes to LOADER prompt ─────────────────────
             if _operation_mode == 48:
@@ -17709,8 +17726,8 @@ def main():
                         _idx48 += 1
 
                 if not _bmc_ips48:
-                    print("  No BMC addresses entered. Exiting.")
-                    sys.exit(0)
+                    print("  No BMC addresses entered. Returning to menu.")
+                    raise _ReturnToMenu
 
                 # ── Credentials ──────────────────────────────────────────────────
                 print("")
@@ -17789,7 +17806,7 @@ def main():
                 _session_log.end_phase()
                 _session_log.record_completion(normal_exit=(_fail48 == 0))
                 print(f"\U0001f4dd Session log: {_session_log.log_file}")
-                sys.exit(0 if _fail48 == 0 else 1)
+                raise _ReturnToMenu
 
             # ── Mode 49 (5f): cluster health and version check ─────────────────────
             if _operation_mode == 49:
@@ -17959,7 +17976,110 @@ def main():
                     _session_log.log("5f: cluster not healthy within timeout", prefix="WARN")
 
                 print(f"\U0001f4dd Session log: {_session_log.log_file}")
-                sys.exit(0 if _healthy49 else 1)
+                raise _ReturnToMenu
+
+            # ── Mode 50 (5g): list and clean up stale BMC SSH sessions ────────────
+            if _operation_mode == 50:
+                _print_banner("\U0001f9f9 5g: List and clean up stale BMC SSH sessions")
+                _make_session_log("Mode 5g: stale BMC SSH session cleanup")
+                print("")
+
+                # ── Load BMC IPs from config (same logic as modes 47/48) ─────────
+                _bmc_ips50 = []
+                _found_file50 = None
+                for _p50 in _find_config_files(
+                    candidate_names=("BMC_IP.json",
+                                     "reinit-config.json", "reinit_config.json",
+                                     "reinit-afx-config.json", "add_nodes.json"),
+                ):
+                    try:
+                        with open(_p50, "r", encoding="utf-8") as _f50:
+                            _d50data = json.load(_f50)
+                    except Exception:
+                        continue
+                    if isinstance(_d50data.get("netboot_bmcs"), list):
+                        _bmc_ips50 = [str(x) for x in _d50data["netboot_bmcs"] if x]
+                    else:
+                        _pn50 = _d50data.get("primary_node")
+                        if isinstance(_pn50, dict) and _pn50.get("bmc"):
+                            _bmc_ips50.append(str(_pn50["bmc"]))
+                        for _sn50 in (_d50data.get("secondary_nodes") or []):
+                            if isinstance(_sn50, dict) and _sn50.get("bmc"):
+                                _bmc_ips50.append(str(_sn50["bmc"]))
+                        if not _bmc_ips50:
+                            for _n50 in (_d50data.get("nodes") or []):
+                                if isinstance(_n50, dict) and _n50.get("bmc"):
+                                    _bmc_ips50.append(str(_n50["bmc"]))
+                    if _bmc_ips50:
+                        _found_file50 = _p50
+                        break
+
+                if _found_file50:
+                    print(f"  \U0001f4c4 Loaded {len(_bmc_ips50)} BMC address(es) from: {_found_file50}")
+                    for _ip50 in _bmc_ips50:
+                        print(f"     \u2022 {_ip50}")
+                else:
+                    print("  \u2139\ufe0f  No BMC IP file found. Enter BMC addresses manually.")
+                    print("  (Leave blank and press Enter when done.)\n")
+                    _idx50 = 1
+                    while True:
+                        _entry50 = _prompt(f"  BMC {_idx50} hostname/IP (blank to finish): ")
+                        if not _entry50:
+                            break
+                        _bmc_ips50.append(_entry50)
+                        _idx50 += 1
+
+                if not _bmc_ips50:
+                    print("  No BMC addresses specified. Returning to menu.")
+                    raise _ReturnToMenu
+
+                # ── Credentials ──────────────────────────────────────────────────
+                print("")
+                _same_creds50 = input(
+                    "  Use the same username and password for all BMCs? [Y/n]: "
+                ).strip().lower()
+                _creds50 = {}
+                if _same_creds50 != "n":
+                    _shared_user50 = input("  BMC username [admin]: ").strip() or "admin"
+                    _shared_pass50 = getpass.getpass("  BMC password (blank = none): ")
+                    for _ip50 in _bmc_ips50:
+                        _creds50[_ip50] = (_shared_user50, _shared_pass50)
+                else:
+                    for _ip50 in _bmc_ips50:
+                        print(f"\n  Credentials for {_ip50}:")
+                        _u50 = input("    Username [admin]: ").strip() or "admin"
+                        _p50pw = getpass.getpass("    Password (blank = none): ")
+                        _creds50[_ip50] = (_u50, _p50pw)
+
+                # ── Interactive loop ──────────────────────────────────────────────
+                while True:
+                    print("\n  What would you like to do?")
+                    print("    1) List stale SSH sessions")
+                    print("    2) Clean up stale SSH sessions")
+                    print("    3) Exit (return to main menu)")
+                    _act50 = _prompt("  Your choice [1/2/3]: ").strip()
+                    if _act50 == "1":
+                        print("")
+                        for _ip50 in _bmc_ips50:
+                            print(f"\n  \U0001f50d Diagnosing SSH state for {_ip50}...")
+                            with suppress(Exception):
+                                _diagnose_stale_bmc_sessions(_ip50, log=_session_log)
+                    elif _act50 == "2":
+                        print("")
+                        for _ip50 in _bmc_ips50:
+                            _u50, _p50pw = _creds50.get(_ip50, ("admin", ""))
+                            print(f"\n  \U0001f9f9 Cleaning stale SSH sessions for {_ip50}...")
+                            with suppress(Exception):
+                                _clear_stale_bmc_sessions(_ip50, _u50, _p50pw,
+                                                          log=_session_log)
+                        print("\n  \u2705 Cleanup pass complete.")
+                    elif _act50 in ("3", ""):
+                        break
+                    else:
+                        print("  \u26a0\ufe0f  Please enter 1, 2, or 3.")
+
+                print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
+                raise _ReturnToMenu
 
             # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
             if _operation_mode == 45:
