@@ -373,6 +373,39 @@ _BOOT_MENU_SIGS = [
 # Used to detect accidental console drops mid-wait.
 _BMC_PROMPT_SIG = "bmc>"
 
+# Regex that matches any bare BMC/SP shell prompt on its own line.
+# Covers: "bmc>", "localhost>", "node-bmc>", "rtp-afx1k-c01-01>", etc.
+# Pattern: optional whitespace, then one or more word/hyphen/dot chars, then ">",
+# then optional whitespace/CR/LF — and nothing else meaningful on that line.
+_BMC_PROMPT_RE = re.compile(
+    r'(?:^|\r|\n)\s*[\w][\w\-\.]*>\s*(?:\r|\n|$)',
+    re.MULTILINE,
+)
+
+
+def _looks_like_bmc_drop(chunk: str) -> bool:
+    """Return True if *chunk* contains what appears to be a bare BMC/SP shell
+    prompt — indicating that system console has exited and the channel has
+    dropped back to the BMC CLI.
+
+    Matches:
+      - Any token ending in ``>`` that contains ``bmc`` (e.g. ``node-bmc>``)
+      - ``localhost>``
+      - Any short token matching ``word[-word]*>`` on its own line (e.g.
+        ``rtp-afx1k-c01-01>``) — the regex guards against false positives from
+        ONTAP CLI output (``::>``, ``*>``, ``(X)>`` etc.) by requiring the line
+        to contain only the prompt token.
+    """
+    cl = chunk.lower()
+    # Fast path: explicit "bmc" substring
+    if _BMC_PROMPT_SIG in cl:
+        return True
+    # Fast path: localhost> (common SP hostname)
+    if "localhost>" in cl:
+        return True
+    # General: any bare word> on its own line (covers node-name prompts)
+    return bool(_BMC_PROMPT_RE.search(chunk))
+
 # Retained-from-existing-cluster state (mode 1, optional reuse after reinit)
 _retained_cluster_name = None
 _retained_net_config = None  # list[dict] of LIF rows
@@ -3471,7 +3504,7 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                 sys.stdout.flush()
             if _session_log:
                 _session_log.log_console(chunk)
-            if check_bmc_drop and _BMC_PROMPT_SIG in chunk.lower():
+            if check_bmc_drop and _looks_like_bmc_drop(chunk):
                 _rc_t = time.monotonic()
                 _reclaim_system_console(channel, node_log=node_log)
                 start_time += time.monotonic() - _rc_t
@@ -5252,7 +5285,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 sys.stdout.flush()
             if _session_log:
                 _session_log.log_console(chunk)
-            if _BMC_PROMPT_SIG in chunk.lower():
+            if _looks_like_bmc_drop(chunk):
                 _rc_t = time.monotonic()
                 _reclaim_system_console(channel, node_log=node_log)
                 start_time += time.monotonic() - _rc_t
@@ -6434,7 +6467,7 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None):
                 sys.stdout.flush()
             if _session_log:
                 _session_log.log_console(chunk)
-            if _BMC_PROMPT_SIG in chunk.lower():
+            if _looks_like_bmc_drop(chunk):
                 _rc_t = time.monotonic()
                 _reclaim_system_console(channel, node_log=node_log)
                 start += time.monotonic() - _rc_t
@@ -9325,10 +9358,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                     # noticing any short line that ends with "> " and contains
                     # "bmc" (covers hostnames like "node-bmc-01> ").
                     _chunk_l = chunk.lower()
-                    _looks_like_bmc = (
-                        _BMC_PROMPT_SIG in _chunk_l
-                        or ("bmc" in _chunk_l and _chunk_l.rstrip().endswith(">"))
-                    )
+                    _looks_like_bmc = _looks_like_bmc_drop(chunk)
                     if _looks_like_bmc and not any(s in _chunk_l for s in _all_sigs):
                         _reenter_console()
                         buf_lower = ""
@@ -9510,12 +9540,8 @@ def _run_4b_standalone(log, resuming: bool = False):
                     # If someone takes over the BMC session or the system
                     # console exits, we'll receive a BMC prompt instead of
                     # boot output.  Detect and re-enter system console.
-                    _chunk_l6 = _chunk.lower()
-                    _bmc_drop6 = (
-                        _BMC_PROMPT_SIG in _chunk_l6
-                        or ("bmc" in _chunk_l6 and _chunk_l6.rstrip().endswith(">"))
-                    )
-                    if _bmc_drop6 and not any(s in _chunk_l6 for s in _all_boot_sigs_lower):
+                    _bmc_drop6 = _looks_like_bmc_drop(_chunk)
+                    if _bmc_drop6 and not any(s in _chunk.lower() for s in _all_boot_sigs_lower):
                         _status(f"  ⚠️  [{ip}] BMC prompt detected during boot wait – "
                                 "re-entering system console...")
                         if log:
@@ -9729,12 +9755,8 @@ def _run_4b_standalone(log, resuming: bool = False):
                         if _nf6:
                             _par_write(_nf6, _chunk4)
                         # ── BMC-drop detection ────────────────────────────────
-                        _chunk4_l = _chunk4.lower()
-                        _bmc_drop4 = (
-                            _BMC_PROMPT_SIG in _chunk4_l
-                            or ("bmc" in _chunk4_l and _chunk4_l.rstrip().endswith(">"))
-                        )
-                        if _bmc_drop4 and not any(s in _chunk4_l for s in _opt4_sigs_lower):
+                        _bmc_drop4 = _looks_like_bmc_drop(_chunk4)
+                        if _bmc_drop4 and not any(s in _chunk4.lower() for s in _opt4_sigs_lower):
                             _status(f"  ⚠️  [{ip}] BMC prompt detected during option 4 boot wait – "
                                     "re-entering system console...")
                             if log:
