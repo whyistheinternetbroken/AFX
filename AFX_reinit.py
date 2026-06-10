@@ -9506,6 +9506,30 @@ def _run_4b_standalone(log, resuming: bool = False):
                     _boot_buf += _chunk
                     if _nf6:
                         _par_write(_nf6, _chunk)
+                    # ── BMC-drop detection ────────────────────────────────────
+                    # If someone takes over the BMC session or the system
+                    # console exits, we'll receive a BMC prompt instead of
+                    # boot output.  Detect and re-enter system console.
+                    _chunk_l6 = _chunk.lower()
+                    _bmc_drop6 = (
+                        _BMC_PROMPT_SIG in _chunk_l6
+                        or ("bmc" in _chunk_l6 and _chunk_l6.rstrip().endswith(">"))
+                    )
+                    if _bmc_drop6 and not any(s in _chunk_l6 for s in _all_boot_sigs_lower):
+                        _status(f"  ⚠️  [{ip}] BMC prompt detected during boot wait – "
+                                "re-entering system console...")
+                        if log:
+                            log.log(f"[{ip}] BMC prompt seen during option 6 boot wait; "
+                                    "re-sending system console", prefix="WARN")
+                        if _nf6:
+                            _par_write(_nf6, "\n>>> [bmc-drop] system console\n")
+                        try:
+                            ch.send("system console\r")
+                        except OSError:
+                            pass
+                        _boot_buf = ""
+                        time.sleep(2)
+                        continue
                     _boot_buf_lower = _boot_buf.lower()
                     # Detect VLDB / cluster-node errors that indicate the node
                     # won't come online normally.
@@ -9704,6 +9728,27 @@ def _run_4b_standalone(log, resuming: bool = False):
                         _opt4_buf += _chunk4
                         if _nf6:
                             _par_write(_nf6, _chunk4)
+                        # ── BMC-drop detection ────────────────────────────────
+                        _chunk4_l = _chunk4.lower()
+                        _bmc_drop4 = (
+                            _BMC_PROMPT_SIG in _chunk4_l
+                            or ("bmc" in _chunk4_l and _chunk4_l.rstrip().endswith(">"))
+                        )
+                        if _bmc_drop4 and not any(s in _chunk4_l for s in _opt4_sigs_lower):
+                            _status(f"  ⚠️  [{ip}] BMC prompt detected during option 4 boot wait – "
+                                    "re-entering system console...")
+                            if log:
+                                log.log(f"[{ip}] BMC prompt seen during option 4 boot wait; "
+                                        "re-sending system console", prefix="WARN")
+                            if _nf6:
+                                _par_write(_nf6, "\n>>> [bmc-drop] system console\n")
+                            try:
+                                ch.send("system console\r")
+                            except OSError:
+                                pass
+                            _opt4_buf = ""
+                            time.sleep(2)
+                            continue
                         _opt4_buf_lower = _opt4_buf.lower()
                         for _s4 in _opt4_sigs_lower:
                             if _s4 in _opt4_buf_lower:
