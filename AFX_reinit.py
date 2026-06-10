@@ -13883,6 +13883,12 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                 in_table = True
                 continue
             if in_table and '::' not in stripped:
+                # Skip footer lines like "N entries were displayed."
+                if 'entries were displayed' in stripped.lower():
+                    continue
+                # Skip the header row (contains "Node" and "Status" but no IP-like token)
+                if stripped.lower().startswith('node') and 'status' in stripped.lower():
+                    continue
                 row_lower = stripped.lower()
                 status_rows.append(row_lower)
                 # Track per-node first-success timestamp.
