@@ -475,6 +475,11 @@ _netboot_static_ip = False
 # _write_node_add_manifest). Used by option 2c to locate the last run.
 _last_node_add_manifest: str = ""
 
+# Set to True by _run_4b_standalone when the operator selected a reinit
+# sub-mode (1a/1b/3).  Read by main() to decide whether to offer the
+# post-completion script runner after a successful 4b run.
+_4b_did_reinit: bool = False
+
 # Set to True when the operator requests passwordless SSH setup during 1a/1b.
 _setup_passwordless_ssh = False
 
@@ -10542,6 +10547,9 @@ def _run_4b_standalone(log, resuming: bool = False):
         if log:
             log.log("4b: checkpoint: cluster_formed saved")
 
+    global _4b_did_reinit
+    _4b_did_reinit = _do_reinit
+
     return True
 
 
@@ -16836,6 +16844,8 @@ def main():
                 _session_log.record_completion(normal_exit=ok)
                 if ok:
                     _checkpoint.clear()
+                    if _4b_did_reinit:
+                        _prompt_and_run_post_script(session_log=_session_log)
                 print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
