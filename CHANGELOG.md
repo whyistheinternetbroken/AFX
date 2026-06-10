@@ -65,7 +65,13 @@ revision labels rather than strict [SemVer](https://semver.org/).
   readme, or changelog.
 
 ### Fixed
-- **5f `_json` NameError on config read.** The config file loader in mode 49
+- **BMC SSH "Not allowed at this time" now retried instead of failing.** The SP/BMC
+  firmware rejects SSH connections with this message when it is busy serving another
+  session. `_ssh_connect_with_retry()` now treats this as a transient banner-class
+  error, applies the same 60 s × 5 retry logic already used for banner timeouts, and
+  displays a clearer "BMC SSH not ready (banner timeout or SP busy)" message. No
+  manual retries required.
+- **5f `_json` NameError on config read.**The config file loader in mode 49
   was calling `_json.load()` instead of `json.load()`, raising a `NameError`
   on any run where a `reinit-config.json` was found.
 - **5f → 5c redirect returned to summary log instead of resuming 5f.** Setting

@@ -3137,7 +3137,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                 # below using last_exc for the new (non-reset) failure.
                 e = last_exc
                 msg = str(e).lower()
-            # ── BMC SSH banner not received ───────────────────────────
+            # ── BMC SSH banner not received / SP busy ─────────────────
             # The BMC SSH daemon is slow to start (post-reboot, busy
             # serving console, etc.). Wait 60s and retry, up to 5
             # minutes total (5 retries), before falling through to the
@@ -3147,12 +3147,19 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
             # auth_password when Transport.active is False). Treat it
             # the same as a banner timeout — the BMC just isn't ready
             # to authenticate yet.
-            if "banner" in msg or "no existing session" in msg:
+            # "Not allowed at this time" is returned by the SP/BMC when
+            # it is busy with another session; also treat as transient.
+            _is_banner_err = (
+                "banner" in msg
+                or "no existing session" in msg
+                or "not allowed at this time" in msg
+            )
+            if _is_banner_err:
                 _bnr_max = 5
                 _bnr_interval = 60  # seconds
                 print(
-                    f"   ⚠️  [{label}] BMC SSH banner not received from "
-                    f"{host} (BMC may still be starting up). Waiting "
+                    f"   ⚠️  [{label}] BMC SSH not ready on "
+                    f"{host} (banner timeout or SP busy). Waiting "
                     f"{_bnr_interval}s and retrying (up to "
                     f"{(_bnr_max * _bnr_interval) // 60} minutes total)..."
                 )
@@ -3207,10 +3214,12 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                     except Exception as eb:
                         last_exc = eb
                         msg_b = str(eb).lower()
-                        if "banner" in msg_b or "no existing session" in msg_b:
+                        if ("banner" in msg_b
+                                or "no existing session" in msg_b
+                                or "not allowed at this time" in msg_b):
                             print(
                                 f"   ⚠️  [{label}] {host} still not "
-                                "responding to SSH (banner timeout)."
+                                "responding to SSH (banner timeout or SP busy)."
                             )
                             continue
                         # Different failure — let outer logic handle it.
@@ -3241,9 +3250,11 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
             # SSH daemon (post-reboot, BMC busy serving console, etc.).
             # "No existing session" surfaces from auth_password when the
             # transport never came up; same underlying cause, same fix.
-            if "banner" in msg or "no existing session" in msg:
-                friendly = ("BMC SSH banner not received in time "
-                            "(BMC may still be starting up)")
+            if ("banner" in msg
+                    or "no existing session" in msg
+                    or "not allowed at this time" in msg):
+                friendly = ("BMC SSH not ready "
+                            "(banner timeout or SP busy — try again shortly)")
                 print(f"   ⚠️  [{label}] connect attempt {attempt} failed: {friendly}")
                 if _session_log:
                     _session_log.log(
