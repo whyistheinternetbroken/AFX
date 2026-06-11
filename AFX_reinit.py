@@ -2063,14 +2063,15 @@ def select_operation_mode():
         print("    5c. Create backup cluster configuration")
         print("    5d. Verify BMC authentication")
         print("    5e. Reset all nodes to LOADER prompt")
-        print("    5f. Cluster health and version check")
-        print("    5g. List and clean up stale BMC SSH sessions")
+        print("    5f. Check node status (LOADER / cluster prompt)")
+        print("    5g. Cluster health and version check")
+        print("    5h. List and clean up stale BMC SSH sessions")
         print("")
         print("  6.  Exit")
         print("")
         print("  " + "─" * 58)
         print("  (type 'menu' at any prompt to return here)")
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5g, or 6): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5h, or 6): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2273,19 +2274,20 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g"):
+        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h"):
             if choice == "5":
-                _print_banner("\U0001f6e0\ufe0f 5: Administration and maintenance")
+                _print_banner("🛠️ 5: Administration and maintenance")
                 print("\n  5a. Install license file only")
                 print("  5b. Set up passwordless SSH to cluster management")
                 print("  5c. Create backup cluster configuration")
                 print("  5d. Verify BMC authentication")
                 print("  5e. Reset all nodes to LOADER prompt")
-                print("  5f. Cluster health and version check")
-                print("  5g. List and clean up stale BMC SSH sessions")
+                print("  5f. Check node status (LOADER / cluster prompt)")
+                print("  5g. Cluster health and version check")
+                print("  5h. List and clean up stale BMC SSH sessions")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5g) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5a–5h) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -2368,7 +2370,25 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
             if choice == "5f":
-                _print_banner("\U0001f4ca 5f: Cluster health and version check")
+                _print_banner("🔍 5f: Check node status")
+                print("")
+                print("  Connects to each BMC via SSH, enters the system console,")
+                print("  and reports whether the node is at a LOADER prompt, an")
+                print("  ONTAP shell (::>), a cluster login prompt, a boot menu,")
+                print("  or in an unknown state.")
+                print("")
+                print("  BMC addresses are loaded from a config/BMC_IP.json file")
+                print("  or entered manually.")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  ✅ Confirmed. 5f: Check node status\n")
+                    return 51, False, False
+                print("\n  ↩️  Returning to menu...\n")
+
+            if choice == "5g":
+                _print_banner("\U0001f4ca 5g: Cluster health and version check")
                 print("")
                 print("  Connects directly to the cluster management LIF via SSH")
                 print("  and checks that all nodes are healthy (Connected, takeover-")
@@ -2378,12 +2398,12 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5f: Cluster health and version check\n")
+                    print("\n  \u2705 Confirmed. 5g: Cluster health and version check\n")
                     return 49, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
-            if choice == "5g":
-                _print_banner("\U0001f9f9 5g: List and clean up stale BMC SSH sessions")
+            if choice == "5h":
+                _print_banner("\U0001f9f9 5h: List and clean up stale BMC SSH sessions")
                 print("")
                 print("  Diagnoses stale SSH socket connections to BMC/SP ports,")
                 print("  deactivates any stuck SOL sessions via ipmitool, and")
@@ -2393,7 +2413,7 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5g: List and clean up stale BMC SSH sessions\n")
+                    print("\n  \u2705 Confirmed. 5h: List and clean up stale BMC SSH sessions\n")
                     return 50, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
             continue
@@ -2402,7 +2422,7 @@ def select_operation_mode():
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5g, or 6.")
+        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5h, or 6.")
 
 
 def get_loader_commands():
@@ -18335,10 +18355,10 @@ def main():
                 print(f"\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
-            # ── Mode 49 (5f): cluster health and version check ─────────────────────
+            # ── Mode 49 (5g): cluster health and version check ─────────────────────
             if _operation_mode == 49:
-                _print_banner("\U0001f4ca 5f: Cluster health and version check")
-                _make_session_log("Mode 5f: cluster health and version check")
+                _print_banner("\U0001f4ca 5g: Cluster health and version check")
+                _make_session_log("Mode 5g: cluster health and version check")
                 print("")
 
                 # ── Gather connection details ────────────────────────────────────
@@ -18497,18 +18517,18 @@ def main():
                 if _healthy49:
                     _ver_str = f" and all nodes are running ONTAP {_running49}" if _running49 else ""
                     print(f"\n  \u2705 Cluster is healthy{_ver_str}.")
-                    _session_log.log(f"5f: cluster healthy, version={_running49}")
+                    _session_log.log(f"5g: cluster healthy, version={_running49}")
                 else:
                     print("\n  \u26a0\ufe0f  Cluster did not reach fully healthy state within the timeout.")
-                    _session_log.log("5f: cluster not healthy within timeout", prefix="WARN")
+                    _session_log.log("5g: cluster not healthy within timeout", prefix="WARN")
 
                 print(f"\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
-            # ── Mode 50 (5g): list and clean up stale BMC SSH sessions ────────────
+            # ── Mode 50 (5h): list and clean up stale BMC SSH sessions ────────────
             if _operation_mode == 50:
-                _print_banner("\U0001f9f9 5g: List and clean up stale BMC SSH sessions")
-                _make_session_log("Mode 5g: stale BMC SSH session cleanup")
+                _print_banner("\U0001f9f9 5h: List and clean up stale BMC SSH sessions")
+                _make_session_log("Mode 5h: stale BMC SSH session cleanup")
                 print("")
 
                 # ── Load BMC IPs from config (same logic as modes 47/48) ─────────
@@ -18606,6 +18626,189 @@ def main():
                         print("  \u26a0\ufe0f  Please enter 1, 2, or 3.")
 
                 print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
+                raise _ReturnToMenu
+
+            # ── Mode 51 (5f): check node status (LOADER / cluster prompt) ──────────
+            if _operation_mode == 51:
+                _print_banner("🔍 5f: Check node status")
+                _make_session_log("Mode 5f: node status check")
+                print("")
+
+                # ── Load BMC IPs (same pattern as modes 47/48/50) ────────────────
+                _bmc_ips51 = []
+                _found_file51 = None
+                for _p51 in _find_config_files(
+                    candidate_names=("BMC_IP.json",
+                                     "reinit-config.json", "reinit_config.json",
+                                     "reinit-afx-config.json", "add_nodes.json"),
+                ):
+                    try:
+                        with open(_p51, "r", encoding="utf-8") as _f51:
+                            _d51 = json.load(_f51)
+                    except Exception:
+                        continue
+                    if isinstance(_d51.get("netboot_bmcs"), list):
+                        _bmc_ips51 = [str(x) for x in _d51["netboot_bmcs"] if x]
+                    else:
+                        _pn51 = _d51.get("primary_node")
+                        if isinstance(_pn51, dict) and _pn51.get("bmc"):
+                            _bmc_ips51.append(str(_pn51["bmc"]))
+                        for _sn51 in (_d51.get("secondary_nodes") or []):
+                            if isinstance(_sn51, dict) and _sn51.get("bmc"):
+                                _bmc_ips51.append(str(_sn51["bmc"]))
+                        if not _bmc_ips51:
+                            for _n51 in (_d51.get("nodes") or []):
+                                if isinstance(_n51, dict) and _n51.get("bmc"):
+                                    _bmc_ips51.append(str(_n51["bmc"]))
+                    if _bmc_ips51:
+                        _found_file51 = _p51
+                        break
+
+                if _found_file51:
+                    print(f"  📄 Loaded {len(_bmc_ips51)} BMC address(es) from: {_found_file51}")
+                    for _ip51 in _bmc_ips51:
+                        print(f"     • {_ip51}")
+                else:
+                    print("  ℹ️  No BMC IP file found. Enter BMC addresses manually.")
+                    print("  (Leave blank and press Enter when done.)\n")
+                    _idx51 = 1
+                    while True:
+                        _entry51 = _prompt(f"  BMC {_idx51} hostname/IP (blank to finish): ")
+                        if not _entry51:
+                            break
+                        _bmc_ips51.append(_entry51)
+                        _idx51 += 1
+
+                if not _bmc_ips51:
+                    print("  No BMC addresses entered. Returning to menu.")
+                    raise _ReturnToMenu
+
+                # ── Credentials ──────────────────────────────────────────────────
+                print("")
+                _same_creds51 = input("  Use the same username/password for all BMCs? [Y/n]: ").strip().lower()
+                _creds51 = {}
+                if _same_creds51 != "n":
+                    _shared_user51 = input("  BMC username [admin]: ").strip() or "admin"
+                    _shared_pass51 = getpass.getpass("  BMC password (blank = none): ")
+                    for _ip51 in _bmc_ips51:
+                        _creds51[_ip51] = (_shared_user51, _shared_pass51)
+                else:
+                    for _ip51 in _bmc_ips51:
+                        _u51 = input(f"  Username for {_ip51} [admin]: ").strip() or "admin"
+                        _p51pw = getpass.getpass(f"  Password for {_ip51}: ")
+                        _creds51[_ip51] = (_u51, _p51pw)
+
+                # ── Probe each node in parallel ───────────────────────────────────
+                _STATUS_LOADER    = "LOADER prompt"
+                _STATUS_ONTAP     = "ONTAP shell (::>)"
+                _STATUS_LOGIN     = "Login prompt"
+                _STATUS_BOOTMENU  = "Boot menu"
+                _STATUS_UNKNOWN   = "Unknown"
+                _STATUS_ERROR     = "Connection error"
+
+                _results51 = {}
+                _results51_lock = threading.Lock()
+
+                def _status_worker51(ip):
+                    u51w, p51w = _creds51.get(ip, ("admin", ""))
+                    _peer_bmc_creds[ip] = {"user": u51w, "password": p51w}
+                    cl51 = ch51 = None
+                    status = _STATUS_ERROR
+                    try:
+                        cl51, u51w, p51w = _ssh_connect_with_retry(
+                            ip, u51w, p51w,
+                            label=f"5f/{ip}", max_attempts=3, interactive=True,
+                        )
+                        ch51 = _open_shell(cl51)
+
+                        # Reach BMC prompt.
+                        if not _reach_bmc_prompt(ch51):
+                            status = _STATUS_ERROR
+                        else:
+                            # Enter system console.
+                            ch51.send("system console\r")
+                            _sc_out, _sc_matched = direct_read_until_any(
+                                ch51,
+                                ["y/n", "ctrl-d", "loader", "::>", "::*>",
+                                 "login:", "password:", "selection", "autoboot",
+                                 "boot loader"],
+                                timeout=20,
+                            )
+                            if _sc_matched and "y/n" in _sc_matched.lower():
+                                ch51.send("y\r")
+                                time.sleep(1)
+                                _sc_out2, _sc_matched = direct_read_until_any(
+                                    ch51,
+                                    ["loader", "::>", "::*>", "login:",
+                                     "selection", "autoboot", "boot loader"],
+                                    timeout=20,
+                                )
+                                _sc_out += _sc_out2
+
+                            # Nudge with CR and collect a little more output.
+                            ch51.send("\r")
+                            _nudge, _nm = direct_read_until_any(
+                                ch51,
+                                ["loader", "::>", "::*>", "login:",
+                                 "selection", "autoboot"],
+                                timeout=10,
+                            )
+                            combined = (_sc_out + _nudge).lower()
+
+                            if _LOADER_PROMPT_RE.search(_sc_out + _nudge):
+                                status = _STATUS_LOADER
+                            elif "::>" in combined or "::*>" in combined:
+                                status = _STATUS_ONTAP
+                            elif "login:" in combined or "password:" in combined:
+                                status = _STATUS_LOGIN
+                            elif ("selection" in combined or "boot menu" in combined
+                                  or "boot loader" in combined
+                                  or re.search(r'\(\s*1[-–]\d+\s*\)', combined)):
+                                status = _STATUS_BOOTMENU
+                            elif "autoboot" in combined:
+                                status = _STATUS_BOOTMENU
+                            else:
+                                status = _STATUS_UNKNOWN
+
+                    except Exception as _e51:
+                        status = f"{_STATUS_ERROR}: {_e51}"
+                    finally:
+                        for _obj in (ch51, cl51):
+                            try:
+                                if _obj:
+                                    _obj.close()
+                            except Exception:
+                                pass
+
+                    with _results51_lock:
+                        _results51[ip] = status
+                    _session_log.log(f"[{ip}] node status: {status}")
+
+                print("\n  🔍 Probing nodes in parallel...\n")
+                _run_parallel(_bmc_ips51, _status_worker51)
+
+                # ── Results table ─────────────────────────────────────────────────
+                _STATUS_ICONS = {
+                    _STATUS_LOADER:   "🟢",
+                    _STATUS_ONTAP:    "🔵",
+                    _STATUS_LOGIN:    "🔵",
+                    _STATUS_BOOTMENU: "🟡",
+                    _STATUS_UNKNOWN:  "⚪",
+                    _STATUS_ERROR:    "🔴",
+                }
+                print("  " + "─" * 58)
+                print(f"  {'BMC IP':<24}  Status")
+                print(f"  {'─'*24}  {'─'*30}")
+                for _ip51 in _bmc_ips51:
+                    _st = _results51.get(_ip51, _STATUS_ERROR)
+                    _icon = next(
+                        (v for k, v in _STATUS_ICONS.items() if _st.startswith(k)),
+                        "⚪"
+                    )
+                    print(f"  {_ip51:<24}  {_icon} {_st}")
+                print("  " + "─" * 58)
+
+                print(f"\n📝 Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
             # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
@@ -19078,7 +19281,7 @@ def main():
             elif _operation_mode == 46:
                 mode_desc = "Create backup cluster configuration (4e, standalone)"
             elif _operation_mode == 49:
-                mode_desc = "Cluster health and version check (5f)"
+                mode_desc = "Cluster health and version check (5g)"
             elif _operation_mode == 2 and _auto_add:
                 mode_desc = "Add node to existing cluster (2b, automatic join wizard)"
             else:
