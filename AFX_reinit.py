@@ -8180,9 +8180,19 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                     f"{_nb_attempt}/{_NETBOOT_MAX_ATTEMPTS}: {pkg_url}"
                 )
         _send_raw(f"netboot {pkg_url}")
+        _status(f"\n  [{node_label}] 📥 Downloading ONTAP image — this may take several minutes...")
+
+        # Download-phase progress thread: emits a status line every 30 s so
+        # the terminal doesn't look hung while the image transfers.
+        _dl_stop = threading.Event()
+        _dl_t0 = time.monotonic()
+        def _dl_progress(_ev=_dl_stop, _t0=_dl_t0):
+            while not _ev.wait(30):
+                elapsed = time.monotonic() - _t0
+                _status(f"  ⏳ [{node_label}] Image downloading... ({elapsed:.0f}s elapsed)")
+        threading.Thread(target=_dl_progress, daemon=True).start()
 
         # Wait for boot menu ────────────────────────────────────────────────
-        _status(f"  [{node_label}] Waiting for boot menu (up to {boot_menu_timeout}s)...")
         buf = ""
         buf_lower = ""
         start = time.monotonic()
@@ -8219,6 +8229,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                 if len(buf_lower) > 16384:
                     buf_lower = buf_lower[-8192:]
             time.sleep(0.1)
+
+        _dl_stop.set()  # stop download progress thread for this attempt
 
         if menu_detected:
             break  # success — exit retry loop
@@ -8268,7 +8280,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         return False
 
     time.sleep(1)  # let the selection prompt fully render
-    _status(f"\n  [{node_label}] Boot menu detected – selecting option 7...")
+    _status(f"\n  ✅ [{node_label}] Download complete — boot menu detected.")
+    _status(f"  [{node_label}] 💿 Installing ONTAP image (selecting option 7)...")
     if log:
         log.log(f"[{node_label}] boot menu detected – sending option 7")
     _send_raw("7")
@@ -8321,7 +8334,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         if _progress_stop[0] is not None:
             _progress_stop[0].set()
         _send_raw("y")
-        _status(f"  ✅ [{node_label}] Install complete – node is rebooting.")
+        _status(f"\n  ✅ [{node_label}] Image installed — 🔄 node rebooting...")
         if log:
             log.log(f"[{node_label}] reboot triggered; install complete")
         return True
@@ -8341,9 +8354,9 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         _progress_stop[0] = _ps
         _install_start = time.monotonic()
         def _progress_reporter(_ev=_ps, _t0=_install_start):
-            while not _ev.wait(90):
+            while not _ev.wait(30):
                 elapsed = time.monotonic() - _t0
-                _status(f"  [{node_label}] ⏳ Node installing ({elapsed:.0f}s elapsed)")
+                _status(f"  ⏳ [{node_label}] 💿 Image installing... ({elapsed:.0f}s elapsed)")
         threading.Thread(target=_progress_reporter, daemon=True).start()
         # Fall through to prompt 4.
     elif m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
@@ -15831,8 +15844,14 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             print(f"  🌐 HTTP server started: {_nb_pkg_url}")
         else:
             _nb_pkg_url = src_value
+
+        def _nb_screen(msg):
+            _real_stdout.write(msg + "\n")
+            _real_stdout.flush()
+
         ok = _run_netboot_install_sequence(
-            channel, _nb_pkg_url, node_label="primary", log=_session_log
+            channel, _nb_pkg_url, node_label="primary", log=_session_log,
+            status_cb=_nb_screen,
         )
         if _nb_httpd:
             try:
