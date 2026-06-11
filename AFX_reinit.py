@@ -15811,8 +15811,13 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         if _session_log:
             _session_log.end_phase()  # End LOADER Commands
             _session_log.start_phase("Netboot ONTAP Install")
+        # Temporarily restore real stdout so _find_upgrade_package() prompts
+        # appear on screen (sys.stdout may be a _NodeLogWriter at this point).
+        _prev_stdout_nb = sys.stdout
+        sys.stdout = _real_stdout
         print("\n  🌐 Netboot-before-reinit: selecting ONTAP package...")
         src_type, src_value = _find_upgrade_package()
+        sys.stdout = _prev_stdout_nb
         if src_type is None:
             print("  ❌ No package selected. Aborting.")
             if _session_log:
