@@ -20262,8 +20262,30 @@ def main():
                     print("✅ BMC prompt returned.")
                     _session_log.log("BMC prompt returned after reset")
                 else:
-                    print("⚠️  BMC prompt not seen after reset, continuing anyway...")
-                    _session_log.log("BMC prompt not seen after reset", prefix="WARN")
+                    print("⚠️  BMC prompt not seen — attempting to reconnect...")
+                    _session_log.log("BMC prompt not seen after reset; reconnecting", prefix="WARN")
+                    _bmc_reconnect_ok = False
+                    for _rc_attempt in range(1, 6):
+                        print(f"   🔌 [reconnect] connecting to {sp_host} as {sp_user} "
+                              f"(attempt {_rc_attempt}/5)...")
+                        _session_log.log(f"BMC reconnect attempt {_rc_attempt}/5")
+                        try:
+                            time.sleep(5)
+                            _rc_client, sp_user, sp_pass = _ssh_connect_with_retry(
+                                sp_host, sp_user, sp_pass,
+                                label=sp_host, max_attempts=1, interactive=True,
+                            )
+                            channel = _open_shell(_rc_client)
+                            _bmc_reconnect_ok = True
+                            print("✅ Reconnected to BMC.")
+                            _session_log.log("BMC reconnect successful")
+                            break
+                        except Exception as _rc_e:
+                            _session_log.log(f"Reconnect attempt {_rc_attempt} failed: {_rc_e}",
+                                             prefix="WARN")
+                    if not _bmc_reconnect_ok:
+                        print("❌ Could not reconnect to BMC after 5 attempts.")
+                        _session_log.log("BMC reconnect failed after 5 attempts", prefix="ERROR")
                 _session_log.end_phase()
 
                 # Phase: Enter System Console
