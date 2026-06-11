@@ -18280,6 +18280,32 @@ def main():
 
                 _run_parallel(_bmc_ips48, _loader_worker48)
 
+                # Retry loop — keep asking until all nodes reach LOADER or
+                # operator declines.
+                while True:
+                    _failed48 = [ip for ip in _bmc_ips48
+                                 if not _results48.get(ip, False)]
+                    if not _failed48:
+                        break
+                    print(f"\n  ⚠️  {len(_failed48)} node(s) did not reach LOADER: "
+                          f"{', '.join(_failed48)}")
+                    _retry_ans48 = _prompt(
+                        "  Retry failed node(s)? [Y/n]: ", "y"
+                    ).strip().lower()
+                    if _retry_ans48 in ("n", "no"):
+                        break
+                    print(f"\n  🔁 Retrying {len(_failed48)} node(s)...")
+                    _session_log.log(f"Retrying LOADER reset for: {_failed48}")
+                    for _ip48r in _failed48:
+                        try:
+                            _nf48r = _node_log_open(_ip48r, _log_dir48,
+                                                    prefix="mode4g_loader_retry")
+                            _node_logs48[_ip48r] = _nf48r
+                            print(f"  📝 [{_ip48r}] Retry log → {_nf48r.name}")
+                        except Exception:
+                            _node_logs48[_ip48r] = None
+                    _run_parallel(_failed48, _loader_worker48)
+
                 for _nf48 in _node_logs48.values():
                     if _nf48:
                         try:
@@ -19720,6 +19746,35 @@ def main():
                     _run_parallel(other_sps, _pr_worker)
 
                     _primary_thread.join()
+
+                    # Retry loop — keep asking until all peers reach LOADER or
+                    # operator declines to retry.
+                    while True:
+                        _failed_peers = [a for a in other_sps
+                                         if not _pr_results.get(a, False)]
+                        if not _failed_peers:
+                            break
+                        print(f"\n  ⚠️  {len(_failed_peers)} peer(s) did not reach LOADER: "
+                              f"{', '.join(_failed_peers)}")
+                        _retry_ans = _prompt(
+                            "  Retry failed peer(s)? [Y/n]: ", "y"
+                        ).strip().lower()
+                        if _retry_ans in ("n", "no"):
+                            break
+                        print(f"\n  🔁 Retrying {len(_failed_peers)} peer(s)...")
+                        _session_log.log(
+                            f"Retrying LOADER reset for: {_failed_peers}"
+                        )
+                        # Re-open log files for the retried peers.
+                        for addr in _failed_peers:
+                            try:
+                                _pr_nf = _node_log_open(addr, _pr_log_dir,
+                                                        prefix="peer_reset_retry")
+                                _pr_node_logs[addr] = _pr_nf
+                                print(f"  📝 [{addr}] Retry log → {_pr_nf.name}")
+                            except Exception as _pr_e:
+                                _pr_node_logs[addr] = None
+                        _run_parallel(_failed_peers, _pr_worker)
 
                     for addr, nf in _pr_node_logs.items():
                         if nf:
