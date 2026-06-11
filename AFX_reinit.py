@@ -18721,8 +18721,20 @@ def main():
                         )
                         ch51 = _open_shell(cl51)
 
-                        # Reach BMC prompt.
-                        if not _reach_bmc_prompt(ch51):
+                        # Open a per-node log so all raw console output is
+                        # captured there and never leaks to the terminal.
+                        _nf51 = None
+                        try:
+                            _nf51 = _node_log_open(
+                                ip,
+                                _session_log.log_dir if _session_log else os.getcwd(),
+                                prefix="5f_status",
+                            )
+                        except Exception:
+                            pass
+
+                        # Reach BMC prompt — route output to log, not terminal.
+                        if not _reach_bmc_prompt(ch51, node_log=_nf51):
                             status = _STATUS_ERROR
                         else:
                             # Enter system console.
@@ -18733,6 +18745,8 @@ def main():
                                  "login:", "password:", "selection", "autoboot",
                                  "boot loader"],
                                 timeout=20,
+                                node_log=_nf51,
+                                quiet=True,
                             )
                             if _sc_matched and "y/n" in _sc_matched.lower():
                                 ch51.send("y\r")
@@ -18742,6 +18756,8 @@ def main():
                                     ["loader", "::>", "::*>", "login:",
                                      "selection", "autoboot", "boot loader"],
                                     timeout=20,
+                                    node_log=_nf51,
+                                    quiet=True,
                                 )
                                 _sc_out += _sc_out2
 
@@ -18752,6 +18768,8 @@ def main():
                                 ["loader", "::>", "::*>", "login:",
                                  "selection", "autoboot"],
                                 timeout=10,
+                                node_log=_nf51,
+                                quiet=True,
                             )
                             combined = (_sc_out + _nudge).lower()
 
@@ -18773,6 +18791,11 @@ def main():
                     except Exception as _e51:
                         status = f"{_STATUS_ERROR}: {_e51}"
                     finally:
+                        if _nf51:
+                            try:
+                                _nf51.close()
+                            except Exception:
+                                pass
                         for _obj in (ch51, cl51):
                             try:
                                 if _obj:
