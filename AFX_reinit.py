@@ -4100,6 +4100,83 @@ def enter_system_console(channel, loader_message=True):
 
 
 # ---------------------------------------------------------------------------
+# LOADER-check helper — probe before deciding to system reset
+# ---------------------------------------------------------------------------
+
+def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
+    """Enter system console and probe briefly for an existing LOADER prompt.
+
+    Flow:
+      1. Send CR then 'system console'
+      2. Watch for LOADER, autoboot, ONTAP output, or y/n takeover for
+         *probe_timeout* seconds.
+      3. If LOADER is detected → return True (caller skips system reset).
+      4. Otherwise → send Ctrl+D to exit the console and return False
+         (caller proceeds with the normal system-reset path).
+
+    When *node_log* is supplied, raw I/O is written there instead of stdout.
+    *label* is used for status prints; pass an IP or node name.
+    """
+    pfx = f"[{label}] " if label else ""
+
+    def _tprint(msg):
+        if node_log:
+            _par_write(node_log, msg + "\n")
+        else:
+            print(msg)
+        if _session_log:
+            _session_log.log(msg.strip())
+
+    # Hit Enter first so any existing prompt echoes back, then enter console.
+    channel.send("\r")
+    time.sleep(0.3)
+    drain_channel(channel, seconds=0.5, quiet=True)
+
+    _tprint(f"  {pfx}🔍 Checking if already at LOADER before system reset...")
+    if _session_log:
+        _session_log.log_sent("system console")
+    channel.send("system console\r")
+
+    buf = ""
+    start = time.monotonic()
+    loader_found = False
+    while time.monotonic() - start < probe_timeout:
+        if channel.recv_ready():
+            chunk = channel.recv(4096).decode("utf-8", errors="replace")
+            buf += chunk
+            if node_log:
+                _par_write(node_log, chunk)
+            elif _session_log:
+                _session_log.log_console(chunk)
+            # Takeover prompt — accept immediately so we can read the console.
+            if "y/n" in buf.lower() and not loader_found:
+                if _session_log:
+                    _session_log.log_sent("y (console takeover during loader probe)")
+                channel.send("y\r")
+                buf = ""
+                continue
+            if _LOADER_PROMPT_RE.search(buf):
+                loader_found = True
+                break
+            # If ONTAP or autoboot is seen, no need to keep waiting.
+            if any(sig in buf.lower() for sig in
+                   ("::>", "::*>", "login:", "starting autoboot")):
+                break
+        time.sleep(0.1)
+
+    if loader_found:
+        _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
+        return True
+
+    # Not at LOADER — exit console and let caller do system reset.
+    _tprint(f"  ℹ️  {pfx}Not at LOADER. Exiting console for system reset...")
+    channel.send("\x04")  # Ctrl+D
+    time.sleep(1)
+    direct_read_until(channel, ">", timeout=10, node_log=node_log)
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Retain-config helpers (mode 1: capture cluster name / network LIFs)
 # ---------------------------------------------------------------------------
 
@@ -4982,31 +5059,35 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             _slog(f"[{host}] no BMC prompt; aborting", prefix="WARN")
             return False
 
-        # system reset (auto-confirm).
-        direct_send_and_wait(ch, "system reset", "y/n", timeout=15, auto_respond="y",
-                             node_log=node_log, quiet=(node_log is not None))
-        _tprint(f"\n   ⏳ [{host}] System reset in process — reboot will happen soon.")
-        if _session_log:
-            _session_log.log(
-                f"[{host}] system reset issued; waiting for reboot to LOADER"
-            )
-        time.sleep(3)
-        direct_read_until(ch, ">", timeout=20, node_log=node_log)
+        # Check if already at LOADER before issuing system reset.
+        if not _already_at_loader(
+            ch, label=host, node_log=node_log,
+        ):
+            # system reset (auto-confirm).
+            direct_send_and_wait(ch, "system reset", "y/n", timeout=15, auto_respond="y",
+                                 node_log=node_log, quiet=(node_log is not None))
+            _tprint(f"\n   ⏳ [{host}] System reset in process — reboot will happen soon.")
+            if _session_log:
+                _session_log.log(
+                    f"[{host}] system reset issued; waiting for reboot to LOADER"
+                )
+            time.sleep(3)
+            direct_read_until(ch, ">", timeout=20, node_log=node_log)
 
-        # Enter system console.
-        if _session_log:
-            _session_log.log_sent("system console")
-        ch.send("system console\r")
-        out, matched = direct_read_until_any(
-            ch,
-            ["y/n", "ctrl-d", "type exit", "serial console", "boot loader", "loader", "autoboot"],
-            timeout=15,
-            node_log=node_log,
-        )
-        if matched and "y/n" in matched.lower():
-            _slog(f"[{host}] taking over existing console session")
-            ch.send("y\r")
-            time.sleep(2)
+            # Enter system console.
+            if _session_log:
+                _session_log.log_sent("system console")
+            ch.send("system console\r")
+            out, matched = direct_read_until_any(
+                ch,
+                ["y/n", "ctrl-d", "type exit", "serial console", "boot loader", "loader", "autoboot"],
+                timeout=15,
+                node_log=node_log,
+            )
+            if matched and "y/n" in matched.lower():
+                _slog(f"[{host}] taking over existing console session")
+                ch.send("y\r")
+                time.sleep(2)
 
         # Monitor for AUTOBOOT and LOADER.
         buf = ""
@@ -7922,24 +8003,26 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             client.close()
             return None, None
 
-        # system reset (auto-confirm if prompted).
-        direct_send_and_wait(ch, "system reset", "y/n", timeout=15,
-                             auto_respond="y", node_log=node_log)
-        print(f"  ⏳ [{host}] Node rebooting...")
-        time.sleep(3)
-        direct_read_until(ch, ">", timeout=20, node_log=node_log)
+        # Check if already at LOADER before issuing system reset.
+        if not _already_at_loader(ch, label=host, node_log=node_log):
+            # system reset (auto-confirm if prompted).
+            direct_send_and_wait(ch, "system reset", "y/n", timeout=15,
+                                 auto_respond="y", node_log=node_log)
+            print(f"  ⏳ [{host}] Node rebooting...")
+            time.sleep(3)
+            direct_read_until(ch, ">", timeout=20, node_log=node_log)
 
-        # system console.
-        ch.send("system console\r")
-        out2, matched2 = direct_read_until_any(
-            ch,
-            ["y/n", "ctrl-d", "serial console", "loader", "autoboot"],
-            timeout=15,
-            node_log=node_log,
-        )
-        if matched2 and "y/n" in matched2.lower():
-            ch.send("y\r")
-            time.sleep(2)
+            # system console.
+            ch.send("system console\r")
+            out2, matched2 = direct_read_until_any(
+                ch,
+                ["y/n", "ctrl-d", "serial console", "loader", "autoboot"],
+                timeout=15,
+                node_log=node_log,
+            )
+            if matched2 and "y/n" in matched2.lower():
+                ch.send("y\r")
+                time.sleep(2)
 
         # Monitor for AUTOBOOT interrupt and LOADER prompt.
         # Raw console output (BIOS init, driver load, etc.) goes to node_log
@@ -8998,36 +9081,42 @@ def _run_4b_standalone(log, resuming: bool = False):
             ch = bmc_channels[ip]
             cl = bmc_clients[ip]
             try:
-                # system reset (auto-confirm y/n prompt)
-                _status(f"  ⏳ [{ip}] Sending system reset...")
-                if nf:
-                    _par_write(nf, "\n>>> system reset\n")
-                ch.send("system reset\r")
-                out, m = _par_recv_until(ch, nf, ["y/n", ">"], timeout=15)
-                if m and "y/n" in m.lower():
+                # Check if already at LOADER; skip system reset if so.
+                if _already_at_loader(ch, label=ip, node_log=nf):
+                    if log:
+                        log.log(f"[{ip}] already at LOADER – system reset skipped")
+                    # Fall through directly to the AUTOBOOT/LOADER monitoring loop.
+                else:
+                    # system reset (auto-confirm y/n prompt)
+                    _status(f"  ⏳ [{ip}] Sending system reset...")
                     if nf:
-                        _par_write(nf, "\n>>> y  (confirming system reset)\n")
-                    ch.send("y\r")
-                _status(f"  ⏳ [{ip}] Node rebooting...")
-                if log:
-                    log.log(f"[{ip}] system reset issued")
-                time.sleep(3)
-                _par_recv_until(ch, nf, [">"], timeout=20)
+                        _par_write(nf, "\n>>> system reset\n")
+                    ch.send("system reset\r")
+                    out, m = _par_recv_until(ch, nf, ["y/n", ">"], timeout=15)
+                    if m and "y/n" in m.lower():
+                        if nf:
+                            _par_write(nf, "\n>>> y  (confirming system reset)\n")
+                        ch.send("y\r")
+                    _status(f"  ⏳ [{ip}] Node rebooting...")
+                    if log:
+                        log.log(f"[{ip}] system reset issued")
+                    time.sleep(3)
+                    _par_recv_until(ch, nf, [">"], timeout=20)
 
-                # system console
-                if nf:
-                    _par_write(nf, "\n>>> system console\n")
-                ch.send("system console\r")
-                out2, m2 = _par_recv_until(
-                    ch, nf,
-                    ["y/n", "ctrl-d", "serial console", "loader", "autoboot"],
-                    timeout=15,
-                )
-                if m2 and "y/n" in m2.lower():
+                    # system console
                     if nf:
-                        _par_write(nf, "\n>>> y  (taking over console session)\n")
-                    ch.send("y\r")
-                    time.sleep(2)
+                        _par_write(nf, "\n>>> system console\n")
+                    ch.send("system console\r")
+                    out2, m2 = _par_recv_until(
+                        ch, nf,
+                        ["y/n", "ctrl-d", "serial console", "loader", "autoboot"],
+                        timeout=15,
+                    )
+                    if m2 and "y/n" in m2.lower():
+                        if nf:
+                            _par_write(nf, "\n>>> y  (taking over console session)\n")
+                        ch.send("y\r")
+                        time.sleep(2)
 
                 # Monitor for AUTOBOOT/LOADER – all raw output → node file only.
                 buf = ""
@@ -14424,23 +14513,25 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             print(f"   ⚠️  [{label}] no BMC prompt; aborting.")
             return False
 
-        # Reset the node to begin a clean boot cycle.
-        print(f"   🔄 [{label}] Sending system reset...")
-        _slog(f"[{label}] sending system reset")
-        ch.send("system reset\r")
-        out, matched = direct_read_until_any(ch, ["y/n", ">"], timeout=15,
-                                             node_log=node_file)
-        if matched and "y/n" in matched.lower():
-            ch.send("y\r"); time.sleep(2)
-            direct_read_until(ch, ">", timeout=20, node_log=node_file)
+        # Check if already at LOADER; skip system reset if so.
+        if not _already_at_loader(ch, label=label, node_log=node_file):
+            # Reset the node to begin a clean boot cycle.
+            print(f"   🔄 [{label}] Sending system reset...")
+            _slog(f"[{label}] sending system reset")
+            ch.send("system reset\r")
+            out, matched = direct_read_until_any(ch, ["y/n", ">"], timeout=15,
+                                                 node_log=node_file)
+            if matched and "y/n" in matched.lower():
+                ch.send("y\r"); time.sleep(2)
+                direct_read_until(ch, ">", timeout=20, node_log=node_file)
 
-        # Attach to the system console to catch the boot sequence.
-        ch.send("system console\r")
-        out, matched = direct_read_until_any(
-            ch, ["y/n", "ctrl-d", "type exit", "serial console", "boot loader",
-                 "loader", "autoboot"], timeout=20, node_log=node_file)
-        if matched and "y/n" in matched.lower():
-            ch.send("y\r"); time.sleep(2)
+            # Attach to the system console to catch the boot sequence.
+            ch.send("system console\r")
+            out, matched = direct_read_until_any(
+                ch, ["y/n", "ctrl-d", "type exit", "serial console", "boot loader",
+                     "loader", "autoboot"], timeout=20, node_log=node_file)
+            if matched and "y/n" in matched.lower():
+                ch.send("y\r"); time.sleep(2)
 
         # Send a CR to wake the console.
 
@@ -19649,34 +19740,43 @@ def main():
             if _operation_mode == 3 and _checkpoint is None:
                 _option3_init_checkpoint(_run_context, sp_host, _peer_bmc_list, config_path)
 
-            # Phase: System Reset
+            # Phase: System Reset (skipped if already at LOADER)
             _session_log.start_phase("System Reset")
-            print("\n🔄 Sending 'system reset' command...")
-            _session_log.log("Sending 'system reset' command")
-            direct_send_and_wait(channel, "system reset", "y/n", timeout=15, auto_respond="y")
-
-            print("\n⏳ System reset in process. Script may appear hung, but be"
-                  " patient — reboot will happen soon.")
-            _session_log.log("System reset issued; waiting for reboot")
-            time.sleep(3)
-
-            print("Waiting for BMC prompt after reset...")
-            _session_log.log("Waiting for BMC prompt after reset")
-            output = direct_read_until(channel, ">", timeout=15)
-            if ">" in output:
-                print("✅ BMC prompt returned.")
-                _session_log.log("BMC prompt returned after reset")
+            if _already_at_loader(channel, label=sp_host):
+                # Node is already sitting at LOADER — nothing to reset.
+                _session_log.log("Already at LOADER – system reset skipped")
+                _session_log.end_phase()
+                # Skip "Enter System Console" — we're already in the console.
+                _session_log.start_phase("Enter System Console")
+                _session_log.log("Already in console (LOADER detected before reset)")
+                _session_log.end_phase()
             else:
-                print("⚠️  BMC prompt not seen after reset, continuing anyway...")
-                _session_log.log("BMC prompt not seen after reset", prefix="WARN")
-            _session_log.end_phase()
+                print("\n🔄 Sending 'system reset' command...")
+                _session_log.log("Sending 'system reset' command")
+                direct_send_and_wait(channel, "system reset", "y/n", timeout=15, auto_respond="y")
 
-            # Phase: Enter System Console
-            _session_log.start_phase("Enter System Console")
-            enter_system_console(channel)
-            print("Now monitoring boot output...\n")
-            _session_log.log("Starting boot monitoring")
-            _session_log.end_phase()
+                print("\n⏳ System reset in process. Script may appear hung, but be"
+                      " patient — reboot will happen soon.")
+                _session_log.log("System reset issued; waiting for reboot")
+                time.sleep(3)
+
+                print("Waiting for BMC prompt after reset...")
+                _session_log.log("Waiting for BMC prompt after reset")
+                output = direct_read_until(channel, ">", timeout=15)
+                if ">" in output:
+                    print("✅ BMC prompt returned.")
+                    _session_log.log("BMC prompt returned after reset")
+                else:
+                    print("⚠️  BMC prompt not seen after reset, continuing anyway...")
+                    _session_log.log("BMC prompt not seen after reset", prefix="WARN")
+                _session_log.end_phase()
+
+                # Phase: Enter System Console
+                _session_log.start_phase("Enter System Console")
+                enter_system_console(channel)
+                print("Now monitoring boot output...\n")
+                _session_log.log("Starting boot monitoring")
+                _session_log.end_phase()
 
             # Install per-node log writer so detailed boot/init output goes to a
             # dedicated file instead of flooding the terminal.  Milestone lines
@@ -19745,22 +19845,29 @@ def main():
                 collect_node_mgmt_per_bmc(sp_host, [])
 
                 _session_log.start_phase(f"System Reset ({sp_host})")
-                print("\n🔄 Sending 'system reset' command...")
-                _session_log.log("Sending 'system reset' command")
-                direct_send_and_wait(channel, "system reset", "y/n", timeout=15,
-                                     auto_respond="y")
-                print("\n⏳ System reset in process. Script may appear hung, but"
-                      " be patient — reboot will happen soon.")
-                _session_log.log("System reset issued; waiting for reboot")
-                time.sleep(3)
-                direct_read_until(channel, ">", timeout=15)
-                _session_log.end_phase()
+                if _already_at_loader(channel, label=sp_host):
+                    _session_log.log(f"[{sp_host}] Already at LOADER – system reset skipped")
+                    _session_log.end_phase()
+                    _session_log.start_phase(f"Enter System Console ({sp_host})")
+                    _session_log.log(f"[{sp_host}] Already in console (LOADER before reset)")
+                    _session_log.end_phase()
+                else:
+                    print("\n🔄 Sending 'system reset' command...")
+                    _session_log.log("Sending 'system reset' command")
+                    direct_send_and_wait(channel, "system reset", "y/n", timeout=15,
+                                         auto_respond="y")
+                    print("\n⏳ System reset in process. Script may appear hung, but"
+                          " be patient — reboot will happen soon.")
+                    _session_log.log("System reset issued; waiting for reboot")
+                    time.sleep(3)
+                    direct_read_until(channel, ">", timeout=15)
+                    _session_log.end_phase()
 
-                _session_log.start_phase(f"Enter System Console ({sp_host})")
-                enter_system_console(channel)
-                print("Now monitoring boot output...\n")
-                _session_log.log("Starting boot monitoring for next node")
-                _session_log.end_phase()
+                    _session_log.start_phase(f"Enter System Console ({sp_host})")
+                    enter_system_console(channel)
+                    print("Now monitoring boot output...\n")
+                    _session_log.log("Starting boot monitoring for next node")
+                    _session_log.end_phase()
 
                 # Close the previous node's log writer and open a fresh one for this node.
                 if isinstance(sys.stdout, _NodeLogWriter):
