@@ -19324,6 +19324,8 @@ def main():
                     print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
                 if _diag_mode:
                     _diag_bootargs = _load_diag_bootargs()
+            elif _operation_mode == 2 and _diag_mode:
+                _diag_bootargs = _load_diag_bootargs()
 
             # License: collect key(s) or validate the license file path now, before
             # the BMC session starts, so the operator can fix issues early.
