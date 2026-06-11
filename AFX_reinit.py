@@ -1303,7 +1303,19 @@ class _NodeLogWriter:
             line, self._buf = self._buf.split("\n", 1)
             stripped = line.lstrip()
             if stripped and any(stripped.startswith(m) for m in self._MILESTONE_STARTS):
-                _real_stdout.write(line + "\n")
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Inject timestamp after the first [label] bracket group, or
+                # prepend it if no bracket group is present.
+                _ts_injected = re.sub(
+                    r'(\[[^\]]+\])',
+                    lambda m: m.group(0) + f" | {ts}",
+                    line,
+                    count=1,
+                )
+                if _ts_injected == line:
+                    # No bracket group found – prepend timestamp.
+                    _ts_injected = f"[{ts}] " + line.lstrip()
+                _real_stdout.write(_ts_injected + "\n")
                 _real_stdout.flush()
 
     def flush(self) -> None:
