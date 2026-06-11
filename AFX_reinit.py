@@ -3511,6 +3511,9 @@ def _reclaim_system_console(channel, node_log=None):
     return False
 
 
+_BMC_CONSOLE_KEEPALIVE_INTERVAL = 30  # seconds between null-byte keepalives
+
+
 def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=False, quiet=False):
     """Shared receive loop used by direct_send_and_wait / direct_read_until /
     direct_read_until_any.
@@ -3523,15 +3526,23 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
     original (non-lower-cased) string from *matchers* that triggered the
     match, or ``None`` on timeout / shutdown.  The full accumulated *output*
     string is always returned unmodified so callers can inspect it.
+
+    A null byte (b"\\x00") is sent every _BMC_CONSOLE_KEEPALIVE_INTERVAL
+    seconds of inactivity to prevent the BMC application-level autologout from
+    firing during long waits (e.g., waiting for the boot menu during a reboot).
+    Null bytes are ignored by the ONTAP/LOADER console but reset the BMC's
+    idle timer.
     """
     output = ""
     output_lower = ""
     start_time = time.monotonic()
+    last_channel_activity = time.monotonic()
     while True:
         if _shutdown_event.is_set():
             return output, None
         if channel.recv_ready():
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
+            last_channel_activity = time.monotonic()
             output += chunk
             output_lower += chunk.lower()
             if len(output_lower) > 16384:
@@ -3547,6 +3558,7 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                 _rc_t = time.monotonic()
                 _reclaim_system_console(channel, node_log=node_log)
                 start_time += time.monotonic() - _rc_t
+                last_channel_activity = time.monotonic()
                 output = ""
                 output_lower = ""
                 continue
@@ -3555,6 +3567,14 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                     return output, orig_m
         if time.monotonic() - start_time > timeout:
             return output, None
+        # Periodic null-byte keepalive to prevent BMC application-level
+        # autologout during long waits (e.g. waiting for node to boot).
+        if time.monotonic() - last_channel_activity > _BMC_CONSOLE_KEEPALIVE_INTERVAL:
+            try:
+                channel.sendall(b"\x00")
+            except Exception:
+                pass
+            last_channel_activity = time.monotonic()
         time.sleep(0.1)
 
 
@@ -14616,6 +14636,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         out_lower = ""
         s = time.monotonic()
         last_recv = time.monotonic()
+        last_keepalive = time.monotonic()
         seen_menu = False
         while time.monotonic() - s < 1200:
             if _shutdown_event.is_set():
@@ -14623,6 +14644,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             if ch.recv_ready():
                 chunk = ch.recv(4096).decode("utf-8", errors="replace")
                 last_recv = time.monotonic()
+                last_keepalive = time.monotonic()
                 if node_file:
                     _par_write(node_file, chunk)
                 if _session_log:
@@ -14633,6 +14655,13 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     break
                 if len(out_lower) > 16384:
                     out_lower = out_lower[-8192:]
+            elif time.monotonic() - last_keepalive > _BMC_CONSOLE_KEEPALIVE_INTERVAL:
+                # Send null byte to reset BMC application-level idle timer.
+                try:
+                    ch.sendall(b"\x00")
+                except Exception:
+                    pass
+                last_keepalive = time.monotonic()
             elif time.monotonic() - last_recv > 120:
                 # No data for 2+ minutes – BMC channel may have silently died.
                 # Reconnect SSH and re-attach to system console.
