@@ -2011,7 +2011,7 @@ def select_operation_mode():
       5  -> Exit.
     """
     global _setup_passwordless_ssh, _netboot_before_reinit, _physical_zeroing
-    global _diag_bootargs
+    global _diag_bootargs, _netboot_static_ip
     while True:
         _print_banner("NetApp AFX BMC Console Automation 🤖")
         print("\n  What do you want to do?\n")
@@ -2067,6 +2067,8 @@ def select_operation_mode():
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the cluster reinit.")
+                    _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                    _netboot_static_ip = (_sip_ans == "y")
                 print("\n  ✅ Confirmed. 1a: Format first node (interactive)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
                 print("     → Boot menu: option 9 (Initialize); then interactive\n")
@@ -2100,6 +2102,8 @@ def select_operation_mode():
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the cluster reinit.")
+                    _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                    _netboot_static_ip = (_sip_ans == "y")
                 print("\n  ✅ Confirmed. 1b: Format first node + setup cluster (auto)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
                 print("     → Boot menu: option 9, then auto option 4 + auto setup\n")
@@ -2123,6 +2127,8 @@ def select_operation_mode():
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the node join.")
+                    _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                    _netboot_static_ip = (_sip_ans == "y")
                 print("\n  ✅ Confirmed. 2a: Add node (interactive)")
                 print("     → LOADER: set-defaults + saveenv (no destroy storage pods)")
                 print("     → Boot menu: option 4 (Initialize and configure system)\n")
@@ -2150,6 +2156,8 @@ def select_operation_mode():
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the node join.")
+                    _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                    _netboot_static_ip = (_sip_ans == "y")
                 print("\n  ✅ Confirmed. 2b: Add node (auto)")
                 print("     → LOADER: set-defaults + saveenv")
                 print("     → Boot menu: option 4 + auto join wizard\n")
@@ -2184,6 +2192,8 @@ def select_operation_mode():
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER on the primary node before cluster reinit.")
+                    _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                    _netboot_static_ip = (_sip_ans == "y")
                 print("\n  ✅ Confirmed. 3: End-to-end auto initialize\n")
                 return 3, True, True
             print("\n  ↩️  Returning to menu...\n")
@@ -15940,9 +15950,11 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             _real_stdout.write(msg + "\n")
             _real_stdout.flush()
 
+        _nb_static = _node_mgmt_by_bmc.get(sp_host) if _netboot_static_ip else None
         ok = _run_netboot_install_sequence(
             channel, _nb_pkg_url, node_label="primary", log=_session_log,
             status_cb=_nb_screen,
+            static_ifconfig=_nb_static,
         )
         if _nb_httpd:
             try:
