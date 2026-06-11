@@ -1039,7 +1039,7 @@ def _select_config_path_interactive(detected, indent="  ", header_emoji="📄"):
     if len(detected) == 1:
         found = detected[0]
         print(f"\n{pad}{header_emoji} Found config file: {found}")
-        use_it = _prompt(f"{pad}Use this config file? [Y/N]: ", "n").lower()
+        use_it = _prompt(f"{pad}Use this config file? [Y/n]: ", "y").lower()
         return found if use_it in ("", "y", "yes") else None
 
     print(f"\n{pad}{header_emoji} Found multiple config files:")
@@ -1049,7 +1049,7 @@ def _select_config_path_interactive(detected, indent="  ", header_emoji="📄"):
     while True:
         sel = _prompt(
             f"{pad}Select [0-{len(detected)}, default 1]: "
-        , "0")
+        , "1")
         if sel == "":
             sel = "1"
         if not sel.isdigit():
