@@ -14615,12 +14615,14 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         sig_lower = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
         out_lower = ""
         s = time.monotonic()
+        last_recv = time.monotonic()
         seen_menu = False
         while time.monotonic() - s < 1200:
             if _shutdown_event.is_set():
                 return False
             if ch.recv_ready():
                 chunk = ch.recv(4096).decode("utf-8", errors="replace")
+                last_recv = time.monotonic()
                 if node_file:
                     _par_write(node_file, chunk)
                 if _session_log:
@@ -14631,6 +14633,54 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     break
                 if len(out_lower) > 16384:
                     out_lower = out_lower[-8192:]
+            elif time.monotonic() - last_recv > 120:
+                # No data for 2+ minutes – BMC channel may have silently died.
+                # Reconnect SSH and re-attach to system console.
+                _elapsed_silent = int(time.monotonic() - last_recv)
+                print(f"   ⚠️  [{label}] No console data for {_elapsed_silent}s – reconnecting to BMC...")
+                if node_file:
+                    _par_write(node_file, f"\n>>> [Reconnecting BMC after {_elapsed_silent}s silence]\n")
+                if _session_log:
+                    _session_log.log(f"[{label}] reconnecting BMC after {_elapsed_silent}s silence")
+                try:
+                    try:
+                        ch.close()
+                    except Exception:
+                        pass
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                    client, peer_user, peer_password = _ssh_connect_with_retry(
+                        peer_bmc, peer_user, peer_password,
+                        label=label, max_attempts=3, interactive=True,
+                    )
+                    ch = _open_shell(client)
+                    if not _reach_bmc_prompt(ch, timeout=15, node_log=node_file):
+                        print(f"   ⚠️  [{label}] BMC prompt not reached after reconnect; continuing...")
+                    ch.send("system console\r")
+                    _out_sc, _m_sc = direct_read_until_any(
+                        ch, ["y/n", "ctrl-d", "serial console", "loader",
+                             "autoboot", "selection"],
+                        timeout=20, node_log=node_file,
+                    )
+                    if _m_sc and "y/n" in _m_sc.lower():
+                        ch.send("y\r"); time.sleep(2)
+                    elif _m_sc and any(sg in (_m_sc or "").lower() for sg in sig_lower):
+                        # Boot menu already visible – drop into detection immediately.
+                        out_lower += _out_sc.lower()
+                    # Send CR to nudge any waiting prompt.
+                    ch.send("\r")
+                    last_recv = time.monotonic()
+                    # Don't reset s – preserve original timeout budget.
+                    print(f"   ✅ [{label}] Reconnected to BMC; resuming boot menu wait...")
+                    if _session_log:
+                        _session_log.log(f"[{label}] BMC reconnect successful; resuming boot menu wait")
+                except Exception as _rc_err:
+                    print(f"   ❌ [{label}] BMC reconnect failed: {_rc_err}")
+                    if _session_log:
+                        _session_log.log(f"[{label}] BMC reconnect failed: {_rc_err}", prefix="ERROR")
+                    return False
             time.sleep(0.1)
         if not seen_menu:
             print(f"   ⚠️  [{label}] boot menu not detected; aborting.")
