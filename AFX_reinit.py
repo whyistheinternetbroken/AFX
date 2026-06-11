@@ -19847,15 +19847,17 @@ def main():
 
             # Install per-node log writer so detailed boot/init output goes to a
             # dedicated file instead of flooding the terminal.  Milestone lines
-            # (✅ / ⚠️ / 🤖 etc.) are still echoed to the screen.  Interactive
-            # modes (1a/2a) run in pass-through so the operator sees everything.
+            # (✅ / ⚠️ / 🤖 etc.) are still echoed to the screen.  Raw console
+            # output (hardware boot, LOADER prompts, kernel loading, etc.) is
+            # always suppressed from the terminal; InteractiveSession.run()
+            # re-enables pass-through when the operator needs a live shell.
             _is_auto_mode = _auto_setup or _auto_add or _operation_mode == 3
             _nlw_log_dir = _session_log.log_dir if _session_log else os.getcwd()
             _nlw_node_file = _node_log_open(
                 sp_host, _nlw_log_dir,
                 prefix="option2b_add_node" if _operation_mode == 2 else f"mode{_operation_mode}_node",
             )
-            _nlw = _NodeLogWriter(_nlw_node_file, interactive=not _is_auto_mode)
+            _nlw = _NodeLogWriter(_nlw_node_file, interactive=False)
             sys.stdout = _nlw
             _real_stdout.write(
                 f"\n  📝 [{sp_host}] Detailed node output → {_nlw_node_file.name}\n"
@@ -19946,7 +19948,7 @@ def main():
                     sp_host, _nlw_log_dir,
                     prefix="option2b_add_node" if _operation_mode == 2 else f"mode{_operation_mode}_node",
                 )
-                _nlw2 = _NodeLogWriter(_nlw_node_file2, interactive=not _is_auto_mode)
+                _nlw2 = _NodeLogWriter(_nlw_node_file2, interactive=False)
                 sys.stdout = _nlw2
                 _real_stdout.write(
                     f"\n  📝 [{sp_host}] Detailed node output → {_nlw_node_file2.name}\n"
