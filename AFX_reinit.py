@@ -1206,6 +1206,21 @@ def _config_secondary_nodes(ctx=None) -> list:
 # survives any later sys.stdout replacement.
 _real_stdout = sys.stdout
 
+
+def _ts_print(msg: str) -> None:
+    """Print a milestone line with an injected timestamp directly to the real
+    terminal, bypassing any sys.stdout wrapper.  Uses the same bracket-injection
+    logic as _NodeLogWriter so the format is consistent everywhere.
+    """
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    injected = re.sub(r'(\[[^\]]+\])', lambda m: m.group(0) + f" | {ts}", msg, count=1)
+    if injected == msg:
+        # No bracket group – prepend timestamp.
+        injected = f"[{ts}] " + msg.lstrip()
+    _real_stdout.write(injected + "\n")
+    _real_stdout.flush()
+
+
 # When True (--debug flag), _NodeLogWriter forwards ALL output to the terminal
 # instead of filtering to milestone lines only.
 _debug_console = False
@@ -4165,7 +4180,7 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
         if node_log:
             _par_write(node_log, msg + "\n")
         else:
-            print(msg)
+            _ts_print(msg)
         if _session_log:
             _session_log.log(msg.strip())
 
@@ -5064,8 +5079,9 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
     terminal regardless, so parallel calls don't interleave console noise.
     """
     def _tprint(*args, **kwargs):
-        """Print a milestone line directly to the real terminal."""
-        print(*args, file=_real_stdout, **kwargs)
+        """Print a milestone line with timestamp directly to the real terminal."""
+        msg = " ".join(str(a) for a in args)
+        _ts_print(msg)
         _real_stdout.flush()
 
     _tprint(f"\n🔁 [{host}] Resetting to LOADER prompt...")
@@ -19647,6 +19663,10 @@ def main():
                         print(f"     {', '.join(other_sps)}")
                         _session_log.log(f"Mode 3 peer add list: {other_sps}")
 
+                # Holds the result of the primary-node LOADER probe when it runs in
+                # parallel with the peer resets (mode 3 only).
+                _primary_loader_result = [None]
+
                 # Reset every peer BMC to LOADER up-front (mode 3 needs peers parked at
                 # LOADER before the parallel auto-add kicks in). Mode 1 (1a/1b) only
                 # operates on the first node — skip peer resets entirely.
@@ -19682,7 +19702,23 @@ def main():
                         with _pr_lock:
                             _pr_results[addr] = ok
 
+                    # Run peer resets and primary LOADER check simultaneously.
+                    # The primary's SSH channel is independent from peer channels.
+                    _primary_loader_result = [None]
+
+                    def _primary_loader_worker():
+                        _primary_loader_result[0] = _already_at_loader(
+                            channel, label=sp_host
+                        )
+
+                    _primary_thread = threading.Thread(
+                        target=_primary_loader_worker, daemon=True
+                    )
+                    _primary_thread.start()
+
                     _run_parallel(other_sps, _pr_worker)
+
+                    _primary_thread.join()
 
                     for addr, nf in _pr_node_logs.items():
                         if nf:
@@ -19698,7 +19734,7 @@ def main():
                         _session_log.log(
                             f"[{addr}] peer reset {'reached LOADER' if ok else 'did NOT reach LOADER'}"
                         )
-                        print(f"  {sym} [{addr}] Peer reset {'reached LOADER' if ok else 'did NOT reach LOADER'}")
+                        _ts_print(f"  {sym} [{addr}] Peer reset {'reached LOADER' if ok else 'did NOT reach LOADER'}")
                     _session_log.end_phase()
 
             # Mode 2 (2a/2b): collect node-management network info for THIS node
@@ -19912,7 +19948,14 @@ def main():
 
             # Phase: System Reset (skipped if already at LOADER)
             _session_log.start_phase("System Reset")
-            if _already_at_loader(channel, label=sp_host):
+            # _primary_loader_result is set by the parallel thread during the peer
+            # reset phase (mode 3). For all other modes (no peer resets), check now.
+            _at_loader = (
+                _primary_loader_result[0]
+                if _operation_mode == 3 and other_sps and _primary_loader_result[0] is not None
+                else _already_at_loader(channel, label=sp_host)
+            )
+            if _at_loader:
                 # Node is already sitting at LOADER — nothing to reset.
                 _session_log.log("Already at LOADER – system reset skipped")
                 _session_log.end_phase()
