@@ -18786,6 +18786,73 @@ def main():
                     _run_context.config_data = _config_data
                     _run_context.retain_preselected = (False, False, False)
                     _run_context.apply_to_globals()
+
+                    # ── Mode 2: show nodes-to-add list and let operator add more ──
+                    if _operation_mode == 2 and isinstance(_config_data, dict):
+                        _sn_list = _config_data.get("secondary_nodes") or []
+                        _sn_list = [n for n in _sn_list if isinstance(n, dict)]
+                        print("\n  Nodes to be added in this run:")
+                        if _sn_list:
+                            for _sni, _snn in enumerate(_sn_list, 1):
+                                _snbmc  = _snn.get("bmc") or "(no BMC)"
+                                _snname = _snn.get("name") or ""
+                                _snip   = _snn.get("node_mgmt_ip") or ""
+                                _snlabel = f"  {_snname}" if _snname else ""
+                                _sniplab = f"  mgmt={_snip}" if _snip else ""
+                                print(f"    {_sni}. {_snbmc}{_snlabel}{_sniplab}")
+                        else:
+                            print("    (none found in config)")
+
+                        _add_more = _prompt(
+                            "\n  Add additional nodes? [y/N]: ", "n"
+                        ).strip().lower()
+                        if _add_more == "y":
+                            print("\n  Enter details for each additional node.")
+                            print("  Press Enter on blank BMC to finish.")
+                            _extra_num = 1
+                            while True:
+                                _ex_bmc = _prompt(
+                                    f"\n    Extra node {_extra_num} — BMC IP/hostname (blank to finish): "
+                                ).strip()
+                                if not _ex_bmc:
+                                    break
+                                _ex_user = _prompt(
+                                    f"    BMC username [{_cfg_str(_sn_list[0].get('bmc_user')) if _sn_list else 'admin'}]: ",
+                                    _cfg_str(_sn_list[0].get("bmc_user")) if _sn_list else "admin",
+                                ).strip() or "admin"
+                                try:
+                                    _ex_pass = getpass.getpass(
+                                        f"    BMC password for {_ex_user}@{_ex_bmc}: "
+                                    )
+                                except (EOFError, KeyboardInterrupt):
+                                    _ex_pass = ""
+                                _ex_port = _prompt(
+                                    "    Node mgmt port [e0M]: ", "e0M"
+                                ).strip() or "e0M"
+                                _ex_ip   = _prompt("    Node mgmt IP: ").strip()
+                                _ex_mask = _prompt(
+                                    "    Node mgmt netmask [255.255.255.0]: ", "255.255.255.0"
+                                ).strip() or "255.255.255.0"
+                                _ex_gw   = _prompt("    Node mgmt gateway: ").strip()
+                                _ex_entry = {
+                                    "bmc": _ex_bmc,
+                                    "bmc_user": _ex_user,
+                                    "bmc_password": _ex_pass,
+                                    "node_mgmt_port": _ex_port,
+                                    "node_mgmt_ip": _ex_ip,
+                                    "node_mgmt_netmask": _ex_mask,
+                                    "node_mgmt_gateway": _ex_gw,
+                                }
+                                if not isinstance(_config_data.get("secondary_nodes"), list):
+                                    _config_data["secondary_nodes"] = []
+                                _config_data["secondary_nodes"].append(_ex_entry)
+                                _run_context.config_data = _config_data
+                                _run_context.apply_to_globals()
+                                print(f"    ✅ Added: {_ex_bmc}")
+                                _extra_num += 1
+                            if _extra_num > 1:
+                                print(f"\n  ✅ {_extra_num - 1} additional node(s) added.")
+
                 except ValueError as e:
                     print(f"⚠️  {e}")
                     print("   Continuing without a config file (manual prompts).")
