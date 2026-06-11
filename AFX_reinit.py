@@ -14571,6 +14571,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             print(f"   ⚠️  [{label}] no BMC prompt; aborting.")
             return False
 
+        _ts_print(f"[{label}] Starting node add process...")
         # Check if already at LOADER; skip system reset if so.
         if not _already_at_loader(ch, label=label, node_log=node_file):
             # Reset the node to begin a clean boot cycle.
