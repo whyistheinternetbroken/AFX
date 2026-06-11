@@ -16177,6 +16177,8 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
     _slog("Phase 1: Monitoring for AUTOBOOT/LOADER (active interruption mode)")
 
     output_buffer = ""
+    _last_data = time.monotonic()
+    _BMC_IDLE_TIMEOUT = 60  # seconds of no console data before reconnecting
 
     try:
         while not _shutdown_event.is_set():
@@ -16205,11 +16207,13 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
 
                 enter_system_console(channel)
                 output_buffer = ""
+                _last_data = time.monotonic()
                 continue
 
             if channel.recv_ready():
                 chunk = channel.recv(4096).decode("utf-8", errors="replace")
                 output_buffer += chunk
+                _last_data = time.monotonic()
                 sys.stdout.write(chunk)
                 sys.stdout.flush()
                 if _session_log:
@@ -16238,6 +16242,48 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
 
                 if len(output_buffer) > 8192:
                     output_buffer = output_buffer[-4096:]
+
+            elif time.monotonic() - _last_data > _BMC_IDLE_TIMEOUT:
+                # No console data for 60s — BMC session may have gone stale.
+                _idle_s = int(time.monotonic() - _last_data)
+                print(f"\n⚠️  [{sp_host}] No console data for {_idle_s}s — reconnecting to BMC...")
+                _slog(f"[{sp_host}] no console data for {_idle_s}s; reconnecting", prefix="WARN")
+                if _session_log:
+                    _session_log.log(f"[{sp_host}] BMC idle {_idle_s}s – reconnect attempt")
+                try:
+                    try:
+                        channel.close()
+                    except Exception:
+                        pass
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                    client, sp_user, sp_pass = _ssh_connect_with_retry(
+                        sp_host, sp_user, sp_pass,
+                        label=sp_host, max_attempts=5, interactive=True,
+                    )
+                    channel = _open_shell(client)
+                    if not _reach_bmc_prompt(channel, timeout=15):
+                        print(f"   ⚠️  [{sp_host}] BMC prompt not seen after reconnect; continuing...")
+                    channel.send("system console\r")
+                    _sc_out, _sc_matched = direct_read_until_any(
+                        channel,
+                        ["y/n", "ctrl-d", "loader", "autoboot", "selection", "::>"],
+                        timeout=20,
+                    )
+                    if _sc_matched and "y/n" in _sc_matched.lower():
+                        channel.send("y\r")
+                        time.sleep(2)
+                    channel.send("\r")
+                    output_buffer = ""
+                    _last_data = time.monotonic()
+                    print(f"   ✅ [{sp_host}] Reconnected; resuming boot monitoring...")
+                    _slog(f"[{sp_host}] BMC reconnect successful; boot monitoring resumed")
+                except Exception as _idle_err:
+                    print(f"   ❌ [{sp_host}] Reconnect failed: {_idle_err}")
+                    _slog(f"[{sp_host}] BMC reconnect failed: {_idle_err}", prefix="ERROR")
+                    _last_data = time.monotonic()  # reset so we don't spam retries
 
             time.sleep(0.1)
 
