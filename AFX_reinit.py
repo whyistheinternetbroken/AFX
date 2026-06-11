@@ -6294,19 +6294,33 @@ def collect_cluster_config():
     dns_servers = _from_cfg_or_prompt(
         "dns_servers", "DNS servers (comma separated)", None)
 
-    # NTP servers: always prompt so the operator can confirm or modify.
+    # NTP servers: if already configured (from config file or just populated
+    # by the retain-capture path), show the value and only re-prompt if the
+    # operator explicitly wants to change it.  If nothing is configured yet,
+    # open the full picker.
     ntp_servers_raw = cc_cfg.get("ntp_servers")
     if ntp_servers_raw:
         print(f"\n  📄 NTP servers (from config): {ntp_servers_raw}")
-        print("  Select new server(s) to replace the above, or press Enter to keep as-is.")
+        _ntp_change = _prompt(
+            "  Change NTP servers? [y/N]: ", "n"
+        ).strip().lower()
+        if _ntp_change == "y":
+            _ntp_entries = _prompt_ntp_servers()
+            if _ntp_entries:
+                ntp_servers = ",".join(_ntp_entries)
+                print(f"  ✅ NTP servers configured: {ntp_servers}")
+            else:
+                ntp_servers = ntp_servers_raw
+        else:
+            ntp_servers = ntp_servers_raw
     else:
         print("\n  ℹ️   NTP servers (optional). Select from the list or add custom.")
-    _ntp_entries = _prompt_ntp_servers()
-    if _ntp_entries:
-        ntp_servers = ",".join(_ntp_entries)
-        print(f"  ✅ NTP servers configured: {ntp_servers}")
-    else:
-        ntp_servers = ntp_servers_raw or None
+        _ntp_entries = _prompt_ntp_servers()
+        if _ntp_entries:
+            ntp_servers = ",".join(_ntp_entries)
+            print(f"  ✅ NTP servers configured: {ntp_servers}")
+        else:
+            ntp_servers = None
 
     location = _from_cfg_or_prompt(
         "location", "Controller location", None)
