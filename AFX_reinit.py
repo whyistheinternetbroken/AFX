@@ -16245,6 +16245,26 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     _real_stdout.write("  └" + "─" * 60 + "\n")
     _real_stdout.flush()
 
+    # Give the user a chance to abort before any further changes are made
+    _real_stdout.write(
+        "\n  ⚠️  Review the diff above. Exit the reinit process now? [y/N]: "
+    )
+    _real_stdout.flush()
+    try:
+        abort_answer = sys.stdin.readline().strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        abort_answer = ""
+
+    if abort_answer in ("y", "yes"):
+        _slog("User chose to abort reinit after reviewing LOADER env diff")
+        _real_stdout.write("\n  ❌ Reinit aborted by user after LOADER env diff review.\n")
+        _real_stdout.flush()
+        if _session_log:
+            _session_log.end_phase(outcome="ABORT", note="user aborted after env diff review")
+            _session_log.set_outcome("ABORT", "user aborted after env diff review")
+            _session_log.close()
+        sys.exit(0)
+
     _real_stdout.write(
         "\n  Restore these env variables that were cleared by set-defaults? [Y/n]: "
     )
