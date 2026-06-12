@@ -10410,7 +10410,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                     _waited += 1
                 if _shutdown_event.is_set():
                     break
-            cl, ch = _bmc_reach_loader(
+            cl, ch, _fail_reason = _bmc_reach_loader(
                 ip, bmc_user, bmc_passwords.get(ip, ""),
                 node_log=_rl_nf, fallback_passwords=_fb,
             )
@@ -10428,6 +10428,24 @@ def _run_4b_standalone(log, resuming: bool = False):
                         prefix="WARN",
                     )
 
+        if (cl is None or ch is None) and _fail_reason == "loader_timeout":
+            # LOADER was not seen within the timeout but SSH auth succeeded –
+            # the node is likely still booting.  Give it one more extended
+            # wait (the existing retry loop already tried 3 times; this adds
+            # one final 120s back-off before the password-fallback path).
+            _status(
+                f"  \u23f3 [{ip}] LOADER timeout (SSH OK) – waiting 120s "
+                f"before final retry..."
+            )
+            for _ in range(120):
+                if _shutdown_event.is_set():
+                    break
+                time.sleep(1)
+            cl, ch, _fail_reason = _bmc_reach_loader(
+                ip, bmc_user, bmc_passwords.get(ip, ""),
+                node_log=_rl_nf, fallback_passwords=_fb,
+            )
+
         if cl is None or ch is None:
             # BMC passwords can get reset (typically to blank) by some
             # service-processor resets / firmware events. Try a blank
@@ -10435,6 +10453,18 @@ def _run_4b_standalone(log, resuming: bool = False):
             # if blank still fails. The retry uses the same reach-LOADER
             # path so a success here unblocks the worker without aborting
             # the whole parallel run.
+            # NOTE: only attempt alternate passwords on SSH-level failures.
+            # A loader_timeout failure means SSH was fine; the node is just
+            # still booting – prompting for a new password would mislead.
+            if _fail_reason == "loader_timeout":
+                with _reconnect_lock:
+                    _reconnect_errors.append(ip)
+                _status(
+                    f"  \u274c [{ip}] LOADER not seen after all retries "
+                    f"(SSH was OK; node may still be booting). "
+                    f"Re-run the script to resume from checkpoint."
+                )
+                return
             _status(
                 f"  \U0001f510 [{ip}] Reconnect failed after {_reach_max} "
                 f"attempts; trying blank BMC password (post-reset fallback)..."
@@ -10442,7 +10472,7 @@ def _run_4b_standalone(log, resuming: bool = False):
             if log:
                 log.log(f"[{ip}] reach-LOADER fallback: trying blank password",
                         prefix="WARN")
-            cl, ch = _bmc_reach_loader(
+            cl, ch, _fail_reason = _bmc_reach_loader(
                 ip, bmc_user, "", node_log=_rl_nf, fallback_passwords=[],
             )
             if cl is not None and ch is not None:
@@ -10453,23 +10483,49 @@ def _run_4b_standalone(log, resuming: bool = False):
             else:
                 # Last resort: ask the operator for an updated password.
                 # Serialize across worker threads so prompts don't tangle.
+                # First check if another parallel thread already obtained a new
+                # password for a different node – try it before prompting again.
                 _new_pw = None
-                with _stdin_lock:
+                _SKIP_SENTINEL = "SKIP"
+                _current_pw = bmc_passwords.get(ip, "")
+                _shared_pw = next(
+                    (v for k, v in bmc_passwords.items()
+                     if k != ip and v and v != _current_pw),
+                    None,
+                )
+                if _shared_pw:
                     _status(
-                        f"  \u26a0\ufe0f  [{ip}] Blank BMC password also failed."
+                        f"  \U0001f511 [{ip}] Trying password already obtained "
+                        f"for another node..."
                     )
-                    _SKIP_SENTINEL = "SKIP"
-                    try:
-                        _new_pw = getpass.getpass(
-                            f"  Enter updated BMC password for "
-                            f"{bmc_user}@{ip} (type SKIP to skip): "
+                    _try_cl, _try_ch, _ = _bmc_reach_loader(
+                        ip, bmc_user, _shared_pw,
+                        node_log=_rl_nf, fallback_passwords=[],
+                    )
+                    if _try_cl is not None and _try_ch is not None:
+                        _status(
+                            f"  \u2705 [{ip}] Shared password accepted; continuing."
                         )
-                    except (EOFError, KeyboardInterrupt):
-                        _new_pw = _SKIP_SENTINEL
+                        bmc_passwords[ip] = _shared_pw
+                        cl, ch = _try_cl, _try_ch
+                        _new_pw = _SKIP_SENTINEL  # skip operator prompt
+
+                if _new_pw is None:
+                    with _stdin_lock:
+                        _status(
+                            f"  \u26a0\ufe0f  [{ip}] Blank BMC password also failed."
+                        )
+                        try:
+                            _new_pw = getpass.getpass(
+                                f"  Enter updated BMC password for "
+                                f"{bmc_user}@{ip} (type SKIP to skip): "
+                            )
+                        except (EOFError, KeyboardInterrupt):
+                            _new_pw = _SKIP_SENTINEL
                 if _new_pw != _SKIP_SENTINEL:
                     if log:
                         log.log(f"[{ip}] reach-LOADER fallback: operator-supplied password")
-                    cl, ch = _bmc_reach_loader(
+                    cl, ch, _fail_reason = _bmc_reach_loader(
                         ip, bmc_user, _new_pw,
                         node_log=_rl_nf, fallback_passwords=[],
                     )
