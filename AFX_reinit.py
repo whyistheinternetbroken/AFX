@@ -2071,12 +2071,14 @@ def select_operation_mode():
         print("    5f. Check node status (LOADER / cluster prompt)")
         print("    5g. Cluster health and version check")
         print("    5h. List and clean up stale BMC SSH sessions")
+        print("    5i. Backup LOADER environment variables")
+        print("    5j. Compare LOADER env to defaults (diff)")
         print("")
         print("  6.  Exit")
         print("")
         print("  " + "─" * 58)
         print("  (type 'menu' at any prompt to return here)")
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5h, or 6): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5j, or 6): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2279,7 +2281,7 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h"):
+        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j"):
             if choice == "5":
                 _print_banner("🛠️ 5: Administration and maintenance")
                 print("\n  5a. Install license file only")
@@ -2290,9 +2292,11 @@ def select_operation_mode():
                 print("  5f. Check node status (LOADER / cluster prompt)")
                 print("  5g. Cluster health and version check")
                 print("  5h. List and clean up stale BMC SSH sessions")
+                print("  5i. Backup LOADER environment variables")
+                print("  5j. Compare LOADER env to defaults (diff)")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5h) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5a–5j) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -2421,13 +2425,48 @@ def select_operation_mode():
                     print("\n  \u2705 Confirmed. 5h: List and clean up stale BMC SSH sessions\n")
                     return 50, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
+
+            if choice == "5i":
+                _print_banner("\U0001f4be 5i: Backup LOADER environment variables")
+                print("")
+                print("  Connects to each BMC via SSH, enters the system console,")
+                print("  runs 'printenv' at the LOADER prompt, and saves the output")
+                print("  to a timestamped file. Does NOT run set-defaults.")
+                print("")
+                print("  BMC addresses are loaded from a config/BMC_IP.json file")
+                print("  or entered manually.")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  \u2705 Confirmed. 5i: Backup LOADER environment variables\n")
+                    return 52, False, False
+                print("\n  \u21a9\ufe0f  Returning to menu...\n")
+
+            if choice == "5j":
+                _print_banner("\U0001f50d 5j: Compare LOADER env to defaults (diff)")
+                print("")
+                print("  Connects to each BMC, captures the current LOADER env,")
+                print("  runs set-defaults, captures the new env, and shows a diff.")
+                print("  Optionally restores variables cleared by set-defaults and")
+                print("  saves the environment with saveenv.")
+                print("")
+                print("  BMC addresses are loaded from a config/BMC_IP.json file")
+                print("  or entered manually.")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  \u2705 Confirmed. 5j: Compare LOADER env to defaults (diff)\n")
+                    return 53, False, False
+                print("\n  \u21a9\ufe0f  Returning to menu...\n")
             continue
 
         if choice == "6":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5h, or 6.")
+        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5j, or 6.")
 
 
 def get_loader_commands():
@@ -10564,8 +10603,14 @@ def _run_4b_standalone(log, resuming: bool = False):
                 "to continue."
             )
             return
-        # From LOADER send the configured boot commands (ends with boot_ontap menu).
+        # From LOADER: capture env, run set-defaults, then send remaining commands.
+        _log_dir = _session_log.log_dir if _session_log else os.getcwd()
+        _loader_env_pre_post_prompt(
+            ch, ip, _log_dir, node_log=_rl_nf, interactive=False
+        )
         for cmd in get_loader_commands():
+            if cmd == "set-defaults":
+                continue  # already run inside _loader_env_pre_post_prompt
             try:
                 ch.send(cmd + "\r")
             except Exception:
@@ -14715,7 +14760,16 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         # Physical zeroing, if requested, is set on every node so the
         # whole cluster ends up with consistent raid.use-physical-zeroing?
         # behaviour.
-        _peer_loader_cmds = ["set-defaults", "setenv AUTO_FW_UPDATE false"]
+        _peer_ld_log_dir = (_session_log.log_dir
+                            if _session_log and hasattr(_session_log, "log_dir")
+                            else os.getcwd())
+        # Capture env before/after set-defaults (non-interactive: no user prompt).
+        _loader_env_pre_post_prompt(
+            ch, label, _peer_ld_log_dir,
+            node_log=node_file, interactive=False
+        )
+        # set-defaults was already run above; exclude it from the command list.
+        _peer_loader_cmds = ["setenv AUTO_FW_UPDATE false"]
         if _physical_zeroing:
             _peer_loader_cmds.append("setenv raid.use-physical-zeroing? true")
         else:
@@ -16045,6 +16099,174 @@ def auto_complete_initialization(channel, bmc_host=None):
         sys.exit(1)
 
 
+
+# ---------------------------------------------------------------------------
+# LOADER environment backup / diff helpers
+# ---------------------------------------------------------------------------
+
+def _loader_env_capture(channel, node_log=None):
+    """Send 'printenv' at LOADER prompt and return a {varname: value} dict."""
+    output = direct_send_and_wait(channel, "printenv", "LOADER",
+                                  timeout=30, node_log=node_log)
+    env = {}
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Skip header: "Variable Name              Value"
+        if line.lower().startswith("variable"):
+            continue
+        # Format: "varname=value"
+        if "=" in line and not line.startswith(" "):
+            key, _, val = line.partition("=")
+            key = key.strip()
+            if key:
+                env[key] = val.strip()
+            continue
+        # Format: "varname   VALUE" (tab or multi-space separated)
+        parts = re.split(r"[ \t]+", line, maxsplit=1)
+        if len(parts) == 2 and parts[0]:
+            env[parts[0].strip()] = parts[1].strip()
+        elif len(parts) == 1 and parts[0]:
+            # bare variable with no value
+            env[parts[0].strip()] = ""
+    return env
+
+
+def _loader_env_save_to_file(env_dict, label, log_dir, prefix="loader_env"):
+    """Write env dict to a timestamped .txt file; return the file path."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_label = re.sub(r"[^\w.\-]", "_", label)
+    filename = f"{prefix}_{safe_label}_{ts}.txt"
+    path = os.path.join(log_dir, filename)
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            for key in sorted(env_dict):
+                fh.write(f"{key} {env_dict[key]}\n")
+        _slog(f"LOADER env saved to: {path}")
+    except Exception as exc:
+        _slog(f"Could not write LOADER env file {path}: {exc}", prefix="WARN")
+        return ""
+    return path
+
+
+def _loader_env_diff(pre, post):
+    """Return list of (key, pre_value, post_value) for changed/removed vars.
+
+    Only vars present in *pre* are considered:
+      - removed entirely  → post_value = None
+      - value changed     → post_value = new string
+    Result is sorted by key.
+    """
+    diffs = []
+    for key in sorted(pre):
+        pre_val = pre[key]
+        if key not in post:
+            diffs.append((key, pre_val, None))
+        elif post[key] != pre_val:
+            diffs.append((key, pre_val, post[key]))
+    return diffs
+
+
+def _loader_env_pre_post_prompt(channel, label, log_dir,
+                                node_log=None, interactive=True):
+    """Capture env before set-defaults, run set-defaults, capture after, diff.
+
+    Returns a list of "varname value" strings for vars the user wants restored
+    (or [] when non-interactive or user declines restore).
+    """
+    # Capture pre-defaults env
+    _slog("Capturing LOADER env (pre set-defaults)")
+    pre_env = _loader_env_capture(channel, node_log=node_log)
+    _loader_env_save_to_file(pre_env, label, log_dir, prefix="loader_env_pre")
+
+    # Run set-defaults
+    _slog("Running: set-defaults")
+    direct_send_and_wait(channel, "set-defaults", "LOADER",
+                         timeout=15, node_log=node_log)
+
+    # Verify boot DNA (abort if unsupported, just like the original loop does)
+    if not _verify_boot_dna(channel):
+        if _session_log:
+            _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
+            _session_log.set_outcome("FAIL", "unsupported boot DNA")
+            _session_log.close()
+        sys.exit(1)
+
+    # Capture post-defaults env
+    _slog("Capturing LOADER env (post set-defaults)")
+    post_env = _loader_env_capture(channel, node_log=node_log)
+    _loader_env_save_to_file(post_env, label, log_dir, prefix="loader_env_post")
+
+    diff_vars = _loader_env_diff(pre_env, post_env)
+
+    if not diff_vars:
+        _slog("LOADER env diff: no differences (set-defaults changed nothing)")
+        return []
+
+    # Save diff summary
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_label = re.sub(r"[^\w.\-]", "_", label)
+    diff_path = os.path.join(log_dir, f"loader_env_diff_{safe_label}_{ts}.txt")
+    try:
+        with open(diff_path, "w", encoding="utf-8") as fh:
+            fh.write(f"LOADER env diff for {label} at {ts}\n")
+            fh.write("─" * 60 + "\n")
+            fh.write(f"  {'Variable':<35} {'Before':<20} After (post-defaults)\n")
+            fh.write("─" * 60 + "\n")
+            for key, pre_val, post_val in diff_vars:
+                after_str = "(removed)" if post_val is None else post_val
+                fh.write(f"  {key:<35} {pre_val:<20} {after_str}\n")
+        _slog(f"LOADER env diff saved to: {diff_path}")
+    except Exception as exc:
+        _slog(f"Could not write diff file: {exc}", prefix="WARN")
+        diff_path = ""
+
+    if not interactive:
+        # Background thread: log diff but don't prompt
+        _slog(
+            f"LOADER env diff ({len(diff_vars)} var(s) changed/removed "
+            f"by set-defaults); see {diff_path}"
+        )
+        return []
+
+    # Interactive: show diff table and ask whether to restore
+    _real_stdout.write("\n  ┌─ LOADER env diff: vars changed by set-defaults ─┐\n")
+    _real_stdout.write(
+        f"  │  {'Variable':<35} {'Before':<20} After\n"
+    )
+    _real_stdout.write("  │  " + "─" * 58 + "\n")
+    for key, pre_val, post_val in diff_vars:
+        after_str = "(removed)" if post_val is None else post_val
+        _real_stdout.write(
+            f"  │  {key:<35} {pre_val:<20} {after_str}\n"
+        )
+    _real_stdout.write("  └" + "─" * 60 + "\n")
+    _real_stdout.flush()
+
+    _real_stdout.write(
+        "\n  Restore these env variables that were cleared by set-defaults? [Y/n]: "
+    )
+    _real_stdout.flush()
+    try:
+        answer = sys.stdin.readline().strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+
+    if answer in ("", "y", "yes"):
+        restore_cmds = [
+            f"{key} {pre_val}"
+            for key, pre_val, _ in diff_vars
+            if pre_val is not None
+        ]
+        _slog(f"User chose to restore {len(restore_cmds)} env var(s) after set-defaults")
+        return restore_cmds
+
+    _slog("User declined to restore env vars after set-defaults")
+    return []
+
+
+
 def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     global _reinit_label
     _reinit_label = sp_host or _reinit_label
@@ -16068,7 +16290,23 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
 
     _slog(f"LOADER commands for mode {_operation_mode}: {loader_commands}")
 
+    # Capture env before set-defaults, run set-defaults, capture after, diff,
+    # and (interactively) ask whether to restore cleared vars.
+    _ld_log_dir = (_session_log.log_dir
+                   if _session_log and hasattr(_session_log, "log_dir")
+                   else os.getcwd())
+    _extra_setvars = _loader_env_pre_post_prompt(
+        channel, sp_host or "primary", _ld_log_dir, interactive=True
+    )
+
     for command in loader_commands:
+        # set-defaults was already run inside _loader_env_pre_post_prompt;
+        # inject any restored env vars at this point and skip the command.
+        if command == "set-defaults":
+            for _ev in _extra_setvars:
+                _slog(f"Restoring env var: setenv {_ev}")
+                direct_send_and_wait(channel, f"setenv {_ev}", "LOADER", timeout=15)
+            continue
         # When netboot-before-reinit is active, skip boot_ontap menu – the
         # node will boot into the menu naturally after the netboot install.
         if command == "boot_ontap menu" and _netboot_before_reinit:
@@ -16099,17 +16337,6 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             if _session_log:
                 _session_log.log_sent(command)
             time.sleep(1)
-
-        # After set-defaults, verify the node's boot DNA. Only DNA 3088 is
-        # supported by this script; any other value indicates an unsupported
-        # platform and we abort with a clear message.
-        if command == "set-defaults":
-            if not _verify_boot_dna(channel):
-                if _session_log:
-                    _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
-                    _session_log.set_outcome("FAIL", "unsupported boot DNA")
-                    _session_log.close()
-                sys.exit(1)
 
     # ── Netboot-before-reinit hook ─────────────────────────────────────────
     # When the operator answered 'y' to the 1a/1b ONTAP-version prompt, skip
@@ -18945,6 +19172,284 @@ def main():
                 print("  " + "─" * 58)
 
                 print(f"\n📝 Session log: {_session_log.log_file}")
+                raise _ReturnToMenu
+
+            # ── Mode 52 (5i): Backup LOADER environment variables ─────────────────
+            if _operation_mode == 52:
+                _print_banner("\U0001f4be 5i: Backup LOADER environment variables")
+                _make_session_log("Mode 5i: LOADER env backup")
+                print("")
+
+                # Load BMC IPs (same pattern as mode 51)
+                _bmc_ips52 = []
+                _found_file52 = None
+                for _p52 in _find_config_files(
+                    candidate_names=("BMC_IP.json",
+                                     "reinit-config.json", "reinit_config.json",
+                                     "reinit-afx-config.json", "add_nodes.json"),
+                ):
+                    try:
+                        with open(_p52, "r", encoding="utf-8") as _f52:
+                            _d52 = json.load(_f52)
+                    except Exception:
+                        continue
+                    if isinstance(_d52.get("netboot_bmcs"), list):
+                        _bmc_ips52 = [str(x) for x in _d52["netboot_bmcs"] if x]
+                    else:
+                        _pn52 = _d52.get("primary_node")
+                        if isinstance(_pn52, dict) and _pn52.get("bmc"):
+                            _bmc_ips52.append(str(_pn52["bmc"]))
+                        for _sn52 in (_d52.get("secondary_nodes") or []):
+                            if isinstance(_sn52, dict) and _sn52.get("bmc"):
+                                _bmc_ips52.append(str(_sn52["bmc"]))
+                        if not _bmc_ips52:
+                            for _n52 in (_d52.get("nodes") or []):
+                                if isinstance(_n52, dict) and _n52.get("bmc"):
+                                    _bmc_ips52.append(str(_n52["bmc"]))
+                    if _bmc_ips52:
+                        _found_file52 = _p52
+                        break
+
+                if _found_file52:
+                    print(f"  \U0001f4c4 Loaded {len(_bmc_ips52)} BMC address(es) from: {_found_file52}")
+                    for _ip52 in _bmc_ips52:
+                        print(f"     \u2022 {_ip52}")
+                else:
+                    print("  \u2139\ufe0f  No BMC IP file found. Enter BMC addresses manually.")
+                    print("  (Leave blank and press Enter when done.)\n")
+                    _idx52 = 1
+                    while True:
+                        _entry52 = input(f"  BMC {_idx52} hostname/IP (blank to finish): ").strip()
+                        if not _entry52:
+                            break
+                        _bmc_ips52.append(_entry52)
+                        _idx52 += 1
+
+                if not _bmc_ips52:
+                    print("  No BMC addresses entered. Returning to menu.")
+                    raise _ReturnToMenu
+
+                print("")
+                _same_creds52 = input("  Use the same username/password for all BMCs? [Y/n]: ").strip().lower()
+                _creds52 = {}
+                if _same_creds52 != "n":
+                    _shared_user52 = input("  BMC username [admin]: ").strip() or "admin"
+                    _shared_pass52 = getpass.getpass("  BMC password (blank = none): ")
+                    for _ip52 in _bmc_ips52:
+                        _creds52[_ip52] = (_shared_user52, _shared_pass52)
+                else:
+                    for _ip52 in _bmc_ips52:
+                        _u52 = input(f"  Username for {_ip52} [admin]: ").strip() or "admin"
+                        _p52pw = getpass.getpass(f"  Password for {_ip52}: ")
+                        _creds52[_ip52] = (_u52, _p52pw)
+
+                _ld52_log_dir = _session_log.log_dir if _session_log else os.getcwd()
+                _saved_files52 = []
+
+                for _ip52 in _bmc_ips52:
+                    print(f"\n  \U0001f4e1 [{_ip52}] Connecting...")
+                    _u52w, _p52w = _creds52.get(_ip52, ("admin", ""))
+                    _cl52 = _ch52 = None
+                    try:
+                        _cl52, _u52w, _p52w = _ssh_connect_with_retry(
+                            _ip52, _u52w, _p52w,
+                            label=f"5i/{_ip52}", max_attempts=3, interactive=True,
+                        )
+                        _ch52 = _open_shell(_cl52)
+                        _nf52 = None
+                        try:
+                            _nf52 = _node_log_open(_ip52, _ld52_log_dir, prefix="5i_env")
+                        except Exception:
+                            pass
+                        if not _reach_bmc_prompt(_ch52, node_log=_nf52):
+                            print(f"  \u274c [{_ip52}] Could not reach BMC prompt; skipping.")
+                            continue
+                        _ch52.send("system console\r")
+                        _sc52_out, _sc52_m = direct_read_until_any(
+                            _ch52,
+                            ["y/n", "ctrl-d", "loader", "autoboot"],
+                            timeout=20, node_log=_nf52, quiet=True,
+                        )
+                        if _sc52_m and "y/n" in _sc52_m.lower():
+                            _ch52.send("y\r"); time.sleep(2)
+                            direct_read_until(_ch52, "loader", timeout=30, node_log=_nf52)
+                        # Nudge for LOADER prompt
+                        _ch52.send("\r")
+                        _nudge52 = direct_read_until(_ch52, "LOADER", timeout=10, node_log=_nf52)
+                        if "loader" not in _nudge52.lower():
+                            print(f"  \u26a0\ufe0f  [{_ip52}] Node not at LOADER prompt; skipping.")
+                            continue
+                        print(f"  \U0001f4be [{_ip52}] At LOADER – capturing printenv...")
+                        _env52 = _loader_env_capture(_ch52, node_log=_nf52)
+                        _fpath52 = _loader_env_save_to_file(
+                            _env52, _ip52, _ld52_log_dir, prefix="loader_env_backup"
+                        )
+                        if _fpath52:
+                            _saved_files52.append((_ip52, _fpath52))
+                            print(f"  \u2705 [{_ip52}] Saved {len(_env52)} vars → {_fpath52}")
+                        else:
+                            print(f"  \u274c [{_ip52}] Could not save env file.")
+                    except Exception as _e52:
+                        print(f"  \u274c [{_ip52}] Error: {_e52}")
+                    finally:
+                        if _nf52:
+                            try:
+                                _nf52.close()
+                            except Exception:
+                                pass
+                        for _obj52 in (_ch52, _cl52):
+                            try:
+                                if _obj52:
+                                    _obj52.close()
+                            except Exception:
+                                pass
+
+                print("\n  " + "─" * 58)
+                print("  Backup complete.")
+                for _bip52, _bfp52 in _saved_files52:
+                    print(f"  \U0001f4c4 [{_bip52}] {_bfp52}")
+                if _session_log:
+                    print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
+                raise _ReturnToMenu
+
+            # ── Mode 53 (5j): Compare LOADER env to defaults (diff) ──────────────
+            if _operation_mode == 53:
+                _print_banner("\U0001f50d 5j: Compare LOADER env to defaults (diff)")
+                _make_session_log("Mode 5j: LOADER env diff")
+                print("")
+
+                # Load BMC IPs (same pattern as mode 51/52)
+                _bmc_ips53 = []
+                _found_file53 = None
+                for _p53 in _find_config_files(
+                    candidate_names=("BMC_IP.json",
+                                     "reinit-config.json", "reinit_config.json",
+                                     "reinit-afx-config.json", "add_nodes.json"),
+                ):
+                    try:
+                        with open(_p53, "r", encoding="utf-8") as _f53:
+                            _d53 = json.load(_f53)
+                    except Exception:
+                        continue
+                    if isinstance(_d53.get("netboot_bmcs"), list):
+                        _bmc_ips53 = [str(x) for x in _d53["netboot_bmcs"] if x]
+                    else:
+                        _pn53 = _d53.get("primary_node")
+                        if isinstance(_pn53, dict) and _pn53.get("bmc"):
+                            _bmc_ips53.append(str(_pn53["bmc"]))
+                        for _sn53 in (_d53.get("secondary_nodes") or []):
+                            if isinstance(_sn53, dict) and _sn53.get("bmc"):
+                                _bmc_ips53.append(str(_sn53["bmc"]))
+                        if not _bmc_ips53:
+                            for _n53 in (_d53.get("nodes") or []):
+                                if isinstance(_n53, dict) and _n53.get("bmc"):
+                                    _bmc_ips53.append(str(_n53["bmc"]))
+                    if _bmc_ips53:
+                        _found_file53 = _p53
+                        break
+
+                if _found_file53:
+                    print(f"  \U0001f4c4 Loaded {len(_bmc_ips53)} BMC address(es) from: {_found_file53}")
+                    for _ip53 in _bmc_ips53:
+                        print(f"     \u2022 {_ip53}")
+                else:
+                    print("  \u2139\ufe0f  No BMC IP file found. Enter BMC addresses manually.")
+                    print("  (Leave blank and press Enter when done.)\n")
+                    _idx53 = 1
+                    while True:
+                        _entry53 = input(f"  BMC {_idx53} hostname/IP (blank to finish): ").strip()
+                        if not _entry53:
+                            break
+                        _bmc_ips53.append(_entry53)
+                        _idx53 += 1
+
+                if not _bmc_ips53:
+                    print("  No BMC addresses entered. Returning to menu.")
+                    raise _ReturnToMenu
+
+                print("")
+                _same_creds53 = input("  Use the same username/password for all BMCs? [Y/n]: ").strip().lower()
+                _creds53 = {}
+                if _same_creds53 != "n":
+                    _shared_user53 = input("  BMC username [admin]: ").strip() or "admin"
+                    _shared_pass53 = getpass.getpass("  BMC password (blank = none): ")
+                    for _ip53 in _bmc_ips53:
+                        _creds53[_ip53] = (_shared_user53, _shared_pass53)
+                else:
+                    for _ip53 in _bmc_ips53:
+                        _u53 = input(f"  Username for {_ip53} [admin]: ").strip() or "admin"
+                        _p53pw = getpass.getpass(f"  Password for {_ip53}: ")
+                        _creds53[_ip53] = (_u53, _p53pw)
+
+                _ld53_log_dir = _session_log.log_dir if _session_log else os.getcwd()
+
+                for _ip53 in _bmc_ips53:
+                    print(f"\n  \U0001f4e1 [{_ip53}] Connecting...")
+                    _u53w, _p53w = _creds53.get(_ip53, ("admin", ""))
+                    _cl53 = _ch53 = None
+                    try:
+                        _cl53, _u53w, _p53w = _ssh_connect_with_retry(
+                            _ip53, _u53w, _p53w,
+                            label=f"5j/{_ip53}", max_attempts=3, interactive=True,
+                        )
+                        _ch53 = _open_shell(_cl53)
+                        _nf53 = None
+                        try:
+                            _nf53 = _node_log_open(_ip53, _ld53_log_dir, prefix="5j_env")
+                        except Exception:
+                            pass
+                        if not _reach_bmc_prompt(_ch53, node_log=_nf53):
+                            print(f"  \u274c [{_ip53}] Could not reach BMC prompt; skipping.")
+                            continue
+                        _ch53.send("system console\r")
+                        _sc53_out, _sc53_m = direct_read_until_any(
+                            _ch53,
+                            ["y/n", "ctrl-d", "loader", "autoboot"],
+                            timeout=20, node_log=_nf53, quiet=True,
+                        )
+                        if _sc53_m and "y/n" in _sc53_m.lower():
+                            _ch53.send("y\r"); time.sleep(2)
+                            direct_read_until(_ch53, "loader", timeout=30, node_log=_nf53)
+                        # Nudge for LOADER prompt
+                        _ch53.send("\r")
+                        _nudge53 = direct_read_until(_ch53, "LOADER", timeout=10, node_log=_nf53)
+                        if "loader" not in _nudge53.lower():
+                            print(f"  \u26a0\ufe0f  [{_ip53}] Node not at LOADER prompt; skipping.")
+                            continue
+                        print(f"  \U0001f50d [{_ip53}] At LOADER – running env capture + set-defaults diff...")
+                        _restore53 = _loader_env_pre_post_prompt(
+                            _ch53, _ip53, _ld53_log_dir,
+                            node_log=_nf53, interactive=True,
+                        )
+                        # Apply any vars the user chose to restore
+                        for _ev53 in _restore53:
+                            print(f"  \U0001f504 [{_ip53}] Restoring: setenv {_ev53}")
+                            direct_send_and_wait(_ch53, f"setenv {_ev53}", "LOADER", timeout=15,
+                                                 node_log=_nf53)
+                        # Always saveenv after diff/restore
+                        print(f"  \U0001f4be [{_ip53}] Saving env (saveenv)...")
+                        direct_send_and_wait(_ch53, "saveenv", "LOADER", timeout=15,
+                                             node_log=_nf53)
+                        print(f"  \u2705 [{_ip53}] Done.")
+                    except Exception as _e53:
+                        print(f"  \u274c [{_ip53}] Error: {_e53}")
+                    finally:
+                        if _nf53:
+                            try:
+                                _nf53.close()
+                            except Exception:
+                                pass
+                        for _obj53 in (_ch53, _cl53):
+                            try:
+                                if _obj53:
+                                    _obj53.close()
+                            except Exception:
+                                pass
+
+                print("\n  " + "─" * 58)
+                print("  Diff/restore complete.")
+                if _session_log:
+                    print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
             # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
