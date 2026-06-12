@@ -9,6 +9,10 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **LOADER prompt detection now keys on `LOADER-` during automation/polling.**
+  Prompt waits used by LOADER command execution, netboot, boot-menu staging, and
+  status checks were aligned to look for `LOADER-`/`loader-` instead of generic
+  `LOADER`/`loader` text, reducing false-positive matches in noisy console output.
 - **4a upgrade uses cluster-mgmt LIF SSH as primary channel; BMC is fallback only.**
   The 4a ONTAP upgrade workflow now attempts a direct SSH connection to the
   cluster management LIF (sourced from `reinit-config.json` or prompted at
@@ -32,8 +36,21 @@ revision labels rather than strict [SemVer](https://semver.org/).
   extracted from the `is-current=true` row rather than parsing the `version`
   command (more reliable for RC and special builds). Falls back to `channel_41`
   if no cluster-mgmt IP is available.
+- **Menu labels for env tools marked experimental.**
+  Options `5i` and `5j` now display `(experimental)` in both the main menu and
+  the option-5 sub-menu.
 
 ### Fixed
+- **Mode 4b reconnect worker crash on tuple unpack.**
+  `_bmc_reach_loader` now consistently returns a 3-tuple
+  `(client, channel, failure_reason)` in all paths, fixing
+  `ValueError: not enough values to unpack (expected 3, got 2)` during
+  reconnect-to-LOADER handling.
+- **Option 2b/3 boot-menu stalls on `Waiting for BMC`.**
+  During boot-menu wait, when `Waiting for BMC` appears and console output then
+  goes silent for 60s, the script now performs a visible BMC SSH + system-console
+  reconnect and resumes waiting on the refreshed channel instead of silently
+  hanging.
 - **Version parse failure after upgrade.** Step 12 was using `channel_41`
   (BMC PTY), which injected spurious `Password:` prompts and ANSI escape codes
   into the command output, causing the version regex to fail and print
@@ -45,6 +62,17 @@ revision labels rather than strict [SemVer](https://semver.org/).
   the corruption.
 
 ### Added
+- **Boot-menu CR keepalive every 5 minutes.**
+  While waiting for the ONTAP boot menu, the script now sends a periodic carriage
+  return every 300 seconds to help keep BMC console sessions active during long
+  waits.
+- **Boot DNA check captures full LOADER `printenv` to `configs/`.**
+  DNA verification now runs `printenv` (not `printenv bootarg.init.dna`) and
+  writes raw output to `configs/loader_printenv_<timestamp>.txt` for review,
+  then parses `bootarg.init.dna` from that capture.
+- **Pre-reinit abort prompt after LOADER env diff.**
+  After showing the pre/post `set-defaults` env diff during reinit flows, the
+  script now asks whether to exit before proceeding with further boot changes.
 - **Option 5g: list and clean up stale BMC SSH sessions.** A new menu option
   under category 5 that diagnoses stale SSH socket connections to BMC/SP
   addresses, deactivates stuck SOL sessions via `ipmitool sol deactivate`,

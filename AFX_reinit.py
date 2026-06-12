@@ -6231,7 +6231,7 @@ def _prompt_cluster_ip_fallback():
         print("    \u26A0\uFE0F  Expected an IPv4 address in the form x.x.x.x.")
 
 
-def _fetch_existing_cluster_ip(bmc_user=None, bmc_password=None):
+def _fetch_existing_cluster_ip(bmc_user=None, bmc_password=None, prompt_before_auth=False):
     """Return an IP on the existing cluster's private cluster network by
     SSHing to the cluster management LIF and running
     `network interface show -role cluster -fields address`.
@@ -6258,9 +6258,47 @@ def _fetch_existing_cluster_ip(bmc_user=None, bmc_password=None):
             return _prompt_cluster_ip_fallback()
         _cluster_config["mgmt_ip"] = mgmt_ip
 
+    prompted_user = None
+    prompted_pass = None
+    if prompt_before_auth:
+        _best_user = (
+            _cluster_config.get("admin_user")
+            or cfg_cluster.get("user")
+            or bmc_user
+            or "admin"
+        )
+        _best_pass = (
+            _cluster_config.get("admin_password")
+            or cfg_cluster.get("password")
+            or None
+        )
+        _pass_hint = " [press Enter to use stored password]" if _best_pass else ""
+        print("\n  🔐 Enter cluster admin credentials before cluster-network lookup.")
+        try:
+            prompted_user = input(
+                f"  Cluster admin username [{_best_user}]: "
+            ).strip() or _best_user
+            prompted_pass = getpass.getpass(
+                f"  Password for {prompted_user}@{mgmt_ip}{_pass_hint}: "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            prompted_user = _best_user
+            prompted_pass = ""
+        if not prompted_pass and _best_pass:
+            prompted_pass = _best_pass
+            print("  ℹ️  Using stored cluster password.")
+        if prompted_user and prompted_pass:
+            _cluster_config["admin_user"] = prompted_user
+            _cluster_config["admin_password"] = prompted_pass
+            if _session_log:
+                _session_log.log(
+                    f"Using operator-provided cluster credentials first (user={prompted_user})"
+                )
+
     # Build the candidate list (user, password, source) preserving order and
     # dropping incomplete / duplicate pairs.
     candidates = _build_credential_list(
+        (prompted_user, prompted_pass, "operator input"),
         (_cluster_config.get("admin_user"),
          _cluster_config.get("admin_password"),
          "previous cluster login"),
@@ -14109,7 +14147,9 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     print("\n📡 Looking up a cluster-network IP from the existing cluster...")
     _slog("Looking up cluster-network IP")
     cluster_iface_ip = _fetch_existing_cluster_ip(
-        bmc_user=sp_user, bmc_password=sp_pass,
+        bmc_user=sp_user,
+        bmc_password=sp_pass,
+        prompt_before_auth=True,
     )
 
     print("\n⏳ Waiting for cluster-network IP prompt...")
@@ -16316,13 +16356,30 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     direct_send_and_wait(channel, "set-defaults", "LOADER-",
                          timeout=15, node_log=node_log)
 
-    # Verify boot DNA (abort if unsupported, just like the original loop does)
-    if not _verify_boot_dna(channel):
-        if _session_log:
-            _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
-            _session_log.set_outcome("FAIL", "unsupported boot DNA")
-            _session_log.close()
-        sys.exit(1)
+    # Verify boot DNA (optional in interactive mode; required in non-interactive).
+    _run_bootarg_check = True
+    if interactive:
+        _real_stdout.write(
+            "\n  Run bootarg.init.dna verification now? [Y/n]: "
+        )
+        _real_stdout.flush()
+        try:
+            _dna_ans = sys.stdin.readline().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            _dna_ans = ""
+        if _dna_ans in ("n", "no"):
+            _run_bootarg_check = False
+            _slog("User chose to skip bootarg.init.dna verification")
+
+    if _run_bootarg_check:
+        if not _verify_boot_dna(channel):
+            if _session_log:
+                _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
+                _session_log.set_outcome("FAIL", "unsupported boot DNA")
+                _session_log.close()
+            sys.exit(1)
+    else:
+        _slog("bootarg.init.dna verification skipped by operator")
 
     # Capture post-defaults env
     _slog("Capturing LOADER env (post set-defaults)")

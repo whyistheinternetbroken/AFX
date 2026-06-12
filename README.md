@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/10/2026  
+**Updated:** 6/12/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
 ---
@@ -42,6 +42,11 @@ All session activity is captured in a timestamped log directory with a human-rea
 
 | Feature | Description |
 |---|---|
+| **Boot-menu stall recovery (`Waiting for BMC`)** | During option 2b/3 boot-menu waits, if console output reports `Waiting for BMC` and then stalls, the script now visibly retries BMC SSH + `system console` and continues on the refreshed session. |
+| **Boot-menu keepalive (5-minute CR)** | While waiting for long boot transitions, the script now sends a carriage return every 5 minutes to reduce BMC console session timeout risk. |
+| **Boot DNA capture via `printenv`** | DNA verification now runs `printenv` and saves raw LOADER environment output to `configs/loader_printenv_<timestamp>.txt` before parsing `bootarg.init.dna`. |
+| **LOADER env review safety stop** | After showing the pre/post `set-defaults` env diff during reinit, the script prompts whether to abort the run before any further boot-step changes proceed. |
+| **LOADER env utilities (`5i`/`5j`)** | New standalone env tools are available in option 5: `5i` backup LOADER env and `5j` compare env vs defaults. Both are currently marked **(experimental)** in the menu. |
 | JSON Config File | Cluster and node credentials can be pre-supplied in a JSON config file, eliminating repeated prompts across multi-node operations. |
 | Full Automation Modes | Modes 1b, 2b, and 3 drive the ONTAP cluster setup and node-join wizards without operator interaction. |
 | Parallel Node Operations | Mode 2b and Mode 3 run peer node additions in parallel threads, significantly reducing multi-node reinit time. |
