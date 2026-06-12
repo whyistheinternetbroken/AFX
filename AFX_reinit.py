@@ -18673,6 +18673,64 @@ def main():
                         except Exception:
                             pass
 
+                # ── Optional env backup ───────────────────────────────────────────
+                _successful48 = [ip for ip in _bmc_ips48 if _results48.get(ip, False)]
+                if _successful48:
+                    _bkp_ans48 = _prompt(
+                        "  Back up LOADER environment variables from successful node(s)? [Y/n]: ",
+                        "y",
+                    ).strip().lower()
+                    if _bkp_ans48 not in ("n", "no"):
+                        _bkp_log_dir48 = _session_log.log_dir if _session_log else os.getcwd()
+                        print(f"\n  💾 Backing up LOADER env for {len(_successful48)} node(s)...")
+
+                        def _bkp_worker48(ip):
+                            _u48b, _p48b = _creds48.get(ip, ("admin", ""))
+                            try:
+                                _cl48b, _u48b, _p48b = _ssh_connect_with_retry(
+                                    ip, _u48b, _p48b,
+                                    label=f"env-bkp/{ip}",
+                                    max_attempts=3, interactive=False,
+                                )
+                            except Exception as _e48b:
+                                print(f"  ❌ [{ip}] SSH failed for env backup: {_e48b}")
+                                return
+                            try:
+                                _ch48b = _open_shell(_cl48b)
+                                if not _reach_bmc_prompt(_ch48b, timeout=15):
+                                    print(f"  ❌ [{ip}] BMC prompt not reached for env backup.")
+                                    return
+                                _ch48b.send("system console\r")
+                                direct_read_until_any(
+                                    _ch48b,
+                                    ["ctrl-d", "loader", "LOADER"],
+                                    timeout=10,
+                                )
+                                _ch48b.send("\r")
+                                direct_read_until(_ch48b, "LOADER", timeout=5)
+                                _env48b = _loader_env_capture(_ch48b)
+                                _env_path48b = _loader_env_save_to_file(
+                                    _env48b, ip, _bkp_log_dir48,
+                                    prefix="5e_loader_env_backup",
+                                )
+                                if _env_path48b:
+                                    print(f"  ✅ [{ip}] Env saved → {_env_path48b}")
+                                else:
+                                    print(f"  ⚠️  [{ip}] Env capture empty or save failed.")
+                            except Exception as _e48b2:
+                                print(f"  ❌ [{ip}] Env backup error: {_e48b2}")
+                            finally:
+                                try:
+                                    _ch48b.close()
+                                except Exception:
+                                    pass
+                                try:
+                                    _cl48b.close()
+                                except Exception:
+                                    pass
+
+                        _run_parallel(_successful48, _bkp_worker48)
+
                 # ── Results summary ───────────────────────────────────────────────
                 print("\n  " + "─" * 58)
                 print(f"  {'BMC IP':<24}  Result")
