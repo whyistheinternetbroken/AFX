@@ -3580,7 +3580,7 @@ def _reclaim_system_console(channel, node_log=None):
                 _slog("System console reconnected after auto-takeover")
                 return True
             if any(s in buf_lower for s in
-                   ("ctrl-d", "type exit", "serial", "loader", "autoboot", "selection")):
+                   ("ctrl-d", "type exit", "serial", "loader-", "autoboot", "selection")):
                 print("✅ System console reconnected.")
                 _slog("System console reconnected")
                 return True
@@ -4168,7 +4168,7 @@ def enter_system_console(channel, loader_message=True):
     print("Waiting for system console response...")
     output, matched = direct_read_until_any(
         channel,
-        ["y/n", "ctrl-d", "type exit", "serial console", "boot loader", "loader", "autoboot"],
+        ["y/n", "ctrl-d", "type exit", "serial console", "boot loader", "loader-", "autoboot"],
         timeout=15, quiet=True
     )
 
@@ -4189,7 +4189,7 @@ def enter_system_console(channel, loader_message=True):
             print("Waiting for console to connect after takeover...")
             output2, matched2 = direct_read_until_any(
                 channel,
-                ["ctrl-d", "type exit", "serial console", "boot loader", "loader", "autoboot", ">"],
+                ["ctrl-d", "type exit", "serial console", "boot loader", "loader-", "autoboot", ">"],
                 timeout=15, quiet=True
             )
             if matched2:
@@ -5202,7 +5202,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             ch.send("system console\r")
             out, matched = direct_read_until_any(
                 ch,
-                ["y/n", "ctrl-d", "type exit", "serial console", "boot loader", "loader", "autoboot"],
+                ["y/n", "ctrl-d", "type exit", "serial console", "boot loader", "loader-", "autoboot"],
                 timeout=15,
                 node_log=node_log,
             )
@@ -5373,7 +5373,7 @@ class InteractiveSession:
         time.sleep(1)
         output, matched = direct_read_until_any(
             self.channel,
-            ["y/n", "ctrl-d", "type exit", "serial console", "boot loader", "loader", "autoboot"],
+            ["y/n", "ctrl-d", "type exit", "serial console", "boot loader", "loader-", "autoboot"],
             timeout=15
         )
         if matched and "y/n" in matched.lower():
@@ -5584,22 +5584,38 @@ _REQUIRED_BOOT_DNA = "3088"
 
 
 def _verify_boot_dna(channel):
-    """Run 'printenv bootarg.init.dna' at the LOADER prompt and confirm the
-    value is the supported DNA. Returns True if supported, False otherwise.
+    """Run 'printenv' at the LOADER prompt, save raw output in configs/, and
+    confirm bootarg.init.dna is the supported value.
+    Returns True if supported, False otherwise.
     """
-    print("\n🧬 Verifying boot DNA (printenv bootarg.init.dna)...")
-    _slog("Verifying boot DNA via 'printenv bootarg.init.dna'")
+    print("\n🧬 Verifying boot DNA (printenv)...")
+    _slog("Verifying boot DNA via 'printenv'")
 
     output = direct_send_and_wait(
-        channel, "printenv bootarg.init.dna", "LOADER", timeout=15
+        channel, "printenv", "LOADER-", timeout=15
     )
+
+    # Save raw printenv output for operator review/troubleshooting.
+    try:
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+        _cfg_dir = os.path.join(_script_dir, "configs")
+        os.makedirs(_cfg_dir, exist_ok=True)
+        _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _raw_env_path = os.path.join(_cfg_dir, f"loader_printenv_{_ts}.txt")
+        with open(_raw_env_path, "w", encoding="utf-8") as _fh:
+            _fh.write(output)
+            if not output.endswith("\n"):
+                _fh.write("\n")
+        _slog(f"Saved LOADER printenv output to: {_raw_env_path}")
+    except Exception as _env_exc:
+        _slog(f"Could not save LOADER printenv output: {_env_exc}", prefix="WARN")
 
     # Find the DNA value in the printenv output. Typical formats:
     #   bootarg.init.dna=3088
     #   bootarg.init.dna           3088
     # We restrict the gap between key and value to spaces/tabs (not \s, which
-    # would span newlines) so the echoed command line "printenv
-    # bootarg.init.dna\r\n" is NOT matched against the next line's "Variable"
+    # would span newlines) so the echoed command line "printenv\r\n" is NOT
+    # matched against the next line's "Variable"
     # table header. We then take the last match, which is the data row.
     dna_value = None
     matches = re.findall(
@@ -5621,7 +5637,7 @@ def _verify_boot_dna(channel):
 
     _print_banner("❌ UNSUPPORTED BOOT DNA")
     if dna_value is None:
-        print("  Could not determine the boot DNA from 'printenv bootarg.init.dna'.")
+        print("  Could not determine the boot DNA from 'printenv'.")
     else:
         print(f"  Boot DNA reported: {dna_value}")
         print(f"  Required boot DNA: {_REQUIRED_BOOT_DNA}")
@@ -8139,7 +8155,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             ch.send("system console\r")
             out2, matched2 = direct_read_until_any(
                 ch,
-                ["y/n", "ctrl-d", "serial console", "loader", "autoboot"],
+                ["y/n", "ctrl-d", "serial console", "loader-", "autoboot"],
                 timeout=15,
                 node_log=node_log,
             )
@@ -8322,13 +8338,13 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         # Switch to diag privilege level so ifconfig accepts -addr/-mask/-gw flags.
         if nf:
             _par_send(channel, nf, "priv set diag")
-            _par_recv_until(channel, nf, ["LOADER", "loader"], timeout=15)
+            _par_recv_until(channel, nf, ["LOADER-", "loader-"], timeout=15)
             _par_send(channel, nf, _ifc_cmd)
-            output, _ = _par_recv_until(channel, nf, ["LOADER", "loader"], timeout=60)
+            output, _ = _par_recv_until(channel, nf, ["LOADER-", "loader-"], timeout=60)
         else:
-            direct_send_and_wait(channel, "priv set diag", "LOADER", timeout=15)
-            output = direct_send_and_wait(channel, _ifc_cmd, "LOADER", timeout=60)
-        if "loader" not in output.lower():
+            direct_send_and_wait(channel, "priv set diag", "LOADER-", timeout=15)
+            output = direct_send_and_wait(channel, _ifc_cmd, "LOADER-", timeout=60)
+        if "loader-" not in output.lower():
             _status(f"  ⚠️  [{node_label}] LOADER prompt not seen after static ifconfig; continuing...")
     else:
         _status(f"\n  [{node_label}] Running ifconfig e0M -auto...")
@@ -8336,10 +8352,10 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             log.log(f"[{node_label}] ifconfig e0M -auto")
         if nf:
             _par_send(channel, nf, "ifconfig e0M -auto")
-            output, _ = _par_recv_until(channel, nf, ["LOADER", "loader"], timeout=60)
+            output, _ = _par_recv_until(channel, nf, ["LOADER-", "loader-"], timeout=60)
         else:
-            output = direct_send_and_wait(channel, "ifconfig e0M -auto", "LOADER", timeout=60)
-        if "loader" not in output.lower():
+            output = direct_send_and_wait(channel, "ifconfig e0M -auto", "LOADER-", timeout=60)
+        if "loader-" not in output.lower():
             _status(f"  ⚠️  [{node_label}] LOADER prompt not seen after ifconfig; continuing...")
 
     # ── 2+3. netboot + wait for boot menu (retry on download failure) ────────
@@ -8366,9 +8382,9 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         log.log(f"[{node_label}] setenv nvram_discard 1")
     if nf:
         _par_send(channel, nf, "setenv nvram_discard 1")
-        _par_recv_until(channel, nf, ["LOADER", "loader"], timeout=15)
+        _par_recv_until(channel, nf, ["LOADER-", "loader-"], timeout=15)
     else:
-        direct_send_and_wait(channel, "setenv nvram_discard 1", "LOADER", timeout=15)
+        direct_send_and_wait(channel, "setenv nvram_discard 1", "LOADER-", timeout=15)
 
     for _nb_attempt in range(1, _NETBOOT_MAX_ATTEMPTS + 1):
         if _nb_attempt == 1:
@@ -8459,7 +8475,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                 # error/prompt text, causing the LOADER to see a garbled
                 # command line and report 'no program name specified' or
                 # 'error opening archive' on attempt 2+.
-                _recv(["LOADER", "loader"], timeout=30)
+                _recv(["LOADER-", "loader-"], timeout=30)
             # else: fall through; post-loop block reports the final error
         else:
             break  # timeout with no menu and no download error — don't retry
@@ -9232,7 +9248,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                     ch.send("system console\r")
                     out2, m2 = _par_recv_until(
                         ch, nf,
-                        ["y/n", "ctrl-d", "serial console", "loader", "autoboot"],
+                        ["y/n", "ctrl-d", "serial console", "loader-", "autoboot"],
                         timeout=15,
                     )
                     if m2 and "y/n" in m2.lower():
@@ -9562,7 +9578,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                                     _par_write(_nf6, "\n>>> y (takeover)\n")
                                 time.sleep(0.5)
                             elif any(s in _rc_l for s in (
-                                    "ctrl-d", "type exit", "selection", "login:", "loader", "autoboot")):
+                                    "ctrl-d", "type exit", "selection", "login:", "loader-", "autoboot")):
                                 break
                         time.sleep(0.1)
                     ch = _new_ch
@@ -14721,7 +14737,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             ch.send("system console\r")
             out, matched = direct_read_until_any(
                 ch, ["y/n", "ctrl-d", "type exit", "serial console", "boot loader",
-                     "loader", "autoboot"], timeout=20, node_log=node_file)
+                     "loader-", "autoboot"], timeout=20, node_log=node_file)
             if matched and "y/n" in matched.lower():
                 ch.send("y\r"); time.sleep(2)
 
@@ -14781,7 +14797,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         _peer_loader_cmds += ["saveenv", "boot_ontap menu"]
         for cmd in _peer_loader_cmds:
             if cmd != "boot_ontap menu":
-                _out = direct_send_and_wait(ch, cmd, "LOADER", timeout=15,
+                _out = direct_send_and_wait(ch, cmd, "LOADER-", timeout=15,
                                             node_log=node_file)
                 if cmd.startswith("setenv bootarg."):
                     if any(tok in _out for tok in ("%", "Error", "error", "invalid", "unknown", "Unknown")):
@@ -14848,7 +14864,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         print(f"   ⚠️  [{label}] BMC prompt not reached after reconnect; continuing...")
                     ch.send("system console\r")
                     _out_sc, _m_sc = direct_read_until_any(
-                        ch, ["y/n", "ctrl-d", "serial console", "loader",
+                        ch, ["y/n", "ctrl-d", "serial console", "loader-",
                              "autoboot", "selection"],
                         timeout=20, node_log=node_file,
                     )
@@ -16107,7 +16123,7 @@ def auto_complete_initialization(channel, bmc_host=None):
 
 def _loader_env_capture(channel, node_log=None):
     """Send 'printenv' at LOADER prompt and return a {varname: value} dict."""
-    output = direct_send_and_wait(channel, "printenv", "LOADER",
+    output = direct_send_and_wait(channel, "printenv", "LOADER-",
                                   timeout=30, node_log=node_log)
     env = {}
     for line in output.splitlines():
@@ -16183,7 +16199,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
     # Run set-defaults
     _slog("Running: set-defaults")
-    direct_send_and_wait(channel, "set-defaults", "LOADER",
+    direct_send_and_wait(channel, "set-defaults", "LOADER-",
                          timeout=15, node_log=node_log)
 
     # Verify boot DNA (abort if unsupported, just like the original loop does)
@@ -16303,8 +16319,8 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     # Send a bare CR to provoke a fresh LOADER prompt echo; the calling loop
     # already confirmed LOADER is active, so this should respond instantly.
     channel.send("\r")
-    output = direct_read_until(channel, "LOADER", timeout=5)
-    if "loader" not in output.lower():
+    output = direct_read_until(channel, "LOADER-", timeout=5)
+    if "loader-" not in output.lower():
         print("⚠️  No LOADER prompt seen, attempting commands anyway...")
 
     loader_commands = get_loader_commands()
@@ -16326,7 +16342,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         if command == "set-defaults":
             for _ev in _extra_setvars:
                 _slog(f"Restoring env var: setenv {_ev}")
-                direct_send_and_wait(channel, f"setenv {_ev}", "LOADER", timeout=15)
+                direct_send_and_wait(channel, f"setenv {_ev}", "LOADER-", timeout=15)
             continue
         # When netboot-before-reinit is active, skip boot_ontap menu – the
         # node will boot into the menu naturally after the netboot install.
@@ -16336,8 +16352,8 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             continue
         _slog(f"Running LOADER command: {command}")
         if command != "boot_ontap menu":
-            output = direct_send_and_wait(channel, command, "LOADER", timeout=15)
-            if "loader" not in output.lower():
+            output = direct_send_and_wait(channel, command, "LOADER-", timeout=15)
+            if "loader-" not in output.lower():
                 print(f"⚠️  No LOADER prompt after '{command}', continuing anyway...")
             # Check for LOADER errors on diag bootarg setenv commands.
             if command.startswith("setenv bootarg."):
@@ -16584,7 +16600,7 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     channel.send("system console\r")
                     _sc_out, _sc_matched = direct_read_until_any(
                         channel,
-                        ["y/n", "ctrl-d", "loader", "autoboot", "selection", "::>"],
+                        ["y/n", "ctrl-d", "loader-", "autoboot", "selection", "::>"],
                         timeout=20,
                     )
                     if _sc_matched and "y/n" in _sc_matched.lower():
@@ -18724,11 +18740,11 @@ def main():
                                 _ch48b.send("system console\r")
                                 direct_read_until_any(
                                     _ch48b,
-                                    ["ctrl-d", "loader", "LOADER"],
+                                    ["ctrl-d", "loader-", "LOADER-"],
                                     timeout=10,
                                 )
                                 _ch48b.send("\r")
-                                direct_read_until(_ch48b, "LOADER", timeout=5)
+                                direct_read_until(_ch48b, "LOADER-", timeout=5)
                                 _env48b = _loader_env_capture(_ch48b)
                                 _env_path48b = _loader_env_save_to_file(
                                     _env48b, ip, _bkp_log_dir48,
@@ -19160,7 +19176,7 @@ def main():
                             ch51.send("system console\r")
                             _sc_out, _sc_matched = direct_read_until_any(
                                 ch51,
-                                ["y/n", "ctrl-d", "loader", "::>", "::*>",
+                                ["y/n", "ctrl-d", "loader-", "::>", "::*>",
                                  "login:", "password:", "selection", "autoboot",
                                  "boot loader"],
                                 timeout=20,
@@ -19172,7 +19188,7 @@ def main():
                                 time.sleep(1)
                                 _sc_out2, _sc_matched = direct_read_until_any(
                                     ch51,
-                                    ["loader", "::>", "::*>", "login:",
+                                    ["loader-", "::>", "::*>", "login:",
                                      "selection", "autoboot", "boot loader"],
                                     timeout=20,
                                     node_log=_nf51,
@@ -19184,7 +19200,7 @@ def main():
                             ch51.send("\r")
                             _nudge, _nm = direct_read_until_any(
                                 ch51,
-                                ["loader", "::>", "::*>", "login:",
+                                ["loader-", "::>", "::*>", "login:",
                                  "selection", "autoboot"],
                                 timeout=10,
                                 node_log=_nf51,
@@ -19346,16 +19362,16 @@ def main():
                         _ch52.send("system console\r")
                         _sc52_out, _sc52_m = direct_read_until_any(
                             _ch52,
-                            ["y/n", "ctrl-d", "loader", "autoboot"],
+                            ["y/n", "ctrl-d", "loader-", "autoboot"],
                             timeout=20, node_log=_nf52, quiet=True,
                         )
                         if _sc52_m and "y/n" in _sc52_m.lower():
                             _ch52.send("y\r"); time.sleep(2)
-                            direct_read_until(_ch52, "loader", timeout=30, node_log=_nf52)
+                            direct_read_until(_ch52, "loader-", timeout=30, node_log=_nf52)
                         # Nudge for LOADER prompt
                         _ch52.send("\r")
-                        _nudge52 = direct_read_until(_ch52, "LOADER", timeout=10, node_log=_nf52)
-                        if "loader" not in _nudge52.lower():
+                        _nudge52 = direct_read_until(_ch52, "LOADER-", timeout=10, node_log=_nf52)
+                        if "loader-" not in _nudge52.lower():
                             print(f"  \u26a0\ufe0f  [{_ip52}] Node not at LOADER prompt; skipping.")
                             continue
                         print(f"  \U0001f4be [{_ip52}] At LOADER – capturing printenv...")
@@ -19483,16 +19499,16 @@ def main():
                         _ch53.send("system console\r")
                         _sc53_out, _sc53_m = direct_read_until_any(
                             _ch53,
-                            ["y/n", "ctrl-d", "loader", "autoboot"],
+                            ["y/n", "ctrl-d", "loader-", "autoboot"],
                             timeout=20, node_log=_nf53, quiet=True,
                         )
                         if _sc53_m and "y/n" in _sc53_m.lower():
                             _ch53.send("y\r"); time.sleep(2)
-                            direct_read_until(_ch53, "loader", timeout=30, node_log=_nf53)
+                            direct_read_until(_ch53, "loader-", timeout=30, node_log=_nf53)
                         # Nudge for LOADER prompt
                         _ch53.send("\r")
-                        _nudge53 = direct_read_until(_ch53, "LOADER", timeout=10, node_log=_nf53)
-                        if "loader" not in _nudge53.lower():
+                        _nudge53 = direct_read_until(_ch53, "LOADER-", timeout=10, node_log=_nf53)
+                        if "loader-" not in _nudge53.lower():
                             print(f"  \u26a0\ufe0f  [{_ip53}] Node not at LOADER prompt; skipping.")
                             continue
                         print(f"  \U0001f50d [{_ip53}] At LOADER – running env capture + set-defaults diff...")
@@ -19503,11 +19519,11 @@ def main():
                         # Apply any vars the user chose to restore
                         for _ev53 in _restore53:
                             print(f"  \U0001f504 [{_ip53}] Restoring: setenv {_ev53}")
-                            direct_send_and_wait(_ch53, f"setenv {_ev53}", "LOADER", timeout=15,
+                            direct_send_and_wait(_ch53, f"setenv {_ev53}", "LOADER-", timeout=15,
                                                  node_log=_nf53)
                         # Always saveenv after diff/restore
                         print(f"  \U0001f4be [{_ip53}] Saving env (saveenv)...")
-                        direct_send_and_wait(_ch53, "saveenv", "LOADER", timeout=15,
+                        direct_send_and_wait(_ch53, "saveenv", "LOADER-", timeout=15,
                                              node_log=_nf53)
                         print(f"  \u2705 [{_ip53}] Done.")
                     except Exception as _e53:
