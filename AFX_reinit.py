@@ -5459,11 +5459,15 @@ class InteractiveSession:
 # Boot menu handler
 # ---------------------------------------------------------------------------
 
-def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_label=""):
+def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_label="",
+                                  reconnect_ctx=None):
     """Wait for the ONTAP boot menu then auto-select the configured option.
 
     When *node_log* is supplied all raw console bytes are written there
     instead of sys.stdout; only clean status lines appear on the terminal.
+    If *reconnect_ctx* is provided, this helper may refresh BMC SSH and
+    system-console access on stalls and writes updated channel/client/creds
+    back into that dict.
     """
     option, description = get_boot_menu_option()
 
@@ -5490,6 +5494,16 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     start_time = time.monotonic()
     last_nudge = start_time
     last_progress = start_time
+    last_keepalive_cr = start_time
+    waiting_for_bmc_seen = False
+    waiting_for_bmc_retry_armed = False
+
+    def _screen_status(msg):
+        try:
+            _real_stdout.write(msg + "\n")
+            _real_stdout.flush()
+        except Exception:
+            print(msg)
 
     while time.monotonic() - start_time < timeout:
         if _shutdown_event.is_set():
@@ -5505,6 +5519,17 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 sys.stdout.flush()
             if _session_log:
                 _session_log.log_console(chunk)
+            if "waiting for bmc" in chunk.lower():
+                waiting_for_bmc_seen = True
+                waiting_for_bmc_retry_armed = True
+                _screen_status(
+                    f"⚠️  {_pfx}Detected 'Waiting for BMC' in console output; "
+                    "will retry BMC SSH+console if silent for 60s."
+                )
+                if _session_log:
+                    _session_log.log(
+                        f"[{node_label or 'primary'}] detected 'Waiting for BMC' in boot output"
+                    )
             if _looks_like_bmc_drop(chunk):
                 _rc_t = time.monotonic()
                 _reclaim_system_console(channel, node_log=node_log)
@@ -5530,6 +5555,95 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
         # If the console has been silent for ~30s, send a CR to nudge any
         # pending prompt that may already be displayed but waiting for input.
         now = time.monotonic()
+        if now - last_keepalive_cr >= 300:
+            try:
+                channel.send("\r")
+                last_keepalive_cr = now
+                _slog("Sent periodic CR keepalive (5 min) during boot-menu wait")
+            except Exception:
+                pass
+        if (reconnect_ctx is not None and waiting_for_bmc_seen and waiting_for_bmc_retry_armed
+                and now - last_progress > 60):
+            waiting_for_bmc_retry_armed = False
+            _host = reconnect_ctx.get("host")
+            _user = reconnect_ctx.get("user")
+            _pw = reconnect_ctx.get("password")
+            _client = reconnect_ctx.get("client")
+            _screen_status(
+                f"🔁 {_pfx}No console output for 60s after 'Waiting for BMC' — "
+                "retrying BMC SSH + system console..."
+            )
+            if _session_log:
+                _session_log.log(
+                    f"[{node_label or _host}] no output 60s after 'Waiting for BMC'; "
+                    "retrying BMC SSH/system console",
+                    prefix="WARN",
+                )
+            try:
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+                try:
+                    if _client:
+                        _client.close()
+                except Exception:
+                    pass
+
+                _new_client, _new_user, _new_pw = _ssh_connect_with_retry(
+                    _host, _user, _pw,
+                    label=_host or "primary BMC",
+                    max_attempts=3,
+                    interactive=True,
+                )
+                _new_ch = _open_shell(_new_client)
+                if not _reach_bmc_prompt(_new_ch, timeout=15, node_log=node_log):
+                    raise RuntimeError("BMC prompt not reached after reconnect")
+                _new_ch.send("system console\r")
+                _sc_out, _sc_m = direct_read_until_any(
+                    _new_ch,
+                    ["y/n", "ctrl-d", "type exit", "serial console",
+                     "loader-", "autoboot", "selection (1-", "::>", "login:"],
+                    timeout=20,
+                    node_log=node_log,
+                    quiet=True,
+                )
+                if _sc_m and "y/n" in _sc_m.lower():
+                    _new_ch.send("y\r")
+                    time.sleep(1)
+                    _sc_out2, _ = direct_read_until_any(
+                        _new_ch,
+                        ["ctrl-d", "type exit", "serial console", "loader-",
+                         "autoboot", "selection (1-", "::>", "login:"],
+                        timeout=20,
+                        node_log=node_log,
+                        quiet=True,
+                    )
+                    _sc_out += _sc_out2
+                _new_ch.send("\r")
+                channel = _new_ch
+                reconnect_ctx["channel"] = _new_ch
+                reconnect_ctx["client"] = _new_client
+                reconnect_ctx["user"] = _new_user
+                reconnect_ctx["password"] = _new_pw
+                last_progress = time.monotonic()
+                last_nudge = last_progress
+                last_keepalive_cr = last_progress
+                output = ""
+                output_lower = ""
+                _screen_status(f"✅ {_pfx}BMC reconnect successful; resuming boot-menu wait.")
+                if _session_log:
+                    _session_log.log(
+                        f"[{node_label or _host}] BMC reconnect successful; resumed boot-menu wait"
+                    )
+                continue
+            except Exception as _rbmc_exc:
+                _screen_status(f"❌ {_pfx}BMC reconnect failed: {_rbmc_exc}")
+                if _session_log:
+                    _session_log.log(
+                        f"[{node_label or _host}] BMC reconnect failed: {_rbmc_exc}",
+                        prefix="ERROR",
+                    )
         if now - last_progress > 30 and now - last_nudge > 30:
             channel.send("\r")
             last_nudge = now
@@ -16436,7 +16550,25 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     if _session_log:
         _session_log.start_phase("Boot Menu Selection")
 
-    if not wait_for_boot_menu_and_select(channel, timeout=1800, node_label=sp_host):
+    _bootmenu_reconnect_ctx = {
+        "host": sp_host,
+        "user": sp_user,
+        "password": sp_pass,
+        "client": client,
+        "channel": channel,
+    }
+    _bootmenu_ok = wait_for_boot_menu_and_select(
+        channel,
+        timeout=1800,
+        node_label=sp_host,
+        reconnect_ctx=_bootmenu_reconnect_ctx,
+    )
+    # Ensure fallback/manual path and later phases use latest session if reconnected.
+    channel = _bootmenu_reconnect_ctx.get("channel", channel)
+    client = _bootmenu_reconnect_ctx.get("client", client)
+    sp_user = _bootmenu_reconnect_ctx.get("user", sp_user)
+    sp_pass = _bootmenu_reconnect_ctx.get("password", sp_pass)
+    if not _bootmenu_ok:
         print("\n⚠️  Falling back to manual menu selection...")
         _slog("Auto-select failed, falling back to manual input", prefix="WARN")
         drain_channel(channel, seconds=5)
