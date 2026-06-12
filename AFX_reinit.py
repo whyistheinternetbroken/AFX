@@ -8100,7 +8100,8 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
     The caller is responsible for closing client/channel.
     When *node_log* is supplied all raw console I/O is written there instead
     of sys.stdout; status milestones are always printed to the terminal.
-    Returns (None, None) on failure.
+    Returns (client, channel, None) on success or
+    (None, None, "ssh"/"loader_timeout") on failure.
     """
     print(f"\n  🔁 [{host}] Connecting and resetting to LOADER...")
     if node_log:
@@ -8113,7 +8114,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
         )
     except Exception as exc:
         print(f"  ❌ [{host}] SSH failed: {exc}")
-        return None, None
+        return None, None, "ssh"
 
     try:
         ch = _open_shell(client)
@@ -8123,7 +8124,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             print(f"  ❌ [{host}] No BMC prompt received.")
             ch.close()
             client.close()
-            return None, None
+            return None, None, "ssh"
 
         # Check if already at LOADER before issuing system reset.
         if not _already_at_loader(ch, label=host, node_log=node_log):
@@ -8189,10 +8190,10 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             print(f"  ❌ [{host}] LOADER prompt not detected within {timeout}s.")
             ch.close()
             client.close()
-            return None, None
+            return None, None, "loader_timeout"
 
         print(f"  ✅ [{host}] At LOADER prompt.")
-        return client, ch
+        return client, ch, None
 
     except Exception as exc:
         print(f"  ❌ [{host}] Error reaching LOADER: {exc}")
@@ -8204,7 +8205,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             client.close()
         except Exception:
             pass
-        return None, None
+        return None, None, "ssh"
 
 
 # ---------------------------------------------------------------------------
