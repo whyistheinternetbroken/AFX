@@ -1087,15 +1087,20 @@ def _run_parallel(items, target, *, with_index=False, join_timeout=None):
 def _bmc_fallback_passwords(ip, bmc_passwords):
     """Build the silent-fallback password list for a BMC connect attempt.
 
-    Currently appends the cluster admin password (if it was collected and
-    differs from the BMC's own password) so the connect helper can retry
-    silently when the BMC happens to be using cluster admin creds.
+    Appends the cluster admin password (if different from the BMC password)
+    and an empty/blank password (BMC passwords can be reset to blank by some
+    SP firmware events) so both are tried silently before the operator is
+    asked to re-enter credentials.
     """
     cluster_admin_pw = (_cluster_config.get("admin_password")
                         if isinstance(_cluster_config, dict) else None)
     fb = []
     if cluster_admin_pw and cluster_admin_pw != bmc_passwords.get(ip):
         fb.append(cluster_admin_pw)
+    # Always include blank as a last-resort silent fallback (SP reset events
+    # can leave the BMC with an empty password).
+    if bmc_passwords.get(ip, "") != "":
+        fb.append("")
     return fb
 
 
@@ -10394,6 +10399,7 @@ def _run_4b_standalone(log, resuming: bool = False):
         _reach_max = 3
         _reach_interval = 60  # seconds between attempts
         cl = ch = None
+        _fail_reason = "ssh"  # default; updated by each _bmc_reach_loader call
         for _attempt in range(1, _reach_max + 1):
             if _shutdown_event.is_set():
                 break
@@ -10465,21 +10471,26 @@ def _run_4b_standalone(log, resuming: bool = False):
                     f"Re-run the script to resume from checkpoint."
                 )
                 return
-            _status(
-                f"  \U0001f510 [{ip}] Reconnect failed after {_reach_max} "
-                f"attempts; trying blank BMC password (post-reset fallback)..."
-            )
-            if log:
-                log.log(f"[{ip}] reach-LOADER fallback: trying blank password",
-                        prefix="WARN")
-            cl, ch, _fail_reason = _bmc_reach_loader(
-                ip, bmc_user, "", node_log=_rl_nf, fallback_passwords=[],
-            )
-            if cl is not None and ch is not None:
-                _status(f"  \u2705 [{ip}] Blank BMC password accepted; continuing.")
-                bmc_passwords[ip] = ""
+            # Blank password is now included in the fallback queue tried by the
+            # primary loop (_bmc_fallback_passwords).  Only retry blank explicitly
+            # if the stored password was already blank (i.e. blank didn't work at
+            # all and something else is wrong) — skip the redundant attempt.
+            if bmc_passwords.get(ip, "") != "":
+                _status(
+                    f"  \U0001f510 [{ip}] Reconnect failed after {_reach_max} "
+                    f"attempts; trying blank BMC password (post-reset fallback)..."
+                )
                 if log:
-                    log.log(f"[{ip}] reach-LOADER recovered with blank password")
+                    log.log(f"[{ip}] reach-LOADER fallback: trying blank password",
+                            prefix="WARN")
+                cl, ch, _fail_reason = _bmc_reach_loader(
+                    ip, bmc_user, "", node_log=_rl_nf, fallback_passwords=[],
+                )
+                if cl is not None and ch is not None:
+                    _status(f"  \u2705 [{ip}] Blank BMC password accepted; continuing.")
+                    bmc_passwords[ip] = ""
+                    if log:
+                        log.log(f"[{ip}] reach-LOADER recovered with blank password")
             else:
                 # Last resort: ask the operator for an updated password.
                 # Serialize across worker threads so prompts don't tangle.
