@@ -9506,7 +9506,7 @@ def _run_4b_standalone(log, resuming: bool = False):
             )
         else:
             _skip_env_q = _prompt(
-                "\n  Skip LOADER bootarg backup/printenv stage during 4b reinit? [y/N]: "
+                "\n  Skip LOADER backup/printenv capture during 4b reinit (DNA check still runs)? [y/N]: "
             , "n").lower()
             _loader_env_stage_enabled = (_skip_env_q not in ("y", "yes"))
         if log:
@@ -17180,7 +17180,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     Returns a list of "varname value" strings for vars the user wants restored
     (or [] when non-interactive or user declines restore).
     """
-    global _loader_env_stage_enabled
+    global _loader_env_stage_enabled, _bootarg_check_enabled
     _env_log = node_log
     _close_env_log = False
     if _env_log is None and log_dir:
@@ -17191,7 +17191,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
             _env_log = None
     if _loader_env_stage_enabled is None and interactive:
         _real_stdout.write(
-            "\n  Skip LOADER bootarg backup/printenv stage? [y/N]: "
+            "\n  Skip LOADER backup/printenv capture (DNA check still runs)? [y/N]: "
         )
         _real_stdout.flush()
         try:
@@ -17205,7 +17205,43 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
         )
 
     if _loader_env_stage_enabled is False:
-        _slog("Skipping LOADER bootarg backup/printenv stage by operator request")
+        _slog("Skipping LOADER env backup/diff capture by operator request")
+
+        # Even when env backup/printenv capture is skipped, still run
+        # set-defaults and bootarg.init.dna verification.
+        _slog("Running: set-defaults")
+        direct_send_and_wait(channel, "set-defaults", "LOADER-",
+                             timeout=15, node_log=_env_log)
+
+        _run_bootarg_check = True
+        if _bootarg_check_enabled is not None:
+            _run_bootarg_check = bool(_bootarg_check_enabled)
+        elif interactive:
+            _real_stdout.write(
+                "\n  Run bootarg.init.dna verification now? [Y/n]: "
+            )
+            _real_stdout.flush()
+            try:
+                _dna_ans = sys.stdin.readline().strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                _dna_ans = ""
+            if _dna_ans in ("n", "no"):
+                _run_bootarg_check = False
+                _slog("User chose to skip bootarg.init.dna verification")
+
+        if _run_bootarg_check:
+            if not _verify_boot_dna(channel, node_log=_env_log):
+                if _session_log:
+                    _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
+                    _session_log.set_outcome("FAIL", "unsupported boot DNA")
+                    _session_log.close()
+                if _close_env_log and _env_log:
+                    with suppress(Exception):
+                        _env_log.close()
+                sys.exit(1)
+        else:
+            _slog("bootarg.init.dna verification skipped by operator")
+
         if _close_env_log and _env_log:
             with suppress(Exception):
                 _env_log.close()
@@ -17221,7 +17257,6 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     direct_send_and_wait(channel, "set-defaults", "LOADER-",
                          timeout=15, node_log=_env_log)
 
-    global _bootarg_check_enabled
     # Verify boot DNA (optional in interactive mode; required in non-interactive).
     _run_bootarg_check = True
     if _bootarg_check_enabled is not None:
@@ -17389,7 +17424,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     if _operation_mode == 3:
         if _loader_env_stage_enabled is None:
             _real_stdout.write(
-                "\n  Skip LOADER bootarg backup/printenv stage for option 3 nodes? [y/N]: "
+                "\n  Skip LOADER backup/printenv capture for option 3 nodes (DNA check still runs)? [y/N]: "
             )
             _real_stdout.flush()
             try:
