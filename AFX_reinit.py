@@ -6138,6 +6138,11 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 except Exception:
                     pass
 
+                # Attempt to free a stale SOL session on the BMC side.
+                # BMC session slot pools can become starved if sessions don't
+                # cleanly deactivate. This is a best-effort cleanup.
+                _ipmi_sol_deactivate(_host, _user, _pw, log=_session_log)
+
                 _new_client, _new_user, _new_pw = _ssh_connect_with_retry(
                     _host, _user, _pw,
                     label=_host or "primary BMC",
