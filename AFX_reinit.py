@@ -1220,18 +1220,29 @@ def _inject_ip_timestamp_line(line: str) -> str:
     Example:
       "  ✅ [10.0.0.1] Connected"
     becomes:
-      "  ✅ [10.0.0.1] | 2026-06-12 22:21:25 Connected"
+      "  ✅ [10.0.0.1] | 2026-06-12 22:21:25 | Connected"
     """
     if not line or not _BRACKETED_IPV4_RE.search(line):
         return line
     if _INLINE_TS_RE.search(line) or _PREFIX_TS_RE.match(line.lstrip()):
         return line
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return _BRACKETED_IPV4_RE.sub(
-        lambda m: m.group(0) + f" | {ts}",
-        line,
-        count=1,
-    )
+    
+    def _replace_ip(m):
+        bracketed_ip = m.group(0)
+        pos = m.end()
+        # Check if there's any text after the IP (non-whitespace)
+        remaining = line[pos:].lstrip()
+        if remaining and not remaining.startswith("|"):
+            # Text exists after IP; add extra pipe separator
+            # Preserve original spacing from pos to first non-space char
+            spacing = line[pos:pos + len(line[pos:]) - len(remaining)]
+            return bracketed_ip + f" | {ts} |{spacing}"
+        # No text after IP
+        return bracketed_ip + f" | {ts}"
+    
+    result = _BRACKETED_IPV4_RE.sub(_replace_ip, line, count=1)
+    return result
 
 
 def _inject_ip_timestamp_text(text: str) -> str:
@@ -11167,7 +11178,7 @@ def _run_4b_standalone(log, resuming: bool = False):
         with _reconnect_lock:
             loader_channels[ip] = ch
             loader_clients[ip] = cl
-        _status(f"  ✅ [{ip}] Reconnected – boot_ontap menu sent.")
+        _status(f"  ✅ [{ip}] Reconnected to LOADER – boot_ontap menu sent.")
         if _checkpoint:
             _checkpoint.mark_node_done("reinit_loader", ip)
             if log:
@@ -15427,7 +15438,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     ch.send("\r")
                     last_recv = time.monotonic()
                     # Don't reset s – preserve original timeout budget.
-                    print(f"   ✅ [{label}] Reconnected to BMC; resuming boot menu wait...")
+                    print(f"   ✅ [{label}] Reconnected to BMC (120s silence); resuming boot menu wait...")
                     if _session_log:
                         _session_log.log(f"[{label}] BMC reconnect successful; resuming boot menu wait")
                 except Exception as _rc_err:
@@ -17252,7 +17263,7 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     channel.send("\r")
                     output_buffer = ""
                     _last_data = time.monotonic()
-                    print(f"   ✅ [{sp_host}] Reconnected; resuming boot monitoring...")
+                    print(f"   ✅ [{sp_host}] Reconnected to BMC (60s idle); resuming boot monitoring...")
                     _slog(f"[{sp_host}] BMC reconnect successful; boot monitoring resumed")
                 except Exception as _idle_err:
                     print(f"   ❌ [{sp_host}] Reconnect failed: {_idle_err}")
