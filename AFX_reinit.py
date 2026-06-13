@@ -51,6 +51,11 @@ _SHELL_PROMPT_RE = re.compile(r"::\*?>")
 # ANSI/VT100 escape sequence stripper — PTY and system-console sessions inject
 # these codes for colour / cursor movement; strip before text parsing.
 _ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+_BRACKETED_IPV4_RE = re.compile(
+    r"\[(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\]"
+)
+_INLINE_TS_RE = re.compile(r"\|\s\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}")
+_PREFIX_TS_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\]")
 
 # ---------------------------------------------------------------------------
 # Per-reinit elapsed-time / node-label tracking
@@ -1209,7 +1214,65 @@ def _config_secondary_nodes(ctx=None) -> list:
 
 # Saved reference to the real terminal stdout; set once at startup so it
 # survives any later sys.stdout replacement.
-_real_stdout = sys.stdout
+def _inject_ip_timestamp_line(line: str) -> str:
+    """Add a timestamp to lines that contain a bracketed IPv4 address.
+
+    Example:
+      "  ✅ [10.0.0.1] Connected"
+    becomes:
+      "  ✅ [10.0.0.1] | 2026-06-12 22:21:25 Connected"
+    """
+    if not line or not _BRACKETED_IPV4_RE.search(line):
+        return line
+    if _INLINE_TS_RE.search(line) or _PREFIX_TS_RE.match(line.lstrip()):
+        return line
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return _BRACKETED_IPV4_RE.sub(
+        lambda m: m.group(0) + f" | {ts}",
+        line,
+        count=1,
+    )
+
+
+def _inject_ip_timestamp_text(text: str) -> str:
+    """Apply IPv4-bracket timestamp injection to every line in *text*."""
+    if not text:
+        return text
+    out = []
+    for seg in text.splitlines(keepends=True):
+        if seg.endswith("\r\n"):
+            core, ending = seg[:-2], "\r\n"
+        elif seg.endswith("\n"):
+            core, ending = seg[:-1], "\n"
+        else:
+            core, ending = seg, ""
+        out.append(_inject_ip_timestamp_line(core) + ending)
+    return "".join(out)
+
+
+class _RealStdoutProxy:
+    """Proxy around the terminal stdout used by direct _real_stdout writes."""
+
+    def __init__(self, raw_stdout):
+        self._raw = raw_stdout
+
+    def write(self, text):
+        self._raw.write(_inject_ip_timestamp_text(text))
+
+    def flush(self):
+        self._raw.flush()
+
+    def fileno(self):
+        return self._raw.fileno()
+
+    def isatty(self):
+        return self._raw.isatty()
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+
+_real_stdout = _RealStdoutProxy(sys.stdout)
 
 
 def _ts_print(msg: str) -> None:
@@ -1217,10 +1280,9 @@ def _ts_print(msg: str) -> None:
     terminal, bypassing any sys.stdout wrapper.  Uses the same bracket-injection
     logic as _NodeLogWriter so the format is consistent everywhere.
     """
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    injected = re.sub(r'(\[[^\]]+\])', lambda m: m.group(0) + f" | {ts}", msg, count=1)
+    injected = _inject_ip_timestamp_line(msg)
     if injected == msg:
-        # No bracket group – prepend timestamp.
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         injected = f"[{ts}] " + msg.lstrip()
     _real_stdout.write(injected + "\n")
     _real_stdout.flush()
@@ -1371,10 +1433,11 @@ class _TeeStdout:
         self._lock = threading.Lock()
 
     def write(self, text):
-        self._real.write(text)
+        transformed = _inject_ip_timestamp_text(text)
+        self._real.write(transformed)
         try:
             if not self._log.closed:
-                clean = _ANSI_RE.sub("", text)
+                clean = _ANSI_RE.sub("", transformed)
                 with self._lock:
                     self._log.write(clean)
         except Exception:
@@ -2643,17 +2706,37 @@ _diag_mode = False
 # when _diag_mode is True. Populated by _load_diag_bootargs().
 _diag_bootargs: list = []
 
+# Tri-state for bootarg.init.dna verification inside LOADER env pre/post flow:
+#   None  -> not decided yet (interactive prompt where applicable)
+#   True  -> run check
+#   False -> skip check
+_bootarg_check_enabled: "bool | None" = None
+
+# Tri-state for the entire LOADER env backup/printenv stage:
+#   None  -> not decided yet (interactive prompt where applicable)
+#   True  -> run pre/post printenv capture + bootarg check + diff flow
+#   False -> skip that stage entirely
+_loader_env_stage_enabled: "bool | None" = None
+
 _shutdown_event = threading.Event()
 _client_lock    = threading.Lock()
 _active_client  = None
 _ctrl_c_count   = 0
 _bg_mode        = False  # True when --bg flag is passed
 
+# Primary BMC host currently in use. Set by connect_to_sp so shared BMC
+# read loops can attempt a full SSH reconnect + system-console re-entry when
+# console output is silent for an extended period.
+_primary_bmc_host = None
+
 # Primary BMC credentials currently in use. Populated by `connect_to_sp` so
 # subsequent helpers (cluster login, etc.) can fall back to BMC creds when
 # no cluster admin credentials are available.
 _primary_bmc_user = None
 _primary_bmc_password = None
+
+# Shared reconnect context for primary-BMC read loops.
+_primary_bmc_reconnect_ctx = {}
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -2673,6 +2756,59 @@ def setup_logging(debug: bool):
 # ---------------------------------------------------------------------------
 # SSH helpers
 # ---------------------------------------------------------------------------
+
+_ssh_log_lock = threading.Lock()
+_ssh_log_file_path = None
+
+
+def _resolve_ssh_log_file() -> str:
+    """Return the current SSH connection log file path, creating parent dirs.
+
+    Preferred location is inside the active run log directory:
+      logs/<run-timestamp>/SSH_logs/
+    If no session logger exists yet, fall back to:
+      logs/SSH_logs/
+    """
+    global _ssh_log_file_path
+
+    if _session_log and getattr(_session_log, "log_dir", None):
+        _ssh_base = os.path.join(_session_log.log_dir, "SSH_logs")
+    else:
+        _ssh_base = os.path.join(_script_dir(), "logs", "SSH_logs")
+
+    os.makedirs(_ssh_base, exist_ok=True)
+
+    # If we do not have a file yet, or we've transitioned into a run-specific
+    # session directory, rotate to a file in the current base folder.
+    if (
+        not _ssh_log_file_path
+        or os.path.dirname(_ssh_log_file_path) != _ssh_base
+    ):
+        _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _ssh_log_file_path = os.path.join(_ssh_base, f"ssh_connections_{_ts}.log")
+
+    return _ssh_log_file_path
+
+
+def _log_ssh_event(host: str, username: str, label: str, event: str,
+                   attempt: int | None = None, details: str = "") -> None:
+    """Append one SSH connection event to the dedicated SSH log file."""
+    try:
+        with _ssh_log_lock:
+            _path = _resolve_ssh_log_file()
+            _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            _attempt = str(attempt) if attempt is not None else "-"
+            _line = (
+                f"[{_ts}] label={label} host={host} user={username} "
+                f"attempt={_attempt} event={event}"
+            )
+            if details:
+                _line += f" details={details}"
+            with open(_path, "a", encoding="utf-8") as _fh:
+                _fh.write(_line + "\n")
+    except Exception:
+        pass
+
 
 def _silent_ping(host):
     """Return True if `host` responds to a single ICMP ping, False otherwise."""
@@ -3161,11 +3297,20 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                     f"[{label}] SSH connect to {host} as {username} "
                     f"(attempt {attempt}/{max_attempts})"
                 )
+            _log_ssh_event(
+                host, username, label, "connect_attempt",
+                attempt=attempt,
+                details=f"max_attempts={max_attempts}",
+            )
             client.connect(hostname=host, username=username, password=password,
                             timeout=45, banner_timeout=60, auth_timeout=45,
                             disabled_algorithms={"pubkeys": ["ssh-dss"]})
             configure_transport(client)
             _register_bmc_client(host, client)
+            _log_ssh_event(
+                host, username, label, "connect_success",
+                attempt=attempt,
+            )
             return client, username, password
         except paramiko.AuthenticationException as e:
             last_exc = e
@@ -3175,6 +3320,11 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                     f"[{label}] auth failed for {username}@{host}",
                     prefix="ERROR",
                 )
+            _log_ssh_event(
+                host, username, label, "auth_failure",
+                attempt=attempt,
+                details=str(e).replace("\n", " "),
+            )
             # If we still have silent fallbacks to try, loop immediately.
             if _queue_idx < len(_attempt_queue):
                 continue
@@ -3257,6 +3407,11 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                                 f"[{label}] SSH reset retry {_r}/{_reset_max} "
                                 f"to {host} as {username}"
                             )
+                        _log_ssh_event(
+                            host, username, label, "reset_retry_attempt",
+                            attempt=_r,
+                            details=f"max={_reset_max}",
+                        )
                         client.connect(
                             hostname=host, username=username,
                             password=password, timeout=45,
@@ -3265,10 +3420,19 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         )
                         configure_transport(client)
                         _register_bmc_client(host, client)
+                        _log_ssh_event(
+                            host, username, label, "reset_retry_success",
+                            attempt=_r,
+                        )
                         return client, username, password
                     except Exception as e2:
                         last_exc = e2
                         msg2 = str(e2).lower()
+                        _log_ssh_event(
+                            host, username, label, "reset_retry_failure",
+                            attempt=_r,
+                            details=str(e2).replace("\n", " "),
+                        )
                         if (isinstance(e2, ConnectionResetError)
                                 or "connection reset" in msg2
                                 or "reset by peer" in msg2):
@@ -3367,6 +3531,11 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                                 f"[{label}] SSH banner retry {_b}/{_bnr_max} "
                                 f"to {host} as {username}"
                             )
+                        _log_ssh_event(
+                            host, username, label, "banner_retry_attempt",
+                            attempt=_b,
+                            details=f"max={_bnr_max}",
+                        )
                         client.connect(
                             hostname=host, username=username,
                             password=password, timeout=45,
@@ -3375,10 +3544,19 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         )
                         configure_transport(client)
                         _register_bmc_client(host, client)
+                        _log_ssh_event(
+                            host, username, label, "banner_retry_success",
+                            attempt=_b,
+                        )
                         return client, username, password
                     except Exception as eb:
                         last_exc = eb
                         msg_b = str(eb).lower()
+                        _log_ssh_event(
+                            host, username, label, "banner_retry_failure",
+                            attempt=_b,
+                            details=str(eb).replace("\n", " "),
+                        )
                         if ("banner" in msg_b
                                 or "no existing session" in msg_b
                                 or "not allowed at this time" in msg_b):
@@ -3426,6 +3604,11 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         f"[{label}] banner timeout for {host}: {e}",
                         prefix="WARN",
                     )
+                _log_ssh_event(
+                    host, username, label, "connect_failure_banner",
+                    attempt=attempt,
+                    details=str(e).replace("\n", " "),
+                )
             else:
                 print(f"   ⚠️  [{label}] connect attempt {attempt} failed: {e}")
                 if _session_log:
@@ -3433,6 +3616,11 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         f"[{label}] connect attempt {attempt} failed: {e}",
                         prefix="ERROR",
                     )
+                _log_ssh_event(
+                    host, username, label, "connect_failure",
+                    attempt=attempt,
+                    details=str(e).replace("\n", " "),
+                )
             # Treat "authentication"/"auth"/"password" hints as auth failures
             # too, since some paramiko/server combos surface them as generic
             # SSHException.
@@ -3458,6 +3646,11 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                 username, password = new_user, new_pass
                 continue
             time.sleep(min(5 * attempt, 15))
+    _log_ssh_event(
+        host, username, label, "connect_exhausted",
+        attempt=max_attempts,
+        details=(str(last_exc).replace("\n", " ") if last_exc else "no exception detail"),
+    )
     raise last_exc if last_exc else RuntimeError(
         f"Could not connect to {host} after {max_attempts} attempts"
     )
@@ -3468,7 +3661,8 @@ def connect_to_sp(host, username, password):
     the caller can update stored creds if the user re-entered them after an
     initial auth failure.
     """
-    global _active_client, _primary_bmc_user, _primary_bmc_password
+    global _active_client, _primary_bmc_host, _primary_bmc_user
+    global _primary_bmc_password, _primary_bmc_reconnect_ctx
     print(f"Connecting to SP at {host} with username {username}...")
     _slog(f"Connecting to SP at {host} with username {username}")
     try:
@@ -3484,8 +3678,12 @@ def connect_to_sp(host, username, password):
     _slog("SSH connection established successfully")
     with _client_lock:
         _active_client = client
+    _primary_bmc_host = host
     _primary_bmc_user = username
     _primary_bmc_password = password
+    _primary_bmc_reconnect_ctx = _make_reconnect_ctx(
+        host, username, password, client=client, channel=None, label="primary BMC"
+    )
     return client, username, password
 
 
@@ -3503,7 +3701,8 @@ def reconnect_to_sp(host, username, password):
     """Reconnect after a session drop. Retries with the same credentials,
     falling back to prompting if the BMC's password has changed.
     """
-    global _active_client
+    global _active_client, _primary_bmc_host, _primary_bmc_user
+    global _primary_bmc_password, _primary_bmc_reconnect_ctx
     try:
         client, username, password = _ssh_connect_with_retry(
             host, username, password, label="reconnect", max_attempts=5,
@@ -3518,6 +3717,12 @@ def reconnect_to_sp(host, username, password):
     _slog("Reconnected successfully")
     with _client_lock:
         _active_client = client
+    _primary_bmc_host = host
+    _primary_bmc_user = username
+    _primary_bmc_password = password
+    _primary_bmc_reconnect_ctx = _make_reconnect_ctx(
+        host, username, password, client=client, channel=channel, label="primary BMC"
+    )
     return client, channel
 
 
@@ -3591,9 +3796,23 @@ def _reclaim_system_console(channel, node_log=None):
 
 
 _BMC_CONSOLE_KEEPALIVE_INTERVAL = 30  # seconds between null-byte keepalives
+_BMC_CONSOLE_SILENCE_RECONNECT_INTERVAL = 300  # 5 minutes with no console data
 
 
-def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=False, quiet=False):
+def _make_reconnect_ctx(host, user, password, client=None, channel=None, label=""):
+    """Build a mutable reconnect context for BMC console watchdog use."""
+    return {
+        "host": host,
+        "user": user,
+        "password": password,
+        "client": client,
+        "channel": channel,
+        "label": label or host or "BMC",
+    }
+
+
+def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=False,
+               quiet=False, reconnect_ctx=None):
     """Shared receive loop used by direct_send_and_wait / direct_read_until /
     direct_read_until_any.
 
@@ -3615,13 +3834,19 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
     output = ""
     output_lower = ""
     start_time = time.monotonic()
-    last_channel_activity = time.monotonic()
+    last_console_data = time.monotonic()
+    last_keepalive_send = 0.0
+    last_silence_reconnect_attempt = 0.0
+
+    if reconnect_ctx and reconnect_ctx.get("channel") is not None:
+        channel = reconnect_ctx.get("channel")
+
     while True:
         if _shutdown_event.is_set():
             return output, None
         if channel.recv_ready():
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
-            last_channel_activity = time.monotonic()
+            last_console_data = time.monotonic()
             output += chunk
             output_lower += chunk.lower()
             if len(output_lower) > 16384:
@@ -3637,7 +3862,8 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                 _rc_t = time.monotonic()
                 _reclaim_system_console(channel, node_log=node_log)
                 start_time += time.monotonic() - _rc_t
-                last_channel_activity = time.monotonic()
+                last_console_data = time.monotonic()
+                last_keepalive_send = 0.0
                 output = ""
                 output_lower = ""
                 continue
@@ -3648,28 +3874,111 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
             return output, None
         # Periodic null-byte keepalive to prevent BMC application-level
         # autologout during long waits (e.g. waiting for node to boot).
-        if time.monotonic() - last_channel_activity > _BMC_CONSOLE_KEEPALIVE_INTERVAL:
+        _now = time.monotonic()
+        _idle = _now - last_console_data
+        if (_idle >= _BMC_CONSOLE_KEEPALIVE_INTERVAL
+                and (_now - last_keepalive_send) >= _BMC_CONSOLE_KEEPALIVE_INTERVAL):
             try:
                 channel.sendall(b"\x00")
             except Exception:
                 pass
-            last_channel_activity = time.monotonic()
+            last_keepalive_send = _now
+
+        # If this is a BMC-aware read path and console output has gone silent
+        # for too long, attempt a full SSH reconnect and re-enter system console.
+        if (check_bmc_drop and reconnect_ctx and reconnect_ctx.get("host")
+                and _idle >= _BMC_CONSOLE_SILENCE_RECONNECT_INTERVAL
+                and (_now - last_silence_reconnect_attempt) >= _BMC_CONSOLE_SILENCE_RECONNECT_INTERVAL):
+            _rc_t = _now
+            last_silence_reconnect_attempt = _now
+            _host = reconnect_ctx.get("host")
+            _user = reconnect_ctx.get("user")
+            _pw = reconnect_ctx.get("password")
+            _client = reconnect_ctx.get("client")
+            _label = reconnect_ctx.get("label") or _host or "BMC"
+            print(f"\n⚠️  [{_label}] No BMC console output for 5 minutes. Reconnecting SSH/session console...")
+            _slog(f"[{_label}] no console activity for 5 minutes; reconnecting BMC SSH/system console",
+                  prefix="WARN")
+            try:
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+                try:
+                    if _client:
+                        _client.close()
+                except Exception:
+                    pass
+
+                _new_client, _new_user, _new_pw = _ssh_connect_with_retry(
+                    _host, _user, _pw,
+                    label=_label,
+                    max_attempts=3,
+                    interactive=True,
+                )
+                _new_ch = _open_shell(_new_client)
+                if not _reach_bmc_prompt(_new_ch, timeout=15, node_log=node_log):
+                    raise RuntimeError("BMC prompt not reached after reconnect")
+                _new_ch.send("system console\r")
+                _sc_out, _sc_m = direct_read_until_any(
+                    _new_ch,
+                    ["y/n", "ctrl-d", "type exit", "serial console",
+                     "boot loader", "loader-", "autoboot", "selection", "::>", "login:"],
+                    timeout=20,
+                    node_log=node_log,
+                    quiet=True,
+                )
+                if _sc_m and "y/n" in _sc_m.lower():
+                    _new_ch.send("y\r")
+                    time.sleep(1)
+                    direct_read_until_any(
+                        _new_ch,
+                        ["ctrl-d", "type exit", "serial console", "boot loader",
+                         "loader-", "autoboot", "selection", "::>", "login:"],
+                        timeout=20,
+                        node_log=node_log,
+                        quiet=True,
+                    )
+                _new_ch.send("\r")
+                channel = _new_ch
+                reconnect_ctx["channel"] = _new_ch
+                reconnect_ctx["client"] = _new_client
+                reconnect_ctx["user"] = _new_user
+                reconnect_ctx["password"] = _new_pw
+                output = ""
+                output_lower = ""
+                last_console_data = time.monotonic()
+                last_keepalive_send = 0.0
+                start_time += time.monotonic() - _rc_t
+                print(f"✅ [{_label}] BMC reconnect successful. Resuming wait.")
+                _slog(f"[{_label}] BMC reconnect successful; resumed console monitoring")
+                continue
+            except Exception as _silence_rc_exc:
+                _slog(f"[{_label}] BMC reconnect after 5m silence failed: {_silence_rc_exc}",
+                      prefix="ERROR")
         time.sleep(0.1)
 
 
 def direct_send_and_wait(channel, command, look_for, timeout=15, auto_respond=None,
-                         node_log=None, check_bmc_drop=False, quiet=False):
+                         node_log=None, check_bmc_drop=False, quiet=False,
+                         reconnect_ctx=None):
     if _session_log and command:
         _session_log.log_sent(command)
+    _rc = reconnect_ctx
+    if _rc is None and check_bmc_drop and _primary_bmc_reconnect_ctx:
+        _rc = _primary_bmc_reconnect_ctx
+    _ch = _rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel
     if command:
-        channel.send(command + "\r")
+        _ch.send(command + "\r")
     matchers = [(look_for.lower(), look_for)] if look_for else []
-    output, matched = _recv_loop(channel, matchers, timeout, node_log, check_bmc_drop)
+    output, matched = _recv_loop(_ch, matchers, timeout, node_log, check_bmc_drop,
+                                 quiet=quiet, reconnect_ctx=_rc)
     if matched is None:
         _slog(f"Timeout ({timeout}s) waiting for '{look_for}'", prefix="WARN")
     elif auto_respond:
         time.sleep(0.3)
-        channel.send(auto_respond + "\r")
+        _ch2 = _rc.get("channel") if (_rc and _rc.get("channel") is not None) else _ch
+        _ch2.send(auto_respond + "\r")
         if not quiet:
             print(f"\n✅ {_node_pfx()}Detected '{look_for}' – auto-responded with '{auto_respond}'{_elapsed_str()}")
         elif node_log:
@@ -3681,16 +3990,25 @@ def direct_send_and_wait(channel, command, look_for, timeout=15, auto_respond=No
 
 
 def direct_read_until(channel, look_for, timeout=15, node_log=None, check_bmc_drop=False):
+    _rc = _primary_bmc_reconnect_ctx if (check_bmc_drop and _primary_bmc_reconnect_ctx) else None
+    _ch = _rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel
     matchers = [(look_for.lower(), look_for)] if look_for else []
-    output, matched = _recv_loop(channel, matchers, timeout, node_log, check_bmc_drop)
+    output, matched = _recv_loop(_ch, matchers, timeout, node_log, check_bmc_drop,
+                                 reconnect_ctx=_rc)
     if matched is None and _session_log:
         _session_log.log(f"Timeout ({timeout}s) waiting for '{look_for}'", prefix="WARN")
     return output
 
 
-def direct_read_until_any(channel, look_for_list, timeout=15, node_log=None, check_bmc_drop=False, quiet=False):
+def direct_read_until_any(channel, look_for_list, timeout=15, node_log=None,
+                          check_bmc_drop=False, quiet=False, reconnect_ctx=None):
+    _rc = reconnect_ctx
+    if _rc is None and check_bmc_drop and _primary_bmc_reconnect_ctx:
+        _rc = _primary_bmc_reconnect_ctx
+    _ch = _rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel
     matchers = [(s.lower(), s) for s in look_for_list]
-    output, matched = _recv_loop(channel, matchers, timeout, node_log, check_bmc_drop, quiet=quiet)
+    output, matched = _recv_loop(_ch, matchers, timeout, node_log, check_bmc_drop,
+                                 quiet=quiet, reconnect_ctx=_rc)
     if matched is None and _session_log:
         _session_log.log(f"Timeout ({timeout}s) waiting for any of {look_for_list}", prefix="WARN")
     return output, matched
@@ -4068,6 +4386,9 @@ def _relaunch_in_screen():
 # ---------------------------------------------------------------------------
 
 def wait_for_bmc_prompt(channel, auto_takeover=False):
+    global _primary_bmc_reconnect_ctx
+    if _primary_bmc_reconnect_ctx:
+        _primary_bmc_reconnect_ctx["channel"] = channel
     print("Shell invoked. Waiting for initial prompt...")
     _slog("Waiting for initial BMC prompt (watching for existing session y/n)")
 
@@ -5153,6 +5474,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
 
     client = None
     ch = None
+    _peer_reconnect_ctx = None
     try:
         try:
             client, username, password = _ssh_connect_with_retry(
@@ -5306,7 +5628,8 @@ class _InteractivePromptBroker:
             return val if val else (default or "")
 
 
-def _interactive_disk_erase_prompts(channel, broker, label, node_log=None):
+def _interactive_disk_erase_prompts(channel, broker, label, node_log=None,
+                                    reconnect_ctx=None):
     """Wait for each of the three disk-erase confirmation prompts and ask the
     operator via *broker* rather than auto-answering.  Used by mode 2a.
     """
@@ -5323,6 +5646,7 @@ def _interactive_disk_erase_prompts(channel, broker, label, node_log=None):
         out, matched = direct_read_until_any(
             channel, [trigger, "login:"], timeout=1800,
             node_log=node_log, check_bmc_drop=True,
+            reconnect_ctx=reconnect_ctx,
         )
         if not matched or trigger.lower() not in matched.lower():
             _slog(f"{_pfx} disk-erase prompt '{short_label}' not seen; skipping",
@@ -6894,14 +7218,19 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None):
     return None
 
 
-def _wait_and_send(channel, trigger, response, label, timeout=900, hide_in_log=False, quiet=False, node_log=None):
+def _wait_and_send(channel, trigger, response, label, timeout=900,
+                   hide_in_log=False, quiet=False, node_log=None,
+                   reconnect_ctx=None):
     """Wait for `trigger` substring (case-insensitive), then send `response`.
     Used by the cluster setup wizard automation.
     """
     if not quiet:
         print(f"\n⏳ Waiting for: {label}...")
     _slog(f"Waiting for: {label}")
-    direct_send_and_wait(channel, "", trigger, timeout=timeout, check_bmc_drop=True, node_log=node_log)
+    direct_send_and_wait(
+        channel, "", trigger, timeout=timeout, check_bmc_drop=True,
+        node_log=node_log, reconnect_ctx=reconnect_ctx,
+    )
     if response is None:
         response = ""
     channel.send(response + "\r")
@@ -6913,7 +7242,8 @@ def _wait_and_send(channel, trigger, response, label, timeout=900, hide_in_log=F
     time.sleep(0.5)
 
 
-def _auto_answer_disk_erase_prompts(channel, node_log=None, label="", is_node_add=None):
+def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
+                                    is_node_add=None, reconnect_ctx=None):
     """Auto-answer the three disk-zero/erase/confirm prompts after option 4.
 
     ``is_node_add`` controls the progress messaging:
@@ -6962,7 +7292,8 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="", is_node_ad
             print(f"\n⏳ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
         _slog(f"Waiting for {lbl}")
         direct_send_and_wait(channel, "", trigger, timeout=1800, auto_respond=resp,
-                             check_bmc_drop=True, quiet=_node_add, node_log=node_log)
+                             check_bmc_drop=True, quiet=_node_add, node_log=node_log,
+                             reconnect_ctx=reconnect_ctx)
         if _cc_done_ev is not None:
             _cc_done_ev.set()
             _cc_done_ev = None
@@ -7436,6 +7767,7 @@ def _apply_license(channel):
                         look_for_keys=False,
                         disabled_algorithms={"pubkeys": ["ssh-dss"]},
                     )
+                    configure_transport(lic_client)
                     sftp = lic_client.open_sftp()
                     # Track transfer progress to confirm 100 % completion.
                     _sftp_transferred = [0]
@@ -7892,6 +8224,7 @@ def _verify_bmc_ip(ip, username, password):
         client.connect(hostname=ip, username=username, password=password,
                        timeout=15, banner_timeout=20,
                        disabled_algorithms={"pubkeys": ["ssh-dss"]})
+        configure_transport(client)
         _stdin, stdout, _stderr = client.exec_command("bmc status")
         output = stdout.read().decode("utf-8", errors="replace")
         client.close()
@@ -8424,8 +8757,16 @@ def _par_send(ch, nf, cmd):
     ch.send(cmd + "\r")
 
 
-def _node_log_open(ip, log_dir, prefix="node"):
+def _node_log_open(ip, log_dir, prefix="node", previous_log=None):
     """Open (or create) a per-node log file in *log_dir*.
+
+    If *previous_log* is an open file handle for the preceding phase log,
+    a handoff footer is written to it before the new file is returned:
+
+        ========================================================================
+        [<prev_filename>] phase complete.
+        Next phase is logged to [<new_filename>]. End of file.
+        ========================================================================
 
     Returns an open file handle (text mode, line-buffered).
     """
@@ -8433,7 +8774,22 @@ def _node_log_open(ip, log_dir, prefix="node"):
     safe_ip = ip.replace(".", "_").replace(":", "_")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(log_dir, f"{prefix}_{safe_ip}_{ts}.log")
-    return open(path, "w", encoding="utf-8", buffering=1)
+    new_file = open(path, "w", encoding="utf-8", buffering=1)
+    if previous_log is not None:
+        try:
+            prev_name = os.path.basename(previous_log.name)
+            next_name = os.path.basename(path)
+            sep = "=" * 72
+            previous_log.write(
+                f"\n{sep}\n"
+                f"[{prev_name}] phase complete.\n"
+                f"Next phase is logged to [{next_name}]. End of file.\n"
+                f"{sep}\n"
+            )
+            previous_log.flush()
+        except Exception:
+            pass
+    return new_file
 
 
 def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
@@ -8813,6 +9169,10 @@ def _peer_reinit_worker(ip, ctx):
         return
     # Reuse the unified log already opened for this peer node.
     _pnf = _node_reinit_logs.get(ip)
+    _peer_rc_ctx = _make_reconnect_ctx(
+        ip, bmc_user, bmc_passwords.get(ip, ""),
+        client=peer_cl, channel=peer_ch, label=f"peer/{ip}",
+    )
 
     # Redirect stdout for this thread to the per-node log writer so
     # all output goes to the file and only milestone lines reach the terminal.
@@ -8861,8 +9221,10 @@ def _peer_reinit_worker(ip, ctx):
         time.sleep(2)
 
         # Auto-answer disk-erase and node-mgmt prompts (same as mode 2b).
-        _auto_answer_disk_erase_prompts(peer_ch, node_log=_pnf, label=ip,
-                                        is_node_add=True)
+        _auto_answer_disk_erase_prompts(
+            peer_ch, node_log=_pnf, label=ip, is_node_add=True,
+            reconnect_ctx=_peer_rc_ctx,
+        )
         cfg = _resolve_node_mgmt_config(ip)
         _auto_answer_node_mgmt(peer_ch, cfg, node_log=_pnf)
 
@@ -9582,6 +9944,10 @@ def _run_4b_standalone(log, resuming: bool = False):
         # IPs that reached ONTAP login: without needing a boot-menu / option 6.
         # Populated by _select_option6; checked after all workers join.
         _opt6_login_nodes = set()
+        # Nodes that reached _opt6_login_nodes via the VLDB-timeout path
+        # (not at a real login prompt — used to skip the "cluster running"
+        # version-check prompt below).
+        _vldb_timeout_nodes = set()
 
         def _mark_install_done(ip):
             """Persist install_done for *ip* immediately so a kill mid-run
@@ -9621,7 +9987,8 @@ def _run_4b_standalone(log, resuming: bool = False):
             # Open a per-node log for all raw boot output.
             _nf6 = None
             try:
-                _nf6 = _node_log_open(ip, _log_dir, prefix="4b_opt6")
+                _nf6 = _node_log_open(ip, _log_dir, prefix="4b_opt6",
+                                      previous_log=_node_files.get(ip))
                 _status(f"  📝 [{ip}] Boot output → {_nf6.name}")
             except Exception as _e:
                 _status(f"  ⚠️  [{ip}] Could not open log file: {_e}")
@@ -9656,18 +10023,25 @@ def _run_4b_standalone(log, resuming: bool = False):
             def _vldb_prompt():
                 with _stdout_lock:
                     _real_stdout.write(
-                        f"\n  ⚠️  [{ip}] Warning: Timed out waiting for VLDB online detected.\n"
-                        f"  Cluster node not coming online after option 6. "
-                        f"Auto-proceeding to reinitialization process (y).\n"
+                        f"\n  ⚠️  [{ip}] VLDB failed to come online after option 6.\n"
+                        f"  Continue with reinit? [y/n]: "
                     )
                     _real_stdout.flush()
+                    try:
+                        _ans = sys.stdin.readline().strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        _ans = "n"
+                _proceed = _ans in ("y", "yes")
                 if log:
                     log.log(
-                        f"[{ip}] VLDB timeout: auto-answered 'y' "
-                        "(proceed to reinit)",
+                        f"[{ip}] VLDB timeout prompt answered '{_ans}' "
+                        f"({'proceeding' if _proceed else 'aborting'})",
                         prefix="WARN",
                     )
-                return True
+                if _proceed:
+                    with connect_lock:
+                        _vldb_timeout_nodes.add(ip)
+                return _proceed
 
             # ── Phase 1: wait for any boot-menu indicator ──────────────────
             # The warning text ("Normal Boot is prohibited") appears a few
@@ -9703,6 +10077,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                     _new_cl.connect(ip, username=bmc_user, password=_pw,
                                     timeout=20, allow_agent=False, look_for_keys=False,
                                     disabled_algorithms={"pubkeys": ["ssh-dss"]})
+                    configure_transport(_new_cl)
                     _new_ch = _open_shell(_new_cl)
                     # Drain the BMC banner, then enter system console.
                     time.sleep(1)
@@ -10433,7 +10808,10 @@ def _run_4b_standalone(log, resuming: bool = False):
         # If every node reached login: without needing option 6, the cluster is
         # still running.  Log in via the first node's console, run 'version',
         # and let the operator confirm before wiping everything.
-        if _opt6_login_nodes == set(_install_bmc_ips):
+        # Skip this block when VLDB timeout caused nodes to be marked as
+        # "login" — those nodes are NOT actually at a login prompt.
+        if (_opt6_login_nodes == set(_install_bmc_ips)
+                and not _vldb_timeout_nodes):
             _ver_str = None
             _ver_ch = loader_channels.get(first_ip)
             if _ver_ch is not None:
@@ -10580,7 +10958,8 @@ def _run_4b_standalone(log, resuming: bool = False):
     for _ip in bmc_ips:
         _pfx = "4b_node_reinit_primary" if _ip == first_ip else "4b_node_add"
         try:
-            _nf = _node_log_open(_ip, _log_dir, prefix=_pfx)
+            _nf = _node_log_open(_ip, _log_dir, prefix=_pfx,
+                                 previous_log=_node_files.get(_ip))
             _node_reinit_logs[_ip] = _nf
             _status(f"  📝 [{_ip}] Reinit log → {_nf.name}")
             # Populate module-level peer log paths for peer nodes only.
@@ -13627,6 +14006,7 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
             timeout=20,
             disabled_algorithms={"pubkeys": ["ssh-dss"]},
         )
+        configure_transport(_tc)
         _tch = _tc.invoke_shell(width=200, height=50)
         _tout, _tmatch = direct_read_until_any(
             _tch, ["::>", r"::\*>", "password:", "Password:"], timeout=30
@@ -14120,10 +14500,16 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     if _session_log:
         _session_log.start_phase("Auto Join (2b)")
         _session_log.log("Mode 2b automated join starting after option 4 sent")
+    _join_reconnect_ctx = _make_reconnect_ctx(
+        sp_host, sp_user, sp_pass,
+        client=client, channel=channel, label=f"2b/{bmc_host or sp_host or 'node'}",
+    )
 
     # Yes confirmations after option 4.
-    _auto_answer_disk_erase_prompts(channel, label=bmc_host or sp_host or "",
-                                    is_node_add=True)
+    _auto_answer_disk_erase_prompts(
+        channel, label=bmc_host or sp_host or "", is_node_add=True,
+        reconnect_ctx=_join_reconnect_ctx,
+    )
 
     # Node mgmt config (from per-BMC pre-collection).
     cfg = _resolve_node_mgmt_config(bmc_host)
@@ -14209,6 +14595,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
             ["login:", "add another node to the cluster"],
             timeout=_remaining,
             check_bmc_drop=True,
+            reconnect_ctx=_join_reconnect_ctx,
         )
         if not _matched:
             print("\n⚠️  'login:' not seen; you may need to monitor manually.")
@@ -14868,6 +15255,10 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         # Persist any updated credentials so subsequent steps reuse them.
         _peer_bmc_creds[peer_bmc] = {"user": peer_user, "password": peer_password}
         ch = _open_shell(client)
+        _peer_reconnect_ctx = _make_reconnect_ctx(
+            peer_bmc, peer_user, peer_password,
+            client=client, channel=ch, label=label,
+        )
 
         # BMC takeover – accept if another session is active.
         if not _reach_bmc_prompt(ch, node_log=node_file):
@@ -15014,6 +15405,11 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         label=label, max_attempts=3, interactive=True,
                     )
                     ch = _open_shell(client)
+                    if _peer_reconnect_ctx is not None:
+                        _peer_reconnect_ctx["client"] = client
+                        _peer_reconnect_ctx["channel"] = ch
+                        _peer_reconnect_ctx["user"] = peer_user
+                        _peer_reconnect_ctx["password"] = peer_password
                     if not _reach_bmc_prompt(ch, timeout=15, node_log=node_file):
                         print(f"   ⚠️  [{label}] BMC prompt not reached after reconnect; continuing...")
                     ch.send("system console\r")
@@ -15050,10 +15446,12 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         # Yes confirmations + node mgmt + join wizard.
         if broker is not None:
             _interactive_disk_erase_prompts(ch, broker, peer_bmc,
-                                            node_log=node_file)
+                                            node_log=node_file,
+                                            reconnect_ctx=_peer_reconnect_ctx)
         else:
             _auto_answer_disk_erase_prompts(ch, node_log=node_file, label=peer_bmc,
-                                            is_node_add=True)
+                                            is_node_add=True,
+                                            reconnect_ctx=_peer_reconnect_ctx)
         _t_disk_erase_done = time.monotonic()
         print(f"   ⏱️  [{label}] Disk erase done at +{_t_disk_erase_done - _t_thread_start:.1f}s")
 
@@ -16346,6 +16744,26 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     Returns a list of "varname value" strings for vars the user wants restored
     (or [] when non-interactive or user declines restore).
     """
+    global _loader_env_stage_enabled
+    if _loader_env_stage_enabled is None and interactive:
+        _real_stdout.write(
+            "\n  Skip LOADER bootarg backup/printenv stage? [y/N]: "
+        )
+        _real_stdout.flush()
+        try:
+            _skip_env_ans = sys.stdin.readline().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            _skip_env_ans = ""
+        _loader_env_stage_enabled = (_skip_env_ans not in ("y", "yes"))
+        _slog(
+            "LOADER bootarg backup/printenv stage "
+            f"{'enabled' if _loader_env_stage_enabled else 'skipped'} by operator"
+        )
+
+    if _loader_env_stage_enabled is False:
+        _slog("Skipping LOADER bootarg backup/printenv stage by operator request")
+        return []
+
     # Capture pre-defaults env
     _slog("Capturing LOADER env (pre set-defaults)")
     pre_env = _loader_env_capture(channel, node_log=node_log)
@@ -16356,9 +16774,12 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     direct_send_and_wait(channel, "set-defaults", "LOADER-",
                          timeout=15, node_log=node_log)
 
+    global _bootarg_check_enabled
     # Verify boot DNA (optional in interactive mode; required in non-interactive).
     _run_bootarg_check = True
-    if interactive:
+    if _bootarg_check_enabled is not None:
+        _run_bootarg_check = bool(_bootarg_check_enabled)
+    elif interactive:
         _real_stdout.write(
             "\n  Run bootarg.init.dna verification now? [Y/n]: "
         )
@@ -16476,7 +16897,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
 
 def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
-    global _reinit_label
+    global _reinit_label, _bootarg_check_enabled, _loader_env_stage_enabled
     _reinit_label = sp_host or _reinit_label
     _pfx = _node_pfx()
     print(f"\n⏳ {_pfx}Setting LOADER boot options...{_elapsed_str()}")
@@ -16497,6 +16918,39 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     loader_commands = get_loader_commands()
 
     _slog(f"LOADER commands for mode {_operation_mode}: {loader_commands}")
+
+    # Mode 3 runs additional peer LOADER flows in worker threads; ask once here
+    # so the same env-stage and bootarg-check choices apply to all nodes.
+    if _operation_mode == 3:
+        if _loader_env_stage_enabled is None:
+            _real_stdout.write(
+                "\n  Skip LOADER bootarg backup/printenv stage for option 3 nodes? [y/N]: "
+            )
+            _real_stdout.flush()
+            try:
+                _m3_env_ans = sys.stdin.readline().strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                _m3_env_ans = ""
+            _loader_env_stage_enabled = (_m3_env_ans not in ("y", "yes"))
+            _slog(
+                "Option 3 LOADER bootarg backup/printenv stage "
+                f"{'enabled' if _loader_env_stage_enabled else 'skipped'} by operator"
+            )
+
+        if _loader_env_stage_enabled is not False and _bootarg_check_enabled is None:
+            _real_stdout.write(
+                "\n  Run bootarg.init.dna verification for option 3 nodes? [Y/n]: "
+            )
+            _real_stdout.flush()
+            try:
+                _m3_dna_ans = sys.stdin.readline().strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                _m3_dna_ans = ""
+            _bootarg_check_enabled = (_m3_dna_ans not in ("n", "no"))
+            _slog(
+                "Option 3 bootarg.init.dna verification "
+                f"{'enabled' if _bootarg_check_enabled else 'skipped'} by operator"
+            )
 
     # Capture env before set-defaults, run set-defaults, capture after, diff,
     # and (interactively) ask whether to restore cleared vars.
@@ -16860,6 +17314,11 @@ def _make_session_log(label: str) -> "SessionLogger":
     if label:
         _session_log._operation_label = label
         _session_log.log(label)
+    try:
+        _ssh_path = _resolve_ssh_log_file()
+        _session_log.log(f"SSH connection log: {_ssh_path}")
+    except Exception:
+        pass
     return _session_log
 
 
@@ -18637,6 +19096,7 @@ def main():
                             timeout=20, banner_timeout=30, auth_timeout=20,
                             disabled_algorithms={"pubkeys": ["ssh-dss"]},
                         )
+                        configure_transport(client47)
                         ch47 = _open_shell(client47)
 
                         # Wait for BMC prompt
@@ -19945,6 +20405,7 @@ def main():
                         timeout=20,
                         disabled_algorithms={"pubkeys": ["ssh-dss"]},
                     )
+                    configure_transport(_tc_45)
                     _tch_45 = _tc_45.invoke_shell(width=200, height=50)
                     _tout_45, _tmatch_45 = direct_read_until_any(
                         _tch_45, ["::>", r"::\*>", "password:", "Password:"], timeout=30
@@ -20899,7 +21360,8 @@ def main():
                         for addr in _failed_peers:
                             try:
                                 _pr_nf = _node_log_open(addr, _pr_log_dir,
-                                                        prefix="peer_reset_retry")
+                                                        prefix="peer_reset_retry",
+                                                        previous_log=_pr_node_logs.get(addr))
                                 _pr_node_logs[addr] = _pr_nf
                                 print(f"  📝 [{addr}] Retry log → {_pr_nf.name}")
                             except Exception as _pr_e:
@@ -21293,15 +21755,22 @@ def main():
                     _session_log.end_phase()
 
                 # Close the previous node's log writer and open a fresh one for this node.
-                if isinstance(sys.stdout, _NodeLogWriter):
+                _prev_nlw_file = sys.stdout._nf if isinstance(sys.stdout, _NodeLogWriter) else None
+                if _prev_nlw_file:
                     try:
-                        sys.stdout._nf.close()
+                        pass  # handoff written by _node_log_open below; close after
                     except Exception:
                         pass
                 _nlw_node_file2 = _node_log_open(
                     sp_host, _nlw_log_dir,
                     prefix="option2b_add_node" if _operation_mode == 2 else f"mode{_operation_mode}_node",
+                    previous_log=_prev_nlw_file,
                 )
+                if _prev_nlw_file:
+                    try:
+                        _prev_nlw_file.close()
+                    except Exception:
+                        pass
                 _nlw2 = _NodeLogWriter(_nlw_node_file2, interactive=False)
                 sys.stdout = _nlw2
                 _real_stdout.write(
