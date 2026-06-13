@@ -10274,6 +10274,9 @@ def _run_4b_standalone(log, resuming: bool = False):
         # (not at a real login prompt — used to skip the "cluster running"
         # version-check prompt below).
         _vldb_timeout_nodes = set()
+        # Nodes where ONTAP reported NVRAM/sysid mismatch. These should proceed
+        # directly to reinit without asking for a cluster-level continue.
+        _nvram_mismatch_nodes = set()
 
         def _mark_install_done(ip):
             """Persist install_done for *ip* immediately so a kill mid-run
@@ -10717,6 +10720,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                         # so a failed reinit reconnect does not force a re-install.
                         with connect_lock:
                             _opt6_login_nodes.add(ip)
+                            _nvram_mismatch_nodes.add(ip)
                         _mark_install_done(ip)
                         if _nf6:
                             with suppress(Exception):
@@ -10924,6 +10928,8 @@ def _run_4b_standalone(log, resuming: bool = False):
                                 _status(f"  ⚠️  [{ip}] NVRAM sysid mismatch detected during option 4 boot – proceeding to reinitialization.")
                                 if log:
                                     log.log(f"[{ip}] NVRAM changed / sysid mismatch seen during option 4 boot; proceeding to reinit", prefix="WARN")
+                                with connect_lock:
+                                    _nvram_mismatch_nodes.add(ip)
                                 if _nf6:
                                     with suppress(Exception):
                                         _nf6.close()
@@ -11139,7 +11145,8 @@ def _run_4b_standalone(log, resuming: bool = False):
         # Skip this block when VLDB timeout caused nodes to be marked as
         # "login" — those nodes are NOT actually at a login prompt.
         if (_opt6_login_nodes == set(_install_bmc_ips)
-                and not _vldb_timeout_nodes):
+                and not _vldb_timeout_nodes
+                and not _nvram_mismatch_nodes):
             _ver_str = None
             _ver_ch = loader_channels.get(first_ip)
             if _ver_ch is not None:
@@ -11237,6 +11244,17 @@ def _run_4b_standalone(log, resuming: bool = False):
                         loader_clients[_cip].close()
                 loader_clients.clear()
                 return True
+        elif _nvram_mismatch_nodes:
+            _status(
+                "  ⚠️  NVRAM sysid mismatch was detected on one or more nodes; "
+                "proceeding directly to reinitialization without prompt."
+            )
+            if log:
+                log.log(
+                    "4b: skipping cluster-level continue prompt due to NVRAM/sysid "
+                    f"mismatch on nodes: {sorted(_nvram_mismatch_nodes)}",
+                    prefix="WARN",
+                )
 
         # Close all existing channels/clients (nodes are now at the login prompt
         # after option 6 completed).
