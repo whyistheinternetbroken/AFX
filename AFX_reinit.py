@@ -6170,6 +6170,9 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                     )
                     _sc_out += _sc_out2
                 _new_ch.send("\r")
+                time.sleep(0.5)
+                # Send Enter again to refresh boot menu display in case it was cached
+                _new_ch.send("\r")
                 channel = _new_ch
                 reconnect_ctx["channel"] = _new_ch
                 reconnect_ctx["client"] = _new_client
