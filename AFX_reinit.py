@@ -9265,22 +9265,38 @@ def _peer_reinit_worker(ip, ctx):
         _buf_lower = ""
         _start = time.monotonic()
         _found = False
+        _last_progress = _start
         while time.monotonic() - _start < 900:
             if _shutdown_event.is_set():
                 break
-            if peer_ch.recv_ready():
-                chunk = peer_ch.recv(4096).decode("utf-8", errors="replace")
+            _elapsed = time.monotonic() - _start
+            if time.monotonic() - _last_progress >= 120:
+                _status(f"  ⏳ [{ip}] Still waiting for boot menu... ({int(_elapsed)}s elapsed)")
+                _last_progress = time.monotonic()
+            _remaining = max(1, int(900 - _elapsed))
+            _slice_timeout = min(30, _remaining)
+            _p_ch = (_peer_rc_ctx.get("channel")
+                     if (_peer_rc_ctx and _peer_rc_ctx.get("channel") is not None)
+                     else peer_ch)
+            chunk, matched = direct_read_until_any(
+                _p_ch,
+                menu_sigs_lower,
+                timeout=_slice_timeout,
+                node_log=_pnf,
+                quiet=True,
+                check_bmc_drop=True,
+                reconnect_ctx=_peer_rc_ctx,
+            )
+            if _peer_rc_ctx and _peer_rc_ctx.get("channel") is not None:
+                peer_ch = _peer_rc_ctx["channel"]
+            if chunk:
                 _buf_lower += chunk.lower()
-                if _pnf:
-                    _par_write(_pnf, chunk)
-                for sig in menu_sigs_lower:
-                    if sig in _buf_lower:
-                        _found = True
-                        break
-                if _found:
-                    break
+                _last_progress = time.monotonic()
                 if len(_buf_lower) > 16384:
                     _buf_lower = _buf_lower[-8192:]
+            if matched:
+                _found = True
+                break
             time.sleep(0.1)
 
         if not _found:
@@ -9329,8 +9345,10 @@ def _run_4b_standalone(log, resuming: bool = False):
     module-level ``_checkpoint`` is used to skip already-completed phases.
     Returns True on success.
     """
-    global _peer_log_paths, _checkpoint
+    global _peer_log_paths, _checkpoint, _loader_env_stage_enabled, _bootarg_check_enabled
     _peer_log_paths = {}  # reset for this run
+    _loader_env_stage_enabled = None
+    _bootarg_check_enabled = None
 
     # ── Shared state ───────────────────────────────────────────────────────
     # Serializes the brief status lines printed to the console by parallel
@@ -9434,8 +9452,9 @@ def _run_4b_standalone(log, resuming: bool = False):
             log.end_phase()
 
     # ── Step 1c: Reinit questions (ask now, before operations begin) ───────
-    _cp_do_reinit  = _checkpoint.get_param("do_reinit")   if (resuming and _checkpoint) else None
-    _cp_mode_sel   = _checkpoint.get_param("reinit_mode") if (resuming and _checkpoint) else None
+    _cp_do_reinit   = _checkpoint.get_param("do_reinit") if (resuming and _checkpoint) else None
+    _cp_mode_sel    = _checkpoint.get_param("reinit_mode") if (resuming and _checkpoint) else None
+    _cp_skip_env    = _checkpoint.get_param("skip_loader_env_stage") if (resuming and _checkpoint) else None
 
     if resuming and _cp_do_reinit is not None:
         _do_reinit = _cp_do_reinit
@@ -9478,6 +9497,23 @@ def _run_4b_standalone(log, resuming: bool = False):
 
         if log:
             log.log(f"4b: reinit mode selected: {_mode_sel}")
+
+        if resuming and _cp_skip_env is not None:
+            _loader_env_stage_enabled = (not bool(_cp_skip_env))
+            print(
+                "\n  🔖 Resuming: LOADER bootarg backup/printenv stage "
+                f"{'skipped' if _cp_skip_env else 'enabled'}."
+            )
+        else:
+            _skip_env_q = _prompt(
+                "\n  Skip LOADER bootarg backup/printenv stage during 4b reinit? [y/N]: "
+            , "n").lower()
+            _loader_env_stage_enabled = (_skip_env_q not in ("y", "yes"))
+        if log:
+            log.log(
+                "4b: LOADER bootarg backup/printenv stage "
+                f"{'enabled' if _loader_env_stage_enabled else 'skipped'}"
+            )
 
         # Discover and load a config file.
         print("\n  " + "─" * 58)
@@ -9616,6 +9652,11 @@ def _run_4b_standalone(log, resuming: bool = False):
         _checkpoint.set_param("netboot_static_ip", _netboot_static_ip)
         if _diag_mode:
             _checkpoint.set_param("diag_bootargs", _diag_bootargs)
+    if _checkpoint is not None:
+        _checkpoint.set_param(
+            "skip_loader_env_stage",
+            bool(_do_reinit and _loader_env_stage_enabled is False),
+        )
     if log:
         log.log(f"4b: checkpoint {'resumed' if resuming else 'initialised'} at {_checkpoint._path}")
 
@@ -11283,10 +11324,23 @@ def _run_4b_standalone(log, resuming: bool = False):
 
     if log:
         log.start_phase("4b – Boot Menu Selection")
-    if not wait_for_boot_menu_and_select(first_ch, node_log=_pnf_primary):
+    _first_rc_ctx = _make_reconnect_ctx(
+        first_ip,
+        bmc_user,
+        bmc_passwords.get(first_ip, ""),
+        client=first_cl,
+        channel=first_ch,
+        label=f"4b/bootmenu/{first_ip}",
+    )
+    if not wait_for_boot_menu_and_select(
+            first_ch, node_log=_pnf_primary, reconnect_ctx=_first_rc_ctx):
         print(f"  ⚠️  [{first_ip}] Boot menu not detected; operator may need to intervene.")
         if log:
             log.log(f"[{first_ip}] boot menu not seen for primary reinit", prefix="WARN")
+    first_ch = _first_rc_ctx.get("channel") or first_ch
+    first_cl = _first_rc_ctx.get("client") or first_cl
+    loader_channels[first_ip] = first_ch
+    loader_clients[first_ip] = first_cl
     if log:
         log.end_phase()
 
@@ -11312,7 +11366,17 @@ def _run_4b_standalone(log, resuming: bool = False):
             print(f"\n  [{first_ip}] Starting automatic cluster initialization...")
             if log:
                 log.start_phase("4b – Cluster Initialization (primary)")
-            auto_complete_initialization(first_ch, bmc_host=first_ip)
+            _auto_init_rc = _make_reconnect_ctx(
+                first_ip,
+                bmc_user,
+                bmc_passwords.get(first_ip, ""),
+                client=first_cl,
+                channel=first_ch,
+                label=f"4b/primary/{first_ip}",
+            )
+            auto_complete_initialization(
+                first_ch, bmc_host=first_ip, reconnect_ctx=_auto_init_rc
+            )
             if log:
                 log.end_phase()
         else:
@@ -11331,6 +11395,8 @@ def _run_4b_standalone(log, resuming: bool = False):
                 log.end_phase()
     finally:
         sys.stdout = _prev_stdout_primary
+
+    _run_ok = True
 
     # ── Mode 3: auto-join peer nodes ───────────────────────────────────────
     if _mode_sel == "3" and _peers_for_reinit:
@@ -11402,14 +11468,17 @@ def _run_4b_standalone(log, resuming: bool = False):
 
         if _peer_errors:
             print(f"  ⚠️  Peer reinit issues: {_peer_errors}")
+            _run_ok = False
+            if log:
+                log.log(f"4b mode 3: peer reinit issues: {_peer_errors}", prefix="ERROR")
 
         # ── Bulk cluster add via the primary node's cluster shell ──────────
         _4b_collected_ips = [_4b_cluster_ips_out[ip] for ip in _peers_for_reinit
                              if ip in _4b_cluster_ips_out]
+        _4b_pch = None
+        _4b_pcl = None
         if _4b_collected_ips:
             # Connect to the cluster mgmt IP (or fall back to first_ch).
-            _4b_pch = None
-            _4b_pcl = None
             _4b_mgmt_ip = _cluster_config.get("mgmt_ip")
             _4b_admin_user = (
                 _cluster_config.get("admin_user")
@@ -11432,25 +11501,80 @@ def _run_4b_standalone(log, resuming: bool = False):
                     _4b_pch = None
 
             if _4b_pch:
-                _cluster_add_nodes_bulk(_4b_pch, _4b_collected_ips, log=log)
-                try:
-                    _4b_pch.close()
-                except Exception:
-                    pass
-                try:
-                    _4b_pcl.close()
-                except Exception:
-                    pass
+                _add_ok = _cluster_add_nodes_bulk(_4b_pch, _4b_collected_ips, log=log)
+                if not _add_ok:
+                    _run_ok = False
+                    if log:
+                        log.log("4b mode 3: cluster add-node did not complete", prefix="ERROR")
             else:
                 _status("  ⚠️  No cluster shell available; skipping cluster add-node.")
+                _run_ok = False
                 if log:
                     log.log("4b mode 3: cluster shell unavailable; skipping cluster add-node",
-                            prefix="WARN")
+                            prefix="ERROR")
         else:
             _status("  ⚠️  No cluster IPs collected from peers; skipping cluster add-node.")
+            _run_ok = False
             if log:
                 log.log("4b mode 3: no cluster IPs; skipping cluster add-node",
-                        prefix="WARN")
+                        prefix="ERROR")
+
+        if _4b_pch:
+            _target_nodes = len(bmc_ips)
+            print(f"\n  🔍 Final health check: waiting for {_target_nodes} healthy node(s)...")
+            _healthy_nodes = _wait_for_cluster_nodes_healthy(
+                _4b_pch,
+                target_count=_target_nodes,
+                total_timeout=1800,
+                poll_interval=120,
+                label="4b mode 3",
+                final_count=_target_nodes,
+            )
+            if not _healthy_nodes:
+                _run_ok = False
+                if log:
+                    log.log("4b mode 3: cluster show health check failed", prefix="ERROR")
+
+            _fo_out = ""
+            try:
+                with _suppress_console():
+                    _fo_out = _run_cluster_command(
+                        _4b_pch, "set -rows 0; storage failover show", timeout=30
+                    )
+            except Exception as _fo_exc:
+                _run_ok = False
+                if log:
+                    log.log(f"4b mode 3: could not query storage failover show: {_fo_exc}",
+                            prefix="ERROR")
+            _expected_nodes = []
+            if _fo_out:
+                _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out) if r.get("node")]
+            if len(_expected_nodes) >= _target_nodes:
+                _expected_nodes = _expected_nodes[:_target_nodes]
+                print("\n  🔍 Final failover/giveback check...")
+                if not _wait_for_cluster_healthy(
+                    _4b_pch, _expected_nodes, total_timeout=1200, poll_interval=60, log=log
+                ):
+                    _run_ok = False
+                    if log:
+                        log.log("4b mode 3: final failover/giveback check failed", prefix="ERROR")
+            else:
+                _run_ok = False
+                if log:
+                    log.log(
+                        f"4b mode 3: expected {_target_nodes} nodes in storage failover show, "
+                        f"found {len(_expected_nodes)}",
+                        prefix="ERROR",
+                    )
+            try:
+                _4b_pch.close()
+            except Exception:
+                pass
+            try:
+                if _4b_pcl:
+                    _4b_pcl.close()
+            except Exception:
+                pass
 
     # Close all unified per-node reinit log files now that all workers are done.
     for _ip, _nf in _node_reinit_logs.items():
@@ -11473,15 +11597,17 @@ def _run_4b_standalone(log, resuming: bool = False):
 
     # Mark cluster fully formed in the checkpoint. The caller (_main) will
     # clear the checkpoint file on success.
-    if _checkpoint:
+    if _checkpoint and _run_ok:
         _checkpoint.mark_done("cluster_formed")
         if log:
             log.log("4b: checkpoint: cluster_formed saved")
+    elif _checkpoint and log:
+        log.log("4b: cluster not fully formed; checkpoint retained for resume", prefix="WARN")
 
     global _4b_did_reinit
     _4b_did_reinit = _do_reinit
 
-    return True
+    return _run_ok
 
 
 # ---------------------------------------------------------------------------
@@ -16816,7 +16942,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     print("\n✅ Parallel peer auto-add complete.")
 
 
-def auto_complete_initialization(channel, bmc_host=None):
+def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
     """Drive option-9 → option-4 cluster init non-interactively for mode 1b.
 
     Sequence:
@@ -16881,6 +17007,11 @@ def auto_complete_initialization(channel, bmc_host=None):
     start = time.monotonic()
     last_progress = start
     found = False
+    _rc = reconnect_ctx
+    if _rc is None and _primary_bmc_reconnect_ctx:
+        _rc = _primary_bmc_reconnect_ctx
+    if _rc is not None:
+        _rc["channel"] = channel
     while time.monotonic() - start < 2400:
         if _shutdown_event.is_set():
             return
@@ -16894,18 +17025,31 @@ def auto_complete_initialization(channel, bmc_host=None):
             except Exception:
                 pass
             last_progress = now
-        if channel.recv_ready():
-            chunk = channel.recv(4096).decode("utf-8", errors="replace")
-            if _boot_log:
-                _par_write(_boot_log, chunk)
+        _remaining = max(1, int(2400 - (time.monotonic() - start)))
+        _slice_timeout = min(30, _remaining)
+        _ch = (_rc.get("channel") if (_rc and _rc.get("channel") is not None)
+               else channel)
+        chunk, matched = direct_read_until_any(
+            _ch,
+            sig_lower,
+            timeout=_slice_timeout,
+            node_log=_boot_log,
+            quiet=True,
+            check_bmc_drop=True,
+            reconnect_ctx=_rc,
+        )
+        if _rc and _rc.get("channel") is not None:
+            channel = _rc["channel"]
+        if chunk:
             if _session_log:
                 _session_log.log_console(chunk)
             output_lower += chunk.lower()
-            if any(s in output_lower for s in sig_lower):
-                found = True
-                break
             if len(output_lower) > 16384:
                 output_lower = output_lower[-8192:]
+            last_progress = time.monotonic()
+        if matched:
+            found = True
+            break
         time.sleep(0.1)
 
     if not found:
