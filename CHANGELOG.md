@@ -9,6 +9,22 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **4b skip prompts and continue prompt wording simplified.**
+  The LOADER backup/printenv skip prompts no longer include the parenthetical
+  "DNA check still runs". 4b continue prompts now read
+  `Continue with reinit of entire cluster? [y/n]:` and are asked once at
+  cluster scope.
+- **VLDB-timeout path is now cluster all-or-nothing.**
+  Per-node `Continue with reinit?` prompts were removed from the option-6
+  worker flow. On VLDB timeout, workers proceed directly and the single
+  cluster-level continue gate determines whether reinit continues.
+- **Default BMC username prompt shown when loading config BMC list.**
+  The fallback prompt after loading a BMC config file now reads
+  `BMC username [admin]:` so pressing Enter clearly keeps `admin`.
+- **4b pre-collected cluster admin password now requires confirmation.**
+  When pre-collecting cluster admin password because one or more BMC passwords
+  are blank, the script now asks `Confirm cluster admin password` and retries
+  on mismatch before storing the value.
 - **LOADER prompt detection now keys on `LOADER-` during automation/polling.**
   Prompt waits used by LOADER command execution, netboot, boot-menu staging, and
   status checks were aligned to look for `LOADER-`/`loader-` instead of generic
@@ -62,6 +78,22 @@ revision labels rather than strict [SemVer](https://semver.org/).
   the corruption.
 
 ### Added
+- **Runtime pause/resume control built into live runs.**
+  Added operator-controlled runtime pause that can be triggered by sentinel
+  file (`.afx_pause`) or Unix signals (`SIGUSR1` toggle, `SIGUSR2` resume).
+  While paused, console automation loops hold position and auto-reconnect /
+  reclaim behavior is suppressed so manual BMC console work can proceed
+  without the script taking over.
+- **Runtime manual checkpoint trigger for active runs.**
+  Added manual checkpoint snapshots during live execution via sentinel file
+  (`.afx_checkpoint_now`) or Unix signal (`SIGURG`). Each request writes a
+  timestamped snapshot under `checkpoints/` as
+  `afx_checkpoint_manual_YYYYMMDD_HHMMSS.json`.
+- **Option-4 zero-disks wait now retries option 4 if boot menu is still visible.**
+  In disk-erase auto-answer flow, the script now detects an unchanged
+  `Selection (1-N)?` boot menu during "zero disks confirmation" wait and
+  automatically re-sends option `4` (up to three attempts) to avoid a
+  long stall waiting for prompts that cannot appear.
 - **Boot-menu CR keepalive every 5 minutes.**
   While waiting for the ONTAP boot menu, the script now sends a periodic carriage
   return every 300 seconds to help keep BMC console sessions active during long

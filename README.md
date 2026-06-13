@@ -1105,6 +1105,8 @@ current `[Unreleased]` working set.
 
 | Version | Date | Description |
 |---|---|---|
+| v2 (unreleased) | Jun 13, 2026 | **Runtime pause and checkpoint controls.** Added live pause/resume control for active runs (`.afx_pause`, `SIGUSR1` toggle, `SIGUSR2` resume) that suppresses auto-reconnect while paused, plus manual checkpoint snapshots during runtime (`.afx_checkpoint_now`, `SIGURG`) written as `checkpoints/afx_checkpoint_manual_YYYYMMDD_HHMMSS.json`. |
+| v2 (unreleased) | Jun 13, 2026 | **Safer credential prompts.** Config-loaded BMC username prompt now shows `BMC username [admin]:`, and 4b pre-collected cluster admin passwords now require confirmation (`Confirm cluster admin password`) with mismatch retry. |
 | v2 (unreleased) | Jun 1, 2026 | **Incremental node join timing.** Per-node sub-rows under `Node join total` now show incremental elapsed time (`+Xm`) for the 2nd and later nodes, making it easy to see how long each individual node join took. First node and `Join → all nodes healthy` retain cumulative totals. |
 | v2 (unreleased) | Jun 1, 2026 | **Periodic health-wait heartbeat.** While waiting for all nodes to become healthy, the terminal prints `⏳ Still waiting for N healthy node(s) — elapsed Xm Ys; next check in ~5 min...` every 5 minutes so operators can confirm the script is alive. |
 | v2 (unreleased) | Jun 1, 2026 | **DSA host key rejection fix.** Added `disabled_algorithms={"pubkeys": ["ssh-dss"]}` to every `SSHClient.connect()` call site to prevent `q must be exactly 160, 224, or 256 bits long` errors when BMCs or cluster management interfaces present non-standard DSA host keys. |
