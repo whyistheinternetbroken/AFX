@@ -14169,15 +14169,45 @@ def _run_ontap_upgrade(log):
                 if _WAITING_FOR_CLUSTER_APPS in _state_lower:
                     _not_ready.append("waiting for cluster applications")
 
-                if not _not_ready and _parsed is not None:
+                # Special case: after a rolling upgrade the two nodes in the
+                # SFO pair are temporarily on different ONTAP versions, so
+                # tof=false with a "version mismatch" reason even though the
+                # giveback completed and the node IS back online.  Detect
+                # "Connected to <partner>" + the version-mismatch text and
+                # treat it as success — the mismatch resolves once the second
+                # node is upgraded.
+                _version_mismatch_in_state = (
+                    _VERSION_MISMATCH_SIG in _state_lower
+                )
+                _connected_and_version_mismatch = (
+                    not _tof
+                    and "connected to" in _state_lower
+                    and _version_mismatch_in_state
+                    and _WAITING_FOR_CLUSTER_APPS not in _state_lower
+                )
+
+                if not _not_ready and _parsed is not None or _connected_and_version_mismatch:
                     _total = time.monotonic() - _t0
-                    print(f"  \u2705 {takeover_node} back online. "
-                          f"(total: {int(_total)}s)")
+                    if _connected_and_version_mismatch:
+                        print(f"  \u2705 {takeover_node} back online "
+                              "(tof=false due to inter-node version mismatch — "
+                              "expected mid-upgrade; will resolve after next node "
+                              f"upgrades). (total: {int(_total)}s)")
+                        if log:
+                            log.log(
+                                f"{takeover_node}: giveback complete; tof=false "
+                                "due to version mismatch (expected mid-upgrade) "
+                                f"(total {_total:.0f}s)"
+                            )
+                    else:
+                        print(f"  \u2705 {takeover_node} back online. "
+                              f"(total: {int(_total)}s)")
+                        if log:
+                            log.log(
+                                f"{takeover_node}: takeover/giveback complete "
+                                f"(total {_total:.0f}s)"
+                            )
                     if log:
-                        log.log(
-                            f"{takeover_node}: takeover/giveback complete "
-                            f"(total {_total:.0f}s)"
-                        )
                         log.add_phase_subtiming(
                             "Upgrade Workflow",
                             f"  [{takeover_node}] takeover + giveback",
