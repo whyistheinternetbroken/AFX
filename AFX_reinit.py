@@ -888,6 +888,16 @@ def _print_banner(title: str, *, width: int = 60) -> None:
     print(bar)
 
 
+def _print_autopilot_banner() -> None:
+    """Print the 'no more admin interaction required' transition notice."""
+    bar = "=" * 60
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"\n{bar}")
+    print(f"  🤖 [{ts}] Admin interaction complete.")
+    print("  Autopilot engaged. Check back periodically for job completion.")
+    print(bar + "\n")
+
+
 def _open_shell(client, **kwargs):
     """``client.invoke_shell(**kwargs)`` with ``settimeout(0)`` already
     applied. Returns the channel.
@@ -9828,6 +9838,7 @@ def _run_4b_standalone(log, resuming: bool = False):
         log.log(f"4b: static ifconfig in LOADER: {_netboot_static_ip}")
 
     print("\n  ✅ All setup information collected. Starting operations...")
+    _print_autopilot_banner()
     if log:
         log.log(f"4b: all upfront questions answered; do_reinit={_do_reinit}, mode={_mode_sel}")
 
@@ -13224,6 +13235,7 @@ def _run_ontap_upgrade(log):
         if log:
             log.log(f"Image update mode: {'parallel via {_cl_mgmt_ip}' if _parallel_update else 'sequential via console'}")
 
+        _print_autopilot_banner()
         print("\n  \U0001f4e4 Installing upgrade package to all nodes...")
 
         # Build flat list of (nodename, replace_img) tasks in group order.
@@ -22414,6 +22426,7 @@ def main():
                     except Exception:
                         pass
 
+                    _print_autopilot_banner()
                     ok = _run_2b_parallel_add(
                         _2b_all_peers, sp_user,
                         {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "")
@@ -22467,6 +22480,7 @@ def main():
                 except Exception:
                     pass
 
+                _print_autopilot_banner()
                 ok = _run_2a_parallel_add(
                     _2a_all_peers, sp_user,
                     {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "")
@@ -22519,6 +22533,11 @@ def main():
             # still prevents re-joining nodes that already completed.
             if _operation_mode == 3 and _checkpoint is None:
                 _option3_init_checkpoint(_run_context, sp_host, _peer_bmc_list, config_path)
+
+            # Show autopilot banner for automated modes (1b, 2b, 3) — all
+            # upfront prompts are now done; the rest runs unattended.
+            if _auto_setup or _auto_add or _operation_mode == 3:
+                _print_autopilot_banner()
 
             # Phase: System Reset (skipped if already at LOADER)
             _session_log.start_phase("System Reset")
