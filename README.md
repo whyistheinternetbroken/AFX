@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/12/2026  
+**Updated:** 6/13/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
 ---
@@ -441,11 +441,104 @@ cluster and asks for explicit confirmation.
 | `peer_joined` | per-peer (mode 3) | A peer completes the join wizard and the primary's `cluster show` confirms it. |
 | `option3_complete` | global | The end-to-end mode-3 finalize banner has been printed. The checkpoint file is then deleted. |
 
+### Manual checkpoint snapshots
+
+At any point during a live run you can force an immediate checkpoint snapshot — a timestamped copy of the current checkpoint state — without stopping the script.
+
+**Method 1 — sentinel file (any OS):**
+
+```bash
+# Create the trigger file next to AFX_reinit.py
+touch .afx_checkpoint_now
+```
+
+The script detects the file at the next internal poll, writes a snapshot to `checkpoints/afx_checkpoint_manual_<YYYYMMDD_HHMMSS>.json`, then removes the trigger file.
+
+**Method 2 — Unix signal (Linux / macOS):**
+
+```bash
+# The script prints the PID and signal command at startup, e.g.:
+#   signal checkpoint: kill -URG <pid>
+kill -URG <pid>
+```
+
+`SIGURG` triggers the same snapshot write without touching the filesystem.
+
+The script prints the saved path on screen:
+
+```
+💾 Manual checkpoint saved (operator): checkpoints/afx_checkpoint_manual_20260613_151200.json
+```
+
+Manual snapshot files are separate from the live `afx_checkpoint.json` that `--resume` uses; they are kept for audit/diagnostic purposes and are not loaded automatically.
+
 ### Clearing the checkpoint
 
 The script removes `afx_checkpoint.json` automatically on successful
 completion of mode 4b. To discard a stale checkpoint manually, delete
 the file or answer **no** at the resume prompt.
+
+---
+
+## Pause & Resume (runtime control)
+
+During any automated run (modes 1b, 2b, 3, 4a, 4b) you can pause automation in-place without killing the script. The script freezes at the next safe yield point (typically between boot stages or before issuing a cluster command), then resumes exactly where it left off when the pause is lifted.
+
+At startup the script prints the pause controls for the current run, for example:
+
+```
+⏯️  Runtime pause control:
+   create file: /scripts/AFX/.afx_pause
+   remove file: resume automation
+   signal toggle: kill -USR1 12345
+   signal resume: kill -USR2 12345
+
+💾 Runtime manual checkpoint:
+   create file: /scripts/AFX/.afx_checkpoint_now
+   signal checkpoint: kill -URG 12345
+```
+
+### How to pause
+
+**Method 1 — sentinel file (any OS):**
+
+```bash
+# Pause: create the file
+touch .afx_pause
+
+# Resume: remove the file
+rm .afx_pause
+```
+
+**Method 2 — Unix signals (Linux / macOS):**
+
+```bash
+kill -USR1 <pid>   # toggle pause on/off
+kill -USR2 <pid>   # force resume (clear pause)
+```
+
+While paused the script prints:
+
+```
+⏸️  Pause requested (boot menu wait). Automation and auto-reconnect are paused.
+   Remove pause file to resume: /scripts/AFX/.afx_pause
+```
+
+When the pause file is removed (or `USR2` sent) the script immediately resumes:
+
+```
+▶️  Pause cleared. Resuming automation.
+```
+
+### When to use pause
+
+| Situation | Action |
+|---|---|
+| Unexpected console state — you want to inspect before the script advances | Pause, investigate, remove the pause file |
+| Long-running boot wait — you want to snapshot state before a risky phase | Pause + create `.afx_checkpoint_now`, then resume |
+| Step-debug a wizard phase without killing the run | Pause between phases |
+
+> **Note:** Pause does not affect already-running background threads (parallel peer adds, parallel image installs). It freezes the *coordination* layer — new phases will not start, reconnects will be deferred — but threads that are actively mid-operation finish their current step.
 
 ---
 
@@ -873,47 +966,26 @@ sudo dnf install ipmitool
 
 ### Pause a live run for manual BMC console commands
 
-If you need to take over a BMC console during an active run without killing the script:
+See [Pause & Resume (runtime control)](#pause--resume-runtime-control) for full details including signal-based controls and when to use each method.
 
 ```bash
 # Create/remove in the same directory as AFX_reinit.py
-# Pause automation + auto-reconnect
-touch .afx_pause
-
-# ...run your manual BMC console commands...
-
-# Resume automation
-rm -f .afx_pause
+touch .afx_pause    # pause automation
+rm -f .afx_pause    # resume automation
 ```
-
-The pause sentinel is checked continuously by the console read loops. While `.afx_pause` exists, the script holds its place and suppresses reconnect/reclaim behavior until the file is removed.
-
-On Linux/macOS, pause is also built into the script via signals:
-
-```bash
-kill -USR1 <script-pid>   # toggle pause/resume
-kill -USR2 <script-pid>   # force resume
-```
-
-The script prints these signal shortcuts (with its PID) at startup.
 
 ### Create a manual checkpoint mid-run
 
-You can force a checkpoint snapshot while the script is running:
+See [Manual checkpoint snapshots](#manual-checkpoint-snapshots) for full details including signal-based triggering.
 
 ```bash
 # Create request file in the same directory as AFX_reinit.py
 touch .afx_checkpoint_now
 ```
 
-On Linux/macOS, you can also signal it directly:
-
-```bash
-kill -URG <script-pid>
-```
-
 The script writes a timestamped snapshot under `checkpoints/` as:
 `afx_checkpoint_manual_YYYYMMDD_HHMMSS.json`.
+
 
 ### BMC SSH banner timeout (session pool full)
 
