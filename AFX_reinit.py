@@ -14191,13 +14191,36 @@ def _run_ontap_upgrade(log):
                     if _connected_and_version_mismatch:
                         print(f"  \u2705 {takeover_node} back online "
                               "(tof=false due to inter-node version mismatch — "
-                              "expected mid-upgrade; will resolve after next node "
-                              f"upgrades). (total: {int(_total)}s)")
+                              "expected mid-upgrade). "
+                              f"(total: {int(_total)}s)")
                         if log:
                             log.log(
                                 f"{takeover_node}: giveback complete; tof=false "
                                 "due to version mismatch (expected mid-upgrade) "
                                 f"(total {_total:.0f}s)"
+                            )
+                        # Register the partner as requiring allow-version-mismatch
+                        # so the outer rolling-upgrade loop uses the correct option
+                        # when it calls _do_takeover_giveback for takeover_by.
+                        _ver_mismatch_nodes.add(takeover_by)
+                        if log:
+                            log.log(
+                                f"Marked {takeover_by} as requiring "
+                                "allow-version-mismatch for next takeover"
+                            )
+                        # Proactively issue the takeover of the partner with
+                        # allow-version-mismatch so it is already in progress
+                        # when the outer loop reaches it.
+                        print(f"\n  \u26a1 Proactively issuing takeover of "
+                              f"{takeover_by} with allow-version-mismatch...")
+                        _send_cmd(
+                            f"storage failover takeover -ofnode {takeover_by} "
+                            f"-option allow-version-mismatch -override-vetoes true"
+                        )
+                        if log:
+                            log.log(
+                                f"Issued proactive takeover of {takeover_by} "
+                                "with allow-version-mismatch"
                             )
                     else:
                         print(f"  \u2705 {takeover_node} back online. "
