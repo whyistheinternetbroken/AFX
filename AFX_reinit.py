@@ -13974,9 +13974,11 @@ def _run_ontap_upgrade(log):
                                 if _CLUSTER_PROMPT_RE.search(_buf[-200:]):
                                     break
                             time.sleep(0.2)
+                    return _buf
 
+                _out = ""
                 try:
-                    _do_send(_cl_ch)
+                    _out = _do_send(_cl_ch)
                 except Exception as _sc_err:
                     # _cl_ch may have dropped when the cluster-mgmt LIF
                     # migrated during the takeover.  The poll channel
@@ -13988,13 +13990,14 @@ def _run_ontap_upgrade(log):
                                 f"({_sc_err}); retrying via poll channel",
                                 prefix="WARN",
                             )
-                        _do_send(_poll_channel[0])
+                        _out = _do_send(_poll_channel[0])
                     elif log:
                         log.log(
                             f"_send_cmd: channel error ({_sc_err}), "
                             "no poll channel available",
                             prefix="ERROR",
                         )
+                return _out
 
             # ── Issue takeover ───────────────────────────────────────────────
             def _close_poll():
@@ -14211,15 +14214,43 @@ def _run_ontap_upgrade(log):
                         # when the outer loop reaches it.
                         print(f"\n  \u26a1 Proactively issuing takeover of "
                               f"{takeover_by} with allow-version-mismatch...")
-                        _send_cmd(
+                        _WAFL_NEWER_ERR = (
+                            "partner versions of WAFL and/or RAID are newer"
+                            " than this node"
+                        )
+                        _proactive_out = _send_cmd(
                             f"storage failover takeover -ofnode {takeover_by} "
                             f"-option allow-version-mismatch -override-vetoes true"
                         )
-                        if log:
-                            log.log(
-                                f"Issued proactive takeover of {takeover_by} "
-                                "with allow-version-mismatch"
+                        if _proactive_out and _WAFL_NEWER_ERR in _proactive_out:
+                            # ONTAP rejected takeover of takeover_by because its
+                            # WAFL/RAID is considered newer from this node's
+                            # perspective — retry in the opposite direction.
+                            print(f"  ⚠️  Takeover of {takeover_by} rejected "
+                                  f"(WAFL/RAID newer). Retrying takeover of "
+                                  f"{takeover_node} instead...")
+                            if log:
+                                log.log(
+                                    f"Proactive takeover of {takeover_by} failed "
+                                    f"(WAFL/RAID newer); retrying -ofnode "
+                                    f"{takeover_node}",
+                                    prefix="WARN",
+                                )
+                            _send_cmd(
+                                f"storage failover takeover -ofnode {takeover_node} "
+                                f"-option allow-version-mismatch -override-vetoes true"
                             )
+                            if log:
+                                log.log(
+                                    f"Issued proactive takeover of {takeover_node} "
+                                    "with allow-version-mismatch (fallback)"
+                                )
+                        else:
+                            if log:
+                                log.log(
+                                    f"Issued proactive takeover of {takeover_by} "
+                                    "with allow-version-mismatch"
+                                )
                     else:
                         print(f"  \u2705 {takeover_node} back online. "
                               f"(total: {int(_total)}s)")
