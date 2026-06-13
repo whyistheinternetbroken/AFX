@@ -37,6 +37,8 @@ from datetime import datetime
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 
+SCRIPT_VERSION = "1.1.1"
+
 # OPT: compile LOADER prompt regex once at module level instead of per-iteration
 _LOADER_PROMPT_RE = re.compile(r'LOADER-\w+>')
 
@@ -4108,6 +4110,9 @@ OPTIONS
     -h, --help
         Print this help page and exit.
 
+    --version
+        Print script version and last update timestamp, then exit.
+
     -c PATH, --config PATH
         Path to a JSON configuration file containing cluster and node
         parameters (BMC addresses, credentials, management IPs, etc.).
@@ -4211,6 +4216,9 @@ EXAMPLES
     Resume an interrupted 4b run:
         python3 AFX_reinit.py --resume --config configs/reinit-config.json
 
+    Print script version metadata:
+        python3 AFX_reinit.py --version
+
 FILES
     reinit-config.json
         Default configuration file name.  Searched in ./configs/, the script
@@ -4245,6 +4253,36 @@ SEE ALSO
     print(page)
 
 
+def _script_last_update_timestamp() -> str:
+    """Return last update timestamp for this script.
+
+    Prefers git commit timestamp for AFX_reinit.py; falls back to file mtime.
+    """
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+    script_name = os.path.basename(script_path)
+    try:
+        ts = subprocess.check_output(
+            ["git", "-C", script_dir, "log", "-1", "--format=%cI", "--", script_name],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        if ts:
+            return ts
+    except Exception:
+        pass
+    return datetime.fromtimestamp(os.path.getmtime(script_path)).isoformat(timespec="seconds")
+
+
+def _print_version_info() -> None:
+    print(f"AFX_reinit.py version: {SCRIPT_VERSION}")
+    print(f"Last update timestamp: {_script_last_update_timestamp()}")
+
+
+def _version_banner_line() -> str:
+    return f"AFX_reinit.py v{SCRIPT_VERSION} (last update: {_script_last_update_timestamp()})"
+
+
 def parse_args():
     # Disable argparse's built-in -h/--help so we can provide a man-page
     # style replacement instead.
@@ -4254,6 +4292,8 @@ def parse_args():
     )
     parser.add_argument("--help", "-h", action="store_true", default=False,
                         help="Print this help page and exit.")
+    parser.add_argument("--version", action="store_true", default=False,
+                        help="Print script version and last update timestamp, then exit.")
     parser.add_argument("--debug", "-d", action="store_true", default=False,
                         help="Debug mode: print all raw console output to the "
                              "screen instead of suppressing it to the log file. "
@@ -4335,6 +4375,9 @@ def parse_args():
     args = parser.parse_args()
     if args.help:
         _print_man_page()
+        sys.exit(0)
+    if args.version:
+        _print_version_info()
         sys.exit(0)
     return args
 
@@ -17496,6 +17539,8 @@ def _make_session_log(label: str) -> "SessionLogger":
     """
     global _session_log
     _session_log = SessionLogger(bg_mode=_bg_mode)
+    _banner = _version_banner_line()
+    print(f"\n🚀 {_banner}")
 
     def _atexit_close():
         if _session_log and not _session_log._file.closed:
@@ -17508,6 +17553,7 @@ def _make_session_log(label: str) -> "SessionLogger":
     if label:
         _session_log._operation_label = label
         _session_log.log(label)
+    _session_log.log(f"Script version: {_banner}")
     try:
         _ssh_path = _resolve_ssh_log_file()
         _session_log.log(f"SSH connection log: {_ssh_path}")
