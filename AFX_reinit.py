@@ -9910,11 +9910,11 @@ def _run_4b_standalone(log, resuming: bool = False):
                 f"primary_setup_done={_checkpoint.is_done('primary_setup_done')}"
             )
 
-    # Open per-node log files.
+    # Open per-BMC session logs for the install flow.
     for ip in bmc_ips:
         try:
-            _node_files[ip] = _node_log_open(ip, _log_dir, prefix="4b_node")
-            print(f"  📝 [{ip}] Log: {_node_files[ip].name}")
+            _node_files[ip] = _node_log_open(ip, _log_dir, prefix="bmc_session")
+            print(f"  📝 [{ip}] BMC session log: {_node_files[ip].name}")
         except Exception as exc:
             print(f"  ⚠️  [{ip}] Could not open node log: {exc}")
             _node_files[ip] = None
@@ -11294,13 +11294,13 @@ def _run_4b_standalone(log, resuming: bool = False):
     _reconnect_errors = []
     _reconnect_lock = threading.Lock()
 
-    # Pre-open one unified log file per node that spans all reinit phases
+    # Pre-open one unified per-BMC session log file for reinit phases
     # (reconnect-to-LOADER, boot menu, and init wizard).
-    #   Primary node → 4b_node_reinit_primary_<ip>_<ts>.log
-    #   Peer nodes   → 4b_node_add_<ip>_<ts>.log
+    #   Primary node → bmc_session_reinit_primary_<ip>_<ts>.log
+    #   Peer nodes   → bmc_session_add_<ip>_<ts>.log
     _node_reinit_logs = {}  # {ip: file_handle}
     for _ip in bmc_ips:
-        _pfx = "4b_node_reinit_primary" if _ip == first_ip else "4b_node_add"
+        _pfx = "bmc_session_reinit_primary" if _ip == first_ip else "bmc_session_add"
         try:
             _nf = _node_log_open(_ip, _log_dir, prefix=_pfx,
                                  previous_log=_node_files.get(_ip))
