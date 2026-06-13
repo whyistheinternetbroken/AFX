@@ -8735,7 +8735,7 @@ def _collect_netboot_bmcs():
                 _bmc_user = _first_user
 
             if not _bmc_user:
-                _bmc_user = input("  BMC username: ").strip() or "admin"
+                _bmc_user = input("  BMC username [admin]: ").strip() or "admin"
             else:
                 # Only prompt to override the username for address-only files
                 # (BMC_IP.json). Full config files carry the username.
@@ -9615,17 +9615,26 @@ def _run_4b_standalone(log, resuming: bool = False):
         global _cluster_config
         if not (_cluster_config and _cluster_config.get("admin_password")):
             print("")
-            _pre_cluster_pw = getpass.getpass(
-                "  Enter the cluster admin password to be used during "
-                "cluster configuration: "
-            )
-            if _pre_cluster_pw:
+            while True:
+                _pre_cluster_pw = getpass.getpass(
+                    "  Enter the cluster admin password to be used during "
+                    "cluster configuration: "
+                )
+                if not _pre_cluster_pw:
+                    break
+                _pre_cluster_pw_confirm = getpass.getpass(
+                    "  Confirm cluster admin password: "
+                )
+                if _pre_cluster_pw_confirm != _pre_cluster_pw:
+                    print("    ⚠️  Passwords do not match. Try again.")
+                    continue
                 if not isinstance(_cluster_config, dict):
                     _cluster_config = {}
                 _cluster_config["admin_password"] = _pre_cluster_pw
                 _ctx_sync_from_globals()
                 if log:
                     log.log("4b: cluster admin password pre-collected (BMC password was empty)")
+                break
 
     # ── Step 1b: Package selection (ask now, before operations begin) ──────
     if log:
