@@ -6008,6 +6008,8 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     print(f"\n⏳ {_pfx}Primary node booting to boot menu (will auto-select option {option} – {description}){_elapsed_str()}")
     if node_log and hasattr(node_log, "name"):
         print(f"   📝 {_pfx}Primary node log: {node_log.name}")
+    if _session_log and getattr(_session_log, "log_file", None):
+        print(f"   📝 {_pfx}BMC session log: {_session_log.log_file}")
     if _session_log:
         _session_log.log(
             f"Phase 2: Waiting for boot menu up to {timeout}s "
@@ -9037,12 +9039,7 @@ def _node_log_open(ip, log_dir, prefix="node", previous_log=None):
     """Open (or create) a per-node log file in *log_dir*.
 
     If *previous_log* is an open file handle for the preceding phase log,
-    a handoff footer is written to it before the new file is returned:
-
-        ========================================================================
-        [<prev_filename>] phase complete.
-        Next phase is logged to [<new_filename>]. End of file.
-        ========================================================================
+    a handoff footer is written to it before the new file is returned.
 
     Returns an open file handle (text mode, line-buffered).
     """
@@ -9053,13 +9050,14 @@ def _node_log_open(ip, log_dir, prefix="node", previous_log=None):
     new_file = open(path, "w", encoding="utf-8", buffering=1)
     if previous_log is not None:
         try:
-            prev_name = os.path.basename(previous_log.name)
-            next_name = os.path.basename(path)
+            prev_path = getattr(previous_log, "name", "")
+            next_path = path
             sep = "=" * 72
             previous_log.write(
                 f"\n{sep}\n"
-                f"[{prev_name}] phase complete.\n"
-                f"Next phase is logged to [{next_name}]. End of file.\n"
+                "Log complete. Moved on to next phase.\n"
+                f"Review that log at [{prev_path}].\n"
+                f"Next phase is logged to [{next_path}]. End of file.\n"
                 f"{sep}\n"
             )
             previous_log.flush()
@@ -17200,7 +17198,8 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
                 sep = "=" * 72
                 _boot_log.write(
                     f"\n{sep}\n"
-                    f"[{os.path.basename(_boot_log.name)}] phase complete.\n"
+                    "Log complete. Moved on to next phase.\n"
+                    f"Review that log at [{_boot_log.name}].\n"
                     f"Next phase is logged to [{next_log_name}]. End of file.\n"
                     f"{sep}\n"
                 )
