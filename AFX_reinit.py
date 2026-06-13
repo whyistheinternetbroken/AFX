@@ -7309,6 +7309,22 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             _cc_done_ev.set()
             _cc_done_ev = None
 
+    # Checkpoint: disks have been formatted and ONTAP image installed
+    if _checkpoint:
+        try:
+            if _node_add:
+                # Option 2: node is installing/formatting
+                _checkpoint.mark_done("node_install_done")
+                _checkpoint.mark_done("node_format_done")
+                _slog("checkpoint: node_install_done and node_format_done saved")
+            elif _operation_mode == 1:
+                # Option 1: primary is installing/formatting
+                _checkpoint.mark_done("primary_install_done")
+                _checkpoint.mark_done("primary_format_done")
+                _slog("checkpoint: primary_install_done and primary_format_done saved")
+        except Exception:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # Diagnostic bootarg helpers
@@ -14299,6 +14315,14 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None):
         except Exception:
             pass
 
+    # Checkpoint: For option 1, also mark primary_setup_done
+    if _checkpoint and _operation_mode == 1:
+        try:
+            _checkpoint.mark_done("primary_setup_done")
+            _slog("checkpoint: primary_setup_done saved")
+        except Exception:
+            pass
+
     # Apply any pre-configured ONTAP license(s).
     if _license_mode:
         if _login_primary_cluster_shell(channel, cc.get("admin_password")):
@@ -14359,6 +14383,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None):
             _session_log.set_outcome("PASS", "cluster setup complete (mode 1)")
             try:
                 _session_log.close()
+            except Exception:
+                pass
+        # Checkpoint: mark option 1 as complete
+        if _checkpoint:
+            try:
+                _checkpoint.mark_done("option1_complete")
+                _slog("checkpoint: option1_complete saved")
             except Exception:
                 pass
         sys.exit(0)
@@ -14630,6 +14661,14 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         _session_log.log(f"Node {bmc_host or sp_host} reached login: prompt")
         _session_log.end_phase()
 
+    # Checkpoint: node has joined the cluster
+    if _checkpoint and _operation_mode == 2:
+        try:
+            _checkpoint.mark_done("node_joined")
+            _slog("checkpoint: node_joined saved")
+        except Exception:
+            pass
+
     # 6. Offer to add another node in the same run.
     # Mark the current node as done so it is never offered again.
     _2b_processed_bmcs.add(bmc_host or sp_host)
@@ -14652,6 +14691,13 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         if ans != "y":
             print("\n👋 No more nodes to add – exiting.")
             _slog("Operator declined to add another node; exiting")
+            # Checkpoint: mark option 2 as complete
+            if _checkpoint and _operation_mode == 2:
+                try:
+                    _checkpoint.mark_done("option2_complete")
+                    _slog("checkpoint: option2_complete saved")
+                except Exception:
+                    pass
             _shutdown_event.set()
             return
 
@@ -16247,6 +16293,143 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
     except Exception as exc:
         if session_log:
             session_log.log(f"option 3 checkpoint init failed: {exc}", prefix="WARN")
+
+
+def _option1_init_checkpoint(ctx, sp_host, config_path):
+    """Detect any prior option-1 checkpoint and initialise a fresh one.
+
+    If a prior checkpoint shows the primary node already had its cluster
+    created (``primary_setup_done`` set, ``option1_complete`` not set), warn
+    the operator that the cluster already exists and suggest exiting.
+    On confirmation (or no destructive risk) the prior checkpoint is cleared
+    and a fresh one initialised.
+
+    Mutates ``ctx.checkpoint`` and syncs back to the legacy ``_checkpoint``
+    global so downstream callers that still read the global see the new
+    value. Calls ``sys.exit(0)`` if the operator aborts.
+    """
+    ctx.refresh_from_globals()
+    session_log = ctx.session_log
+
+    prior = CheckpointManager()
+    if prior.load():
+        prior_bootmenu = prior.is_done("primary_bootmenu_done")
+        prior_install = prior.is_done("primary_install_done")
+        prior_format = prior.is_done("primary_format_done")
+        prior_primary = prior.is_done("primary_setup_done")
+        prior_complete = prior.is_done("option1_complete")
+        _print_banner("🔖 Prior option-1 checkpoint found")
+        print(f"     BMC IP                : {sp_host}")
+        print(f"     Mode                  : {prior.mode}")
+        if prior_bootmenu:
+            print("     primary_bootmenu_done : ✅ (boot menu cleared)")
+        if prior_install:
+            print("     primary_install_done  : ✅ (ONTAP image installed)")
+        if prior_format:
+            print("     primary_format_done   : ✅ (disks formatted)")
+        if prior_primary:
+            print("     primary_setup_done    : ✅ (cluster already created)")
+        if prior_complete:
+            print("     option1_complete      : ✅")
+        print("=" * 60)
+        
+        if prior_primary and not prior_complete:
+            print("\n  ⚠️  The cluster was already created in a prior run!")
+            print("  Running option 1 again will DESTROY THE CLUSTER and lose all data.")
+            print("  The cluster is likely still running.\n")
+            ans = _prompt("Continue anyway? [y/N]: ").strip().lower()
+            if ans not in ("y", "yes"):
+                print("  Exiting without changes.")
+                sys.exit(0)
+        
+        # Clear prior checkpoint for fresh run
+        prior.clear()
+        print("\n  Prior checkpoint cleared — starting fresh.\n")
+        if session_log:
+            session_log.log("Prior option-1 checkpoint cleared; starting fresh")
+
+    try:
+        all_bmcs = [sp_host] if sp_host else []
+        cp = CheckpointManager(
+            mode="1",
+            bmc_ips=all_bmcs,
+            log_dir=(session_log.log_dir
+                     if session_log and hasattr(session_log, "log_dir") else ""),
+            config_path=(config_path or ""),
+        )
+        ctx.checkpoint = cp
+        ctx.apply_to_globals()
+        if session_log:
+            session_log.log(f"option 1 checkpoint initialised for BMC: {sp_host}")
+    except Exception as exc:
+        if session_log:
+            session_log.log(f"option 1 checkpoint init failed: {exc}", prefix="WARN")
+
+
+def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
+    """Detect any prior option-2 checkpoint and initialise a fresh one.
+
+    If a prior checkpoint shows the node was already joined to the cluster
+    (``node_joined`` set, ``option2_complete`` not set), warn the operator.
+    On confirmation (or no destructive risk) the prior checkpoint is cleared
+    and a fresh one initialised.
+
+    Mutates ``ctx.checkpoint`` and syncs back to the legacy ``_checkpoint``
+    global so downstream callers that still read the global see the new
+    value. Calls ``sys.exit(0)`` if the operator aborts.
+    """
+    ctx.refresh_from_globals()
+    session_log = ctx.session_log
+
+    prior = CheckpointManager()
+    if prior.load():
+        prior_install = prior.is_done("node_install_done")
+        prior_format = prior.is_done("node_format_done")
+        prior_joined = prior.is_done("node_joined")
+        prior_complete = prior.is_done("option2_complete")
+        _print_banner("🔖 Prior option-2 checkpoint found")
+        print(f"     BMC IP                : {secondary_bmc}")
+        print(f"     Mode                  : {prior.mode}")
+        if prior_install:
+            print("     node_install_done     : ✅ (ONTAP image installed)")
+        if prior_format:
+            print("     node_format_done      : ✅ (disks formatted)")
+        if prior_joined:
+            print("     node_joined           : ✅ (node already joined cluster)")
+        if prior_complete:
+            print("     option2_complete      : ✅")
+        print("=" * 60)
+        
+        if prior_joined and not prior_complete:
+            print("\n  ⚠️  The node was already added to the cluster in a prior run!")
+            print("  Running option 2 again may cause duplicate node entries.\n")
+            ans = _prompt("Continue anyway? [y/N]: ").strip().lower()
+            if ans not in ("y", "yes"):
+                print("  Exiting without changes.")
+                sys.exit(0)
+        
+        # Clear prior checkpoint for fresh run
+        prior.clear()
+        print("\n  Prior checkpoint cleared — starting fresh.\n")
+        if session_log:
+            session_log.log("Prior option-2 checkpoint cleared; starting fresh")
+
+    try:
+        all_bmcs = [secondary_bmc] if secondary_bmc else []
+        cp = CheckpointManager(
+            mode="2",
+            bmc_ips=all_bmcs,
+            log_dir=(session_log.log_dir
+                     if session_log and hasattr(session_log, "log_dir") else ""),
+            config_path=(config_path or ""),
+        )
+        ctx.checkpoint = cp
+        ctx.apply_to_globals()
+        if session_log:
+            session_log.log(f"option 2 checkpoint initialised for BMC: {secondary_bmc}")
+    except Exception as exc:
+        if session_log:
+            session_log.log(f"option 2 checkpoint init failed: {exc}", prefix="WARN")
 
 
 def _find_post_scripts() -> list:
@@ -21595,6 +21778,16 @@ def main():
                 os.makedirs(snap_dir, exist_ok=True)
                 snap_path = os.path.join(snap_dir, "reinit-config.json")
                 write_config_snapshot(snap_path)
+
+            # ── Option 1 checkpoint init (before destructive ops) ────────────────
+            # Detect prior option-1 runs and warn about destructive operations.
+            if _operation_mode == 1 and _checkpoint is None:
+                _option1_init_checkpoint(_run_context, sp_host, config_path)
+
+            # ── Option 2 checkpoint init (before destructive ops) ────────────────
+            # Detect prior option-2 runs and warn about destructive operations.
+            if _operation_mode == 2 and _checkpoint is None:
+                _option2_init_checkpoint(_run_context, sp_host, config_path)
 
             # ── Option 3 checkpoint init (before destructive ops) ────────────────
             # The actual primary-setup phases are not skipped on resume (re-running
