@@ -2740,6 +2740,15 @@ _active_client  = None
 _ctrl_c_count   = 0
 _bg_mode        = False  # True when --bg flag is passed
 
+# Runtime pause control: when this sentinel file exists, automation loops pause
+# and auto-reconnect behavior is suppressed until the file is removed.
+_PAUSE_SENTINEL_FILE = ".afx_pause"
+_CHECKPOINT_REQUEST_FILE = ".afx_checkpoint_now"
+_pause_state_lock = threading.Lock()
+_pause_announced = False
+_runtime_cmd_lock = threading.Lock()
+_manual_checkpoint_signal_event = threading.Event()
+
 # Primary BMC host currently in use. Set by connect_to_sp so shared BMC
 # read loops can attempt a full SSH reconnect + system-console re-entry when
 # console output is silent for an extended period.
@@ -2753,6 +2762,126 @@ _primary_bmc_password = None
 
 # Shared reconnect context for primary-BMC read loops.
 _primary_bmc_reconnect_ctx = {}
+
+
+def _pause_sentinel_path() -> str:
+    return os.path.join(_script_dir(), _PAUSE_SENTINEL_FILE)
+
+
+def _checkpoint_request_path() -> str:
+    return os.path.join(_script_dir(), _CHECKPOINT_REQUEST_FILE)
+
+
+def _pause_requested() -> bool:
+    with suppress(Exception):
+        return os.path.isfile(_pause_sentinel_path())
+    return False
+
+
+def _create_manual_checkpoint(source: str = "operator") -> bool:
+    """Persist a manual checkpoint snapshot of current run state."""
+    with _runtime_cmd_lock:
+        if _checkpoint is None:
+            _ts_print("⚠️  Manual checkpoint requested, but no active checkpoint context is available.")
+            _slog(f"Manual checkpoint request ignored ({source}): no active checkpoint", prefix="WARN")
+            return False
+        try:
+            # Flush in-memory checkpoint state first.
+            _checkpoint.save()
+            _cp_path = getattr(_checkpoint, "_path", "")
+            _cp_dir = os.path.dirname(_cp_path) if _cp_path else os.path.join(
+                _script_dir(), CheckpointManager.CHECKPOINT_DIR
+            )
+            os.makedirs(_cp_dir, exist_ok=True)
+            _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            _manual_path = os.path.join(_cp_dir, f"afx_checkpoint_manual_{_ts}.json")
+            if _cp_path and os.path.isfile(_cp_path):
+                shutil.copy2(_cp_path, _manual_path)
+            else:
+                with open(_manual_path, "w", encoding="utf-8") as _mh:
+                    json.dump(getattr(_checkpoint, "_data", {}), _mh, indent=2)
+                    _mh.write("\n")
+            _ts_print(f"💾 Manual checkpoint saved ({source}): {_manual_path}")
+            _slog(f"Manual checkpoint saved ({source}): {_manual_path}")
+            return True
+        except Exception as exc:
+            _ts_print(f"⚠️  Manual checkpoint save failed ({source}): {exc}")
+            _slog(f"Manual checkpoint save failed ({source}): {exc}", prefix="WARN")
+            return False
+
+
+def _process_runtime_requests(context: str = "runtime loop") -> None:
+    """Handle runtime control requests (checkpoint file/signal)."""
+    _cp_path = _checkpoint_request_path()
+    _from_file = False
+    with suppress(Exception):
+        if os.path.isfile(_cp_path):
+            os.remove(_cp_path)
+            _from_file = True
+    if _from_file:
+        _create_manual_checkpoint(source=f"{context} file request")
+    if _manual_checkpoint_signal_event.is_set():
+        _manual_checkpoint_signal_event.clear()
+        _create_manual_checkpoint(source=f"{context} signal request")
+
+
+def _wait_if_paused(context: str = "automation") -> None:
+    """Block while runtime pause is active.
+
+    Operators can pause/resume a live run by creating/removing the sentinel
+    file returned by _pause_sentinel_path().
+    """
+    global _pause_announced
+    _process_runtime_requests(context)
+    _path = _pause_sentinel_path()
+    while not _shutdown_event.is_set() and _pause_requested():
+        _process_runtime_requests(context)
+        with _pause_state_lock:
+            if not _pause_announced:
+                _pause_announced = True
+                _ts_print(
+                    f"⏸️  Pause requested ({context}). "
+                    "Automation and auto-reconnect are paused."
+                )
+                _ts_print(f"   Remove pause file to resume: {_path}")
+                _slog(f"Pause requested ({context}) via {_path}; automation paused",
+                      prefix="WARN")
+        time.sleep(1.0)
+    with _pause_state_lock:
+        if _pause_announced:
+            _pause_announced = False
+            _ts_print("▶️  Pause cleared. Resuming automation.")
+            _slog("Pause cleared; resuming automation")
+
+
+def _pause_allows_reconnect(context: str = "reconnect") -> bool:
+    """Return False when runtime pause is active and reconnect should be deferred."""
+    if _pause_requested():
+        _wait_if_paused(context)
+        return False
+    return True
+
+
+def _set_pause_state(paused: bool, source: str = "operator") -> bool:
+    """Create/remove pause sentinel. Returns True on success."""
+    _path = _pause_sentinel_path()
+    try:
+        if paused:
+            with open(_path, "a", encoding="utf-8"):
+                pass
+            _ts_print(f"⏸️  Runtime pause enabled ({source}).")
+            _ts_print(f"   Sentinel: {_path}")
+            _slog(f"Runtime pause enabled ({source}) via sentinel {_path}", prefix="WARN")
+        else:
+            with suppress(FileNotFoundError):
+                os.remove(_path)
+            _ts_print(f"▶️  Runtime pause cleared ({source}).")
+            _slog(f"Runtime pause cleared ({source})")
+        return True
+    except Exception as exc:
+        _ts_print(f"⚠️  Failed to update runtime pause state ({source}): {exc}")
+        _slog(f"Failed to update runtime pause state ({source}): {exc}", prefix="WARN")
+        return False
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -3863,6 +3992,7 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
     while True:
         if _shutdown_event.is_set():
             return output, None
+        _wait_if_paused("console I/O loop")
         if channel.recv_ready():
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
             last_console_data = time.monotonic()
@@ -3878,6 +4008,8 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
             if _session_log:
                 _session_log.log_console(chunk)
             if check_bmc_drop and _looks_like_bmc_drop(chunk):
+                if not _pause_allows_reconnect("BMC drop detected"):
+                    continue
                 _rc_t = time.monotonic()
                 _reclaim_system_console(channel, node_log=node_log)
                 start_time += time.monotonic() - _rc_t
@@ -3908,6 +4040,8 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
         if (check_bmc_drop and reconnect_ctx and reconnect_ctx.get("host")
                 and _idle >= _BMC_CONSOLE_SILENCE_RECONNECT_INTERVAL
                 and (_now - last_silence_reconnect_attempt) >= _BMC_CONSOLE_SILENCE_RECONNECT_INTERVAL):
+            if not _pause_allows_reconnect("console silence reconnect"):
+                continue
             _rc_t = _now
             last_silence_reconnect_attempt = _now
             _host = reconnect_ctx.get("host")
@@ -4040,6 +4174,7 @@ def drain_channel(channel, seconds=2, node_log=None, quiet=False):
     while time.monotonic() - start_time < seconds:
         if _shutdown_event.is_set():
             return output
+        _wait_if_paused("channel drain")
         if channel.recv_ready():
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
             output += chunk
@@ -4077,6 +4212,19 @@ def signal_handler(sig, frame):
             except Exception:
                 pass
         os._exit(1)
+
+
+def pause_toggle_signal_handler(sig, frame):
+    _now_paused = not _pause_requested()
+    _set_pause_state(_now_paused, source=f"signal {sig} toggle")
+
+
+def pause_clear_signal_handler(sig, frame):
+    _set_pause_state(False, source=f"signal {sig} clear")
+
+
+def manual_checkpoint_signal_handler(sig, frame):
+    _manual_checkpoint_signal_event.set()
 
 
 def _print_man_page():
@@ -5893,6 +6041,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     while time.monotonic() - start_time < timeout:
         if _shutdown_event.is_set():
             return False
+        _wait_if_paused("boot menu wait")
         if channel.recv_ready():
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
             output += chunk
@@ -5916,6 +6065,8 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                         f"[{node_label or 'primary'}] detected 'Waiting for BMC' in boot output"
                     )
             if _looks_like_bmc_drop(chunk):
+                if not _pause_allows_reconnect("boot menu BMC drop"):
+                    continue
                 _rc_t = time.monotonic()
                 _reclaim_system_console(channel, node_log=node_log)
                 start_time += time.monotonic() - _rc_t
@@ -5949,6 +6100,8 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 pass
         if (reconnect_ctx is not None and waiting_for_bmc_seen and waiting_for_bmc_retry_armed
                 and now - last_progress > 60):
+            if not _pause_allows_reconnect("Waiting-for-BMC reconnect"):
+                continue
             waiting_for_bmc_retry_armed = False
             _host = reconnect_ctx.get("host")
             _user = reconnect_ctx.get("user")
@@ -7244,6 +7397,7 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None):
     while time.monotonic() - start < timeout:
         if _shutdown_event.is_set():
             return None
+        _wait_if_paused("wizard-start wait")
         if channel.recv_ready():
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
             output += chunk
@@ -7256,6 +7410,8 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None):
             if _session_log:
                 _session_log.log_console(chunk)
             if _looks_like_bmc_drop(chunk):
+                if not _pause_allows_reconnect("wizard-start BMC drop"):
+                    continue
                 _rc_t = time.monotonic()
                 _reclaim_system_console(channel, node_log=node_log)
                 start += time.monotonic() - _rc_t
@@ -7324,6 +7480,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
     if _node_add:
         print(f"\n⏳ {_pfx}Resetting configuration and rebooting.{_elapsed_str()}")
     _cc_done_ev = None  # set when the cluster-creation progress reporter starts
+    _menu_sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
     for trigger, resp, lbl in (
         ("zero disks, reset config and install a new file system", "yes",
          "zero disks confirmation"),
@@ -7353,9 +7510,50 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
         elif not _node_add:
             print(f"\n⏳ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
         _slog(f"Waiting for {lbl}")
-        direct_send_and_wait(channel, "", trigger, timeout=1800, auto_respond=resp,
-                             check_bmc_drop=True, quiet=_node_add, node_log=node_log,
-                             reconnect_ctx=reconnect_ctx)
+        if lbl == "zero disks confirmation":
+            # If option 4 was not accepted, the boot menu can remain at
+            # "Selection (1-N)?". Detect that and resend option 4 so we don't
+            # sit for 30 minutes waiting on a prompt that will never arrive.
+            _deadline = time.monotonic() + 1800
+            _answered = False
+            _resend_count = 0
+            while time.monotonic() < _deadline and not _answered:
+                _remaining = max(1, int(_deadline - time.monotonic()))
+                _wait = min(60, _remaining)
+                _out, _matched = direct_read_until_any(
+                    channel,
+                    [trigger] + _menu_sigs,
+                    timeout=_wait,
+                    node_log=node_log,
+                    check_bmc_drop=True,
+                    quiet=_node_add,
+                    reconnect_ctx=reconnect_ctx,
+                )
+                if _matched and _matched.lower() == trigger.lower():
+                    time.sleep(0.3)
+                    channel.send(resp + "\r")
+                    if _session_log:
+                        _session_log.log_sent(resp)
+                    _answered = True
+                    break
+                if _matched and _matched.lower() in _menu_sigs:
+                    _resend_count += 1
+                    if _resend_count <= 3:
+                        _slog("Boot menu still visible; resending option 4")
+                        with suppress(Exception):
+                            channel.send("4\r")
+                        if _session_log:
+                            _session_log.log_sent("4")
+                        time.sleep(1)
+                        continue
+                    _slog("Boot menu remained visible after resending option 4", prefix="WARN")
+                    break
+            if not _answered:
+                _slog("Timeout waiting for zero disks confirmation", prefix="WARN")
+        else:
+            direct_send_and_wait(channel, "", trigger, timeout=1800, auto_respond=resp,
+                                 check_bmc_drop=True, quiet=_node_add, node_log=node_log,
+                                 reconnect_ctx=reconnect_ctx)
         if _cc_done_ev is not None:
             _cc_done_ev.set()
             _cc_done_ev = None
@@ -10231,6 +10429,7 @@ def _run_4b_standalone(log, resuming: bool = False):
             while time.monotonic() - start < _boot_menu_timeout:
                 if _shutdown_event.is_set():
                     break
+                _wait_if_paused(f"[{ip}] option 6 boot-menu wait")
                 now = time.monotonic()
                 if now >= _next_progress:
                     elapsed = int(now - start)
@@ -10240,6 +10439,9 @@ def _run_4b_standalone(log, resuming: bool = False):
                     # If the channel has closed entirely, reconnect the BMC SSH
                     # session and re-enter system console.
                     if ch.closed:
+                        if not _pause_allows_reconnect(f"[{ip}] boot-menu channel reconnect"):
+                            _next_progress = now + 1
+                            continue
                         _reenter_console()
                     else:
                         # Send a carriage return so the node re-displays its
@@ -10248,6 +10450,9 @@ def _run_4b_standalone(log, resuming: bool = False):
                         try:
                             ch.send("\r")
                         except OSError:
+                            if not _pause_allows_reconnect(f"[{ip}] boot-menu send reconnect"):
+                                _next_progress = now + 1
+                                continue
                             _reenter_console()
                 if ch.recv_ready():
                     chunk = ch.recv(4096).decode("utf-8", errors="replace")
@@ -10262,6 +10467,9 @@ def _run_4b_standalone(log, resuming: bool = False):
                     _chunk_l = chunk.lower()
                     _looks_like_bmc = _looks_like_bmc_drop(chunk)
                     if _looks_like_bmc and not any(s in _chunk_l for s in _all_sigs):
+                        if not _pause_allows_reconnect(f"[{ip}] boot-menu BMC drop"):
+                            time.sleep(0.1)
+                            continue
                         _reenter_console()
                         buf_lower = ""
                         continue
@@ -10418,6 +10626,7 @@ def _run_4b_standalone(log, resuming: bool = False):
             while time.monotonic() - _boot_wait_start < _boot_timeout:
                 if _shutdown_event.is_set():
                     break
+                _wait_if_paused(f"[{ip}] option 6 boot wait")
                 _now = time.monotonic()
                 if _now >= _next_progress:
                     _elapsed_min = int((_now - _boot_wait_start) / 60)
@@ -10444,6 +10653,9 @@ def _run_4b_standalone(log, resuming: bool = False):
                     # boot output.  Detect and re-enter system console.
                     _bmc_drop6 = _looks_like_bmc_drop(_chunk)
                     if _bmc_drop6 and not any(s in _chunk.lower() for s in _all_boot_sigs_lower):
+                        if not _pause_allows_reconnect(f"[{ip}] option 6 BMC drop"):
+                            time.sleep(0.1)
+                            continue
                         _preempted6 = _BMC_PREEMPTED_SIG in _chunk.lower()
                         _drop_reason = "session preempted" if _preempted6 else "BMC prompt detected"
                         _status(f"  ⚠️  [{ip}] {_drop_reason} during boot wait – "
@@ -10644,6 +10856,7 @@ def _run_4b_standalone(log, resuming: bool = False):
                 while time.monotonic() - _opt4_boot_start < _opt4_boot_timeout:
                     if _shutdown_event.is_set():
                         break
+                    _wait_if_paused(f"[{ip}] option 4 boot wait")
                     _now4 = time.monotonic()
                     if _now4 >= _opt4_next_progress:
                         _el4 = int((_now4 - _opt4_boot_start) / 60)
@@ -10661,6 +10874,9 @@ def _run_4b_standalone(log, resuming: bool = False):
                         # ── BMC-drop detection ────────────────────────────────
                         _bmc_drop4 = _looks_like_bmc_drop(_chunk4)
                         if _bmc_drop4 and not any(s in _chunk4.lower() for s in _opt4_sigs_lower):
+                            if not _pause_allows_reconnect(f"[{ip}] option 4 BMC drop"):
+                                time.sleep(0.1)
+                                continue
                             _preempted4 = _BMC_PREEMPTED_SIG in _chunk4.lower()
                             _drop_reason4 = "session preempted" if _preempted4 else "BMC prompt detected"
                             _status(f"  ⚠️  [{ip}] {_drop_reason4} during option 4 boot wait – "
@@ -18507,12 +18723,37 @@ def main():
         # list here so _diag_bootargs is always defined.
         _diag_bootargs = []
 
+    _pause_path = _pause_sentinel_path()
+    _checkpoint_req_path = _checkpoint_request_path()
+    _pid = os.getpid()
+    print("\n⏯️  Runtime pause control:")
+    print(f"   create file: {_pause_path}")
+    print("   remove file: resume automation")
+    if hasattr(signal, "SIGUSR1"):
+        print(f"   signal toggle: kill -USR1 {_pid}")
+    if hasattr(signal, "SIGUSR2"):
+        print(f"   signal resume: kill -USR2 {_pid}")
+    print("\n💾 Runtime manual checkpoint:")
+    print(f"   create file: {_checkpoint_req_path}")
+    if hasattr(signal, "SIGURG"):
+        print(f"   signal checkpoint: kill -URG {_pid}")
+    if os.path.isfile(_pause_path):
+        print("   ⚠️  Pause file already exists; script will remain paused until removed.")
+
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     # In background mode, handle SIGHUP (terminal close) gracefully so the log
     # is flushed and closed cleanly rather than truncated mid-write.
     if _bg_mode and hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, signal_handler)
+    # Runtime pause controls (Unix): SIGUSR1 toggles pause; SIGUSR2 forces resume.
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, pause_toggle_signal_handler)
+    if hasattr(signal, "SIGUSR2"):
+        signal.signal(signal.SIGUSR2, pause_clear_signal_handler)
+    # Runtime checkpoint control (Unix): SIGURG writes a manual checkpoint snapshot.
+    if hasattr(signal, "SIGURG"):
+        signal.signal(signal.SIGURG, manual_checkpoint_signal_handler)
 
     # ── --resume: auto-dispatch from checkpoint, skip the start menu ──────
     # When --resume is explicit and a valid checkpoint exists, infer the

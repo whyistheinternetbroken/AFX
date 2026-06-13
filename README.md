@@ -871,6 +871,50 @@ sudo dnf install ipmitool
 
 ## Troubleshooting
 
+### Pause a live run for manual BMC console commands
+
+If you need to take over a BMC console during an active run without killing the script:
+
+```bash
+# Create/remove in the same directory as AFX_reinit.py
+# Pause automation + auto-reconnect
+touch .afx_pause
+
+# ...run your manual BMC console commands...
+
+# Resume automation
+rm -f .afx_pause
+```
+
+The pause sentinel is checked continuously by the console read loops. While `.afx_pause` exists, the script holds its place and suppresses reconnect/reclaim behavior until the file is removed.
+
+On Linux/macOS, pause is also built into the script via signals:
+
+```bash
+kill -USR1 <script-pid>   # toggle pause/resume
+kill -USR2 <script-pid>   # force resume
+```
+
+The script prints these signal shortcuts (with its PID) at startup.
+
+### Create a manual checkpoint mid-run
+
+You can force a checkpoint snapshot while the script is running:
+
+```bash
+# Create request file in the same directory as AFX_reinit.py
+touch .afx_checkpoint_now
+```
+
+On Linux/macOS, you can also signal it directly:
+
+```bash
+kill -URG <script-pid>
+```
+
+The script writes a timestamped snapshot under `checkpoints/` as:
+`afx_checkpoint_manual_YYYYMMDD_HHMMSS.json`.
+
 ### BMC SSH banner timeout (session pool full)
 
 If the script repeatedly fails to connect with a banner-timeout error even after a node has fully booted:
