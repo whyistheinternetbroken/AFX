@@ -13408,7 +13408,8 @@ def _run_ontap_upgrade(log):
                             f"-replace-package true "
                             f"-setdefault true"
                         )
-                        print(f"  [{nn}] \U0001f4e5 Installing image...")
+                        _ts_start = datetime.now().strftime("%H:%M:%S")
+                        print(f"  [{nn}] \U0001f4e5 Installing image... ({_ts_start})")
                         _t0_inst = time.monotonic()
                         out_u2 = _shell_run_cmd(cl2, ucmd2, timeout=960)
                         _inst_elapsed = time.monotonic() - _t0_inst
@@ -13418,12 +13419,13 @@ def _run_ontap_upgrade(log):
                         if log:
                             log.log(f"[{nn}] image install output (tail):\n{out_u2[-2000:]}")
                         upd_failed2 = "error" in out_u2.lower() or "failed" in out_u2.lower()
+                        _ts_end = datetime.now().strftime("%H:%M:%S")
                         if upd_failed2:
                             rd[nn] = (False, out_u2[-500:], _inst_elapsed)
-                            print(f"  [{nn}] \u274c Install failed (see log for details).")
+                            print(f"  [{nn}] \u274c Install failed ({_ts_end}, {_inst_elapsed:.0f}s). See log for details.")
                         else:
                             rd[nn] = (True, "", _inst_elapsed)
-                            print(f"  [{nn}] \u2705 Image installed.")
+                            print(f"  [{nn}] \u2705 Image installed. ({_ts_end}, {_inst_elapsed:.0f}s)")
                     except Exception as e2:
                         rd[nn] = (False, f"Exception: {e2}", 0.0)
                         print(f"  [{nn}] \u274c Exception: {e2}")
@@ -13479,13 +13481,13 @@ def _run_ontap_upgrade(log):
                     f"-setdefault true "
                     f"-validate-only true"
                 )
-                print(f"  \U0001f50e Validating update on {nodename}... (this may take 3-5 minutes)")
+                print(f"  \U0001f50e Validating update on {nodename}... ({datetime.now().strftime('%H:%M:%S')}, may take 3-5 minutes)")
                 _t0_seq_val = time.monotonic()
                 with _suppress_console():
                     out_val = _run_cluster_command(_cl_ch, vcmd, timeout=300)
                 _seq_val_elapsed = time.monotonic() - _t0_seq_val
                 if "error" in out_val.lower() or "failed" in out_val.lower():
-                    print(f"\n  \u274c Validation failed for {nodename}:\n{out_val}")
+                    print(f"\n  \u274c Validation failed for {nodename} ({datetime.now().strftime('%H:%M:%S')}):\n{out_val}")
                     if log:
                         log.log(f"Validation failed for {nodename}: {out_val[-500:]}", prefix="ERROR")
                         log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] image validate", _seq_val_elapsed)
@@ -13498,7 +13500,7 @@ def _run_ontap_upgrade(log):
                         print("  Exiting.")
                         return False
                 else:
-                    print(f"  \u2705 Validation passed for {nodename}.")
+                    print(f"  \u2705 Validation passed for {nodename}. ({datetime.now().strftime('%H:%M:%S')})")
                     if log:
                         log.log(f"Validation passed for {nodename}")
                         log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] image validate", _seq_val_elapsed)
@@ -13513,18 +13515,18 @@ def _run_ontap_upgrade(log):
                     f"-replace-package true "
                     f"-setdefault true"
                 )
-                print(f"  \U0001f4e5 Downloading/installing image on {nodename} (may take several minutes)...")
+                print(f"  \U0001f4e5 Downloading/installing image on {nodename} ({datetime.now().strftime('%H:%M:%S')}, may take several minutes)...")
                 _t0_seq_inst = time.monotonic()
                 with _suppress_console():
                     out_upd = _run_cluster_command(_cl_ch, ucmd, timeout=900)
                 _seq_inst_elapsed = time.monotonic() - _t0_seq_inst
                 if "error" in out_upd.lower() or "failed" in out_upd.lower():
-                    print(f"\n  \u274c Image update failed for {nodename}:\n{out_upd}")
+                    print(f"\n  \u274c Image update failed for {nodename} ({datetime.now().strftime('%H:%M:%S')}):\n{out_upd}")
                     if log:
                         log.log(f"Image update failed for {nodename}: {out_upd[-500:]}", prefix="ERROR")
                         log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] download + install", _seq_inst_elapsed)
                     return False
-                print(f"  \u2705 Image installed on {nodename}.")
+                print(f"  \u2705 Image installed on {nodename}. ({datetime.now().strftime('%H:%M:%S')}, {_seq_inst_elapsed:.0f}s)")
                 if log:
                     log.log(f"Image installed on {nodename}")
                     log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] download + install", _seq_inst_elapsed)
