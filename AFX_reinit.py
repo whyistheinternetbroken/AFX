@@ -141,6 +141,7 @@ class CheckpointManager:
         cp.clear()  # on successful completion
     """
 
+    CHECKPOINT_DIR = "checkpoints"
     CHECKPOINT_FILE = "afx_checkpoint.json"
     MAX_AGE_HOURS = 72  # checkpoints older than this are ignored
 
@@ -149,7 +150,9 @@ class CheckpointManager:
             _script_dir = os.path.dirname(os.path.abspath(__file__))
         except NameError:
             _script_dir = os.getcwd()
-        self._path = path or os.path.join(_script_dir, self.CHECKPOINT_FILE)
+        _cp_dir = os.path.join(_script_dir, self.CHECKPOINT_DIR)
+        os.makedirs(_cp_dir, exist_ok=True)
+        self._path = path or os.path.join(_cp_dir, self.CHECKPOINT_FILE)
         self._data: "dict" = {}
 
     # ── Public API ─────────────────────────────────────────────────────────
@@ -2804,16 +2807,22 @@ def _resolve_ssh_log_file() -> str:
 
 
 def _log_ssh_event(host: str, username: str, label: str, event: str,
-                   attempt: int | None = None, details: str = "") -> None:
+                   attempt: int | None = None, details: str = "",
+                   reconnect: bool = False, phase: str | None = None) -> None:
     """Append one SSH connection event to the dedicated SSH log file."""
     try:
         with _ssh_log_lock:
             _path = _resolve_ssh_log_file()
             _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             _attempt = str(attempt) if attempt is not None else "-"
+            _phase = phase
+            if not _phase and _session_log:
+                _phase = getattr(_session_log, "_current_phase", None)
+            _phase = (_phase or "-").replace(" ", "_")
             _line = (
                 f"[{_ts}] label={label} host={host} user={username} "
-                f"attempt={_attempt} event={event}"
+                f"attempt={_attempt} event={event} "
+                f"reconnect={'yes' if reconnect else 'no'} phase={_phase}"
             )
             if details:
                 _line += f" details={details}"
@@ -3266,7 +3275,8 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                             label: str = "BMC",
                             max_attempts: int = 5,
                             interactive: bool = True,
-                            fallback_passwords: "list[str] | None" = None
+                            fallback_passwords: "list[str] | None" = None,
+                            is_reconnect: bool = False
                             ) -> "tuple[paramiko.SSHClient, str, str]":
     """Open an SSH client to `host` with retry-on-auth-failure.
 
@@ -3287,6 +3297,11 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
         if _fb is not None and (username, _fb) not in _attempt_queue:
             _attempt_queue.append((username, _fb))
     _queue_idx = 0  # index into _attempt_queue for silent fallback phase
+    def _ssh_event(event: str, attempt: int | None = None, details: str = ""):
+        _log_ssh_event(
+            host, username, label, event,
+            attempt=attempt, details=details, reconnect=is_reconnect
+        )
 
     last_exc = None
     for attempt in range(1, max_attempts + 1):
@@ -3310,8 +3325,8 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                     f"[{label}] SSH connect to {host} as {username} "
                     f"(attempt {attempt}/{max_attempts})"
                 )
-            _log_ssh_event(
-                host, username, label, "connect_attempt",
+            _ssh_event(
+                "connect_attempt",
                 attempt=attempt,
                 details=f"max_attempts={max_attempts}",
             )
@@ -3320,10 +3335,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                             disabled_algorithms={"pubkeys": ["ssh-dss"]})
             configure_transport(client)
             _register_bmc_client(host, client)
-            _log_ssh_event(
-                host, username, label, "connect_success",
-                attempt=attempt,
-            )
+            _ssh_event("connect_success", attempt=attempt)
             return client, username, password
         except paramiko.AuthenticationException as e:
             last_exc = e
@@ -3333,8 +3345,8 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                     f"[{label}] auth failed for {username}@{host}",
                     prefix="ERROR",
                 )
-            _log_ssh_event(
-                host, username, label, "auth_failure",
+            _ssh_event(
+                "auth_failure",
                 attempt=attempt,
                 details=str(e).replace("\n", " "),
             )
@@ -3420,8 +3432,8 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                                 f"[{label}] SSH reset retry {_r}/{_reset_max} "
                                 f"to {host} as {username}"
                             )
-                        _log_ssh_event(
-                            host, username, label, "reset_retry_attempt",
+                        _ssh_event(
+                            "reset_retry_attempt",
                             attempt=_r,
                             details=f"max={_reset_max}",
                         )
@@ -3433,16 +3445,13 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         )
                         configure_transport(client)
                         _register_bmc_client(host, client)
-                        _log_ssh_event(
-                            host, username, label, "reset_retry_success",
-                            attempt=_r,
-                        )
+                        _ssh_event("reset_retry_success", attempt=_r)
                         return client, username, password
                     except Exception as e2:
                         last_exc = e2
                         msg2 = str(e2).lower()
-                        _log_ssh_event(
-                            host, username, label, "reset_retry_failure",
+                        _ssh_event(
+                            "reset_retry_failure",
                             attempt=_r,
                             details=str(e2).replace("\n", " "),
                         )
@@ -3544,8 +3553,8 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                                 f"[{label}] SSH banner retry {_b}/{_bnr_max} "
                                 f"to {host} as {username}"
                             )
-                        _log_ssh_event(
-                            host, username, label, "banner_retry_attempt",
+                        _ssh_event(
+                            "banner_retry_attempt",
                             attempt=_b,
                             details=f"max={_bnr_max}",
                         )
@@ -3557,16 +3566,13 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         )
                         configure_transport(client)
                         _register_bmc_client(host, client)
-                        _log_ssh_event(
-                            host, username, label, "banner_retry_success",
-                            attempt=_b,
-                        )
+                        _ssh_event("banner_retry_success", attempt=_b)
                         return client, username, password
                     except Exception as eb:
                         last_exc = eb
                         msg_b = str(eb).lower()
-                        _log_ssh_event(
-                            host, username, label, "banner_retry_failure",
+                        _ssh_event(
+                            "banner_retry_failure",
                             attempt=_b,
                             details=str(eb).replace("\n", " "),
                         )
@@ -3617,8 +3623,8 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         f"[{label}] banner timeout for {host}: {e}",
                         prefix="WARN",
                     )
-                _log_ssh_event(
-                    host, username, label, "connect_failure_banner",
+                _ssh_event(
+                    "connect_failure_banner",
                     attempt=attempt,
                     details=str(e).replace("\n", " "),
                 )
@@ -3629,8 +3635,8 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         f"[{label}] connect attempt {attempt} failed: {e}",
                         prefix="ERROR",
                     )
-                _log_ssh_event(
-                    host, username, label, "connect_failure",
+                _ssh_event(
+                    "connect_failure",
                     attempt=attempt,
                     details=str(e).replace("\n", " "),
                 )
@@ -3659,8 +3665,8 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                 username, password = new_user, new_pass
                 continue
             time.sleep(min(5 * attempt, 15))
-    _log_ssh_event(
-        host, username, label, "connect_exhausted",
+    _ssh_event(
+        "connect_exhausted",
         attempt=max_attempts,
         details=(str(last_exc).replace("\n", " ") if last_exc else "no exception detail"),
     )
@@ -3928,6 +3934,7 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                     label=_label,
                     max_attempts=3,
                     interactive=True,
+                    is_reconnect=True,
                 )
                 _new_ch = _open_shell(_new_client)
                 if not _reach_bmc_prompt(_new_ch, timeout=15, node_log=node_log):
@@ -4167,7 +4174,7 @@ OPTIONS
 
     --resume
         Mode 4b only.  Resume the previous 4b run from its saved
-        checkpoint (afx_checkpoint.json, located alongside this script).
+        checkpoint (checkpoints/afx_checkpoint.json, located alongside this script).
         Phases already completed are skipped — when every BMC IP is
         marked install_done the run jumps straight to Step 6b
         (reconnect to LOADER + boot_ontap menu); peers marked
@@ -4181,7 +4188,7 @@ OPTIONS
         deleted automatically on successful completion of mode 4b.
 
     --checkpoint-status
-        Print a summary of the saved checkpoint (afx_checkpoint.json)
+        Print a summary of the saved checkpoint (checkpoints/afx_checkpoint.json)
         and exit.  Shows the absolute file path, run mode, created /
         updated timestamps, age in minutes, log directory, config
         path, BMC IPs, every completed global phase, and every per-node
@@ -4231,9 +4238,9 @@ FILES
         Human-readable summary: result (PASS/FAIL/WARN), phase and step
         timing, warnings inventory, and errors inventory.
 
-    afx_checkpoint.json
-        Mode 4b resume checkpoint.  Written alongside this script; deleted
-        automatically on successful completion.  Inspect with
+    checkpoints/afx_checkpoint.json
+        Mode 4b resume checkpoint.  Written under the script's checkpoints/
+        directory; deleted automatically on successful completion.  Inspect with
         --checkpoint-status; resume with --resume.  Ignored if older than
         72 hours.
 
@@ -4316,12 +4323,12 @@ def parse_args():
                              "No-op if already running inside screen.")
     parser.add_argument("--resume", action="store_true", default=False,
                         help="Resume a previous 4b run from its last saved "
-                             "checkpoint (afx_checkpoint.json). Skips phases "
+                             "checkpoint (checkpoints/afx_checkpoint.json). Skips phases "
                              "already completed so you do not have to restart "
                              "from scratch after a failure.")
     parser.add_argument("--checkpoint-status", action="store_true", default=False,
                         help="Print a summary of the saved checkpoint "
-                             "(afx_checkpoint.json) showing exactly where the "
+                             "(checkpoints/afx_checkpoint.json) showing exactly where the "
                              "last run left off, then exit. Does not modify "
                              "the checkpoint file.")
     parser.add_argument("--auto-clear-stale-bmc", action="store_true",
@@ -5973,6 +5980,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                     label=_host or "primary BMC",
                     max_attempts=3,
                     interactive=True,
+                    is_reconnect=True,
                 )
                 _new_ch = _open_shell(_new_client)
                 if not _reach_bmc_prompt(_new_ch, timeout=15, node_log=node_log):
@@ -6075,7 +6083,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
 _REQUIRED_BOOT_DNA = "3088"
 
 
-def _verify_boot_dna(channel):
+def _verify_boot_dna(channel, node_log=None):
     """Run 'printenv' at the LOADER prompt, save raw output in configs/, and
     confirm bootarg.init.dna is the supported value.
     Returns True if supported, False otherwise.
@@ -6084,7 +6092,7 @@ def _verify_boot_dna(channel):
     _slog("Verifying boot DNA via 'printenv'")
 
     output = direct_send_and_wait(
-        channel, "printenv", "LOADER-", timeout=15
+        channel, "printenv", "LOADER-", timeout=15, node_log=node_log
     )
 
     # Save raw printenv output for operator review/troubleshooting.
@@ -10142,12 +10150,11 @@ def _run_4b_standalone(log, resuming: bool = False):
                         except Exception:
                             pass
                     _pw = bmc_passwords.get(ip, "")
-                    _new_cl = paramiko.SSHClient()
-                    _new_cl.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                    _new_cl.connect(ip, username=bmc_user, password=_pw,
-                                    timeout=20, allow_agent=False, look_for_keys=False,
-                                    disabled_algorithms={"pubkeys": ["ssh-dss"]})
-                    configure_transport(_new_cl)
+                    _new_cl, _, _ = _ssh_connect_with_retry(
+                        ip, bmc_user, _pw,
+                        label=ip, max_attempts=1, interactive=True,
+                        is_reconnect=True,
+                    )
                     _new_ch = _open_shell(_new_cl)
                     # Drain the BMC banner, then enter system console.
                     time.sleep(1)
@@ -15503,6 +15510,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     client, peer_user, peer_password = _ssh_connect_with_retry(
                         peer_bmc, peer_user, peer_password,
                         label=label, max_attempts=3, interactive=True,
+                        is_reconnect=True,
                     )
                     ch = _open_shell(client)
                     if _peer_reconnect_ctx is not None:
@@ -16393,7 +16401,8 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
 
     try:
         all_bmcs = [sp_host] if sp_host else []
-        cp = CheckpointManager(
+        cp = CheckpointManager()
+        cp.init_run(
             mode="1",
             bmc_ips=all_bmcs,
             log_dir=(session_log.log_dir
@@ -16459,7 +16468,8 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
 
     try:
         all_bmcs = [secondary_bmc] if secondary_bmc else []
-        cp = CheckpointManager(
+        cp = CheckpointManager()
+        cp.init_run(
             mode="2",
             bmc_ips=all_bmcs,
             log_dir=(session_log.log_dir
@@ -16823,29 +16833,71 @@ def auto_complete_initialization(channel, bmc_host=None):
     if _session_log:
         _session_log.start_phase("Auto Cluster Init (1b)")
         _session_log.log("Mode 1b automated init starting after option 9 sent")
+    _boot_log = None
+    _boot_log_dir = _session_log.log_dir if _session_log and hasattr(_session_log, "log_dir") else os.getcwd()
+    try:
+        _boot_log = _node_log_open(bmc_host or "mode1b", _boot_log_dir, prefix="1b_boot")
+    except Exception:
+        _boot_log = None
+
+    def _close_boot_log(next_log_name="session log"):
+        if _boot_log:
+            try:
+                sep = "=" * 72
+                _boot_log.write(
+                    f"\n{sep}\n"
+                    f"[{os.path.basename(_boot_log.name)}] phase complete.\n"
+                    f"Next phase is logged to [{next_log_name}]. End of file.\n"
+                    f"{sep}\n"
+                )
+                _boot_log.flush()
+            except Exception:
+                pass
+            try:
+                _boot_log.close()
+            except Exception:
+                pass
 
     # 1) Storage availability zone warning -> "no"
     print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for storage-availability-zone warning (auto-answer 'no')...{_elapsed_str()}")
     _slog("Waiting for storage-availability-zone warning")
     direct_send_and_wait(
         channel, "", "storage availability zone will be destroyed",
-        timeout=1800, auto_respond="no",
+        timeout=1800, auto_respond="no", quiet=True, node_log=_boot_log,
     )
 
     # 2) Wait for the *second* boot menu and select option 4.
     print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for second boot menu (auto-select option 4)...{_elapsed_str()}")
     _slog("Waiting for second boot menu (option 4)")
-    sig_lower = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
+    sig_lower = [
+        "selection (1-",
+        "selection (1-9)?",
+        "selection (1-11)?",
+        "selection (1-12)?",
+        "select option 4",
+        "boot menu",
+    ]
     output_lower = ""
     start = time.monotonic()
+    last_progress = start
     found = False
     while time.monotonic() - start < 2400:
         if _shutdown_event.is_set():
             return
+        now = time.monotonic()
+        if now - last_progress >= 120:
+            elapsed = int(now - start)
+            print(f"   ⏳ {_node_pfx(bmc_host)}Still waiting for second boot menu... ({elapsed}s elapsed)")
+            _slog(f"[{bmc_host}] still waiting for second boot menu after {elapsed}s")
+            try:
+                channel.send("\r")
+            except Exception:
+                pass
+            last_progress = now
         if channel.recv_ready():
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
-            sys.stdout.write(chunk)
-            sys.stdout.flush()
+            if _boot_log:
+                _par_write(_boot_log, chunk)
             if _session_log:
                 _session_log.log_console(chunk)
             output_lower += chunk.lower()
@@ -16861,6 +16913,7 @@ def auto_complete_initialization(channel, bmc_host=None):
         if _session_log:
             _session_log.log("2nd boot menu not detected within 2400s", prefix="WARN")
             _session_log.end_phase()
+        _close_boot_log()
         return
 
     drain_channel(channel, seconds=1)
@@ -16902,7 +16955,9 @@ def auto_complete_initialization(channel, bmc_host=None):
                 _session_log.close()
             except Exception:
                 pass
+        _close_boot_log(getattr(_session_log, "log_file", "session log"))
         sys.exit(1)
+    _close_boot_log(getattr(_session_log, "log_file", "session log"))
 
 
 
@@ -16982,6 +17037,14 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     (or [] when non-interactive or user declines restore).
     """
     global _loader_env_stage_enabled
+    _env_log = node_log
+    _close_env_log = False
+    if _env_log is None and log_dir:
+        try:
+            _env_log = _node_log_open(label, log_dir, prefix="loader_env")
+            _close_env_log = True
+        except Exception:
+            _env_log = None
     if _loader_env_stage_enabled is None and interactive:
         _real_stdout.write(
             "\n  Skip LOADER bootarg backup/printenv stage? [y/N]: "
@@ -16999,17 +17062,20 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
     if _loader_env_stage_enabled is False:
         _slog("Skipping LOADER bootarg backup/printenv stage by operator request")
+        if _close_env_log and _env_log:
+            with suppress(Exception):
+                _env_log.close()
         return []
 
     # Capture pre-defaults env
     _slog("Capturing LOADER env (pre set-defaults)")
-    pre_env = _loader_env_capture(channel, node_log=node_log)
+    pre_env = _loader_env_capture(channel, node_log=_env_log)
     _loader_env_save_to_file(pre_env, label, log_dir, prefix="loader_env_pre")
 
     # Run set-defaults
     _slog("Running: set-defaults")
     direct_send_and_wait(channel, "set-defaults", "LOADER-",
-                         timeout=15, node_log=node_log)
+                         timeout=15, node_log=_env_log)
 
     global _bootarg_check_enabled
     # Verify boot DNA (optional in interactive mode; required in non-interactive).
@@ -17030,24 +17096,30 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
             _slog("User chose to skip bootarg.init.dna verification")
 
     if _run_bootarg_check:
-        if not _verify_boot_dna(channel):
+        if not _verify_boot_dna(channel, node_log=_env_log):
             if _session_log:
                 _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
                 _session_log.set_outcome("FAIL", "unsupported boot DNA")
                 _session_log.close()
+            if _close_env_log and _env_log:
+                with suppress(Exception):
+                    _env_log.close()
             sys.exit(1)
     else:
         _slog("bootarg.init.dna verification skipped by operator")
 
     # Capture post-defaults env
     _slog("Capturing LOADER env (post set-defaults)")
-    post_env = _loader_env_capture(channel, node_log=node_log)
+    post_env = _loader_env_capture(channel, node_log=_env_log)
     _loader_env_save_to_file(post_env, label, log_dir, prefix="loader_env_post")
 
     diff_vars = _loader_env_diff(pre_env, post_env)
 
     if not diff_vars:
         _slog("LOADER env diff: no differences (set-defaults changed nothing)")
+        if _close_env_log and _env_log:
+            with suppress(Exception):
+                _env_log.close()
         return []
 
     # Save diff summary
@@ -17074,6 +17146,9 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
             f"LOADER env diff ({len(diff_vars)} var(s) changed/removed "
             f"by set-defaults); see {diff_path}"
         )
+        if _close_env_log and _env_log:
+            with suppress(Exception):
+                _env_log.close()
         return []
 
     # Interactive: show diff table and ask whether to restore
@@ -17108,6 +17183,9 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
             _session_log.end_phase(outcome="ABORT", note="user aborted after env diff review")
             _session_log.set_outcome("ABORT", "user aborted after env diff review")
             _session_log.close()
+        if _close_env_log and _env_log:
+            with suppress(Exception):
+                _env_log.close()
         sys.exit(0)
 
     _real_stdout.write(
@@ -17126,9 +17204,15 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
             if pre_val is not None
         ]
         _slog(f"User chose to restore {len(restore_cmds)} env var(s) after set-defaults")
+        if _close_env_log and _env_log:
+            with suppress(Exception):
+                _env_log.close()
         return restore_cmds
 
     _slog("User declined to restore env vars after set-defaults")
+    if _close_env_log and _env_log:
+        with suppress(Exception):
+            _env_log.close()
     return []
 
 
@@ -17473,6 +17557,7 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     client, sp_user, sp_pass = _ssh_connect_with_retry(
                         sp_host, sp_user, sp_pass,
                         label=sp_host, max_attempts=5, interactive=True,
+                        is_reconnect=True,
                     )
                     channel = _open_shell(client)
                     if not _reach_bmc_prompt(channel, timeout=15):
@@ -21890,6 +21975,7 @@ def main():
                             _rc_client, sp_user, sp_pass = _ssh_connect_with_retry(
                                 sp_host, sp_user, sp_pass,
                                 label=sp_host, max_attempts=1, interactive=True,
+                                is_reconnect=True,
                             )
                             channel = _open_shell(_rc_client)
                             _bmc_reconnect_ok = True
