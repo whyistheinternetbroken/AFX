@@ -12099,6 +12099,102 @@ def _parse_image_show(output):
     return result
 
 
+def _ontap_version_key(ver_str: str):
+    """Return a sortable tuple for an ONTAP version string.
+
+    Handles: 9.15.1  9.15.1P5  9.19.1RC1  9.19.1RC2  9.19.1X17  9.15.1.1
+
+    Ordering within the same base (major.minor.patch):
+        X builds (dev/engineering)  <  RC builds  <  GA / P-patch releases
+
+    P-patch releases are GA-level; a higher P number means a newer patch.
+    GA with no suffix is treated as P0.
+    """
+    m = re.match(
+        r"(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?"   # base: 9.15.1 or 9.15.1.1
+        r"(?:([A-Za-z]+)(\d+))?",              # optional suffix: RC1, X17, P5
+        str(ver_str).strip().rstrip(":;.,"),
+        re.IGNORECASE,
+    )
+    if not m:
+        return (0, 0, 0, 0, 0, 0)
+    major = int(m.group(1))
+    minor = int(m.group(2))
+    patch = int(m.group(3))
+    sub   = int(m.group(4) or 0)
+    stype = (m.group(5) or "").upper()
+    snum  = int(m.group(6) or 0)
+    # Map build type to ordering tier: X < RC < GA / P-patch
+    if stype == "X":
+        tier = 0
+    elif stype == "RC":
+        tier = 1
+    else:  # GA (no suffix) or P-patch
+        tier = 2
+    return (major, minor, patch, sub, tier, snum)
+
+
+def _parse_image_versions(output: str) -> dict:
+    """Parse 'system image show -fields version,iscurrent,isdefault' output.
+
+    Returns:
+        {node_name: [{"image": str, "version": str,
+                      "iscurrent": bool, "isdefault": bool}]}
+
+    Handles ONTAP's two-level format where the node name appears only on the
+    first image row for that node; subsequent rows have a blank node column.
+    """
+    result = {}
+    headers = None
+    dashes_seen = False
+    current_node = None
+
+    for raw in output.splitlines():
+        clean = _ANSI_RE.sub("", raw).replace("\r", "")
+        s = clean.strip()
+        if not s or "::" in s:
+            continue
+        if "entries were displayed" in s.lower():
+            break
+        if set(s.replace(" ", "")) <= {"-"}:
+            dashes_seen = True
+            continue
+        if not dashes_seen:
+            low_s = s.lower()
+            if "node" in low_s and "image" in low_s:
+                headers = [re.sub(r"[- ]", "", t).lower() for t in s.split()]
+            continue
+        if headers is None:
+            continue
+        tokens = s.split()
+        # A line that starts at column 0 (no leading whitespace) begins a
+        # new node block; consume the node token and shift remaining tokens.
+        if clean and clean[0] not in (" ", "\t"):
+            current_node = tokens[0]
+            tokens = tokens[1:]
+        if not current_node or not tokens:
+            continue
+        if not tokens[0].lower().startswith("image"):
+            continue
+        non_node = [h for h in headers if h != "node"]
+        row = dict(zip(non_node, tokens))
+        image = row.get("image", "").strip()
+        if not image.lower().startswith("image"):
+            continue
+        version_tok = row.get("version", "").strip()
+        ver_m = re.search(r"(\d+\.\d+\.\d+[A-Za-z0-9.]*)", version_tok)
+        version_str = ver_m.group(1) if ver_m else version_tok
+        iscurrent = row.get("iscurrent", "false").strip().lower() == "true"
+        isdefault = row.get("isdefault", "false").strip().lower() == "true"
+        result.setdefault(current_node, []).append({
+            "image":     image,
+            "version":   version_str,
+            "iscurrent": iscurrent,
+            "isdefault": isdefault,
+        })
+    return result
+
+
 def _parse_failover_show(output):
     """Parse 'storage failover show' output, handling ONTAP's wrapped-row
     format where long node/partner names push columns onto subsequent lines.
@@ -13458,6 +13554,68 @@ def _run_ontap_upgrade(log):
             if log:
                 log.log("Pre-stage only: exiting after image install, skipping rolling upgrade")
             return True
+
+        # ── Step 8b: version downgrade guard ────────────────────────────────
+        # Before marking the new image as default, verify it is not a lower
+        # version than what is currently running.  Handles GA, P-patch, RC,
+        # and X (engineering) builds correctly.
+        print("\n  \U0001f50d Checking new image version against current...")
+        with _suppress_console():
+            _out_vchk = _run_cluster_command(
+                _cl_ch,
+                "set advanced -c off; system image show -fields version,iscurrent,isdefault",
+                timeout=60,
+            )
+        _img_ver_data = _parse_image_versions(_out_vchk)
+        _downgrade_nodes = []
+        for _vn, _vimgs in _img_ver_data.items():
+            _cur_ver = next((e["version"] for e in _vimgs if e["iscurrent"]), None)
+            _new_ver = next(
+                (e["version"] for e in _vimgs if e["isdefault"] and not e["iscurrent"]),
+                None,
+            )
+            if _cur_ver and _new_ver:
+                _ck = _ontap_version_key(_cur_ver)
+                _nk = _ontap_version_key(_new_ver)
+                if _nk < _ck:
+                    _downgrade_nodes.append((_vn, _cur_ver, _new_ver))
+                elif _nk == _ck:
+                    print(f"  \u2139\ufe0f   [{_vn}] New image matches current version: {_cur_ver}")
+                else:
+                    print(f"  \u2705 [{_vn}] Upgrade: {_cur_ver} \u2192 {_new_ver}")
+            elif _cur_ver:
+                print(f"  \u2139\ufe0f   [{_vn}] Running: {_cur_ver} (new image version not detected)")
+        if _downgrade_nodes:
+            print("\n  \u26a0\ufe0f  Version downgrade detected on the following node(s):")
+            for _dn, _dold, _dnew in _downgrade_nodes:
+                print(f"       \u2022 {_dn}: running {_dold} \u2192 new image {_dnew}")
+            if log:
+                log.log(f"Version downgrade detected: {_downgrade_nodes}", prefix="WARN")
+            _dn_ans = _prompt(
+                "\n  This image appears to be a lower version number than what you "
+                "already have. Revert is not supported with this script. Proceed? "
+                "[y/N]: ",
+                "n",
+            ).lower()
+            if _dn_ans != "y":
+                print("  \u274c Upgrade aborted.")
+                if log:
+                    log.log(
+                        "Upgrade aborted: operator declined version downgrade",
+                        prefix="ERROR",
+                    )
+                return False
+            print("  \u26a0\ufe0f  Proceeding with lower-version image at operator request.")
+            if log:
+                log.log("Operator confirmed version downgrade — proceeding")
+        elif _img_ver_data:
+            print("  \u2705 Version check passed.")
+            if log:
+                log.log("Version downgrade check passed — new image is same or higher version")
+        else:
+            print("  \u2139\ufe0f   Could not parse image version data; skipping downgrade check.")
+            if log:
+                log.log("Could not parse image versions for downgrade check", prefix="WARN")
 
         # ── Step 9: verify default image ────────────────────────────────────
         print("\n  \U0001f50d Verifying default image setting...")
