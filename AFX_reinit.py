@@ -6088,7 +6088,7 @@ def _verify_boot_dna(channel, node_log=None):
     confirm bootarg.init.dna is the supported value.
     Returns True if supported, False otherwise.
     """
-    print("\n🧬 Verifying boot DNA (printenv)...")
+    print("\n🧬 Boot DNA check: verifying bootarg.init.dna...")
     _slog("Verifying boot DNA via 'printenv'")
 
     output = direct_send_and_wait(
@@ -6131,7 +6131,7 @@ def _verify_boot_dna(channel, node_log=None):
             break
 
     if dna_value == _REQUIRED_BOOT_DNA:
-        print(f"   ✅ Boot DNA = {dna_value} (supported). Continuing.")
+        print(f"   ✅ Boot DNA check passed: bootarg.init.dna={dna_value}")
         _slog(f"Boot DNA verified: {dna_value}")
         return True
 
@@ -9506,7 +9506,7 @@ def _run_4b_standalone(log, resuming: bool = False):
             )
         else:
             _skip_env_q = _prompt(
-                "\n  Skip LOADER backup/printenv capture during 4b reinit (DNA check still runs)? [y/N]: "
+                "\n  Skip LOADER backup/printenv capture during 4b reinit? [y/N]: "
             , "n").lower()
             _loader_env_stage_enabled = (_skip_env_q not in ("y", "yes"))
         if log:
@@ -10134,33 +10134,18 @@ def _run_4b_standalone(log, resuming: bool = False):
                 return None
 
             # ── VLDB online timeout detection ──────────────────────────────────
-            # When VLDB fails to come online after option 6 the script used to
-            # prompt the operator (y/n) to proceed to reinit. That made the
-            # 4b run block indefinitely on stdin in --bg / screen sessions
-            # and almost always got "y" anyway, so we now auto-answer "y"
-            # and log it.
+            # This flow is all-or-nothing for cluster reinit. Do not block each
+            # node worker on stdin when VLDB times out; proceed directly and let
+            # the single cluster-level continue prompt gate the run.
             def _vldb_prompt():
-                with _stdout_lock:
-                    _real_stdout.write(
-                        f"\n  ⚠️  [{ip}] VLDB failed to come online after option 6.\n"
-                        f"  Continue with reinit? [y/n]: "
-                    )
-                    _real_stdout.flush()
-                    try:
-                        _ans = sys.stdin.readline().strip().lower()
-                    except (EOFError, KeyboardInterrupt):
-                        _ans = "n"
-                _proceed = _ans in ("y", "yes")
                 if log:
                     log.log(
-                        f"[{ip}] VLDB timeout prompt answered '{_ans}' "
-                        f"({'proceeding' if _proceed else 'aborting'})",
+                        f"[{ip}] VLDB timeout detected; proceeding with cluster reinit flow",
                         prefix="WARN",
                     )
-                if _proceed:
-                    with connect_lock:
-                        _vldb_timeout_nodes.add(ip)
-                return _proceed
+                with connect_lock:
+                    _vldb_timeout_nodes.add(ip)
+                return True
 
             # ── Phase 1: wait for any boot-menu indicator ──────────────────
             # The warning text ("Normal Boot is prohibited") appears a few
@@ -10998,12 +10983,12 @@ def _run_4b_standalone(log, resuming: bool = False):
                 if _ver_str:
                     _real_stdout.write(
                         f"\n  Cluster is at version \"{_ver_str}\"."
-                        f" Continue with reinit? [y/n]: "
+                        f" Continue with reinit of entire cluster? [y/n]: "
                     )
                 else:
                     _real_stdout.write(
                         "\n  All nodes are at ONTAP login prompt (cluster is running)."
-                        " Continue with reinit? [y/n]: "
+                        " Continue with reinit of entire cluster? [y/n]: "
                     )
                 _real_stdout.flush()
                 try:
@@ -17191,7 +17176,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
             _env_log = None
     if _loader_env_stage_enabled is None and interactive:
         _real_stdout.write(
-            "\n  Skip LOADER backup/printenv capture (DNA check still runs)? [y/N]: "
+            "\n  Skip LOADER backup/printenv capture? [y/N]: "
         )
         _real_stdout.flush()
         try:
@@ -17424,7 +17409,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     if _operation_mode == 3:
         if _loader_env_stage_enabled is None:
             _real_stdout.write(
-                "\n  Skip LOADER backup/printenv capture for option 3 nodes (DNA check still runs)? [y/N]: "
+                "\n  Skip LOADER backup/printenv capture for option 3 nodes? [y/N]: "
             )
             _real_stdout.flush()
             try:

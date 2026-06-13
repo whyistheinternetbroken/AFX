@@ -35,6 +35,7 @@ The script automates the following core tasks:
 - Lists and cleans up stale BMC SSH sessions interactively
 
 All session activity is captured in a timestamped log directory with a human-readable summary report and a full screen-output transcript.
+Failed-run artifacts are preserved under `script_failures/YYYYMMDD_HHMMSS/` for troubleshooting and are ignored by git.
 
 ---
 
@@ -656,6 +657,8 @@ The `logs/` directory is created in the same folder as the script.
 **`screen_output_*.log`** captures everything that would appear on the operator's terminal — menus, prompts, status lines, and milestone messages — in clean plain text (ANSI escape codes stripped). It is the easiest file to review after a run to see exactly what happened from a user's perspective.
 
 **`bmc_session_*.log`** contains the raw BMC/ONTAP console I/O and all structured log entries with timestamps.
+
+**`script_failures/YYYYMMDD_HHMMSS/`** keeps preserved logs from failed runs for postmortem troubleshooting, including screen output, BMC session logs, SSH traces, and env snapshots.
 
 ### Summary File Format
 

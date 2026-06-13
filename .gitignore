@@ -21,5 +21,6 @@ Thumbs.db
 # Runtime output — keep the folders but ignore their contents
 logs/*
 !logs/.gitkeep
+script_failures/*
 ONTAP/*
 !ONTAP/.gitkeep
