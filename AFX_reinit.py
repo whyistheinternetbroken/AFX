@@ -10019,7 +10019,6 @@ def _run_4b_standalone(log, resuming: bool = False):
         log.log(f"4b: static ifconfig in LOADER: {_netboot_static_ip}")
 
     print("\n  ✅ All setup information collected. Starting operations...")
-    _print_autopilot_banner()
     if log:
         log.log(f"4b: all upfront questions answered; do_reinit={_do_reinit}, mode={_mode_sel}")
 
@@ -10352,6 +10351,7 @@ def _run_4b_standalone(log, resuming: bool = False):
         # ── Step 4: Start HTTP server if serving a local file ─────────────────
         if log:
             log.start_phase("4b – HTTP Server")
+        _print_autopilot_banner()
         httpd = None
         if src_type == "file":
             _ht, pkg_url, httpd = _start_http_server(src_value)
@@ -18317,6 +18317,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
                 _session_log.set_outcome("FAIL", "no package selected for netboot")
                 _session_log.close()
             sys.exit(1)
+        _print_autopilot_banner()
         _nb_httpd = None
         if src_type == "file":
             _nb_t, _nb_pkg_url, _nb_httpd = _start_http_server(src_value)
@@ -22990,9 +22991,13 @@ def main():
             if _operation_mode == 3 and _checkpoint is None:
                 _option3_init_checkpoint(_run_context, sp_host, _peer_bmc_list, config_path)
 
-            # Show autopilot banner for automated modes (1b, 2b, 3) — all
-            # upfront prompts are now done; the rest runs unattended.
-            if _auto_setup or _auto_add or _operation_mode == 3:
+            # Show autopilot banner for automated modes once no further
+            # operator prompts remain. Netboot-before-reinit still prompts for
+            # package selection later, so defer its banner until after the
+            # package is chosen.
+            if (_auto_setup or _auto_add or _operation_mode == 3) and not (
+                _auto_setup and _netboot_before_reinit
+            ):
                 _print_autopilot_banner()
 
             # Phase: System Reset (skipped if already at LOADER)
