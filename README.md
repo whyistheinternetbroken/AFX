@@ -326,7 +326,7 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **1a** | Initialize First Node (interactive) | Boots to LOADER, sets `destroy-all-storage-pods` flag, selects boot menu option 9 (Clean System Configuration). Prompts the operator for all cluster setup wizard inputs. |
 | **1b** | Initialize First Node (automated) | Same as 1a, but drives the full ONTAP cluster setup wizard automatically using values from config file or prompts. |
 | **2a** | Add Node to Cluster (interactive) | Boots to LOADER, selects boot menu option 4 (Initialize and configure system). Operator completes the node-join wizard. In multi-node runs, supports numbered omit selection and auto-skips nodes already in cluster. |
-| **2b** | Add Node to Cluster (automated) | Same as 2a, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel, numbered omit selection, and auto-skips nodes already in cluster. |
+| **2b** | Add Node to Cluster (automated) | Same as 2a, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel, numbered omit selection, and auto-skips nodes already in cluster. In this flow, "primary BMC" is used as the default credential context (for prompts like "blank to reuse primary"), not as a unique controller after parallel add starts. |
 | **2c** | Resume Node Additions | Resumes interrupted node-join operations from the last successful checkpoint. Use when a previous mode 2b or mode 3 run was interrupted before all secondary nodes completed. |
 | **3** | End-to-End Auto Reinit | Runs mode 1b on the primary node, then runs mode 2b on all secondary nodes in parallel. Fully unattended with a config file. |
 | **4a** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. See [Why 4a uses the BMC](#why-4a-uses-the-bmc). |
@@ -733,6 +733,7 @@ Depending on the mode:
 ### Step 10: Multi-Node Parallel Operations (modes 2b and 3)
 
 In mode 2b and mode 3, secondary nodes are processed in parallel worker threads. The script monitors each thread and aggregates results. Each node reports independently to the session log.
+The primary BMC acts as the initial/default credential source for this phase; once worker threads start, each node uses its resolved per-node BMC credentials and is processed independently.
 
 ### Step 11: Exit and Review Logs
 
