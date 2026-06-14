@@ -5780,16 +5780,21 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             return False
 
         # Check if already at LOADER before issuing system reset.
-        if not _already_at_loader(
+        if _already_at_loader(
             ch, label=host, node_log=node_log,
         ):
+            _tprint(f"   ✅ [{host}] Already at LOADER prompt. Disconnecting...")
+            _slog(f"Peer {host} already at LOADER; skipping reset")
+            return True
+
+        def _reset_and_enter_console(reason: str = "initial"):
             # system reset (auto-confirm).
             direct_send_and_wait(ch, "system reset", "y/n", timeout=15, auto_respond="y",
                                  node_log=node_log, quiet=(node_log is not None))
             _tprint(f"\n   ⏳ [{host}] System reset in process — reboot will happen soon.")
             if _session_log:
                 _session_log.log(
-                    f"[{host}] system reset issued; waiting for reboot to LOADER"
+                    f"[{host}] system reset issued ({reason}); waiting for reboot to LOADER"
                 )
             time.sleep(3)
             direct_read_until(ch, ">", timeout=20, node_log=node_log)
@@ -5798,7 +5803,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             if _session_log:
                 _session_log.log_sent("system console")
             ch.send("system console\r")
-            out, matched = direct_read_until_any(
+            _out, matched = direct_read_until_any(
                 ch,
                 ["y/n", "ctrl-d", "type exit", "serial console", "boot loader", "loader-", "autoboot"],
                 timeout=15,
@@ -5809,10 +5814,13 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
                 ch.send("y\r")
                 time.sleep(2)
 
+        _reset_and_enter_console("initial")
+
         # Monitor for AUTOBOOT and LOADER.
         buf = ""
         start = time.monotonic()
         loader_seen = False
+        _login_recovery_attempts = 0
         while time.monotonic() - start < timeout:
             if _shutdown_event.is_set():
                 break
@@ -5826,7 +5834,8 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
                     sys.stdout.flush()
                 if _session_log:
                     _session_log.log_console(chunk)
-                if "starting autoboot press ctrl-c to abort" in buf.lower():
+                _buf_lower = buf.lower()
+                if "starting autoboot press ctrl-c to abort" in _buf_lower:
                     _tprint(f"\n🛑 [{host}] AUTOBOOT detected; sending Ctrl+C...")
                     _slog(f"[{host}] AUTOBOOT detected; sending Ctrl+C")
                     if node_log:
@@ -5835,6 +5844,36 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
                         ch.send("\x03")
                         time.sleep(0.3)
                     buf = ""
+                elif "login:" in _buf_lower:
+                    # We missed the AUTOBOOT interception window and the node
+                    # booted to ONTAP login. Re-run reset + console once so we
+                    # can catch Ctrl+C on the next reboot.
+                    if _login_recovery_attempts >= 1:
+                        _tprint(f"   ⚠️  [{host}] Reached ONTAP login again after retry; giving up.")
+                        _slog(
+                            f"Peer {host} reached ONTAP login after recovery retry; "
+                            "LOADER not reached",
+                            prefix="WARN",
+                        )
+                        break
+                    _login_recovery_attempts += 1
+                    _tprint(f"\n   ⚠️  [{host}] Node reached ONTAP login (Ctrl+C missed). "
+                            "Retrying reset to catch AUTOBOOT...")
+                    _slog(
+                        f"[{host}] reached ONTAP login instead of LOADER; "
+                        "retrying reset/autoboot interception",
+                        prefix="WARN",
+                    )
+                    try:
+                        ch.send("\x04")
+                        time.sleep(1)
+                        direct_read_until(ch, ">", timeout=10, node_log=node_log)
+                    except Exception:
+                        pass
+                    _reset_and_enter_console("autoboot-missed-retry")
+                    buf = ""
+                    start = time.monotonic()
+                    continue
                 elif _LOADER_PROMPT_RE.search(buf):
                     loader_seen = True
                     break
@@ -19320,7 +19359,7 @@ def main():
                     _config_data = {}
                 _ctx_sync_from_globals()
 
-                _make_session_log("Mode 4c: standalone license install")
+                _make_session_log("Mode 5a: standalone license install")
 
                 # BMC credentials from config or interactive prompts.
                 primary_node_44 = {}
@@ -19542,7 +19581,7 @@ def main():
                     if _is_direct46:
                         # Direct cluster-mgmt SSH: already at cluster shell or login
                         # prompt. Authenticate if needed, then run inventory commands.
-                        _session_log.log("4e: direct cluster SSH detected; skipping BMC console path")
+                        _session_log.log("5c: direct cluster SSH detected; skipping BMC console path")
                         print("  ✅ Cluster management SSH detected.")
                         if "login:" in _probe46.lower() and "::>" not in _probe46:
                             # Genuine login: prompt (not just banner text like "Last login:")
@@ -19571,12 +19610,12 @@ def main():
                         # entering system console.  The probe above may have already
                         # consumed it (direct read until '>'), so only call
                         # wait_for_bmc_prompt when the probe did NOT see '>'.
-                        _session_log.log("4e: BMC connection detected; entering system console")
+                        _session_log.log("5c: BMC connection detected; entering system console")
                         _bmc_prompt_in_probe = ">" in _probe46
                         if _bmc_prompt_in_probe:
                             print("  ✅ BMC prompt detected.")
                             _session_log.log(
-                                "4e: BMC prompt already consumed by probe; skipping wait"
+                                "5c: BMC prompt already consumed by probe; skipping wait"
                             )
                         elif not wait_for_bmc_prompt(_ch46, auto_takeover=True):
                             print("  \u274c BMC prompt not received. Exiting.")
@@ -19642,18 +19681,18 @@ def main():
                                 _sp_node_pairs.sort(key=lambda x: x[1])
                                 _matched_bmc = _sp_node_pairs[0][0]
                                 _session_log.log(
-                                    f"4e: primary BMC resolved by node name sort: "
+                                    f"5c: primary BMC resolved by node name sort: "
                                     f"{_matched_bmc} -> {_sp_node_pairs[0][1]}"
                                 )
                         if _matched_bmc:
                             _primary_bmc46 = _matched_bmc
                             print(f"  ℹ️  Resolved primary BMC from SP list: {_primary_bmc46}")
-                            _session_log.log(f"4e: primary BMC resolved from SP list: {_primary_bmc46}")
+                            _session_log.log(f"5c: primary BMC resolved from SP list: {_primary_bmc46}")
                         else:
                             # Final fallback: first SP IP
                             _primary_bmc46 = _sp_ips46[0]
                             print(f"  ⚠️  Could not match primary BMC from SP list; using first: {_primary_bmc46}")
-                            _session_log.log(f"4e: primary BMC fallback to first SP IP: {_primary_bmc46}",
+                            _session_log.log(f"5c: primary BMC fallback to first SP IP: {_primary_bmc46}",
                                              prefix="WARN")
                         # Update the primary_node bmc field in config so it's saved correctly.
                         if isinstance(_config_data.get("primary_node"), dict):
@@ -20374,7 +20413,7 @@ def main():
                         _creds48[_ip48] = (_u48, _p48)
                 print("")
 
-                _make_session_log("4g: reset all nodes to LOADER")
+                _make_session_log("5e: reset all nodes to LOADER")
 
                 # ── Reset each node to LOADER in parallel ────────────────────────
                 _print_banner(f"\U0001f504 Resetting {len(_bmc_ips48)} node(s) to LOADER prompt")
@@ -20385,7 +20424,7 @@ def main():
                 _node_logs48 = {}
                 for _ip48 in _bmc_ips48:
                     try:
-                        _nf48 = _node_log_open(_ip48, _log_dir48, prefix="mode4g_loader")
+                        _nf48 = _node_log_open(_ip48, _log_dir48, prefix="mode5e_loader")
                         _node_logs48[_ip48] = _nf48
                         print(f"  \U0001f4dd [{_ip48}] Log \u2192 {_nf48.name}")
                     except Exception:
@@ -20426,7 +20465,7 @@ def main():
                     for _ip48r in _failed48:
                         try:
                             _nf48r = _node_log_open(_ip48r, _log_dir48,
-                                                    prefix="mode4g_loader_retry")
+                                                    prefix="mode5e_loader_retry")
                             _node_logs48[_ip48r] = _nf48r
                             print(f"  📝 [{_ip48r}] Retry log → {_nf48r.name}")
                         except Exception:
@@ -21352,7 +21391,7 @@ def main():
                 else:
                     sp_pass_45 = getpass.getpass("  BMC password: ")
 
-                _make_session_log("Mode 4d: set up passwordless SSH")
+                _make_session_log("Mode 5b: set up passwordless SSH")
 
                 _session_log.start_phase("SSH Connection (BMC)")
                 client_45, sp_user_45, sp_pass_45 = connect_to_sp(sp_host_45, sp_user_45, sp_pass_45)
