@@ -4547,7 +4547,7 @@ DESCRIPTION
       5h   List and clean up stale BMC SSH sessions
       5i   Backup LOADER environment variables (experimental)
       5j   Compare LOADER env to defaults (diff) (experimental)
-      5k   Check boot DNA (cluster shell or LOADER)
+      5k   Check boot DNA (config target picker + state-aware query)
       5z   Reset all nodes to LOADER prompt (parallel; disruptive command)
 
 OPTIONS
@@ -4833,7 +4833,7 @@ def parse_args():
                         help="Skip the menu and run mode 4e: create a backup "
                              "cluster configuration file.")
     parser.add_argument("--verify", action="store_true", default=False,
-                        help="Skip the menu and run mode 4f: verify BMC "
+                        help="Skip the menu and run mode 5d: verify BMC "
                              "authentication for all configured nodes.")
     parser.add_argument("--loader", action="store_true", default=False,
                         help="Skip the menu and run mode 5z: reset all nodes "
@@ -7065,6 +7065,10 @@ def _run_boot_dna_check_mode():
 
     if _session_log:
         print(f"\n📝 Session log: {_session_log.log_file}")
+    try:
+        input("  Press Enter to return to the main menu...")
+    except (EOFError, KeyboardInterrupt):
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -9788,7 +9792,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
     Returns (client, channel, None) on success or
     (None, None, "ssh"/"loader_timeout") on failure.
     """
-    print(f"\n  🔁 [{host}] Connecting and resetting to LOADER...")
+    print(f"\n  🔁 [{host}] Connecting and moving to LOADER...")
     if node_log:
         _par_write(node_log, f"\n=== _bmc_reach_loader: {host} ===\n")
     try:
@@ -9812,7 +9816,9 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             return None, None, "ssh"
 
         # Check if already at LOADER before issuing system reset.
-        if not _already_at_loader(ch, label=host, node_log=node_log):
+        # Use a slightly longer probe here because some platforms take a few
+        # extra seconds to render LOADER after console attach.
+        if not _already_at_loader(ch, probe_timeout=25, label=host, node_log=node_log):
             # system reset (auto-confirm if prompted).
             direct_send_and_wait(ch, "system reset", "y/n", timeout=15,
                                  auto_respond="y", node_log=node_log)
@@ -9831,6 +9837,8 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             if matched2 and "y/n" in matched2.lower():
                 ch.send("y\r")
                 time.sleep(2)
+        else:
+            print(f"  ✅ [{host}] Already at LOADER — system reset skipped.")
 
         # Monitor for AUTOBOOT interrupt and LOADER prompt.
         # Raw console output (BIOS init, driver load, etc.) goes to node_log
@@ -10997,11 +11005,16 @@ def _run_4b_standalone(log, resuming: bool = False):
             ch = bmc_channels[ip]
             cl = bmc_clients[ip]
             try:
+                _already_loader = False
+                # Nudge quiet BMC shells so prompt detection has fresh output.
+                with suppress(Exception):
+                    ch.send("\r")
+                time.sleep(0.2)
                 # Check if already at LOADER; skip system reset if so.
-                if _already_at_loader(ch, label=ip, node_log=nf):
+                if _already_at_loader(ch, probe_timeout=25, label=ip, node_log=nf):
+                    _already_loader = True
                     if log:
                         log.log(f"[{ip}] already at LOADER – system reset skipped")
-                    # Fall through directly to the AUTOBOOT/LOADER monitoring loop.
                 else:
                     # system reset (auto-confirm y/n prompt)
                     _status(f"  ⏳ [{ip}] Sending system reset...")
@@ -11033,6 +11046,17 @@ def _run_4b_standalone(log, resuming: bool = False):
                             _par_write(nf, "\n>>> y  (taking over console session)\n")
                         ch.send("y\r")
                         time.sleep(2)
+
+                # If we're already at LOADER, mark success immediately.
+                # Waiting for AUTOBOOT output here can stall for several minutes.
+                if _already_loader:
+                    with connect_lock:
+                        loader_channels[ip] = ch
+                        loader_clients[ip] = cl
+                    _status(f"  ✅ [{ip}] At LOADER prompt.")
+                    if log:
+                        log.log(f"[{ip}] confirmed LOADER prompt (no reset needed)")
+                    return
 
                 # Monitor for AUTOBOOT/LOADER – all raw output → node file only.
                 buf = ""
@@ -20658,7 +20682,7 @@ def main():
                     print("\n  ⚡ --backup: launching mode 4e (config backup).")
                 elif args.verify:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 47, False, False
-                    print("\n  ⚡ --verify: launching mode 4f (BMC auth verify).")
+                    print("\n  ⚡ --verify: launching mode 5d (BMC auth verify).")
                 elif args.loader:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 48, False, False
                     print("\n  ⚡ --loader: launching mode 5z (reset all nodes to LOADER).")
@@ -21578,9 +21602,9 @@ def main():
                 else:
                     raise _ReturnToMenu
 
-            # ── Mode 47 (4f): verify BMC authentication ────────────────────────────
+            # ── Mode 47 (5d): verify BMC authentication ────────────────────────────
             if _operation_mode == 47:
-                _print_banner("\U0001f50d 4f: Verify BMC authentication")
+                _print_banner("\U0001f50d 5d: Verify BMC authentication")
                 print("")
 
                 # ── Locate BMC IP list ────────────────────────────────────────────
@@ -21866,9 +21890,9 @@ def main():
                     pass
                 raise _ReturnToMenu
 
-            # ── Mode 48 (4g): reset all nodes to LOADER prompt ─────────────────────
+            # ── Mode 48 (5z): reset all nodes to LOADER prompt ─────────────────────
             if _operation_mode == 48:
-                _print_banner("\U0001f504 4g: Reset all nodes to LOADER prompt")
+                _print_banner("\U0001f504 5z: Reset all nodes to LOADER prompt")
                 print("")
 
                 # ── Locate BMC IP list (same logic as mode 47) ───────────────────
@@ -21964,7 +21988,7 @@ def main():
                         _creds48[_ip48] = (_u48, _p48)
                 print("")
 
-                _make_session_log("5e: reset all nodes to LOADER")
+                _make_session_log("5z: reset all nodes to LOADER")
 
                 # ── Reset each node to LOADER in parallel ────────────────────────
                 _print_banner(f"\U0001f504 Resetting {len(_bmc_ips48)} node(s) to LOADER prompt")
@@ -21975,7 +21999,7 @@ def main():
                 _node_logs48 = {}
                 for _ip48 in _bmc_ips48:
                     try:
-                        _nf48 = _node_log_open(_ip48, _log_dir48, prefix="mode5e_loader")
+                        _nf48 = _node_log_open(_ip48, _log_dir48, prefix="mode5z_loader")
                         _node_logs48[_ip48] = _nf48
                         print(f"  \U0001f4dd [{_ip48}] Log \u2192 {_nf48.name}")
                     except Exception:
@@ -22016,7 +22040,7 @@ def main():
                     for _ip48r in _failed48:
                         try:
                             _nf48r = _node_log_open(_ip48r, _log_dir48,
-                                                    prefix="mode5e_loader_retry")
+                                                    prefix="mode5z_loader_retry")
                             _node_logs48[_ip48r] = _nf48r
                             print(f"  📝 [{_ip48r}] Retry log → {_nf48r.name}")
                         except Exception:
@@ -22068,7 +22092,7 @@ def main():
                                 _env48b = _loader_env_capture(_ch48b)
                                 _env_path48b = _loader_env_save_to_file(
                                     _env48b, ip, _bkp_log_dir48,
-                                    prefix="5e_loader_env_backup",
+                                    prefix="5z_loader_env_backup",
                                 )
                                 if _env_path48b:
                                     print(f"  ✅ [{ip}] Env saved → {_env_path48b}")

@@ -9,6 +9,14 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **4b now probes longer for LOADER before issuing resets.**
+  In option 4b LOADER transitions (initial reset and reconnect), the pre-reset
+  LOADER probe timeout was increased and now explicitly skips `system reset`
+  when the node is already at LOADER.
+- **Help and in-app mode labels now match current option numbering.**
+  Updated CLI/help references from legacy `4f/4g/5e` wording to current
+  `5d/5z` naming, and refreshed the 5k man-page label to describe its
+  config-driven, state-aware boot-DNA behavior.
 - **Modes 1–4 now fail fast globally on unsupported boot DNA.**
   If any node reports an unsupported `bootarg.init.dna` value during reinit
   workflows, the run now stops all node work, aborts the script, and tells the
@@ -60,6 +68,9 @@ revision labels rather than strict [SemVer](https://semver.org/).
   `1,3,4`) before credential prompts and test execution.
 
 ### Fixed
+- **4b no longer stalls after detecting an existing LOADER prompt.**
+  In the parallel reset-to-LOADER step, nodes already at LOADER now proceed
+  immediately instead of waiting for reboot/AUTOBOOT output that never arrives.
 - **2b/2a parallel worker failures no longer cascade when one node aborts.**
   A non-interactive per-node LOADER/DNA failure now aborts only that worker
   instead of closing the global session log. SessionLogger write methods now
