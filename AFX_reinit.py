@@ -4444,8 +4444,10 @@ def manual_checkpoint_signal_handler(sig, frame):
 def _print_man_page():
     """Print a man page-style reference for all CLI options."""
     # Fit to terminal width, capped at 100 columns.
+    # Use plain ASCII for the horizontal rule so --help works on consoles
+    # that cannot encode box-drawing Unicode characters.
     cols = min(shutil.get_terminal_size((80, 24)).columns, 100)
-    rule = "─" * cols
+    rule = "-" * cols
 
     page = f"""
 {rule}
@@ -4470,10 +4472,11 @@ DESCRIPTION
        3   End-to-end reinit: mode 1b on primary + mode 2b on all peers
       4a   ONTAP rolling upgrade (takeover / software update / giveback)
       4b   Netboot and install ONTAP image
-      4c   Standalone license install
-      4d   Set up passwordless SSH to cluster management
-      4e   Create / save cluster configuration backup (JSON)
-      4f   Verify BMC SSH authentication for all nodes
+      5a   Standalone license install
+      5b   Set up passwordless SSH to cluster management
+      5c   Create / save cluster configuration backup (JSON)
+      5d   Verify BMC SSH authentication for selected/all nodes
+      5e   Reset all nodes to LOADER prompt (parallel)
 
 OPTIONS
     -h, --help
@@ -4555,6 +4558,28 @@ OPTIONS
         updated timestamps, age in minutes, log directory, config
         path, BMC IPs, every completed global phase, and every per-node
         phase keyed by BMC IP.  Does not modify the checkpoint file.
+
+    --auto-clear-stale-bmc
+        On BMC SSH banner-timeout retries, scan for ESTABLISHED sockets to
+        <bmc>:22 owned by other local python processes and SIGTERM them.
+        Always-on cleanup (close in-process SSH clients + ipmitool SOL
+        deactivate) still runs regardless of this flag.
+
+    --diag
+        Enable diagnostic bootarg injection at LOADER. Bootargs are loaded
+        from bootargs.txt / bootargs (or prompted interactively), then
+        applied after set-defaults and before saveenv.
+
+    Mode shortcut flags (bypass interactive menu):
+        --first-node      Run mode 1b directly
+        --add-nodes       Run mode 2b directly
+        --reinit          Run mode 3 directly
+        --netboot-install Run mode 4b directly
+        --add-lic         Run mode 5a directly
+        --passwordless    Run mode 5b directly
+        --backup          Run mode 5c directly
+        --verify          Run mode 5d directly
+        --loader          Run mode 5e directly
 
 EXAMPLES
     Interactive run (prompts for all values):
@@ -8633,10 +8658,32 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords):
     if ans != "y":
         return
 
-    for _ip in failing_ips:
+    _targets = _prompt_bmc_target_scope(
+        failing_ips,
+        scope_label="diagnostics",
+        prompt_prefix="  "
+    )
+    if not _targets:
+        return
+
+    for _ip in _targets:
         print(f"\n  🔍 Diagnosing SSH state for {_ip}...")
         with suppress(Exception):
             _diagnose_stale_bmc_sessions(_ip, log=_session_log)
+
+    try:
+        ipmi_only_ans = input(
+            "\n  Run only 'ipmitool sol deactivate' for these BMC(s) now?"
+            " [y/N]: "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        ipmi_only_ans = "n"
+    if ipmi_only_ans == "y":
+        for _ip in _targets:
+            _pw = (bmc_passwords or {}).get(_ip, "") if isinstance(bmc_passwords, dict) else ""
+            print(f"\n  🔧 Running ipmitool sol deactivate for {_ip}...")
+            with suppress(Exception):
+                _ipmi_sol_deactivate(_ip, bmc_user, _pw, log=_session_log)
 
     try:
         fix_ans = input(
@@ -8652,7 +8699,7 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords):
     if fix_ans != "y":
         return
 
-    for _ip in failing_ips:
+    for _ip in _targets:
         _pw = (bmc_passwords or {}).get(_ip, "") if isinstance(bmc_passwords, dict) else ""
         print(f"\n  🧹 Cleaning stale SSH sessions for {_ip}...")
         with suppress(Exception):
@@ -8661,6 +8708,43 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords):
         "\n  ✅ Cleanup pass complete. Re-run the script (or the same"
         " option) to retry BMC verification."
     )
+
+
+def _prompt_bmc_target_scope(candidate_ips, scope_label="operation", prompt_prefix=""):
+    """Return selected BMC target list: all candidates or one explicit IP."""
+    _ips = [str(x).strip() for x in (candidate_ips or []) if str(x).strip()]
+    if not _ips:
+        return []
+
+    while True:
+        try:
+            _scope = input(
+                f"\n{prompt_prefix}Run {scope_label} on all listed BMCs or one IP? "
+                "[all/one]: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return []
+        if _scope in ("", "all", "a"):
+            return list(_ips)
+        if _scope in ("one", "o", "ip", "single", "1"):
+            while True:
+                try:
+                    _ip = input(
+                        f"{prompt_prefix}  Enter BMC IP/hostname "
+                        "(must match listed addresses): "
+                    ).strip()
+                except (EOFError, KeyboardInterrupt):
+                    return []
+                if not _ip:
+                    print(f"{prompt_prefix}  ⚠️  No IP entered.")
+                    continue
+                if _ip not in _ips:
+                    print(
+                        f"{prompt_prefix}  ⚠️  '{_ip}' is not in the loaded BMC list."
+                    )
+                    continue
+                return [_ip]
+        print(f"{prompt_prefix}  ⚠️  Enter 'all' or 'one'.")
 
 
 def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
@@ -20957,6 +21041,33 @@ def main():
                     print("  No BMC addresses to test. Exiting.")
                     sys.exit(0)
 
+                print("\n  BMC targets:")
+                for _idx47, _ip47 in enumerate(_bmc_ips47, 1):
+                    print(f"    {_idx47:>2}. {_ip47}")
+                while True:
+                    _pick47 = _prompt(
+                        "  Test all BMCs or subset by number(s) (comma-separated, "
+                        "blank=all): ",
+                        "all",
+                    ).strip().lower()
+                    if _pick47 in ("", "all", "a", "*"):
+                        break
+                    _parts47 = [p.strip() for p in _pick47.split(",") if p.strip()]
+                    if not _parts47:
+                        break
+                    _bad47 = [p for p in _parts47 if not p.isdigit()]
+                    if _bad47:
+                        print(f"  ⚠️  Invalid entry: {', '.join(_bad47)}. Use numbers like: 1,3")
+                        continue
+                    _idxs47 = sorted(set(int(p) for p in _parts47))
+                    _oor47 = [str(i) for i in _idxs47 if i < 1 or i > len(_bmc_ips47)]
+                    if _oor47:
+                        print(f"  ⚠️  Out of range: {', '.join(_oor47)} (valid: 1-{len(_bmc_ips47)})")
+                        continue
+                    _bmc_ips47 = [_bmc_ips47[i - 1] for i in _idxs47]
+                    break
+                print(f"  ✅ Selected {len(_bmc_ips47)} BMC(s): {', '.join(_bmc_ips47)}")
+
                 # ── Credentials ──────────────────────────────────────────────────
                 print("")
                 _same_creds47 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
@@ -21616,29 +21727,53 @@ def main():
                 # ── Interactive loop ──────────────────────────────────────────────
                 while True:
                     print("\n  What would you like to do?")
-                    print("    1) List stale SSH sessions")
-                    print("    2) Clean up stale SSH sessions")
-                    print("    3) Exit (return to main menu)")
-                    _act50 = _prompt("  Your choice [1/2/3]: ").strip()
+                    print("    1) List stale SSH sessions (all BMCs or one IP)")
+                    print("    2) Clean up stale SSH sessions (all BMCs or one IP)")
+                    print("    3) Run ipmitool SOL deactivate (all BMCs or one IP)")
+                    print("    4) Exit (return to main menu)")
+                    _act50 = _prompt("  Your choice [1/2/3/4]: ").strip()
                     if _act50 == "1":
+                        _targets50 = _prompt_bmc_target_scope(
+                            _bmc_ips50, scope_label="SSH diagnostics", prompt_prefix="  "
+                        )
+                        if not _targets50:
+                            continue
                         print("")
-                        for _ip50 in _bmc_ips50:
+                        for _ip50 in _targets50:
                             print(f"\n  \U0001f50d Diagnosing SSH state for {_ip50}...")
                             with suppress(Exception):
                                 _diagnose_stale_bmc_sessions(_ip50, log=_session_log)
                     elif _act50 == "2":
+                        _targets50 = _prompt_bmc_target_scope(
+                            _bmc_ips50, scope_label="stale-session cleanup", prompt_prefix="  "
+                        )
+                        if not _targets50:
+                            continue
                         print("")
-                        for _ip50 in _bmc_ips50:
+                        for _ip50 in _targets50:
                             _u50, _p50pw = _creds50.get(_ip50, ("admin", ""))
                             print(f"\n  \U0001f9f9 Cleaning stale SSH sessions for {_ip50}...")
                             with suppress(Exception):
                                 _clear_stale_bmc_sessions(_ip50, _u50, _p50pw,
                                                           log=_session_log)
                         print("\n  \u2705 Cleanup pass complete.")
-                    elif _act50 in ("3", ""):
+                    elif _act50 == "3":
+                        _targets50 = _prompt_bmc_target_scope(
+                            _bmc_ips50, scope_label="ipmitool SOL deactivate", prompt_prefix="  "
+                        )
+                        if not _targets50:
+                            continue
+                        print("")
+                        for _ip50 in _targets50:
+                            _u50, _p50pw = _creds50.get(_ip50, ("admin", ""))
+                            print(f"\n  🔧 Running ipmitool sol deactivate for {_ip50}...")
+                            with suppress(Exception):
+                                _ipmi_sol_deactivate(_ip50, _u50, _p50pw, log=_session_log)
+                        print("\n  ✅ ipmitool pass complete.")
+                    elif _act50 in ("4", ""):
                         break
                     else:
-                        print("  \u26a0\ufe0f  Please enter 1, 2, or 3.")
+                        print("  \u26a0\ufe0f  Please enter 1, 2, 3, or 4.")
 
                 print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu

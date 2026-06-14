@@ -9,6 +9,27 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **`--help` man page updated to match current CLI options.**
+  The built-in help output now includes the full current flag set
+  (`--auto-clear-stale-bmc`, `--diag`, and all mode shortcut flags) and uses
+  current menu numbering for utility modes (`5a`–`5e`).
+- **5d BMC auth verify now supports numbered subset selection.**
+  The BMC target list is now shown with numeric indices, and operators can run
+  verification against all targets or a comma-separated subset (for example,
+  `1,3,4`) before credential prompts and test execution.
+
+### Fixed
+- **`--help` output rendering on non-UTF consoles.**
+  The help-page horizontal rule now uses ASCII characters so `--help` does not
+  fail with Unicode encoding errors on Windows/code page terminals.
+- **5h stale-SSH diagnostics now support per-IP targeting and ipmitool-only runs.**
+  Operators can now choose to run diagnostics/cleanup against all loaded BMCs
+  or a single selected IP. Added an explicit `ipmitool sol deactivate` action
+  in the 5h menu, in addition to full stale-session cleanup.
+- **5d failure diagnostics now support per-IP targeting and ipmitool-only runs.**
+  The post-failure diagnostics helper now allows selecting all failing BMCs or
+  one IP, and includes an `ipmitool sol deactivate`-only pass before optional
+  full cleanup.
 - **Blank-password credential retries now require explicit skip.**
   SSH credential re-prompts now treat blank passwords as intentional retry
   values across the shared retry helper and mode 2a/2b pre-auth flows. To stop

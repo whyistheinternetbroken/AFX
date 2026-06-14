@@ -35,6 +35,8 @@ Updates `README.md` and `CHANGELOG.md` to reflect changes made to `AFX_reinit.py
 - The **"Overview"** bullet list describes what the script automates — update it when new automation capabilities are added
 - Option references in the README use the current menu numbering (e.g., `5c` for config backup, not `4e`)
 - Update the **"Updated:"** date field at the top when making doc changes
+- Keep the **Command-Line Reference** section in sync with the script's current CLI flags
+- If CLI options/help text changed, update the script's `--help` man page content (`_print_man_page`) to match
 - The disclaimer block must never be modified
 
 ---
@@ -58,8 +60,13 @@ Updates `README.md` and `CHANGELOG.md` to reflect changes made to `AFX_reinit.py
    - What the script automates (Overview bullet list)
    - A major feature (What's New in v2 table)
    - Option numbers referenced by name (e.g., `4e` → `5c`)
+   - CLI flags / shortcuts in Command-Line Reference
    - The "Updated:" date at the top
 
-5. **Verify** no old option numbers remain in README (grep for `4c`, `4d`, `4e`, `4f`, `4g` as menu option references).
+5. **Update help output** when CLI flags or descriptions change:
+   - Sync `parse_args()` options and `_print_man_page()` content
+   - Ensure `python3 AFX_reinit.py --help` reflects current flags and numbering
 
-6. **Do not commit** the doc changes — leave that to the user or the `commit` skill.
+6. **Verify** no old option numbers remain in README (grep for `4c`, `4d`, `4e`, `4f`, `4g` as menu option references).
+
+7. **Do not commit** the doc changes — leave that to the user or the `commit` skill.
