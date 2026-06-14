@@ -5347,14 +5347,14 @@ def _collect_password_groups_for_nodes(node_ips, prompt_prefix="  "):
             f"{prompt_prefix}2. No - Delete manifest and start over\n"
             f"{prompt_prefix}Choose [1/2]: ",
             "1",
-        ).strip()
-        if _ok == "1":
+        ).strip().lower()
+        if _ok in ("1", "y", "yes"):
             _pw_map = {}
             for _g in _groups:
                 for _ip in _g["ips"]:
                     _pw_map[_ip] = _g["password"]
             return _pw_map
-        if _ok == "2":
+        if _ok in ("2", "n", "no"):
             print(f"{prompt_prefix}Deleting password group manifest and restarting...")
             continue
         print(f"{prompt_prefix}⚠️  Invalid choice. Restarting password-group setup...")
@@ -13668,6 +13668,119 @@ def _parse_failover_show(output):
     return rows
 
 
+def _parse_cluster_port_show(output):
+    """Parse `network port show -ipspace Cluster` output.
+
+    Returns list of dicts with keys:
+      node, port, link, health, raw
+    Handles wrapped rows where Health is emitted on a continuation line.
+    """
+    rows = []
+    current_node = ""
+    pending = None
+
+    for raw in (output or "").splitlines():
+        line = raw.rstrip("\n")
+        s = line.strip()
+        if not s:
+            continue
+        lower = s.lower()
+        if lower.startswith("node:"):
+            if pending:
+                rows.append(pending)
+                pending = None
+            current_node = s.split(":", 1)[1].strip()
+            continue
+        if ("entries were displayed" in lower
+                or "::" in s
+                or lower.startswith("network port show")
+                or lower.startswith("(network port show)")
+                or lower.startswith("port ")
+                or lower.startswith("----")
+                or lower.startswith("speed(mbps)")
+                or lower.startswith("health")
+                or lower.startswith("admin/oper")
+                or lower.startswith("link mtu")):
+            if "entries were displayed" in lower and pending:
+                rows.append(pending)
+                pending = None
+            continue
+
+        parts = s.split()
+        if pending and len(parts) == 1 and "/" not in parts[0]:
+            # Wrapped health line (e.g. "healthy")
+            pending["health"] = parts[0]
+            rows.append(pending)
+            pending = None
+            continue
+
+        if len(parts) >= 6:
+            if pending:
+                rows.append(pending)
+                pending = None
+            _port = parts[0]
+            _ipspace = parts[1].lower()
+            _link = parts[3]
+            _admin_oper = parts[5] if len(parts) > 5 else ""
+            _health = parts[6] if len(parts) > 6 else ""
+            if _ipspace != "cluster" or "/" not in _admin_oper:
+                continue
+            pending = {
+                "node": current_node,
+                "port": _port,
+                "link": _link,
+                "health": _health,
+                "raw": s,
+            }
+            if _health:
+                rows.append(pending)
+                pending = None
+
+    if pending:
+        rows.append(pending)
+    return rows
+
+
+def _cluster_port_health_issues(channel, expected_nodes=None, log=None):
+    """Return list of cluster-port health issues from `-ipspace Cluster`."""
+    try:
+        with _suppress_console():
+            _ports_out = _run_cluster_command(
+                channel, "set -rows 0; network port show -ipspace Cluster", timeout=30
+            )
+    except Exception as _e:
+        return [f"cluster ports query failed: {_e}"]
+
+    _ports_out = _ANSI_RE.sub("", _ports_out).replace("\r\n", "\n").replace("\r", "\n")
+    if log:
+        log.log(f"Cluster health poll — network port show -ipspace Cluster:\n{_ports_out.strip()}")
+
+    _rows = _parse_cluster_port_show(_ports_out)
+    if not _rows:
+        return ["no cluster ports parsed from network port show output"]
+
+    _issues = []
+    _expected = set(str(n) for n in (expected_nodes or []) if n)
+    _seen_nodes = set()
+    for _r in _rows:
+        _node = str(_r.get("node") or "").strip()
+        _port = str(_r.get("port") or "").strip()
+        _link = str(_r.get("link") or "").strip().lower()
+        _health = str(_r.get("health") or "").strip().lower()
+        if _node:
+            _seen_nodes.add(_node)
+        if _link != "up" or _health != "healthy":
+            _issues.append(
+                f"cluster port {_node or '<unknown-node>'}:{_port or '<unknown-port>'} "
+                f"link={_link or '<missing>'} health={_health or '<missing>'}"
+            )
+
+    if _expected:
+        for _missing in sorted(_expected - _seen_nodes):
+            _issues.append(f"cluster ports not found for node {_missing}")
+    return _issues
+
+
 def _parse_sfo_fields(out, node):
     """Parse 'storage failover show -node <node> -fields
     state-description,takeover-of-possible' output.
@@ -13857,11 +13970,13 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
 
 def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
                                poll_interval=60, log=None):
-    """Poll until ALL expected nodes satisfy both:
+    """Poll until ALL expected nodes satisfy all:
       1. 'storage failover show' shows takeover_possible=true and a state
          description of exactly 'Connected to <partner>' with no extra text.
       2. 'storage failover show-giveback' shows 'No aggregates to give back'
          (or no rows) for every node.
+      3. 'network port show -ipspace Cluster' reports every cluster port as
+         Link=up and Health=healthy.
 
     Returns True when healthy, False on timeout.
     """
@@ -13944,10 +14059,15 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
             not_clean.append(f"pending giveback: {gl}")
             break
 
+        # ── Check 3: all cluster ports healthy/up ────────────────────────────
+        not_clean.extend(
+            _cluster_port_health_issues(channel, expected_nodes=expected_nodes, log=log)
+        )
+
         if not not_clean:
             if log:
                 log.log("Cluster health check passed: all nodes connected, "
-                        "no pending giveback")
+                        "no pending giveback, cluster ports healthy")
             return True
 
         if log:
@@ -17288,9 +17408,9 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
                                     poll_interval=300, label="",
                                     final_count=None):
     """Poll `cluster show` until it reports `target_count` nodes, every
-    node row shows 'true' for Health and Eligibility, AND no 'warning'
-    text appears in the command output (e.g. the post-join 'Cluster HA
-    must be configured' notice).
+    node row shows 'true' for Health and Eligibility, no 'warning' text
+    appears in the command output (e.g. the post-join 'Cluster HA must be
+    configured' notice), and cluster ports are Link=up / Health=healthy.
 
     Defaults: up to ``total_timeout`` seconds (15 minutes) of polling at
     ``poll_interval`` second intervals (300s / 5 min). Retry details are written
@@ -17322,8 +17442,10 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
                     f"{prefix}cluster show poll error: {e}", prefix="WARN"
                 )
             count, all_true, has_warning = -1, False, False
+        _port_issues = _cluster_port_health_issues(channel, log=_session_log)
+        _ports_ok = not _port_issues
         elapsed = time.monotonic() - start
-        if count >= target_count and all_true and not has_warning:
+        if count >= target_count and all_true and not has_warning and _ports_ok:
             print(f"\n   ✅ {prefix}cluster show reports {count} healthy node(s) "
                   f"after {elapsed:.0f}s.")
             if _session_log:
@@ -17337,12 +17459,16 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
             print(f"\n   ⚠️  {prefix}cluster show did not reach {target_count} "
                   f"healthy node(s) within {total_timeout}s "
                   f"(last: count={count}, all_true={all_true}, "
-                  f"has_warning={has_warning}).")
+                  f"has_warning={has_warning}, ports_ok={_ports_ok}).")
+            if _port_issues:
+                for _pi in _port_issues:
+                    print(f"      • {_pi}")
             if _session_log:
                 _session_log.log(
                     f"{prefix}cluster show timeout after {elapsed:.0f}s "
                     f"(count={count}, all_true={all_true}, "
-                    f"has_warning={has_warning})",
+                    f"has_warning={has_warning}, ports_ok={_ports_ok}, "
+                    f"port_issues={_port_issues})",
                     prefix="WARN",
                 )
             # If we tried to fix the HA warning one or more times and the
@@ -17358,6 +17484,7 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
             _session_log.log(
                 f"{prefix}cluster show retry: count={count}, "
                 f"all_true={all_true}, has_warning={has_warning}; "
+                f"ports_ok={_ports_ok}; "
                 f"sleeping {poll_interval}s "
                 f"(attempt {attempt}, elapsed {elapsed:.0f}s)"
             )
@@ -23009,8 +23136,12 @@ def main():
                 if not _ch49_ip:
                     _ch49_ip = input("  Cluster management LIF IP: ").strip()
                     if not _ch49_ip:
-                        print("  No IP entered. Exiting.")
-                        sys.exit(0)
+                        print("  No IP entered. Returning to menu.")
+                        try:
+                            input("  Press Enter to return to the main menu...")
+                        except (EOFError, KeyboardInterrupt):
+                            pass
+                        raise _ReturnToMenu
 
                 _ch49_user_in = input(f"  Cluster admin username [{_ch49_user}]: ").strip()
                 if _ch49_user_in:
@@ -23028,7 +23159,12 @@ def main():
                 except Exception as _e49:
                     print(f"  \u274c Connection failed: {_e49}")
                     _session_log.log(f"5f: connection failed: {_e49}", prefix="ERROR")
-                    sys.exit(1)
+                    print(f"\U0001f4dd Session log: {_session_log.log_file}")
+                    try:
+                        input("  Press Enter to return to the main menu...")
+                    except (EOFError, KeyboardInterrupt):
+                        pass
+                    raise _ReturnToMenu
 
                 _ch49 = _open_shell(_cl49)
                 try:
@@ -23068,8 +23204,12 @@ def main():
                     _fo49_out = _run_cluster_command(
                         _ch49, "set -rows 0; storage failover show", timeout=30
                     )
+                    _ports49_out = _run_cluster_command(
+                        _ch49, "set -rows 0; network port show -ipspace Cluster", timeout=30
+                    )
                 _cs49_out = _ANSI_RE.sub("", _cs49_out).replace("\r\n", "\n").replace("\r", "\n")
                 _fo49_out = _ANSI_RE.sub("", _fo49_out).replace("\r\n", "\n").replace("\r", "\n")
+                _ports49_out = _ANSI_RE.sub("", _ports49_out).replace("\r\n", "\n").replace("\r", "\n")
 
                 print("\n  cluster show:")
                 for _ln in _cs49_out.splitlines():
@@ -23081,6 +23221,12 @@ def main():
                 for _ln in _fo49_out.splitlines():
                     _ls = _ln.strip()
                     if _ls and "::" not in _ls and "storage failover show" not in _ls.lower():
+                        print(f"    {_ls}")
+
+                print("\n  network port show -ipspace Cluster:")
+                for _ln in _ports49_out.splitlines():
+                    _ls = _ln.strip()
+                    if _ls and "::" not in _ls and "(network port show)" not in _ls.lower():
                         print(f"    {_ls}")
 
                 _nodes49 = []
@@ -23099,6 +23245,42 @@ def main():
                         _ch49, _nodes49, total_timeout=600, poll_interval=60,
                         log=_session_log,
                     )
+
+                _ports49_rows = _parse_cluster_port_show(_ports49_out)
+                _ports49_bad = []
+                for _pr49 in _ports49_rows:
+                    _link49 = str(_pr49.get("link") or "").strip().lower()
+                    _health49 = str(_pr49.get("health") or "").strip().lower()
+                    if _link49 != "up" or _health49 != "healthy":
+                        _ports49_bad.append(_pr49)
+
+                _ports49_ok = bool(_ports49_rows) and not _ports49_bad
+                if not _ports49_rows:
+                    print("  ⚠️  Could not parse any cluster ports from network port output.")
+                    _session_log.log("5g: no cluster ports parsed from network port show",
+                                     prefix="WARN")
+                elif _ports49_bad:
+                    print("\n  ⚠️  Cluster port health check FAILED:")
+                    for _bp49 in _ports49_bad:
+                        _bn49 = _bp49.get("node") or "<unknown-node>"
+                        _pp49 = _bp49.get("port") or "<unknown-port>"
+                        _lk49 = _bp49.get("link") or "<missing>"
+                        _hs49 = _bp49.get("health") or "<missing>"
+                        print(f"    • {_bn49}:{_pp49}  link={_lk49}  health={_hs49}")
+                    _session_log.log(
+                        "5g: cluster port health failures: " +
+                        "; ".join(
+                            f"{(r.get('node') or '<unknown-node>')}:{(r.get('port') or '<unknown-port>')} "
+                            f"link={(r.get('link') or '<missing>')} health={(r.get('health') or '<missing>')}"
+                            for r in _ports49_bad
+                        ),
+                        prefix="WARN",
+                    )
+                else:
+                    print("  ✅ Cluster port health check passed (all cluster ports link=up, health=healthy).")
+                    _session_log.log("5g: cluster port health check passed")
+
+                _healthy49 = bool(_healthy49 and _ports49_ok)
 
                 # ── Version check ────────────────────────────────────────────────
                 print("\n  \U0001f50d Checking ONTAP version...")

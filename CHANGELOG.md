@@ -9,6 +9,10 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Cluster health gates now validate cluster-port link/health state.**
+  End-of-run health checks (modes 1–4) and utility mode 5g now run
+  `network port show -ipspace Cluster` and fail when any cluster port is not
+  `Link=up` or not `Health=healthy`, with detailed per-node/per-port warnings.
 - **Added mode 5l to build `configs/cluster_IP.json` for node-add reuse.**
   New utility option `5l` connects to cluster management, queries
   cluster-role interfaces (`-role cluster`), and writes an ordered cluster-IP
