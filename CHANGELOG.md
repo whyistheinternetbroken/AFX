@@ -9,6 +9,17 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Unhandled crashes now write a dedicated traceback log file.**
+  On unhandled exceptions, the script now writes a full stack trace to
+  `crash_trace_<timestamp>.log` under the run's `logs/<timestamp>/` directory
+  (or a new logs timestamp directory if no session log was active yet).
+- **Peer-node password prompts now reserve blank for blank passwords.**
+  In per-node credential prompts (modes 2a/2b and shared peer-credential
+  flows), blank input is now treated as an intentional blank password. To reuse
+  the primary password, operators now enter `PRIMARY` explicitly.
+- **2b primary-BMC prompt now clarifies credential-context behavior.**
+  The interactive 2b primary-BMC prompt now states that this node is used as
+  the primary-password context for peers and is not the cluster primary node.
 - **5h SSH diagnostics single-target selection now uses a labeled config-IP picker.**
   When choosing "one" target for SSH diagnostics, the script now shows a
   numbered list of IPs discovered from config (BMC, cluster management, and
@@ -23,6 +34,11 @@ revision labels rather than strict [SemVer](https://semver.org/).
   `1,3,4`) before credential prompts and test execution.
 
 ### Fixed
+- **2b/2a parallel worker failures no longer cascade when one node aborts.**
+  A non-interactive per-node LOADER/DNA failure now aborts only that worker
+  instead of closing the global session log. SessionLogger write methods now
+  safely no-op after close, preventing `ValueError: I/O operation on closed file`
+  from concurrent worker threads.
 - **`--help` output rendering on non-UTF consoles.**
   The help-page horizontal rule now uses ASCII characters so `--help` does not
   fail with Unicode encoding errors on Windows/code page terminals.

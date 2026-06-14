@@ -35,6 +35,7 @@ import argparse
 import platform
 import socket
 import textwrap
+import traceback
 from datetime import datetime
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
@@ -1688,6 +1689,7 @@ class SessionLogger:
         # Optional indented sub-timing rows attached under a parent phase
         # in the summary tables. phase_name -> list[(label, elapsed_seconds)].
         self._phase_subtimings: "dict[str, list[tuple[str, float]]]" = {}
+        self._closed = False
 
         self._write_header()
         print(f"📝 Session log: {self.log_file}")
@@ -1910,6 +1912,8 @@ class SessionLogger:
 
     def log(self, message, prefix="INFO"):
         with self._lock:
+            if self._closed or self._file.closed:
+                return
             upper = prefix.upper()
             now_str = datetime.now().strftime("%H:%M:%S")
             if upper in ("ERROR", "FATAL"):
@@ -1922,14 +1926,20 @@ class SessionLogger:
 
     def log_console(self, data):
         with self._lock:
+            if self._closed or self._file.closed:
+                return
             self._file.write(data)
 
     def log_user_input(self, data):
         with self._lock:
+            if self._closed or self._file.closed:
+                return
             self._file.write(f"[{self._ts_with_elapsed()}] [USER_INPUT] {data}\n")
 
     def log_sent(self, data):
         with self._lock:
+            if self._closed or self._file.closed:
+                return
             display = repr(data) if any(ord(c) < 32 and c not in '\r\n' for c in data) else data.strip()
             self._file.write(f"[{self._ts_with_elapsed()}] [SENT] {display}\n")
 
@@ -1943,6 +1953,9 @@ class SessionLogger:
             except RuntimeError:
                 pass
         with self._lock:
+            if self._closed:
+                return
+            self._closed = True
             # OPT: capture now once instead of calling datetime.now() three times
             now = datetime.now()
             if self._current_phase and self._current_phase_start:
@@ -2213,6 +2226,34 @@ class SessionLogger:
 _session_log = None
 
 
+def _write_crash_trace(exc_type, exc_value, exc_tb, context="Unhandled exception"):
+    """Write a full crash traceback to a dedicated file under logs/."""
+    try:
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        _script_dir = os.getcwd()
+
+    if _session_log and getattr(_session_log, "log_dir", None):
+        _log_dir = _session_log.log_dir
+    else:
+        _ts_dir = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _log_dir = os.path.join(_script_dir, "logs", _ts_dir)
+    os.makedirs(_log_dir, exist_ok=True)
+
+    _ts_file = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _crash_path = os.path.join(_log_dir, f"crash_trace_{_ts_file}.log")
+    with open(_crash_path, "w", encoding="utf-8") as _cf:
+        _cf.write("=" * 70 + "\n")
+        _cf.write("AFX_reinit crash trace\n")
+        _cf.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        _cf.write(f"Host: {platform.node()}\n")
+        _cf.write(f"Python: {sys.version}\n")
+        _cf.write(f"Context: {context}\n")
+        _cf.write("=" * 70 + "\n\n")
+        traceback.print_exception(exc_type, exc_value, exc_tb, file=_cf)
+    return _crash_path
+
+
 def _slog(msg, prefix="INFO"):
     """Shorthand: write *msg* to the active session log (no-op if none set)."""
     if _session_log:
@@ -2286,7 +2327,8 @@ def select_operation_mode():
         print("    5h. List and clean up stale BMC SSH sessions")
         print("    5i. Backup LOADER environment variables (experimental)")
         print("    5j. Compare LOADER env to defaults (diff) (experimental)")
-        print("    Disruptive commands")
+        print("")
+        print("    !!Disruptive commands!!")
         print("      5z. Reset all nodes to LOADER prompt")
         print("")
         print("  6.  Exit")
@@ -2509,7 +2551,7 @@ def select_operation_mode():
                 print("  5i. Backup LOADER environment variables (experimental)")
                 print("  5j. Compare LOADER env to defaults (diff) (experimental)")
                 print("")
-                print("  Disruptive commands")
+                print("  !!Disruptive commands!!")
                 print("    5z. Reset all nodes to LOADER prompt")
                 print("")
                 print("  " + "─" * 58)
@@ -16890,10 +16932,13 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                             if _session_log and hasattr(_session_log, "log_dir")
                             else os.getcwd())
         # Capture env before/after set-defaults (non-interactive: no user prompt).
-        _loader_env_pre_post_prompt(
+        _env_restore_state = _loader_env_pre_post_prompt(
             ch, label, _peer_ld_log_dir,
             node_log=node_file, interactive=False
         )
+        if _env_restore_state is None:
+            _slog(f"[{label}] aborting node add due to unsupported boot DNA", prefix="ERROR")
+            return False
         # set-defaults was already run above; exclude it from the command list.
         _peer_loader_cmds = []
         if _prevent_bios_fw_update:
@@ -17278,10 +17323,17 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 _ep_p = _shared_pw
             else:
                 try:
-                    _ep_p = getpass.getpass(
+                    _primary_pw = (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password")
+                    if _primary_pw is None:
+                        _primary_pw = ""
+                    _ep_p_in = getpass.getpass(
                         f"  BMC password for {_ep_u}@{ip} "
-                        "(blank to reuse primary): "
-                    ) or (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password", "")
+                        "(blank = no password; enter PRIMARY to reuse primary): "
+                    )
+                    if _ep_p_in.strip().upper() == "PRIMARY":
+                        _ep_p = _primary_pw
+                    else:
+                        _ep_p = _ep_p_in
                 except (EOFError, KeyboardInterrupt):
                     _ep_p = ""
             _peer_bmc_creds[ip] = {"user": _ep_u, "password": _ep_p}
@@ -17725,10 +17777,17 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 _ep_p = _shared_pw
             else:
                 try:
-                    _ep_p = getpass.getpass(
+                    _primary_pw = (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password")
+                    if _primary_pw is None:
+                        _primary_pw = ""
+                    _ep_p_in = getpass.getpass(
                         f"  BMC password for {_ep_u}@{ip} "
-                        "(blank to reuse primary): "
-                    ) or (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password", "")
+                        "(blank = no password; enter PRIMARY to reuse primary): "
+                    )
+                    if _ep_p_in.strip().upper() == "PRIMARY":
+                        _ep_p = _primary_pw
+                    else:
+                        _ep_p = _ep_p_in
                 except (EOFError, KeyboardInterrupt):
                     _ep_p = ""
             _peer_bmc_creds[ip] = {"user": _ep_u, "password": _ep_p}
@@ -18725,7 +18784,8 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     """Capture env before set-defaults, run set-defaults, capture after, diff.
 
     Returns a list of "varname value" strings for vars the user wants restored
-    (or [] when non-interactive or user declines restore).
+    (or [] when non-interactive or user declines restore). Returns None when
+    non-interactive validation fails and the caller should abort that node.
     """
     global _loader_env_stage_enabled, _bootarg_check_enabled
     _env_log = node_log
@@ -18762,14 +18822,17 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
         _slog("bootarg.init.dna verification required; running automatically")
         if not _verify_boot_dna(channel, node_log=_env_log):
-            if _session_log:
-                _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
-                _session_log.set_outcome("FAIL", "unsupported boot DNA")
-                _session_log.close()
             if _close_env_log and _env_log:
                 with suppress(Exception):
                     _env_log.close()
-            sys.exit(1)
+            if interactive:
+                if _session_log:
+                    _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
+                    _session_log.set_outcome("FAIL", "unsupported boot DNA")
+                    _session_log.close()
+                sys.exit(1)
+            _slog(f"[{label}] unsupported boot DNA (non-interactive node path)", prefix="ERROR")
+            return None
 
         if _close_env_log and _env_log:
             with suppress(Exception):
@@ -18789,14 +18852,17 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     # Verify boot DNA (required in all modes).
     _slog("bootarg.init.dna verification required; running automatically")
     if not _verify_boot_dna(channel, node_log=_env_log):
-        if _session_log:
-            _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
-            _session_log.set_outcome("FAIL", "unsupported boot DNA")
-            _session_log.close()
         if _close_env_log and _env_log:
             with suppress(Exception):
                 _env_log.close()
-        sys.exit(1)
+        if interactive:
+            if _session_log:
+                _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
+                _session_log.set_outcome("FAIL", "unsupported boot DNA")
+                _session_log.close()
+            sys.exit(1)
+        _slog(f"[{label}] unsupported boot DNA (non-interactive node path)", prefix="ERROR")
+        return None
 
     # Capture post-defaults env
     _slog("Capturing LOADER env (post set-defaults)")
@@ -21333,13 +21399,13 @@ def main():
                                 _failing47, _rep_user47, _pw_map47,
                                 config_data=_cfg_data47, config_path=_found_file47,
                             )
-                        _rerun47 = _prompt(
-                            "  Re-run BMC auth check for selected target(s)? [y/N]: ",
-                            "n",
-                        ).strip().lower()
-                        if _rerun47 == "y":
-                            print("")
-                            continue
+                    _rerun47 = _prompt(
+                        "  Re-run BMC auth check for selected target(s)? [y/N]: ",
+                        "n",
+                    ).strip().lower()
+                    if _rerun47 == "y":
+                        print("")
+                        continue
                     break
 
                 try:
@@ -22937,7 +23003,16 @@ def main():
             if sp_host:
                 _check_bmc_reachable(sp_host)
             else:
-                sp_host = _prompt_bmc_host("Enter BMC hostname/IP or primary node (this will be the first node in the cluster): ")
+                if _operation_mode == 2 and _auto_add:
+                    sp_host = _prompt_bmc_host(
+                        "Enter primary BMC hostname/IP "
+                        "(This node will be used as the primary password for all nodes when chosen; "
+                        "this is NOT the primary node in the cluster): "
+                    )
+                else:
+                    sp_host = _prompt_bmc_host(
+                        "Enter BMC hostname/IP or primary node (this will be the first node in the cluster): "
+                    )
             sp_user = _cfg_str(primary_node.get("bmc_user")) or input("Enter BMC username [admin]: ").strip() or "admin"
             sp_pass = _cfg_get_or_prompt("bmc_password", "Enter BMC password: ", hidden=True)
             if primary_node.get("bmc"):
@@ -23403,7 +23478,9 @@ def main():
                 if other_sps and _operation_mode != 1:
                     _print_banner("🔐 Peer BMC SSH Credentials")
                     print("\n  Provide SSH credentials for each peer BMC. Press Enter")
-                    print(f"  to reuse the primary BMC username '{sp_user}' / password.")
+                    print(f"  to reuse the primary BMC username '{sp_user}'.")
+                    print("  For passwords, blank means no password; enter PRIMARY to")
+                    print("  reuse the primary BMC password.")
 
                     # Ask if all peers share the same credentials as the primary.
                     try:
@@ -23462,11 +23539,14 @@ def main():
                                     print(f"    📄 Password blank in config for {addr}; "
                                           "will attempt SSH with no password.")
                             else:
-                                p = getpass.getpass(
-                                    f"    Password for {addr} (blank to reuse primary): "
+                                _pin = getpass.getpass(
+                                    f"    Password for {addr} "
+                                    "(blank = no password; enter PRIMARY to reuse primary): "
                                 )
-                                if not p:
+                                if _pin.strip().upper() == "PRIMARY":
                                     p = sp_pass
+                                else:
+                                    p = _pin
 
                         _peer_bmc_creds[addr] = {"user": u, "password": p}
                         if p == sp_pass:
@@ -24070,4 +24150,24 @@ def main():
             continue
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        _etype, _eval, _etb = sys.exc_info()
+        _crash_log_path = _write_crash_trace(
+            _etype, _eval, _etb, context="Unhandled exception in main()"
+        )
+        with suppress(Exception):
+            if _session_log:
+                _session_log.log(
+                    f"Unhandled exception: {_etype.__name__ if _etype else 'Exception'}: {_eval}",
+                    prefix="FATAL",
+                )
+                _session_log.log(f"Crash trace log: {_crash_log_path}", prefix="FATAL")
+                _session_log.set_outcome("FAIL", "unhandled exception")
+                _session_log.close()
+        print(
+            f"\n💥 Unhandled exception. Full traceback written to: {_crash_log_path}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
