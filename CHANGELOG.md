@@ -9,6 +9,10 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **5h SSH diagnostics single-target selection now uses a labeled config-IP picker.**
+  When choosing "one" target for SSH diagnostics, the script now shows a
+  numbered list of IPs discovered from config (BMC, cluster management, and
+  node management) with labels, and also allows entering a custom IP/hostname.
 - **`--help` man page updated to match current CLI options.**
   The built-in help output now includes the full current flag set
   (`--auto-clear-stale-bmc`, `--diag`, and all mode shortcut flags) and uses

@@ -2281,18 +2281,19 @@ def select_operation_mode():
         print("    5b. Set up passwordless SSH to cluster management")
         print("    5c. Create backup cluster configuration")
         print("    5d. Verify BMC authentication")
-        print("    5e. Reset all nodes to LOADER prompt")
         print("    5f. Check node status (LOADER / cluster prompt)")
         print("    5g. Cluster health and version check")
         print("    5h. List and clean up stale BMC SSH sessions")
         print("    5i. Backup LOADER environment variables (experimental)")
         print("    5j. Compare LOADER env to defaults (diff) (experimental)")
+        print("    Disruptive commands")
+        print("      5z. Reset all nodes to LOADER prompt")
         print("")
         print("  6.  Exit")
         print("")
         print("  " + "─" * 58)
         print("  (type 'menu' at any prompt to return here)")
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5j, or 6): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5j/5z, or 6): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2495,22 +2496,24 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j"):
+        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5z"):
             if choice == "5":
                 _print_banner("🛠️ 5: Administration and maintenance")
                 print("\n  5a. Install license file only")
                 print("  5b. Set up passwordless SSH to cluster management")
                 print("  5c. Create backup cluster configuration")
                 print("  5d. Verify BMC authentication")
-                print("  5e. Reset all nodes to LOADER prompt")
                 print("  5f. Check node status (LOADER / cluster prompt)")
                 print("  5g. Cluster health and version check")
                 print("  5h. List and clean up stale BMC SSH sessions")
                 print("  5i. Backup LOADER environment variables (experimental)")
                 print("  5j. Compare LOADER env to defaults (diff) (experimental)")
                 print("")
+                print("  Disruptive commands")
+                print("    5z. Reset all nodes to LOADER prompt")
+                print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5j) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5a–5j, 5z) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -2574,8 +2577,8 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice == "5e":
-                _print_banner("\U0001f504 5e: Reset all nodes to LOADER prompt")
+            if choice in ("5z", "5e"):
+                _print_banner("\U0001f504 5z: Reset all nodes to LOADER prompt")
                 print("")
                 print("  Connects to all BMC addresses in parallel, issues a")
                 print("  system reset on each node, enters the system console,")
@@ -2588,7 +2591,7 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5e: Reset all nodes to LOADER prompt\n")
+                    print("\n  \u2705 Confirmed. 5z: Reset all nodes to LOADER prompt\n")
                     return 48, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
@@ -4476,7 +4479,12 @@ DESCRIPTION
       5b   Set up passwordless SSH to cluster management
       5c   Create / save cluster configuration backup (JSON)
       5d   Verify BMC SSH authentication for selected/all nodes
-      5e   Reset all nodes to LOADER prompt (parallel)
+      5f   Check node status (LOADER / cluster prompt)
+      5g   Cluster health and version check
+      5h   List and clean up stale BMC SSH sessions
+      5i   Backup LOADER environment variables (experimental)
+      5j   Compare LOADER env to defaults (diff) (experimental)
+      5z   Reset all nodes to LOADER prompt (parallel; disruptive command)
 
 OPTIONS
     -h, --help
@@ -4579,7 +4587,7 @@ OPTIONS
         --passwordless    Run mode 5b directly
         --backup          Run mode 5c directly
         --verify          Run mode 5d directly
-        --loader          Run mode 5e directly
+        --loader          Run mode 5z directly
 
 EXAMPLES
     Interactive run (prompts for all values):
@@ -4764,7 +4772,7 @@ def parse_args():
                         help="Skip the menu and run mode 4f: verify BMC "
                              "authentication for all configured nodes.")
     parser.add_argument("--loader", action="store_true", default=False,
-                        help="Skip the menu and run mode 4g: reset all nodes "
+                        help="Skip the menu and run mode 5z: reset all nodes "
                              "to the LOADER prompt in parallel.")
     args = parser.parse_args()
     if args.help:
@@ -8639,7 +8647,8 @@ def _classify_auth_failure(exc: BaseException) -> str:
     return str(exc) or exc.__class__.__name__
 
 
-def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords):
+def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
+                              config_data=None, config_path=None):
     """Interactive offer: when BMC verification fails and the operator
     declines to re-enter addresses, ask whether to run the stale-SSH
     diagnostic (and optional ipmitool sol deactivate cleanup) against
@@ -8661,7 +8670,10 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords):
     _targets = _prompt_bmc_target_scope(
         failing_ips,
         scope_label="diagnostics",
-        prompt_prefix="  "
+        prompt_prefix="  ",
+        config_data=config_data,
+        config_path=config_path,
+        include_config_ips=True,
     )
     if not _targets:
         return
@@ -8710,41 +8722,127 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords):
     )
 
 
-def _prompt_bmc_target_scope(candidate_ips, scope_label="operation", prompt_prefix=""):
-    """Return selected BMC target list: all candidates or one explicit IP."""
+def _collect_labeled_ips_from_config(config_data):
+    """Return [(ip, label)] extracted from a reinit config dict."""
+    _out = []
+    if not isinstance(config_data, dict):
+        return _out
+
+    def _add_ip(_ip_val, _label):
+        _ip = str(_ip_val).strip()
+        if _ip:
+            _out.append((_ip, _label))
+
+    _cluster = config_data.get("cluster")
+    if isinstance(_cluster, dict):
+        for _k in ("clus_mgmt_address", "cluster_mgmt_ip", "cluster_management_ip", "mgmt_ip"):
+            if _cluster.get(_k):
+                _add_ip(_cluster.get(_k), "Cluster management IP")
+                break
+
+    _pn = config_data.get("primary_node")
+    if isinstance(_pn, dict):
+        if _pn.get("bmc"):
+            _add_ip(_pn.get("bmc"), "Primary BMC")
+        for _k in ("node_mgmt_ip", "node_management_ip", "mgmt_ip"):
+            if _pn.get(_k):
+                _add_ip(_pn.get(_k), "Primary node management IP")
+                break
+
+    for _idx, _sn in enumerate(config_data.get("secondary_nodes") or [], 1):
+        if not isinstance(_sn, dict):
+            continue
+        if _sn.get("bmc"):
+            _add_ip(_sn.get("bmc"), f"Secondary node { _idx } BMC")
+        for _k in ("node_mgmt_ip", "node_management_ip", "mgmt_ip"):
+            if _sn.get(_k):
+                _add_ip(_sn.get(_k), f"Secondary node { _idx } management IP")
+                break
+
+    for _idx, _n in enumerate(config_data.get("nodes") or [], 1):
+        if not isinstance(_n, dict):
+            continue
+        _role = "Primary node" if _idx == 1 else f"Node {_idx}"
+        if _n.get("bmc"):
+            _add_ip(_n.get("bmc"), f"{_role} BMC")
+        for _k in ("node_mgmt_ip", "node_management_ip", "mgmt_ip"):
+            if _n.get(_k):
+                _add_ip(_n.get(_k), f"{_role} management IP")
+                break
+
+    return _out
+
+
+def _prompt_bmc_target_scope(candidate_ips, scope_label="operation", prompt_prefix="",
+                             config_data=None, config_path=None,
+                             include_config_ips=False):
+    """Return selected target list: all BMC candidates or one selected target."""
     _ips = [str(x).strip() for x in (candidate_ips or []) if str(x).strip()]
     if not _ips:
         return []
 
+    _numbered_targets = []  # [(ip, label)]
+    _seen_scope = {}
+
+    def _add_numbered_target(_ip, _label):
+        _ip = str(_ip).strip()
+        if not _ip:
+            return
+        if _ip not in _seen_scope:
+            _seen_scope[_ip] = set()
+            _numbered_targets.append((_ip, _label))
+        _seen_scope[_ip].add(_label)
+
+    for _ip in _ips:
+        _add_numbered_target(_ip, "BMC target")
+
+    if include_config_ips:
+        for _ip, _label in _collect_labeled_ips_from_config(config_data):
+            _add_numbered_target(_ip, _label)
+
+    _label_map = {}
+    for _ip, _ in _numbered_targets:
+        _label_map[_ip] = ", ".join(sorted(_seen_scope.get(_ip, set())))
+
     while True:
+        _src = f" ({config_path})" if config_path else ""
+        _all_idx = len(_numbered_targets) + 1
+        print(f"\n{prompt_prefix}Available IP targets for {scope_label}{_src}:")
+        for _idx, (_ip, _) in enumerate(_numbered_targets, 1):
+            print(f"{prompt_prefix}  {_idx:>2}. {_ip}  [{_label_map.get(_ip, 'target')}]")
+        print(f"{prompt_prefix}  {_all_idx:>2}. All listed BMC targets")
         try:
-            _scope = input(
-                f"\n{prompt_prefix}Run {scope_label} on all listed BMCs or one IP? "
-                "[all/one]: "
-            ).strip().lower()
+            _pick = input(
+                f"{prompt_prefix}  Pick number (or 'custom'): "
+            ).strip()
         except (EOFError, KeyboardInterrupt):
             return []
-        if _scope in ("", "all", "a"):
+        if not _pick:
+            print(f"{prompt_prefix}  ⚠️  No selection entered.")
+            continue
+        if _pick.lower() in ("custom", "c"):
+            try:
+                _custom_ip = input(
+                    f"{prompt_prefix}  Enter custom IP/hostname: "
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                return []
+            if not _custom_ip:
+                print(f"{prompt_prefix}  ⚠️  No custom IP entered.")
+                continue
+            return [_custom_ip]
+        if not _pick.isdigit():
+            print(f"{prompt_prefix}  ⚠️  Enter a number from the list or 'custom'.")
+            continue
+        _i = int(_pick)
+        if _i == _all_idx:
             return list(_ips)
-        if _scope in ("one", "o", "ip", "single", "1"):
-            while True:
-                try:
-                    _ip = input(
-                        f"{prompt_prefix}  Enter BMC IP/hostname "
-                        "(must match listed addresses): "
-                    ).strip()
-                except (EOFError, KeyboardInterrupt):
-                    return []
-                if not _ip:
-                    print(f"{prompt_prefix}  ⚠️  No IP entered.")
-                    continue
-                if _ip not in _ips:
-                    print(
-                        f"{prompt_prefix}  ⚠️  '{_ip}' is not in the loaded BMC list."
-                    )
-                    continue
-                return [_ip]
-        print(f"{prompt_prefix}  ⚠️  Enter 'all' or 'one'.")
+        if 1 <= _i <= len(_numbered_targets):
+            return [_numbered_targets[_i - 1][0]]
+        print(
+            f"{prompt_prefix}  ⚠️  Out of range: {_pick} "
+            f"(valid: 1-{_all_idx})"
+        )
 
 
 def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
@@ -20068,7 +20166,7 @@ def main():
                     print("\n  ⚡ --verify: launching mode 4f (BMC auth verify).")
                 elif args.loader:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 48, False, False
-                    print("\n  ⚡ --loader: launching mode 4g (reset all nodes to LOADER).")
+                    print("\n  ⚡ --loader: launching mode 5z (reset all nodes to LOADER).")
 
                 if _shortcut_mode is not None:
                     _operation_mode = _shortcut_mode
@@ -20994,6 +21092,7 @@ def main():
                 # Search for BMC_IP.json or a full reinit-config that has node BMC IPs.
                 _bmc_ips47 = []
                 _found_file47 = None
+                _cfg_data47 = None
                 for _p47 in _find_config_files(
                     candidate_names=("BMC_IP.json",
                                      "reinit-config.json", "reinit_config.json",
@@ -21020,6 +21119,7 @@ def main():
                                     _bmc_ips47.append(str(_n47["bmc"]))
                     if _bmc_ips47:
                         _found_file47 = _p47
+                        _cfg_data47 = _d47data
                         break
 
                 if _found_file47:
@@ -21085,150 +21185,162 @@ def main():
                         _creds47[_ip47] = (_u47, _p47)
                 print("")
 
-                # ── Test each BMC concurrently ────────────────────────────────────
-                print("  " + "─" * 58)
-                print(f"  Testing {len(_bmc_ips47)} BMC(s)…\n")
+                while True:
+                    # ── Test each BMC concurrently ────────────────────────────────
+                    print("  " + "─" * 58)
+                    print(f"  Testing {len(_bmc_ips47)} BMC(s)…\n")
 
-                _results47 = {}   # ip -> {"status": "PASS"|"FAIL", "detail": str}
-                _results_lock47 = threading.Lock()
+                    _results47 = {}   # ip -> {"status": "PASS"|"FAIL", "detail": str}
+                    _results_lock47 = threading.Lock()
 
-                def _test_bmc47(ip):
-                    detail = ""
-                    status = "FAIL"
-                    client47 = None
-                    ch47 = None
-                    _ip_user47, _ip_pass47 = _creds47.get(ip, ("admin", ""))
-                    try:
-                        client47 = paramiko.SSHClient()
-                        client47.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                        client47.connect(
-                            hostname=ip, username=_ip_user47, password=_ip_pass47,
-                            timeout=20, banner_timeout=30, auth_timeout=20,
-                            disabled_algorithms={"pubkeys": ["ssh-dss"]},
-                        )
-                        configure_transport(client47)
-                        ch47 = _open_shell(client47)
+                    def _test_bmc47(ip):
+                        detail = ""
+                        status = "FAIL"
+                        client47 = None
+                        ch47 = None
+                        _ip_user47, _ip_pass47 = _creds47.get(ip, ("admin", ""))
+                        try:
+                            client47 = paramiko.SSHClient()
+                            client47.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                            client47.connect(
+                                hostname=ip, username=_ip_user47, password=_ip_pass47,
+                                timeout=20, banner_timeout=30, auth_timeout=20,
+                                disabled_algorithms={"pubkeys": ["ssh-dss"]},
+                            )
+                            configure_transport(client47)
+                            ch47 = _open_shell(client47)
 
-                        # Wait for BMC prompt
-                        _buf47 = ""
-                        _t47 = time.monotonic()
-                        while time.monotonic() - _t47 < 15:
-                            if ch47.recv_ready():
-                                _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
-                                if ">" in _buf47:
-                                    break
-                            time.sleep(0.1)
-
-                        # Handle takeover prompt silently
-                        if "y/n" in _buf47.lower():
-                            ch47.send("y\r")
+                            # Wait for BMC prompt
                             _buf47 = ""
                             _t47 = time.monotonic()
-                            while time.monotonic() - _t47 < 10:
+                            while time.monotonic() - _t47 < 15:
                                 if ch47.recv_ready():
                                     _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
                                     if ">" in _buf47:
                                         break
                                 time.sleep(0.1)
 
-                        # Run 'bmc status'
-                        ch47.send("bmc status\r")
-                        _out47 = ""
-                        _t47 = time.monotonic()
-                        while time.monotonic() - _t47 < 15:
-                            if ch47.recv_ready():
-                                chunk = ch47.recv(4096).decode("utf-8", errors="replace")
-                                _out47 += chunk
-                                if ">" in _out47[_out47.find("bmc status"):] if "bmc status" in _out47 else ">" in _out47:
+                            # Handle takeover prompt silently
+                            if "y/n" in _buf47.lower():
+                                ch47.send("y\r")
+                                _buf47 = ""
+                                _t47 = time.monotonic()
+                                while time.monotonic() - _t47 < 10:
+                                    if ch47.recv_ready():
+                                        _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
+                                        if ">" in _buf47:
+                                            break
+                                    time.sleep(0.1)
+
+                            # Run 'bmc status'
+                            ch47.send("bmc status\r")
+                            _out47 = ""
+                            _t47 = time.monotonic()
+                            while time.monotonic() - _t47 < 15:
+                                if ch47.recv_ready():
+                                    chunk = ch47.recv(4096).decode("utf-8", errors="replace")
+                                    _out47 += chunk
+                                    if ">" in _out47[_out47.find("bmc status"):] if "bmc status" in _out47 else ">" in _out47:
+                                        break
+                                time.sleep(0.1)
+
+                            # Parse IP from 'bmc status' output.
+                            # Look for lines like "  IP Address: 10.192.160.29"
+                            _found_ip47 = None
+                            for _ln47 in _out47.splitlines():
+                                _m47 = re.search(
+                                    r'(?:ip\s*address|bmc\s*ip|address)\s*[:\s]+(\d{1,3}(?:\.\d{1,3}){3})',
+                                    _ln47, re.IGNORECASE,
+                                )
+                                if _m47:
+                                    _found_ip47 = _m47.group(1)
                                     break
-                            time.sleep(0.1)
 
-                        # Parse IP from 'bmc status' output.
-                        # Look for lines like "  IP Address: 10.192.160.29"
-                        _found_ip47 = None
-                        for _ln47 in _out47.splitlines():
-                            _m47 = re.search(
-                                r'(?:ip\s*address|bmc\s*ip|address)\s*[:\s]+(\d{1,3}(?:\.\d{1,3}){3})',
-                                _ln47, re.IGNORECASE,
-                            )
-                            if _m47:
-                                _found_ip47 = _m47.group(1)
-                                break
+                            if _found_ip47 is None:
+                                # Fallback: any IPv4 in the output that isn't 0.0.0.0
+                                for _m47 in re.finditer(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b', _out47):
+                                    _cand47 = _m47.group(1)
+                                    if _cand47 != "0.0.0.0":
+                                        _found_ip47 = _cand47
+                                        break
 
-                        if _found_ip47 is None:
-                            # Fallback: any IPv4 in the output that isn't 0.0.0.0
-                            for _m47 in re.finditer(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b', _out47):
-                                _cand47 = _m47.group(1)
-                                if _cand47 != "0.0.0.0":
-                                    _found_ip47 = _cand47
-                                    break
+                            if _found_ip47 and _found_ip47 == ip:
+                                status = "PASS"
+                                detail = f"bmc status IP matched ({_found_ip47})"
+                            elif _found_ip47:
+                                status = "FAIL"
+                                detail = f"IP mismatch: expected {ip}, got {_found_ip47}"
+                            else:
+                                status = "FAIL"
+                                detail = "could not parse IP from 'bmc status' output"
 
-                        if _found_ip47 and _found_ip47 == ip:
-                            status = "PASS"
-                            detail = f"bmc status IP matched ({_found_ip47})"
-                        elif _found_ip47:
+                        except paramiko.AuthenticationException as _ex47a:
                             status = "FAIL"
-                            detail = f"IP mismatch: expected {ip}, got {_found_ip47}"
+                            detail = _classify_auth_failure(_ex47a)
+                        except Exception as _ex47:
+                            status = "FAIL"
+                            detail = _classify_auth_failure(_ex47)
+                        finally:
+                            try:
+                                if ch47:
+                                    ch47.close()
+                                if client47:
+                                    client47.close()
+                            except Exception:
+                                pass
+
+                        with _results_lock47:
+                            _results47[ip] = {"status": status, "detail": detail}
+
+                    _run_parallel(_bmc_ips47, _test_bmc47, join_timeout=60)
+
+                    # ── Results table ─────────────────────────────────────────────
+                    print("\n  " + "─" * 58)
+                    print(f"  {'BMC IP':<22}  {'Result':<6}  Detail")
+                    print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
+                    _pass_count47 = 0
+                    _fail_count47 = 0
+                    for _ip47 in _bmc_ips47:
+                        _r47 = _results47.get(_ip47, {"status": "FAIL", "detail": "no result (timeout?)"})
+                        _icon47 = "\u2705" if _r47["status"] == "PASS" else "\u274c"
+                        print(f"  {_ip47:<22}  {_icon47} {_r47['status']:<4}  {_r47['detail']}")
+                        if _r47["status"] == "PASS":
+                            _pass_count47 += 1
                         else:
-                            status = "FAIL"
-                            detail = "could not parse IP from 'bmc status' output"
+                            _fail_count47 += 1
+                    print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
+                    print(f"\n  {_pass_count47} PASS  /  {_fail_count47} FAIL  (of {len(_bmc_ips47)} tested)\n")
 
-                    except paramiko.AuthenticationException as _ex47a:
-                        status = "FAIL"
-                        detail = _classify_auth_failure(_ex47a)
-                    except Exception as _ex47:
-                        status = "FAIL"
-                        detail = _classify_auth_failure(_ex47)
-                    finally:
-                        try:
-                            if ch47:
-                                ch47.close()
-                            if client47:
-                                client47.close()
-                        except Exception:
-                            pass
-
-                    with _results_lock47:
-                        _results47[ip] = {"status": status, "detail": detail}
-
-                _run_parallel(_bmc_ips47, _test_bmc47, join_timeout=60)
-
-                # ── Results table ─────────────────────────────────────────────────
-                print("\n  " + "─" * 58)
-                print(f"  {'BMC IP':<22}  {'Result':<6}  Detail")
-                print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
-                _pass_count47 = 0
-                _fail_count47 = 0
-                for _ip47 in _bmc_ips47:
-                    _r47 = _results47.get(_ip47, {"status": "FAIL", "detail": "no result (timeout?)"})
-                    _icon47 = "\u2705" if _r47["status"] == "PASS" else "\u274c"
-                    print(f"  {_ip47:<22}  {_icon47} {_r47['status']:<4}  {_r47['detail']}")
-                    if _r47["status"] == "PASS":
-                        _pass_count47 += 1
-                    else:
-                        _fail_count47 += 1
-                print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
-                print(f"\n  {_pass_count47} PASS  /  {_fail_count47} FAIL  (of {len(_bmc_ips47)} tested)\n")
-
-                # ── Offer SSH diagnostic for any failing BMC(s) ──────────────────
-                # Reuses the same helper as the netboot-BMC verification flow so
-                # an operator can identify stale local SSH sockets (and optionally
-                # clean them) without leaving 4f.
-                _failing47 = [
-                    _ip for _ip in _bmc_ips47
-                    if _results47.get(_ip, {}).get("status") != "PASS"
-                ]
-                if _failing47:
-                    # Build a {ip: password} map from per-IP creds for the helper.
-                    _pw_map47 = {_ip: _creds47.get(_ip, ("", ""))[1] for _ip in _failing47}
-                    # Pick a representative username; the helper only uses it for
-                    # ipmitool sol deactivate, which expects a single (user, pass).
-                    _rep_user47 = next(
-                        (_creds47[_ip][0] for _ip in _failing47 if _ip in _creds47),
-                        "admin",
-                    )
-                    with suppress(Exception):
-                        _offer_bmc_ssh_diagnostic(_failing47, _rep_user47, _pw_map47)
+                    # ── Offer SSH diagnostic for any failing BMC(s) ──────────────
+                    # Reuses the same helper as the netboot-BMC verification flow so
+                    # an operator can identify stale local SSH sockets (and optionally
+                    # clean them) without leaving 4f.
+                    _failing47 = [
+                        _ip for _ip in _bmc_ips47
+                        if _results47.get(_ip, {}).get("status") != "PASS"
+                    ]
+                    if _failing47:
+                        # Build a {ip: password} map from per-IP creds for the helper.
+                        _pw_map47 = {_ip: _creds47.get(_ip, ("", ""))[1] for _ip in _failing47}
+                        # Pick a representative username; the helper only uses it for
+                        # ipmitool sol deactivate, which expects a single (user, pass).
+                        _rep_user47 = next(
+                            (_creds47[_ip][0] for _ip in _failing47 if _ip in _creds47),
+                            "admin",
+                        )
+                        with suppress(Exception):
+                            _offer_bmc_ssh_diagnostic(
+                                _failing47, _rep_user47, _pw_map47,
+                                config_data=_cfg_data47, config_path=_found_file47,
+                            )
+                        _rerun47 = _prompt(
+                            "  Re-run BMC auth check for selected target(s)? [y/N]: ",
+                            "n",
+                        ).strip().lower()
+                        if _rerun47 == "y":
+                            print("")
+                            continue
+                    break
 
                 try:
                     input("  Press Enter to return to the main menu...")
@@ -21660,6 +21772,7 @@ def main():
                 # ── Load BMC IPs from config (same logic as modes 47/48) ─────────
                 _bmc_ips50 = []
                 _found_file50 = None
+                _cfg_data50 = None
                 for _p50 in _find_config_files(
                     candidate_names=("BMC_IP.json",
                                      "reinit-config.json", "reinit_config.json",
@@ -21685,6 +21798,7 @@ def main():
                                     _bmc_ips50.append(str(_n50["bmc"]))
                     if _bmc_ips50:
                         _found_file50 = _p50
+                        _cfg_data50 = _d50data
                         break
 
                 if _found_file50:
@@ -21734,7 +21848,9 @@ def main():
                     _act50 = _prompt("  Your choice [1/2/3/4]: ").strip()
                     if _act50 == "1":
                         _targets50 = _prompt_bmc_target_scope(
-                            _bmc_ips50, scope_label="SSH diagnostics", prompt_prefix="  "
+                            _bmc_ips50, scope_label="SSH diagnostics", prompt_prefix="  ",
+                            config_data=_cfg_data50, config_path=_found_file50,
+                            include_config_ips=True,
                         )
                         if not _targets50:
                             continue
