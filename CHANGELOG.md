@@ -68,6 +68,13 @@ revision labels rather than strict [SemVer](https://semver.org/).
   `1,3,4`) before credential prompts and test execution.
 
 ### Fixed
+- **2b reconnects no longer send `system console` at LOADER.**
+  In option 2b peer-node reconnect loops, reconnect state is now probed first
+  and `system console` is only sent from a BMC prompt. LOADER/boot-menu states
+  now resume directly without issuing invalid LOADER commands.
+- **System-console commands are now gated to BMC prompts.**
+  LOADER probe paths no longer send `system console` when already at LOADER or
+  other non-BMC prompts, preventing repeated `system console` spam on LOADER.
 - **4b no longer stalls after detecting an existing LOADER prompt.**
   In the parallel reset-to-LOADER step, nodes already at LOADER now proceed
   immediately instead of waiting for reboot/AUTOBOOT output that never arrives.

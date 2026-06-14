@@ -4985,21 +4985,30 @@ def enter_system_console(channel, loader_message=True):
         _slog("Already in cluster shell – system console skipped")
         return
 
+    if _LOADER_PROMPT_RE.search(probe_out) or "LOADER-" in probe_out.upper():
+        # Already at LOADER – system console command is only valid from BMC.
+        print("✅ Already at LOADER prompt. Skipping 'system console'.")
+        _slog("Already at LOADER prompt – system console skipped")
+        return
+
     if "login:" in probe_lower:
         # At a cluster login prompt – also already past the BMC.
         print("✅ Cluster login prompt detected. Skipping 'system console'.")
         _slog("Cluster login prompt detected – system console skipped")
         return
 
-    # BMC prompt (or unrecognised) – proceed with "system console".
-    if "bmc" not in probe_lower:
-        print("⚠️  Prompt unrecognised; attempting 'system console' anyway...")
-        if _session_log:
-            _session_log.log(f"Prompt unrecognised, sending system console anyway. Probe: {probe_out[-200:]!r}",
-                             prefix="WARN")
-    else:
+    # Only issue "system console" from a BMC prompt.
+    if "bmc" in probe_lower or (probe_matched and probe_matched == ">"):
         print("✅ BMC prompt detected. Entering system console...")
         _slog("BMC prompt confirmed; sending 'system console'")
+    else:
+        print("⚠️  Prompt is not BMC; skipping 'system console'.")
+        if _session_log:
+            _session_log.log(
+                f"Prompt is not BMC; skipped system console. Probe: {probe_out[-200:]!r}",
+                prefix="WARN",
+            )
+        return
 
     if _session_log:
         _session_log.log_sent("system console")
@@ -5066,15 +5075,15 @@ def enter_system_console(channel, loader_message=True):
 # ---------------------------------------------------------------------------
 
 def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
-    """Enter system console and probe briefly for an existing LOADER prompt.
+    """Probe for an existing LOADER prompt, entering system console only from BMC.
 
     Flow:
-      1. Send CR then 'system console'
-      2. Watch for LOADER, autoboot, ONTAP output, or y/n takeover for
+      1. Send CR and inspect current prompt/output.
+      2. If LOADER is detected → return True (caller skips system reset).
+      3. If not at BMC prompt → return False (caller continues normal path).
+      4. If at BMC prompt, send 'system console' and probe for LOADER for
          *probe_timeout* seconds.
-      3. If LOADER is detected → return True (caller skips system reset).
-      4. Otherwise → send Ctrl+D to exit the console and return False
-         (caller proceeds with the normal system-reset path).
+      5. If LOADER is detected → return True, else return False.
 
     When *node_log* is supplied, raw I/O is written there instead of stdout.
     *label* is used for status prints; pass an IP or node name.
@@ -5089,10 +5098,21 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
         if _session_log:
             _session_log.log(msg.strip())
 
-    # Hit Enter first so any existing prompt echoes back, then enter console.
+    # Hit Enter first so any existing prompt echoes back.
     channel.send("\r")
     time.sleep(0.3)
-    drain_channel(channel, seconds=0.5, quiet=True)
+    _probe = drain_channel(channel, seconds=0.7, node_log=node_log, quiet=True)
+
+    if _LOADER_PROMPT_RE.search(_probe) or "LOADER-" in _probe.upper():
+        _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
+        return True
+    if any(sig in _probe.lower() for sig in ("::>", "::*>", "login:")):
+        _tprint(f"  ℹ️  {pfx}Not at BMC prompt; skipping system console probe.")
+        return False
+    _at_bmc = ("bmc" in _probe.lower()) or _probe.rstrip().endswith(">")
+    if not _at_bmc:
+        _tprint(f"  ℹ️  {pfx}Prompt not recognized as BMC; skipping system console probe.")
+        return False
 
     _tprint(f"  {pfx}🔍 Checking if already at LOADER before system reset...")
     if _session_log:
@@ -5107,6 +5127,7 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
     start = time.monotonic()
     last_nudge = start
     loader_found = False
+    _entered_console = True
     while time.monotonic() - start < probe_timeout:
         if channel.recv_ready():
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
@@ -5143,10 +5164,11 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
         return True
 
     # Not at LOADER — exit console and let caller do system reset.
-    _tprint(f"  ℹ️  {pfx}Not at LOADER. Exiting console for system reset...")
-    channel.send("\x04")  # Ctrl+D
-    time.sleep(1)
-    direct_read_until(channel, ">", timeout=10, node_log=node_log)
+    if _entered_console:
+        _tprint(f"  ℹ️  {pfx}Not at LOADER. Exiting console for system reset...")
+        channel.send("\x04")  # Ctrl+D
+        time.sleep(1)
+        direct_read_until(channel, ">", timeout=10, node_log=node_log)
     return False
 
 
@@ -17201,6 +17223,65 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             _reconnect_msg_streak = 0
             _reconnect_msg_suppressed = False
 
+        def _maybe_enter_system_console(_ch, _reason=""):
+            """Enter system console only when reconnect lands at a BMC prompt.
+
+            Returns: (entered_console: bool, out: str, matched: str|None)
+            """
+            with suppress(Exception):
+                _ch.send("\r")
+            _probe_out, _probe_match = direct_read_until_any(
+                _ch,
+                ["loader-", "::*>", "::>", "login:", "selection", "autoboot", ">", "y/n"],
+                timeout=8,
+                node_log=node_file,
+            )
+            _track_fw_update_markers(_probe_out)
+            _probe = (_probe_out or "")
+            _probe_l = _probe.lower()
+
+            # Late takeover prompt while probing reconnect state.
+            if _probe_match and "y/n" in _probe_match.lower():
+                _ch.send("y\r")
+                time.sleep(1)
+                _out2, _m2 = direct_read_until_any(
+                    _ch,
+                    ["loader-", "::*>", "::>", "login:", "selection", "autoboot", ">"],
+                    timeout=8,
+                    node_log=node_file,
+                )
+                _track_fw_update_markers(_out2)
+                _probe += _out2 or ""
+                _probe_l = _probe.lower()
+                _probe_match = _m2
+
+            # Already in console/LOADER/cluster flow: do not spam "system console".
+            if _LOADER_PROMPT_RE.search(_probe) or "loader-" in _probe_l:
+                return False, _probe, _probe_match
+            if any(_sig in _probe_l for _sig in ("::*>", "::>", "login:", "selection", "autoboot")):
+                return False, _probe, _probe_match
+
+            _at_bmc = (_probe_match == ">") or ("bmc" in _probe_l) or _probe_l.rstrip().endswith(">")
+            if not _at_bmc:
+                if _session_log:
+                    _session_log.log(
+                        f"[{label}] reconnect state ambiguous ({_reason}); skipping system console. "
+                        f"Probe tail: {_probe[-160:]!r}",
+                        prefix="WARN",
+                    )
+                return False, _probe, _probe_match
+
+            _ch.send("system console\r")
+            _out_sc, _m_sc = direct_read_until_any(
+                _ch, ["y/n", "ctrl-d", "serial console", "loader-", "autoboot", "selection"],
+                timeout=20, node_log=node_file,
+            )
+            _track_fw_update_markers(_out_sc)
+            if _m_sc and "y/n" in _m_sc.lower():
+                _ch.send("y\r")
+                time.sleep(1)
+            return True, _out_sc, _m_sc
+
         # Check if already at LOADER; skip system reset if so.
         _already_loader = _already_at_loader(ch, label=label, node_log=node_file)
         if not _already_loader:
@@ -17321,15 +17402,14 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         takeover_msg=f"[{label}] Existing BMC session detected during reconnect — auto-answering yes",
                     ):
                         print(f"   ⚠️  [{label}] BMC prompt not reached after reconnect; continuing...")
-                    ch.send("system console\r")
-                    _out_sc, _m_sc = direct_read_until_any(
-                        ch, ["y/n", "ctrl-d", "serial console", "loader-",
-                             "autoboot", "selection"],
-                        timeout=20, node_log=node_file,
+                    _entered_sc, _out_sc, _m_sc = _maybe_enter_system_console(
+                        ch, _reason="LOADER wait reconnect",
                     )
-                    _track_fw_update_markers(_out_sc)
-                    if _m_sc and "y/n" in _m_sc.lower():
-                        ch.send("y\r"); time.sleep(1)
+                    if (not _entered_sc) and _session_log:
+                        _session_log.log(
+                            f"[{label}] reconnect resumed without system console "
+                            "(already in LOADER/console path)",
+                        )
                     ch.send("\r")
                     last_recv = time.monotonic()
                     last_keepalive = time.monotonic()
@@ -17481,16 +17561,10 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         takeover_msg=f"[{label}] Existing BMC session detected during reconnect — auto-answering yes",
                     ):
                         print(f"   ⚠️  [{label}] BMC prompt not reached after reconnect; continuing...")
-                    ch.send("system console\r")
-                    _out_sc, _m_sc = direct_read_until_any(
-                        ch, ["y/n", "ctrl-d", "serial console", "loader-",
-                             "autoboot", "selection"],
-                        timeout=20, node_log=node_file,
+                    _entered_sc, _out_sc, _m_sc = _maybe_enter_system_console(
+                        ch, _reason="boot menu wait reconnect",
                     )
-                    _track_fw_update_markers(_out_sc)
-                    if _m_sc and "y/n" in _m_sc.lower():
-                        ch.send("y\r"); time.sleep(2)
-                    elif _m_sc and any(sg in (_m_sc or "").lower() for sg in sig_lower):
+                    if _m_sc and any(sg in (_m_sc or "").lower() for sg in sig_lower):
                         # Boot menu already visible – drop into detection immediately.
                         out_lower += _out_sc.lower()
                     # Send CR to nudge any waiting prompt.
