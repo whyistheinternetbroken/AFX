@@ -2663,14 +2663,14 @@ def select_operation_mode():
 
 
 def get_loader_commands():
+    _fw_cmds = ["setenv AUTO_FW_UPDATE false"] if _prevent_bios_fw_update else []
     # Mode 3 primary uses mode-1 LOADER commands (full cluster init); peers in
     # mode 3 are driven by their own threads with their own LOADER commands.
     if _operation_mode in (1, 3):
         cmds = [
             "set-defaults",
-            "setenv AUTO_FW_UPDATE false",
             "setenv bootarg.destroy.all.storage.pods true",
-        ]
+        ] + _fw_cmds
         if _physical_zeroing:
             cmds.append("setenv raid.use-physical-zeroing? true")
         else:
@@ -2683,8 +2683,7 @@ def get_loader_commands():
     else:
         cmds = [
             "set-defaults",
-            "setenv AUTO_FW_UPDATE false",
-        ]
+        ] + _fw_cmds
         # Physical zeroing is a per-node LOADER setting; apply it to
         # peers too when the operator opted in so the whole cluster ends
         # up with consistent raid.use-physical-zeroing? behaviour.
@@ -2835,6 +2834,10 @@ _diag_mode = False
 # List of validated "bootarg.name.variable <value>" strings to inject at LOADER
 # when _diag_mode is True. Populated by _load_diag_bootargs().
 _diag_bootargs: list = []
+
+# When True, LOADER config includes "setenv AUTO_FW_UPDATE false" to prevent
+# BIOS firmware auto-updates during boot flows.
+_prevent_bios_fw_update = True
 
 # Tri-state for bootarg.init.dna verification inside LOADER env pre/post flow:
 #   None  -> not decided yet (interactive prompt where applicable)
@@ -7858,8 +7861,8 @@ def _load_diag_bootargs():
         except (EOFError, KeyboardInterrupt):
             confirm = ""
         if confirm == "n":
-            print("  ❌ Bootarg application cancelled. Exiting.")
-            sys.exit(1)
+            print("  ℹ️  Skipping diagnostic bootargs and continuing.")
+            return []
         print("  ✅ Bootargs confirmed.")
 
     return validated
@@ -9969,7 +9972,7 @@ def _run_4b_standalone(log, resuming: bool = False):
             log.log(f"4b: physical disk zeroing requested: {_physical_zeroing}")
 
         # Diagnostic bootargs: if --diag was passed, load/prompt for bootargs now.
-        global _diag_mode, _diag_bootargs
+        global _diag_mode, _diag_bootargs, _prevent_bios_fw_update
         if _diag_mode:
             _cp_diag = _checkpoint.get_param("diag_bootargs") if (resuming and _checkpoint) else None
             if resuming and _cp_diag is not None:
@@ -9979,6 +9982,27 @@ def _run_4b_standalone(log, resuming: bool = False):
                 _diag_bootargs = _load_diag_bootargs()
             if log:
                 log.log(f"4b: diag bootargs: {_diag_bootargs}")
+
+        # Firmware-update behavior: this controls whether LOADER sets
+        # AUTO_FW_UPDATE false.
+        if resuming and _checkpoint and _checkpoint.get_param("prevent_bios_fw_update") is not None:
+            _prevent_bios_fw_update = bool(_checkpoint.get_param("prevent_bios_fw_update"))
+            print(
+                "\n  🔖 Resuming: BIOS firmware auto-update prevention="
+                f"{'enabled' if _prevent_bios_fw_update else 'disabled'}."
+            )
+        else:
+            _fw_q = _prompt(
+                "  Do you want to prevent BIOS firmware from updating? [Y/n]: ",
+                "y",
+            ).lower()
+            _prevent_bios_fw_update = (_fw_q not in ("n", "no"))
+        if _prevent_bios_fw_update:
+            print("  ℹ️   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
+        else:
+            print("  ℹ️   BIOS firmware auto-update prevention disabled.")
+        if log:
+            log.log(f"4b: prevent BIOS firmware update: {_prevent_bios_fw_update}")
 
     # ── Static vs DHCP ifconfig in LOADER ─────────────────────────────────
     global _netboot_static_ip
@@ -10046,6 +10070,7 @@ def _run_4b_standalone(log, resuming: bool = False):
         _checkpoint.set_param("reinit_mode",       _mode_sel)
         _checkpoint.set_param("physical_zeroing",  _physical_zeroing)
         _checkpoint.set_param("netboot_static_ip", _netboot_static_ip)
+        _checkpoint.set_param("prevent_bios_fw_update", _prevent_bios_fw_update)
         if _diag_mode:
             _checkpoint.set_param("diag_bootargs", _diag_bootargs)
     if _checkpoint is not None:
@@ -16567,7 +16592,9 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             node_log=node_file, interactive=False
         )
         # set-defaults was already run above; exclude it from the command list.
-        _peer_loader_cmds = ["setenv AUTO_FW_UPDATE false"]
+        _peer_loader_cmds = []
+        if _prevent_bios_fw_update:
+            _peer_loader_cmds.append("setenv AUTO_FW_UPDATE false")
         if _physical_zeroing:
             _peer_loader_cmds.append("setenv raid.use-physical-zeroing? true")
         else:
@@ -19649,7 +19676,7 @@ def main():
     global _primary_bmc_user, _primary_bmc_password
     global _checkpoint, _run_context
     global _auto_clear_stale_bmc
-    global _diag_mode, _diag_bootargs, _physical_zeroing
+    global _diag_mode, _diag_bootargs, _physical_zeroing, _prevent_bios_fw_update
 
     args = parse_args()
 
@@ -22362,7 +22389,8 @@ def main():
                 else:
                     print("\n  ↩️  Will not retain any existing cluster configuration.")
 
-            # ── Pre-reinit prompts: physical zeroing and diagnostic bootargs ─────
+            # ── Pre-reinit prompts: physical zeroing, diagnostic bootargs, and
+            #    firmware auto-update behavior ───────────────────────────────────
             # Asked here — right after config/retain selection, before any BMC
             # connection — so all up-front questions are grouped together.
             if _operation_mode in (1, 3):
@@ -22378,6 +22406,17 @@ def main():
                     _diag_bootargs = _load_diag_bootargs()
             elif _operation_mode == 2 and _diag_mode:
                 _diag_bootargs = _load_diag_bootargs()
+
+            if _operation_mode in (1, 2, 3):
+                _fw_ans = _prompt(
+                    "  Do you want to prevent BIOS firmware from updating? [Y/n]: ",
+                    "y",
+                ).lower()
+                _prevent_bios_fw_update = (_fw_ans not in ("n", "no"))
+                if _prevent_bios_fw_update:
+                    print("  ℹ️   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
+                else:
+                    print("  ℹ️   BIOS firmware auto-update prevention disabled.")
 
             # License: collect key(s) or validate the license file path now, before
             # the BMC session starts, so the operator can fix issues early.
