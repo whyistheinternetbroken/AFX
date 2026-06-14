@@ -5829,6 +5829,9 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
                 _slog(f"[{host}] taking over existing console session")
                 ch.send("y\r")
                 time.sleep(2)
+            # Quiet console attaches can hide an already-present prompt.
+            with suppress(Exception):
+                ch.send("\r")
 
         _reset_and_enter_console("initial")
 
@@ -9060,6 +9063,9 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
         # Raw console output (BIOS init, driver load, etc.) goes to node_log
         # only; status milestones are printed to the terminal.
         print(f"  ⏳ [{host}] Waiting for AUTOBOOT / LOADER prompt...")
+        # Some BMC consoles stay silent until Enter is pressed.
+        with suppress(Exception):
+            ch.send("\r")
         buf = ""
         start = time.monotonic()
         loader_seen = False
@@ -17823,6 +17829,9 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
         _run_bootarg_check = True
         if _bootarg_check_enabled is not None:
             _run_bootarg_check = bool(_bootarg_check_enabled)
+        elif _operation_mode == 1 and _auto_setup:
+            _run_bootarg_check = True
+            _slog("Option 1b: bootarg.init.dna verification required; running automatically")
         elif interactive:
             _real_stdout.write(
                 "\n  Run bootarg.init.dna verification now? [Y/n]: "
@@ -17868,6 +17877,9 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     _run_bootarg_check = True
     if _bootarg_check_enabled is not None:
         _run_bootarg_check = bool(_bootarg_check_enabled)
+    elif _operation_mode == 1 and _auto_setup:
+        _run_bootarg_check = True
+        _slog("Option 1b: bootarg.init.dna verification required; running automatically")
     elif interactive:
         _real_stdout.write(
             "\n  Run bootarg.init.dna verification now? [Y/n]: "
@@ -18256,6 +18268,9 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
     print(f"  ➡️  Boot menu option {option} ({description}) will be selected automatically")
     print("  ➡️  After that, session becomes fully interactive\n")
     _slog("Phase 1: Monitoring for AUTOBOOT/LOADER (active interruption mode)")
+    # Quiet console attaches can hide the current prompt until Enter is sent.
+    with suppress(Exception):
+        channel.send("\r")
 
     output_buffer = ""
     _last_data = time.monotonic()
@@ -18287,6 +18302,8 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     direct_read_until(channel, ">", timeout=15)
 
                 enter_system_console(channel)
+                with suppress(Exception):
+                    channel.send("\r")
                 output_buffer = ""
                 _last_data = time.monotonic()
                 continue
