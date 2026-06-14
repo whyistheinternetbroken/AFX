@@ -6762,18 +6762,8 @@ def _print_boot_dna_records(records, *, source_label):
     return True
 
 
-def _run_boot_dna_check_mode():
-    """Mode 5k helper: detect cluster-shell vs LOADER and print DNA values."""
-    _target54 = input("  Cluster management IP or BMC IP: ").strip()
-    if not _target54:
-        print("  No target entered. Returning to menu.")
-        return
-    _user54 = input("  Username [admin]: ").strip() or "admin"
-    _pass54 = getpass.getpass("  Password (blank = none): ")
-
-    _cluster_config["admin_user"] = _user54
-    _cluster_config["admin_password"] = _pass54
-
+def _run_boot_dna_check_target(_target54, _user54, _pass54):
+    """Run mode-5k boot-DNA detection/check against a single target."""
     _cl54 = _ch54 = _nf54 = None
     try:
         _cl54, _user54, _pass54 = _ssh_connect_with_retry(
@@ -6912,9 +6902,6 @@ def _run_boot_dna_check_mode():
             )
             _boot54_records = _extract_boot_dna_records(_boot54_out, default_label=_target54)
             _print_boot_dna_records(_boot54_records, source_label=_source54)
-
-        if _session_log:
-            print(f"\n📝 Session log: {_session_log.log_file}")
     finally:
         if _nf54:
             try:
@@ -6927,6 +6914,118 @@ def _run_boot_dna_check_mode():
                     _obj54.close()
             except Exception:
                 pass
+
+
+def _run_boot_dna_check_mode():
+    """Mode 5k helper: detect cluster-shell vs LOADER and print DNA values."""
+    _bmc_ips54 = []
+    _cluster_mgmt54 = ""
+    _found_file54 = None
+    for _p54 in _find_config_files(
+        candidate_names=(
+            "BMC_IP.json",
+            "reinit-config.json",
+            "reinit_config.json",
+            "reinit-afx-config.json",
+            "add_nodes.json",
+        ),
+    ):
+        try:
+            with open(_p54, "r", encoding="utf-8") as _f54:
+                _d54 = json.load(_f54)
+        except Exception:
+            continue
+        if not isinstance(_d54, dict):
+            continue
+
+        _tmp_bmcs54 = []
+        if isinstance(_d54.get("netboot_bmcs"), list):
+            _tmp_bmcs54.extend([str(x).strip() for x in _d54["netboot_bmcs"] if str(x).strip()])
+        else:
+            _pn54 = _d54.get("primary_node")
+            if isinstance(_pn54, dict) and _pn54.get("bmc"):
+                _tmp_bmcs54.append(str(_pn54.get("bmc")).strip())
+            for _sn54 in (_d54.get("secondary_nodes") or []):
+                if isinstance(_sn54, dict) and _sn54.get("bmc"):
+                    _tmp_bmcs54.append(str(_sn54.get("bmc")).strip())
+            if not _tmp_bmcs54:
+                for _n54 in (_d54.get("nodes") or []):
+                    if isinstance(_n54, dict) and _n54.get("bmc"):
+                        _tmp_bmcs54.append(str(_n54.get("bmc")).strip())
+
+        _cl54 = _d54.get("cluster") if isinstance(_d54.get("cluster"), dict) else {}
+        for _k54 in ("clus_mgmt_address", "cluster_mgmt_ip", "cluster_management_ip", "mgmt_ip"):
+            _v54 = str((_cl54.get(_k54) if isinstance(_cl54, dict) else _d54.get(_k54)) or "").strip()
+            if _v54:
+                _cluster_mgmt54 = _v54
+                break
+
+        if _tmp_bmcs54 or _cluster_mgmt54:
+            _bmc_ips54 = list(dict.fromkeys([x for x in _tmp_bmcs54 if x]))
+            _found_file54 = _p54
+            break
+
+    if not _cluster_mgmt54 and isinstance(_config_data, dict):
+        _cfg_cluster54 = _config_data.get("cluster") if isinstance(_config_data.get("cluster"), dict) else {}
+        for _k54 in ("clus_mgmt_address", "cluster_mgmt_ip", "cluster_management_ip", "mgmt_ip"):
+            _v54 = str((_cfg_cluster54.get(_k54) if isinstance(_cfg_cluster54, dict) else _config_data.get(_k54)) or "").strip()
+            if _v54:
+                _cluster_mgmt54 = _v54
+                break
+    if not _cluster_mgmt54:
+        _cluster_mgmt54 = str(_cluster_config.get("mgmt_ip") or "").strip()
+
+    if _found_file54:
+        print(f"  📄 Loaded target hints from: {_found_file54}")
+
+    while True:
+        print("")
+        print("  Target selection:")
+        print("    1. All BMC IPs")
+        if _bmc_ips54:
+            for _ip54 in _bmc_ips54:
+                print(f"       - {_ip54}")
+        else:
+            print("       - (no BMC IPs found in config)")
+        _cm_disp54 = _cluster_mgmt54 if _cluster_mgmt54 else "<not found>"
+        print(f"    2. {_cm_disp54} (Cluster management)")
+        print("    3. Enter custom IP")
+        _sel54 = _prompt("  Select [1-3]: ", "1").strip()
+        if _sel54 == "1":
+            if not _bmc_ips54:
+                print("  ⚠️  No BMC IPs were found. Choose option 2 or 3.")
+                continue
+            _targets54 = list(_bmc_ips54)
+            break
+        if _sel54 == "2":
+            if not _cluster_mgmt54:
+                print("  ⚠️  Cluster management IP not found. Choose option 1 or 3.")
+                continue
+            _targets54 = [_cluster_mgmt54]
+            break
+        if _sel54 == "3":
+            _custom54 = _prompt("  Custom hostname/IP: ").strip()
+            if not _custom54:
+                print("  ⚠️  No target entered.")
+                continue
+            _targets54 = [_custom54]
+            break
+        print("  ⚠️  Invalid selection. Enter 1, 2, or 3.")
+
+    _default_user54 = _cluster_config.get("admin_user") or "admin"
+    _user54 = input(f"  Username [{_default_user54}]: ").strip() or _default_user54
+    _pass54 = getpass.getpass("  Password (blank = none): ")
+
+    _cluster_config["admin_user"] = _user54
+    _cluster_config["admin_password"] = _pass54
+
+    for _target54 in _targets54:
+        print(f"\n  {'─' * 58}")
+        print(f"  🔎 Checking boot DNA on {_target54}")
+        _run_boot_dna_check_target(_target54, _user54, _pass54)
+
+    if _session_log:
+        print(f"\n📝 Session log: {_session_log.log_file}")
 
 
 # ---------------------------------------------------------------------------

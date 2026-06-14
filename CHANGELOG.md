@@ -19,6 +19,10 @@ revision labels rather than strict [SemVer](https://semver.org/).
   shell or LOADER, and reports `bootarg.init.dna`. The LOADER path uses
   `printenv bootarg.init.dna`, while the live-cluster path runs
   `node run * -c "priv set diag; bootargs get bootarg.init.dna"`.
+- **5k target selection now uses config-driven numbered options.**
+  The boot-DNA utility now loads BMC and cluster-management targets from JSON
+  config and offers a numbered picker: **1)** all BMC IPs, **2)** cluster
+  management IP, **3)** custom IP/hostname.
 - **5d rerun can now reselect targets from the numbered BMC list.**
   When an operator chooses to rerun BMC auth verification, the script now
   reopens the numbered target picker so a different all/subset selection can be
