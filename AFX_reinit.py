@@ -34,6 +34,7 @@ import signal
 import argparse
 import platform
 import socket
+import textwrap
 from datetime import datetime
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
@@ -953,6 +954,18 @@ def _print_autopilot_banner() -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print("  Autopilot engaged. Check back periodically for job completion.")
     print(bar + "\n")
+
+
+def _print_wrapped_warning(message: str, *, indent: str = "  ", max_width: int = 100) -> None:
+    """Print a WARNING line wrapped to terminal width with aligned continuation."""
+    cols = min(shutil.get_terminal_size((80, 24)).columns, max_width)
+    wrapped = textwrap.fill(
+        message,
+        width=max(cols, 40),
+        initial_indent=f"{indent}⚠️  WARNING: ",
+        subsequent_indent=indent,
+    )
+    print(f"\n{wrapped}")
 
 
 def _open_shell(client, **kwargs):
@@ -12083,10 +12096,10 @@ def _find_upgrade_package():
                         tgz_files.append(full)
                         seen.add(full)
 
-    print(
-        "\n  ⚠️  WARNING: If you are downgrading FROM 9.19.1 (or later) with "
-        "large-SAZ support enabled, a full cluster reinitialize will be required "
-        "after reverting to an earlier ONTAP version."
+    _print_wrapped_warning(
+        "If you are downgrading FROM 9.19.1 (or later) with large-SAZ support "
+        "enabled, a full cluster reinitialize will be required after reverting "
+        "to an earlier ONTAP version."
     )
 
     if tgz_files:
