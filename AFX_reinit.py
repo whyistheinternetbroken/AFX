@@ -4854,9 +4854,14 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
     if _session_log:
         _session_log.log_sent("system console")
     channel.send("system console\r")
+    # Some BMCs attach to an already-idle console without printing a fresh
+    # prompt until Enter is pressed.
+    time.sleep(0.3)
+    channel.send("\r")
 
     buf = ""
     start = time.monotonic()
+    last_nudge = start
     loader_found = False
     while time.monotonic() - start < probe_timeout:
         if channel.recv_ready():
@@ -4882,6 +4887,11 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
             if any(sig in buf.lower() for sig in
                    ("::>", "::*>", "login:")):
                 break
+        elif time.monotonic() - last_nudge > 2.0:
+            # Quiet console attach: nudge once every few seconds so the
+            # current prompt (e.g. LOADER-A>) is emitted.
+            channel.send("\r")
+            last_nudge = time.monotonic()
         time.sleep(0.1)
 
     if loader_found:
