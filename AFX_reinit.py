@@ -6764,6 +6764,12 @@ def _print_boot_dna_records(records, *, source_label):
 
 def _run_boot_dna_check_target(_target54, _user54, _pass54):
     """Run mode-5k boot-DNA detection/check against a single target."""
+    _result54 = {
+        "target": _target54,
+        "state": "Unknown",
+        "records": [],
+        "ok": False,
+    }
     _cl54 = _ch54 = _nf54 = None
     try:
         _cl54, _user54, _pass54 = _ssh_connect_with_retry(
@@ -6808,17 +6814,20 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
             print("  ✅ Cluster shell detected directly.")
             _cluster_ready54 = True
             _source54 = "cluster shell"
+            _result54["state"] = "At cluster shell"
         elif _init54_match and "login:" in _init54_match.lower():
             print("  🔐 Cluster login prompt detected directly.")
             if not _wait_for_cluster_prompt(_ch54, timeout=45):
                 print("  ❌ Could not reach the cluster shell.")
-                return
+                return _result54
             _cluster_ready54 = True
             _source54 = "cluster shell"
+            _result54["state"] = "At cluster shell"
         elif _init54_match and "loader-" in _init54_match.lower():
             print("  ✅ LOADER prompt detected directly.")
             _loader_ready54 = True
             _source54 = "LOADER"
+            _result54["state"] = "At LOADER"
         else:
             if not (_init54_match and ">" in _init54_match):
                 if not _reach_bmc_prompt(
@@ -6827,7 +6836,7 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
                     takeover_msg=f"[{_target54}] taking over existing BMC session for boot DNA check",
                 ):
                     print("  ❌ Could not reach a BMC or cluster prompt.")
-                    return
+                    return _result54
 
             print("  🖥️  BMC prompt detected; entering system console...")
             _ch54.send("system console\r")
@@ -6870,17 +6879,19 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
                 print("  ✅ LOADER prompt detected via system console.")
                 _loader_ready54 = True
                 _source54 = "LOADER via BMC console"
+                _result54["state"] = "At LOADER"
             elif ("::>" in _combined54 or "::*>" in _combined54
                   or "login:" in _combined54 or "password:" in _combined54):
                 print("  ✅ Live-cluster console detected; reaching cluster shell...")
                 if not _wait_for_cluster_prompt(_ch54, timeout=45):
                     print("  ❌ Could not reach the cluster shell from system console.")
-                    return
+                    return _result54
                 _cluster_ready54 = True
                 _source54 = "cluster shell via BMC console"
+                _result54["state"] = "At cluster shell"
             else:
                 print("  ❌ Could not determine whether the node is at LOADER or a live cluster prompt.")
-                return
+                return _result54
 
         if _cluster_ready54:
             print('\n  ▶ Running: node run * -c "priv set diag; bootargs get bootarg.init.dna"\n')
@@ -6890,6 +6901,8 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
                 timeout=90,
             )
             _boot54_records = _extract_boot_dna_records(_boot54_out, default_label=_target54)
+            _result54["records"] = list(_boot54_records or [])
+            _result54["ok"] = bool(_boot54_records)
             _print_boot_dna_records(_boot54_records, source_label=_source54)
         elif _loader_ready54:
             print("\n  ▶ Running: printenv bootarg.init.dna\n")
@@ -6901,7 +6914,10 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
                 node_log=_nf54,
             )
             _boot54_records = _extract_boot_dna_records(_boot54_out, default_label=_target54)
+            _result54["records"] = list(_boot54_records or [])
+            _result54["ok"] = bool(_boot54_records)
             _print_boot_dna_records(_boot54_records, source_label=_source54)
+        return _result54
     finally:
         if _nf54:
             try:
@@ -7019,10 +7035,33 @@ def _run_boot_dna_check_mode():
     _cluster_config["admin_user"] = _user54
     _cluster_config["admin_password"] = _pass54
 
+    _results54 = []
     for _target54 in _targets54:
         print(f"\n  {'─' * 58}")
         print(f"  🔎 Checking boot DNA on {_target54}")
-        _run_boot_dna_check_target(_target54, _user54, _pass54)
+        _res54 = _run_boot_dna_check_target(_target54, _user54, _pass54) or {
+            "target": _target54,
+            "state": "Unknown",
+            "records": [],
+            "ok": False,
+        }
+        _results54.append(_res54)
+
+    if len(_targets54) > 1 and _results54:
+        print("\n  🧾 Boot DNA summary:")
+        print(f"  {'Target':<24}  {'State':<18}  Value(s)")
+        print(f"  {'-'*24}  {'-'*18}  {'-'*24}")
+        for _r54 in _results54:
+            _vals54 = _r54.get("records") or []
+            if not _vals54:
+                _val_disp54 = "(parse failed)"
+            else:
+                _val_disp54 = ", ".join(sorted({str(v) for _, v in _vals54}))
+            print(
+                f"  {str(_r54.get('target') or '-'):<24}  "
+                f"{str(_r54.get('state') or 'Unknown'):<18}  "
+                f"{_val_disp54}"
+            )
 
     if _session_log:
         print(f"\n📝 Session log: {_session_log.log_file}")

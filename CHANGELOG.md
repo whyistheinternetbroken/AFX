@@ -23,6 +23,10 @@ revision labels rather than strict [SemVer](https://semver.org/).
   The boot-DNA utility now loads BMC and cluster-management targets from JSON
   config and offers a numbered picker: **1)** all BMC IPs, **2)** cluster
   management IP, **3)** custom IP/hostname.
+- **5k now reports per-target node state in multi-node results.**
+  When checking all BMC targets, 5k now evaluates each node's runtime state
+  (At LOADER vs At cluster shell), uses the matching bootarg query path, and
+  prints a summary list that includes both node state and DNA value(s).
 - **5d rerun can now reselect targets from the numbered BMC list.**
   When an operator chooses to rerun BMC auth verification, the script now
   reopens the numbered target picker so a different all/subset selection can be
