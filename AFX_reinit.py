@@ -4876,9 +4876,11 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
             if _LOADER_PROMPT_RE.search(buf):
                 loader_found = True
                 break
-            # If ONTAP or autoboot is seen, no need to keep waiting.
+            # If ONTAP output is seen, no need to keep waiting.
+            # Do not break on "starting autoboot" text alone; some consoles
+            # replay stale boot lines before showing the current LOADER prompt.
             if any(sig in buf.lower() for sig in
-                   ("::>", "::*>", "login:", "starting autoboot")):
+                   ("::>", "::*>", "login:")):
                 break
         time.sleep(0.1)
 
@@ -5745,7 +5747,6 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
         _ts_print(msg)
         _real_stdout.flush()
 
-    _tprint(f"\n🔁 [{host}] Resetting to LOADER prompt...")
     _slog(f"Peer reset starting for {host}")
 
     client = None
@@ -5779,6 +5780,10 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             _slog(f"[{host}] no BMC prompt; aborting", prefix="WARN")
             return False
 
+        _tprint(f"   🔎 [{host}] Checking current node status...")
+        if _session_log:
+            _session_log.log(f"[{host}] checking current node status before reset")
+
         # Check if already at LOADER before issuing system reset.
         if _already_at_loader(
             ch, label=host, node_log=node_log,
@@ -5788,6 +5793,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             return True
 
         def _reset_and_enter_console(reason: str = "initial"):
+            _tprint(f"\n🔁 [{host}] Resetting to LOADER prompt...")
             # system reset (auto-confirm).
             direct_send_and_wait(ch, "system reset", "y/n", timeout=15, auto_respond="y",
                                  node_log=node_log, quiet=(node_log is not None))
