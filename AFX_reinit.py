@@ -16356,6 +16356,9 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         _ts_print(f"[{label}] Starting node add process...")
         _fw_update_active = False
         _fw_update_notice = "Firmware is updating. BMC will reconnect soon."
+        _reconnect_msg_streak = 0
+        _reconnect_msg_suppressed = False
+        _reconnect_msg_limit = 5
 
         def _track_fw_update_markers(_text: str):
             nonlocal _fw_update_active
@@ -16364,6 +16367,30 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 _fw_update_active = True
             if "resetting to enable secure boot menu" in _lt:
                 _fw_update_active = False
+
+        def _emit_reconnect_notice(_console_msg: str, _log_msg: str = ""):
+            nonlocal _reconnect_msg_streak, _reconnect_msg_suppressed
+            _reconnect_msg_streak += 1
+            if _reconnect_msg_streak <= _reconnect_msg_limit:
+                if _console_msg:
+                    print(_console_msg)
+                if _session_log and _log_msg:
+                    _session_log.log(_log_msg)
+                return
+            if not _reconnect_msg_suppressed:
+                print(f"   ℹ️  [{label}] Suppressing repeated BMC reconnect messages until reconnect succeeds or timeout.")
+                if _session_log:
+                    _session_log.log(
+                        f"[{label}] suppressing repeated BMC reconnect messages after "
+                        f"{_reconnect_msg_limit} consecutive notices",
+                        prefix="WARN",
+                    )
+                _reconnect_msg_suppressed = True
+
+        def _reset_reconnect_notice_suppression():
+            nonlocal _reconnect_msg_streak, _reconnect_msg_suppressed
+            _reconnect_msg_streak = 0
+            _reconnect_msg_suppressed = False
 
         # Check if already at LOADER; skip system reset if so.
         _already_loader = _already_at_loader(ch, label=label, node_log=node_file)
@@ -16442,9 +16469,10 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 # instead of hanging until Ctrl+C.
                 _elapsed_silent = int(time.monotonic() - last_recv)
                 if _fw_update_active:
-                    print(f"   ⏳ [{label}] {_fw_update_notice}")
-                    if _session_log:
-                        _session_log.log(f"[{label}] {_fw_update_notice}")
+                    _emit_reconnect_notice(
+                        f"   ⏳ [{label}] {_fw_update_notice}",
+                        f"[{label}] {_fw_update_notice}",
+                    )
                     _sleep_left = 120
                     while _sleep_left > 0:
                         if _shutdown_event.is_set():
@@ -16453,12 +16481,12 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         time.sleep(_step)
                         _sleep_left -= _step
                 else:
-                    print(f"   ⚠️  [{label}] No console data for {_elapsed_silent}s – reconnecting to BMC...")
+                    _emit_reconnect_notice(
+                        f"   ⚠️  [{label}] No console data for {_elapsed_silent}s – reconnecting to BMC...",
+                        f"[{label}] reconnecting BMC during LOADER wait after {_elapsed_silent}s silence",
+                    )
                 if node_file:
                     _par_write(node_file, f"\n>>> [Reconnecting BMC after {_elapsed_silent}s silence]\n")
-                if _session_log:
-                    if not _fw_update_active:
-                        _session_log.log(f"[{label}] reconnecting BMC during LOADER wait after {_elapsed_silent}s silence")
                 try:
                     try:
                         ch.close()
@@ -16497,18 +16525,17 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     last_recv = time.monotonic()
                     last_keepalive = time.monotonic()
                     last_nudge = time.monotonic()
+                    _reset_reconnect_notice_suppression()
                     if not _fw_update_active:
                         print(f"   ✅ [{label}] Reconnected to BMC during LOADER wait; resuming...")
                     if _session_log and not _fw_update_active:
                         _session_log.log(f"[{label}] BMC reconnect successful during LOADER wait")
                 except Exception as _rc_err:
                     if _fw_update_active:
-                        print(f"   ⏳ [{label}] {_fw_update_notice}")
-                        if _session_log:
-                            _session_log.log(
-                                f"[{label}] reconnect deferred during firmware update: {_rc_err}",
-                                prefix="WARN",
-                            )
+                        _emit_reconnect_notice(
+                            f"   ⏳ [{label}] {_fw_update_notice}",
+                            f"[{label}] reconnect deferred during firmware update: {_rc_err}",
+                        )
                         last_recv = time.monotonic()
                         last_keepalive = time.monotonic()
                         last_nudge = time.monotonic()
@@ -16597,9 +16624,10 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 # Reconnect SSH and re-attach to system console.
                 _elapsed_silent = int(time.monotonic() - last_recv)
                 if _fw_update_active:
-                    print(f"   ⏳ [{label}] {_fw_update_notice}")
-                    if _session_log:
-                        _session_log.log(f"[{label}] {_fw_update_notice}")
+                    _emit_reconnect_notice(
+                        f"   ⏳ [{label}] {_fw_update_notice}",
+                        f"[{label}] {_fw_update_notice}",
+                    )
                     _sleep_left = 120
                     while _sleep_left > 0:
                         if _shutdown_event.is_set():
@@ -16608,12 +16636,12 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         time.sleep(_step)
                         _sleep_left -= _step
                 else:
-                    print(f"   ⚠️  [{label}] No console data for {_elapsed_silent}s – reconnecting to BMC...")
+                    _emit_reconnect_notice(
+                        f"   ⚠️  [{label}] No console data for {_elapsed_silent}s – reconnecting to BMC...",
+                        f"[{label}] reconnecting BMC after {_elapsed_silent}s silence",
+                    )
                 if node_file:
                     _par_write(node_file, f"\n>>> [Reconnecting BMC after {_elapsed_silent}s silence]\n")
-                if _session_log:
-                    if not _fw_update_active:
-                        _session_log.log(f"[{label}] reconnecting BMC after {_elapsed_silent}s silence")
                 try:
                     try:
                         ch.close()
@@ -16655,18 +16683,17 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     ch.send("\r")
                     last_recv = time.monotonic()
                     # Don't reset s – preserve original timeout budget.
+                    _reset_reconnect_notice_suppression()
                     if not _fw_update_active:
                         print(f"   ✅ [{label}] Reconnected to BMC (120s silence); resuming boot menu wait...")
                     if _session_log and not _fw_update_active:
                         _session_log.log(f"[{label}] BMC reconnect successful; resuming boot menu wait")
                 except Exception as _rc_err:
                     if _fw_update_active:
-                        print(f"   ⏳ [{label}] {_fw_update_notice}")
-                        if _session_log:
-                            _session_log.log(
-                                f"[{label}] reconnect deferred during firmware update: {_rc_err}",
-                                prefix="WARN",
-                            )
+                        _emit_reconnect_notice(
+                            f"   ⏳ [{label}] {_fw_update_notice}",
+                            f"[{label}] reconnect deferred during firmware update: {_rc_err}",
+                        )
                         last_recv = time.monotonic()
                         last_keepalive = time.monotonic()
                         continue
