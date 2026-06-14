@@ -24,6 +24,7 @@ import shutil
 import time
 import re
 import json
+import select
 import importlib  # OPT: use importlib.import_module instead of __import__
 import ipaddress
 import getpass
@@ -790,6 +791,64 @@ def _prompt(prompt: str, default: str = "") -> str:
     """
     try:
         val = input(prompt).strip()
+        if val.lower() == "menu":
+            print("  ↩️  Returning to main menu...")
+            raise _ReturnToMenu
+        return val
+    except (EOFError, KeyboardInterrupt):
+        return default
+
+
+def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> str:
+    """Prompt with a timeout (seconds), returning ``default`` on timeout.
+
+    Supports ``menu`` escape behavior like ``_prompt``.
+    """
+    if timeout <= 0:
+        return _prompt(prompt, default=default)
+
+    try:
+        if os.name != "nt":
+            # POSIX: wait for stdin readability, then read one line.
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            ready, _, _ = select.select([sys.stdin], [], [], timeout)
+            if not ready:
+                print("")
+                print(f"  ⏱️  No response in {timeout}s; defaulting to '{default or ''}'.")
+                return default
+            val = sys.stdin.readline()
+            if val == "":
+                return default
+            val = val.strip()
+        else:
+            # Windows console fallback.
+            import msvcrt
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            buf = []
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwche()
+                    if ch in ("\r", "\n"):
+                        print("")
+                        break
+                    if ch == "\003":  # Ctrl+C
+                        raise KeyboardInterrupt
+                    if ch == "\b":
+                        if buf:
+                            buf.pop()
+                        continue
+                    buf.append(ch)
+                else:
+                    time.sleep(0.05)
+            else:
+                print("")
+                print(f"  ⏱️  No response in {timeout}s; defaulting to '{default or ''}'.")
+                return default
+            val = "".join(buf).strip()
+
         if val.lower() == "menu":
             print("  ↩️  Returning to main menu...")
             raise _ReturnToMenu
@@ -17134,7 +17193,11 @@ def _prompt_and_run_post_script(session_log=None):
     skip.
     """
     while True:
-        ans = _prompt("\n  Run an additional script now? [y/N]: ").strip().lower()
+        ans = _prompt_with_timeout(
+            "\n  Run an additional script now? [y/N]: ",
+            default="n",
+            timeout=120,
+        ).strip().lower()
         if ans not in ("y", "yes"):
             return
 
