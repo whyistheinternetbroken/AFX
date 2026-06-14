@@ -335,7 +335,7 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **5b** | SSH Key Setup | Configures passwordless SSH from the script host to the cluster management interface. |
 | **5c** | Config Backup | Connects to the cluster and captures its current configuration (name, IPs, licenses, nodes) to a JSON file. Can also build a config file manually from user prompts. |
 | **5d** | BMC Auth Verify | Tests BMC SSH authentication for all nodes defined in the config file and reports pass/fail. |
-| **5e** | Reset to LOADER | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging all nodes before a manual reinit or netboot run. |
+| **5e** | Reset to LOADER | Connects to configured BMC addresses in parallel, issues a system reset on each selected node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. The script exits when every selected node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging nodes before a manual reinit or netboot run. |
 | **5f** | Check Node Status | Connects to each BMC and reports whether nodes are at LOADER, ONTAP shell, login prompt, boot menu, or unknown state. |
 | **5g** | Cluster Health Check | Connects to the cluster management LIF via SSH and checks health/version. |
 | **5h** | Stale BMC Session Cleanup | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. SSH diagnostics one-IP targeting uses a numbered, labeled config-IP picker (BMC/cluster mgmt/node mgmt) with a custom-IP option. |
@@ -1151,16 +1151,17 @@ For mode 4b, the validated bootarg list is saved to the checkpoint file. On `--r
 
 ## Reset to LOADER (`--loader` / mode 5e)
 
-Mode 5e resets every configured node to the `LOADER>` prompt in parallel via BMC. It is a lightweight staging utility — it does not begin a reinit, install software, or modify any configuration. Use it to prepare all nodes before starting a manual reinit, netboot, or any workflow that requires nodes to be sitting at LOADER.
+Mode 5e resets selected configured nodes to the `LOADER>` prompt in parallel via BMC. It is a lightweight staging utility — it does not begin a reinit, install software, or modify any configuration. Use it to prepare all nodes or a chosen subset before starting a manual reinit, netboot, or any workflow that requires nodes to be sitting at LOADER.
 
 ### How it works
 
 1. Reads the config file for all BMC addresses (primary + all secondary nodes).
-2. Opens a parallel BMC SSH session to each node simultaneously.
-3. Issues `system reset` to reboot the node.
-4. Monitors the console, intercepting the AUTOBOOT countdown with Ctrl+C.
-5. Confirms the `LOADER>` prompt on each node and reports success or failure per node.
-6. The script exits once all nodes have reached LOADER (or timed out).
+2. Shows a numbered target list and lets you choose all nodes or a comma-separated subset by number.
+3. Opens a parallel BMC SSH session to each selected node simultaneously.
+4. Issues `system reset` to reboot the node.
+5. Monitors the console, intercepting the AUTOBOOT countdown with Ctrl+C.
+6. Confirms the `LOADER>` prompt on each node and reports success or failure per node.
+7. The script exits once all selected nodes have reached LOADER (or timed out).
 
 ### Usage
 
@@ -1172,6 +1173,7 @@ python3 AFX_reinit.py --loader --config configs/reinit-config.json
 ### Notes
 
 - Requires a config file with BMC addresses for all nodes (`--config`).
+- Supports selecting all listed nodes or a numbered subset before reset begins.
 - Each node is processed independently; a failure on one node does not stop the others.
 - If a node fails to reach LOADER within the timeout, it is reported as failed in the summary — other nodes continue.
 - This mode does **not** modify ONTAP or cluster state; it only resets the nodes at the hardware level.

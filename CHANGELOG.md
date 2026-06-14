@@ -9,6 +9,10 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **5z reset-to-LOADER now supports numbered subset selection.**
+  The LOADER target list is now shown with numeric indices, and operators can
+  run the reset against all targets or a comma-separated subset (for example,
+  `1,3,4`) before credentials are collected.
 - **Unhandled crashes now write a dedicated traceback log file.**
   On unhandled exceptions, the script now writes a full stack trace to
   `crash_trace_<timestamp>.log` under the run's `logs/<timestamp>/` directory

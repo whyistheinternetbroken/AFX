@@ -21468,6 +21468,33 @@ def main():
                     print("  No BMC addresses entered. Returning to menu.")
                     raise _ReturnToMenu
 
+                print("\n  LOADER reset targets:")
+                for _idx48, _ip48 in enumerate(_bmc_ips48, 1):
+                    print(f"    {_idx48:>2}. {_ip48}")
+                while True:
+                    _pick48 = _prompt(
+                        "  Reset all BMCs to LOADER or subset by number(s) (comma-separated, "
+                        "blank=all): ",
+                        "all",
+                    ).strip().lower()
+                    if _pick48 in ("", "all", "a", "*"):
+                        break
+                    _parts48 = [p.strip() for p in _pick48.split(",") if p.strip()]
+                    if not _parts48:
+                        break
+                    _bad48 = [p for p in _parts48 if not p.isdigit()]
+                    if _bad48:
+                        print(f"  ⚠️  Invalid entry: {', '.join(_bad48)}. Use numbers like: 1,3")
+                        continue
+                    _idxs48 = sorted(set(int(p) for p in _parts48))
+                    _oor48 = [str(i) for i in _idxs48 if i < 1 or i > len(_bmc_ips48)]
+                    if _oor48:
+                        print(f"  ⚠️  Out of range: {', '.join(_oor48)} (valid: 1-{len(_bmc_ips48)})")
+                        continue
+                    _bmc_ips48 = [_bmc_ips48[i - 1] for i in _idxs48]
+                    break
+                print(f"  ✅ Selected {len(_bmc_ips48)} BMC(s): {', '.join(_bmc_ips48)}")
+
                 # ── Credentials ──────────────────────────────────────────────────
                 print("")
                 _same_creds48 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
