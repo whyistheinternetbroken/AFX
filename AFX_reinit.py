@@ -21946,6 +21946,7 @@ def main():
                 _print_banner("\U0001f4be 5c: Create backup cluster configuration")
                 print("")
                 _make_session_log("Mode 5c: backup cluster configuration")
+                _cluster_ip_rows46 = []
 
                 # Resolve output dir early — needed throughout.
                 try:
@@ -22114,6 +22115,17 @@ def main():
                         collect_peer_sps=True,
                         direct_cluster_ssh=_is_direct46,
                     )
+                    try:
+                        _cluster_ip_rows46 = _get_cluster_role_ips(_ch46)
+                        if _cluster_ip_rows46:
+                            _session_log.log(
+                                f"5c: captured {len(_cluster_ip_rows46)} cluster-role IP row(s)"
+                            )
+                    except Exception as _cip46_err:
+                        _session_log.log(
+                            f"5c: cluster-role IP capture failed: {_cip46_err}",
+                            prefix="WARN",
+                        )
                     _session_log.end_phase()
 
                     try:
@@ -22384,6 +22396,18 @@ def main():
                             except (EOFError, KeyboardInterrupt):
                                 _clus_ip46 = None
 
+                        try:
+                            _cluster_ip_rows46 = _get_cluster_role_ips(_bch46)
+                            if _cluster_ip_rows46:
+                                _session_log.log(
+                                    f"5c: captured {len(_cluster_ip_rows46)} cluster-role IP row(s)"
+                                )
+                        except Exception as _cip46_err:
+                            _session_log.log(
+                                f"5c: cluster-role IP capture failed: {_cip46_err}",
+                                prefix="WARN",
+                            )
+
                         _session_log.end_phase()
 
                         try:
@@ -22556,6 +22580,30 @@ def main():
                             _session_log.log(f"BMC_IP.json write failed: {_bmc_ip_err}", prefix="WARN")
                     else:
                         print("  \u26a0\ufe0f  No BMC addresses collected; BMC_IP.json not written.")
+
+                # ── Always write cluster_IP.json when gather/build captured rows ─────
+                if _cluster_ip_rows46:
+                    _cluster_entries46 = []
+                    for _row46 in _cluster_ip_rows46:
+                        _cluster_entries46.append({
+                            "cluster_ip": str(_row46.get("cluster_ip") or "").strip(),
+                            "node_name": str(_row46.get("node_name") or "").strip(),
+                            "bmc": "",
+                            "source": "5c gather/build",
+                        })
+                    _cluster_path46 = _write_cluster_ip_manifest_entries(
+                        _cluster_entries46,
+                        reason="mode 5c gather/build",
+                    )
+                    if _cluster_path46:
+                        print(f"  ✅ cluster_IP.json written to: {_cluster_path46}")
+                        _session_log.log(
+                            f"cluster_IP.json written: {_cluster_path46} "
+                            f"({len(_cluster_entries46)} entries)"
+                        )
+                    else:
+                        print("  ⚠️  Could not write cluster_IP.json.")
+                        _session_log.log("cluster_IP.json write failed", prefix="WARN")
 
                 # Determine output path.
                 # For build paths: always default to configs/add_nodes.json so the

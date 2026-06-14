@@ -9,6 +9,10 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **5c gather/build now writes `configs/cluster_IP.json` automatically.**
+  When mode 5c connects to an existing cluster (gather path or build/add path),
+  it now captures cluster-role interface IPs and writes `cluster_IP.json` in
+  addition to the config snapshot output.
 - **Added mode 4c for install-only netboot image deployment.**
   New mode `4c` reuses the 4b netboot/install pipeline but always stops after
   ONTAP image install, skipping reinit and any cluster create/node-add flows.
