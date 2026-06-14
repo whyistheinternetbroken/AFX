@@ -794,6 +794,14 @@ def _prompt(prompt: str, default: str = "") -> str:
         val = input(prompt).strip()
         if val.lower() == "menu":
             print("  ↩️  Returning to main menu...")
+            try:
+                input("  Press Enter to return to the main menu...")
+            except (EOFError, KeyboardInterrupt):
+                pass
+            try:
+                input("  Press Enter to return to the main menu...")
+            except (EOFError, KeyboardInterrupt):
+                pass
             raise _ReturnToMenu
         return val
     except (EOFError, KeyboardInterrupt):
@@ -20987,6 +20995,10 @@ def main():
                     with suppress(Exception):
                         _offer_bmc_ssh_diagnostic(_failing47, _rep_user47, _pw_map47)
 
+                try:
+                    input("  Press Enter to return to the main menu...")
+                except (EOFError, KeyboardInterrupt):
+                    pass
                 raise _ReturnToMenu
 
             # ── Mode 48 (4g): reset all nodes to LOADER prompt ─────────────────────
@@ -21204,6 +21216,10 @@ def main():
                 _session_log.end_phase()
                 _session_log.record_completion(normal_exit=(_fail48 == 0))
                 print(f"\U0001f4dd Session log: {_session_log.log_file}")
+                try:
+                    input("  Press Enter to return to the main menu...")
+                except (EOFError, KeyboardInterrupt):
+                    pass
                 raise _ReturnToMenu
 
             # ── Mode 49 (5g): cluster health and version check ─────────────────────
@@ -21295,6 +21311,10 @@ def main():
                     except Exception:
                         pass
                     print(f"\U0001f4dd Session log: {_session_log.log_file}")
+                    try:
+                        input("  Press Enter to return to the main menu...")
+                    except (EOFError, KeyboardInterrupt):
+                        pass
                     raise _ReturnToMenu
                 print(f"  \u2705 Connected to {_ch49_ip}")
                 _session_log.log(f"5g: connected to {_ch49_ip}")
@@ -21390,6 +21410,10 @@ def main():
                     _session_log.log("5g: cluster not healthy within timeout", prefix="WARN")
 
                 print(f"\U0001f4dd Session log: {_session_log.log_file}")
+                try:
+                    input("  Press Enter to return to the main menu...")
+                except (EOFError, KeyboardInterrupt):
+                    pass
                 raise _ReturnToMenu
 
             # ── Mode 50 (5h): list and clean up stale BMC SSH sessions ────────────
