@@ -16325,7 +16325,10 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         try:
             client, peer_user, peer_password = _ssh_connect_with_retry(
                 peer_bmc, peer_user, peer_password,
-                label=label, max_attempts=5, interactive=True,
+                # Threaded 2a/2b worker path: never block on hidden
+                # credential re-prompts; fail this node and surface retry
+                # selection at the batch level instead.
+                label=label, max_attempts=5, interactive=False,
             )
         except Exception as e:
             print(f"   ❌ [{label}] could not authenticate: {e}")
@@ -16342,11 +16345,26 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         )
 
         # BMC takeover – accept if another session is active.
-        if not _reach_bmc_prompt(ch, node_log=node_file):
+        if not _reach_bmc_prompt(
+            ch,
+            node_log=node_file,
+            takeover_msg=f"[{label}] Existing BMC session detected — auto-answering yes to take over",
+        ):
             print(f"   ⚠️  [{label}] no BMC prompt; aborting.")
             return False
 
         _ts_print(f"[{label}] Starting node add process...")
+        _fw_update_active = False
+        _fw_update_notice = "Firmware is updating. BMC will reconnect soon."
+
+        def _track_fw_update_markers(_text: str):
+            nonlocal _fw_update_active
+            _lt = str(_text or "").lower()
+            if "firmware is being updated" in _lt:
+                _fw_update_active = True
+            if "resetting to enable secure boot menu" in _lt:
+                _fw_update_active = False
+
         # Check if already at LOADER; skip system reset if so.
         _already_loader = _already_at_loader(ch, label=label, node_log=node_file)
         if not _already_loader:
@@ -16372,6 +16390,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         # confirmed LOADER, skip this wait and continue directly.
         buf = ""
         start = time.monotonic()
+        last_recv = start
+        last_keepalive = start
         last_nudge = start
         loader_seen = bool(_already_loader)
         if not loader_seen:
@@ -16381,11 +16401,23 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 return False
             if ch.recv_ready():
                 chunk = ch.recv(4096).decode("utf-8", errors="replace")
+                last_recv = time.monotonic()
+                last_keepalive = time.monotonic()
+                _track_fw_update_markers(chunk)
                 buf += chunk
                 if node_file:
                     _par_write(node_file, chunk)
                 if _session_log:
                     _session_log.log_console(f"[{label}] {chunk}")
+                if "y/n" in buf.lower():
+                    # Some BMCs re-emit a takeover prompt mid-stream after
+                    # reconnects; always auto-accept in 2a/2b worker mode.
+                    ch.send("y\r")
+                    if _session_log:
+                        _session_log.log_sent("y")
+                    buf = ""
+                    time.sleep(0.5)
+                    continue
                 if "starting autoboot press ctrl-c to abort" in buf.lower():
                     for _ in range(5):
                         ch.send("\x03"); time.sleep(0.3)
@@ -16395,9 +16427,99 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     break
                 if len(buf) > 8192:
                     buf = buf[-4096:]
+            elif time.monotonic() - last_keepalive > _BMC_CONSOLE_KEEPALIVE_INTERVAL:
+                try:
+                    ch.sendall(b"\x00")
+                except Exception:
+                    pass
+                last_keepalive = time.monotonic()
             elif time.monotonic() - last_nudge >= 15.0:
                 ch.send("\r")
                 last_nudge = time.monotonic()
+            elif time.monotonic() - last_recv > 120:
+                # No output for 2+ minutes while waiting for LOADER: reconnect
+                # and reattach to system console so the worker can fail fast
+                # instead of hanging until Ctrl+C.
+                _elapsed_silent = int(time.monotonic() - last_recv)
+                if _fw_update_active:
+                    print(f"   ⏳ [{label}] {_fw_update_notice}")
+                    if _session_log:
+                        _session_log.log(f"[{label}] {_fw_update_notice}")
+                    _sleep_left = 120
+                    while _sleep_left > 0:
+                        if _shutdown_event.is_set():
+                            return False
+                        _step = 1 if _sleep_left > 1 else _sleep_left
+                        time.sleep(_step)
+                        _sleep_left -= _step
+                else:
+                    print(f"   ⚠️  [{label}] No console data for {_elapsed_silent}s – reconnecting to BMC...")
+                if node_file:
+                    _par_write(node_file, f"\n>>> [Reconnecting BMC after {_elapsed_silent}s silence]\n")
+                if _session_log:
+                    if not _fw_update_active:
+                        _session_log.log(f"[{label}] reconnecting BMC during LOADER wait after {_elapsed_silent}s silence")
+                try:
+                    try:
+                        ch.close()
+                    except Exception:
+                        pass
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                    client, peer_user, peer_password = _ssh_connect_with_retry(
+                        peer_bmc, peer_user, peer_password,
+                        label=label, max_attempts=3, interactive=False,
+                        is_reconnect=True,
+                    )
+                    ch = _open_shell(client)
+                    if _peer_reconnect_ctx is not None:
+                        _peer_reconnect_ctx["client"] = client
+                        _peer_reconnect_ctx["channel"] = ch
+                        _peer_reconnect_ctx["user"] = peer_user
+                        _peer_reconnect_ctx["password"] = peer_password
+                    if not _reach_bmc_prompt(
+                        ch, timeout=15, node_log=node_file,
+                        takeover_msg=f"[{label}] Existing BMC session detected during reconnect — auto-answering yes",
+                    ):
+                        print(f"   ⚠️  [{label}] BMC prompt not reached after reconnect; continuing...")
+                    ch.send("system console\r")
+                    _out_sc, _m_sc = direct_read_until_any(
+                        ch, ["y/n", "ctrl-d", "serial console", "loader-",
+                             "autoboot", "selection"],
+                        timeout=20, node_log=node_file,
+                    )
+                    _track_fw_update_markers(_out_sc)
+                    if _m_sc and "y/n" in _m_sc.lower():
+                        ch.send("y\r"); time.sleep(1)
+                    ch.send("\r")
+                    last_recv = time.monotonic()
+                    last_keepalive = time.monotonic()
+                    last_nudge = time.monotonic()
+                    if not _fw_update_active:
+                        print(f"   ✅ [{label}] Reconnected to BMC during LOADER wait; resuming...")
+                    if _session_log and not _fw_update_active:
+                        _session_log.log(f"[{label}] BMC reconnect successful during LOADER wait")
+                except Exception as _rc_err:
+                    if _fw_update_active:
+                        print(f"   ⏳ [{label}] {_fw_update_notice}")
+                        if _session_log:
+                            _session_log.log(
+                                f"[{label}] reconnect deferred during firmware update: {_rc_err}",
+                                prefix="WARN",
+                            )
+                        last_recv = time.monotonic()
+                        last_keepalive = time.monotonic()
+                        last_nudge = time.monotonic()
+                        continue
+                    print(f"   ❌ [{label}] BMC reconnect failed during LOADER wait: {_rc_err}")
+                    if _session_log:
+                        _session_log.log(
+                            f"[{label}] BMC reconnect failed during LOADER wait: {_rc_err}",
+                            prefix="ERROR",
+                        )
+                    return False
             time.sleep(0.1)
 
         if not loader_seen:
@@ -16452,6 +16574,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 chunk = ch.recv(4096).decode("utf-8", errors="replace")
                 last_recv = time.monotonic()
                 last_keepalive = time.monotonic()
+                _track_fw_update_markers(chunk)
                 if node_file:
                     _par_write(node_file, chunk)
                 if _session_log:
@@ -16473,11 +16596,24 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 # No data for 2+ minutes – BMC channel may have silently died.
                 # Reconnect SSH and re-attach to system console.
                 _elapsed_silent = int(time.monotonic() - last_recv)
-                print(f"   ⚠️  [{label}] No console data for {_elapsed_silent}s – reconnecting to BMC...")
+                if _fw_update_active:
+                    print(f"   ⏳ [{label}] {_fw_update_notice}")
+                    if _session_log:
+                        _session_log.log(f"[{label}] {_fw_update_notice}")
+                    _sleep_left = 120
+                    while _sleep_left > 0:
+                        if _shutdown_event.is_set():
+                            return False
+                        _step = 1 if _sleep_left > 1 else _sleep_left
+                        time.sleep(_step)
+                        _sleep_left -= _step
+                else:
+                    print(f"   ⚠️  [{label}] No console data for {_elapsed_silent}s – reconnecting to BMC...")
                 if node_file:
                     _par_write(node_file, f"\n>>> [Reconnecting BMC after {_elapsed_silent}s silence]\n")
                 if _session_log:
-                    _session_log.log(f"[{label}] reconnecting BMC after {_elapsed_silent}s silence")
+                    if not _fw_update_active:
+                        _session_log.log(f"[{label}] reconnecting BMC after {_elapsed_silent}s silence")
                 try:
                     try:
                         ch.close()
@@ -16489,7 +16625,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         pass
                     client, peer_user, peer_password = _ssh_connect_with_retry(
                         peer_bmc, peer_user, peer_password,
-                        label=label, max_attempts=3, interactive=True,
+                        label=label, max_attempts=3, interactive=False,
                         is_reconnect=True,
                     )
                     ch = _open_shell(client)
@@ -16498,7 +16634,10 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         _peer_reconnect_ctx["channel"] = ch
                         _peer_reconnect_ctx["user"] = peer_user
                         _peer_reconnect_ctx["password"] = peer_password
-                    if not _reach_bmc_prompt(ch, timeout=15, node_log=node_file):
+                    if not _reach_bmc_prompt(
+                        ch, timeout=15, node_log=node_file,
+                        takeover_msg=f"[{label}] Existing BMC session detected during reconnect — auto-answering yes",
+                    ):
                         print(f"   ⚠️  [{label}] BMC prompt not reached after reconnect; continuing...")
                     ch.send("system console\r")
                     _out_sc, _m_sc = direct_read_until_any(
@@ -16506,6 +16645,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                              "autoboot", "selection"],
                         timeout=20, node_log=node_file,
                     )
+                    _track_fw_update_markers(_out_sc)
                     if _m_sc and "y/n" in _m_sc.lower():
                         ch.send("y\r"); time.sleep(2)
                     elif _m_sc and any(sg in (_m_sc or "").lower() for sg in sig_lower):
@@ -16515,10 +16655,21 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     ch.send("\r")
                     last_recv = time.monotonic()
                     # Don't reset s – preserve original timeout budget.
-                    print(f"   ✅ [{label}] Reconnected to BMC (120s silence); resuming boot menu wait...")
-                    if _session_log:
+                    if not _fw_update_active:
+                        print(f"   ✅ [{label}] Reconnected to BMC (120s silence); resuming boot menu wait...")
+                    if _session_log and not _fw_update_active:
                         _session_log.log(f"[{label}] BMC reconnect successful; resuming boot menu wait")
                 except Exception as _rc_err:
+                    if _fw_update_active:
+                        print(f"   ⏳ [{label}] {_fw_update_notice}")
+                        if _session_log:
+                            _session_log.log(
+                                f"[{label}] reconnect deferred during firmware update: {_rc_err}",
+                                prefix="WARN",
+                            )
+                        last_recv = time.monotonic()
+                        last_keepalive = time.monotonic()
+                        continue
                     print(f"   ❌ [{label}] BMC reconnect failed: {_rc_err}")
                     if _session_log:
                         _session_log.log(f"[{label}] BMC reconnect failed: {_rc_err}", prefix="ERROR")
@@ -16623,6 +16774,78 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             except Exception:
                 pass
 
+def _node_mgmt_ip_for_bmc(bmc_host: str) -> str:
+    """Return configured node-mgmt IP for a BMC host when known."""
+    _bmc = str(bmc_host or "").strip()
+    if not _bmc:
+        return ""
+    _cached = _node_mgmt_by_bmc.get(_bmc) if isinstance(_node_mgmt_by_bmc, dict) else {}
+    if isinstance(_cached, dict):
+        _ip = str(_cached.get("node_mgmt_ip") or "").strip()
+        if _ip:
+            return _ip
+    _cfg = _node_cfg_for(_bmc) or {}
+    return str(_cfg.get("node_mgmt_ip") or "").strip()
+
+
+def _omit_nodes_by_number(peer_bmcs, mode_label="", log=None):
+    """Allow operator to omit nodes by 1-based index from the displayed list."""
+    if not peer_bmcs:
+        return []
+    while True:
+        _raw = _prompt(
+            "  Omit node number(s) from add (comma-separated, blank for none): ",
+            "",
+        ).strip()
+        if not _raw:
+            return list(peer_bmcs)
+        _parts = [p.strip() for p in _raw.split(",") if p.strip()]
+        if not _parts:
+            return list(peer_bmcs)
+        _bad = [p for p in _parts if not p.isdigit()]
+        if _bad:
+            print(f"  ⚠️  Invalid entry: {', '.join(_bad)}. Use numbers like: 2,4")
+            continue
+        _idxs = sorted(set(int(p) for p in _parts))
+        _oor = [str(i) for i in _idxs if i < 1 or i > len(peer_bmcs)]
+        if _oor:
+            print(f"  ⚠️  Out of range: {', '.join(_oor)} (valid: 1-{len(peer_bmcs)})")
+            continue
+        _omit_set = set(_idxs)
+        _omitted = [peer_bmcs[i - 1] for i in _idxs]
+        _kept = [b for i, b in enumerate(peer_bmcs, start=1) if i not in _omit_set]
+        print(f"  ℹ️  Omitted {len(_omitted)} node(s): {', '.join(_omitted)}")
+        if log:
+            log.log(f"{mode_label}: operator omitted nodes by index: {_omitted}")
+        return _kept
+
+
+def _omit_already_joined_nodes(peer_bmcs, primary_channel, mode_label="", log=None):
+    """Remove nodes whose node-mgmt IP already exists in the cluster."""
+    if not peer_bmcs or not primary_channel:
+        return list(peer_bmcs or [])
+    _c_name = ((_config_data.get("cluster") or {}).get("name")
+               if isinstance(_config_data, dict) else None)
+    _cluster_nodes = _get_cluster_node_mgmt_ips(primary_channel, cluster_name=_c_name)
+    _joined_ips = {str(v).strip() for v in (_cluster_nodes or {}).values() if str(v).strip()}
+    if not _joined_ips:
+        return list(peer_bmcs)
+    _already = []
+    _keep = []
+    for _bmc in peer_bmcs:
+        _nip = _node_mgmt_ip_for_bmc(_bmc)
+        if _nip and _nip in _joined_ips:
+            _already.append((_bmc, _nip))
+        else:
+            _keep.append(_bmc)
+    if _already:
+        print(f"\n  ℹ️  Skipping {len(_already)} node(s) already in cluster:")
+        for _bmc, _nip in _already:
+            print(f"    ✅ {_bmc} (node-mgmt {_nip})")
+        if log:
+            log.log(f"{mode_label}: omitted already-joined nodes: {_already}")
+    return _keep
+
 
 def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     """Mode 2b with multiple nodes: reset all peers to LOADER in parallel,
@@ -16652,6 +16875,12 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         _n_gw  = _nc.get("node_mgmt_gateway") or _nc.get("gateway") or "—"
         print(f"  {i:<4} {ip:<{_col_w}} {_n_ip:<{_col_w}} {_n_prt:<8} {_n_gw:<{_col_w}}")
     print("=" * 60)
+    peer_bmcs = _omit_nodes_by_number(peer_bmcs, mode_label="2b", log=log)
+    if not peer_bmcs:
+        print("\n  ✅ No nodes selected for add. Nothing to do.")
+        if log:
+            log.log("2b: operator omitted all listed nodes; no-op")
+        return True
 
     # ── 2. BMC credentials ─────────────────────────────────────────────────
     # Check whether any node still needs a password collected.
@@ -16892,6 +17121,44 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         if log:
             log.log("2b parallel: no cluster mgmt IP; verification skipped")
 
+    if primary_channel:
+        peer_bmcs = _omit_already_joined_nodes(
+            peer_bmcs, primary_channel, mode_label="2b", log=log
+        )
+        if not peer_bmcs:
+            print("\n  ✅ All selected nodes are already in cluster. Nothing to add.")
+            if log:
+                log.log("2b: all selected nodes already in cluster; no-op")
+            if primary_client:
+                try:
+                    primary_client.close()
+                except Exception:
+                    pass
+            return True
+        # Refresh manifest after cluster comparison so 2c resumes only pending nodes.
+        _write_node_add_manifest(
+            nodes=[
+                dict(
+                    bmc=addr,
+                    bmc_user=(_peer_bmc_creds.get(addr) or {}).get("user") or bmc_user,
+                    bmc_password=(_peer_bmc_creds.get(addr) or {}).get("password") or bmc_passwords.get(addr, ""),
+                    **{k: v for k, v in (_node_cfg_for(addr) or {}).items()
+                       if k in ("node_mgmt_ip", "node_mgmt_port",
+                                "node_mgmt_netmask", "node_mgmt_gateway")},
+                )
+                for addr in peer_bmcs
+            ],
+            cluster_mgmt_ip=_cluster_config.get("mgmt_ip") or "",
+            cluster_admin_user=(_cluster_config.get("admin_user")
+                                or ((_config_data.get("cluster") or {}).get("user")
+                                    if isinstance(_config_data, dict) else None)
+                                or "admin"),
+            cluster_admin_password=(_cluster_config.get("admin_password")
+                                    or ((_config_data.get("cluster") or {}).get("password")
+                                        if isinstance(_config_data, dict) else None)
+                                    or ""),
+        )
+
     # ── 4. Spawn one thread per peer ────────────────────────────────────────
     if log:
         log.start_phase("2b – Parallel Node Add")
@@ -17039,6 +17306,12 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     print("=" * 60)
     print("\n  ℹ️   Nodes will boot in parallel. When user input is needed")
     print("  the relevant node will pause and ask you here.\n")
+    peer_bmcs = _omit_nodes_by_number(peer_bmcs, mode_label="2a", log=log)
+    if not peer_bmcs:
+        print("\n  ✅ No nodes selected for add. Nothing to do.")
+        if log:
+            log.log("2a: operator omitted all listed nodes; no-op")
+        return True
 
     # ── 2. Collect BMC credentials ───────────────────────────────────────────
     _needs_creds = [ip for ip in peer_bmcs if ip not in _peer_bmc_creds
@@ -17118,6 +17391,21 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             primary_client = None
     else:
         print("  ℹ️  Cluster mgmt IP not set; join verification will be skipped.")
+
+    if primary_channel:
+        peer_bmcs = _omit_already_joined_nodes(
+            peer_bmcs, primary_channel, mode_label="2a", log=log
+        )
+        if not peer_bmcs:
+            print("\n  ✅ All selected nodes are already in cluster. Nothing to add.")
+            if log:
+                log.log("2a: all selected nodes already in cluster; no-op")
+            if primary_client:
+                try:
+                    primary_client.close()
+                except Exception:
+                    pass
+            return True
 
     # ── 4. Spawn threads ─────────────────────────────────────────────────────
     if log:
@@ -18765,49 +19053,66 @@ def _get_cluster_node_mgmt_ips(channel, cluster_name=None):
         if _prompt_m:
             cluster_name = _prompt_m.group(1)
 
-    # ── 3. Single net int show using the cluster name as vserver ──────────
+    # ── 3. Query node-mgmt interfaces (prefer 'network interface show') ────
+    _cmds = [
+        "network interface show -role node-mgmt -fields node,address",
+        "net int show -role node-mgmt -fields node,address",
+    ]
     if cluster_name:
+        _cmds.extend([
+            f"network interface show -vserver {cluster_name} -role node-mgmt -fields address",
+            f"net int show -vserver {cluster_name} -role node-mgmt -fields address",
+        ])
+    for cmd in _cmds:
         try:
-            cmd = (f"net int show -vserver {cluster_name} -role node-mgmt "
-                   f"-fields address")
             with _primary_shell_lock:
                 ni_out = _run_cluster_command(channel, cmd, timeout=30)
-            ni_dashes = False
-            for line in ni_out.splitlines():
-                s2 = line.strip()
-                if not s2:
-                    continue
-                if "::" in s2 or s2.lower().startswith("net int"):
-                    continue
-                if "entries were displayed" in s2.lower():
-                    break
-                if set(s2) <= {"-", " "}:
-                    ni_dashes = True
-                    continue
-                if ni_dashes:
-                    # Output columns: vserver  lif  address
-                    # vserver = cluster name (same on every row).
-                    # lif name starts with the node name, e.g. node1_mgmt1.
-                    parts = s2.split()
-                    if len(parts) >= 3 and _is_valid_ipv4(parts[2]):
-                        _lif, _addr = parts[1], parts[2]
-                        # Match LIF name to node name by prefix.
-                        for _nn in node_names:
-                            if _lif.startswith(_nn):
-                                result[_nn] = _addr
-                                break
-                    elif len(parts) == 2 and _is_valid_ipv4(parts[1]):
-                        _lif, _addr = parts[0], parts[1]
-                        for _nn in node_names:
-                            if _lif.startswith(_nn):
-                                result[_nn] = _addr
-                                break
         except Exception as _ni_e:
-            _slog(f"net int show (vserver {cluster_name}) failed: {_ni_e}",
-                  prefix="WARN")
-    else:
-        _slog("Could not determine cluster name; node-mgmt IP query skipped.",
-              prefix="WARN")
+            _slog(f"{cmd} failed: {_ni_e}", prefix="WARN")
+            continue
+        ni_dashes = False
+        _parsed_any = False
+        for line in ni_out.splitlines():
+            s2 = line.strip()
+            if not s2:
+                continue
+            _ll = s2.lower()
+            if "::" in s2 or _ll.startswith("net int") or _ll.startswith("network interface"):
+                continue
+            if "entries were displayed" in _ll:
+                break
+            if set(s2) <= {"-", " "}:
+                ni_dashes = True
+                continue
+            if not ni_dashes:
+                continue
+            parts = s2.split()
+            if not parts:
+                continue
+            _addr = next((p for p in reversed(parts) if _is_valid_ipv4(p)), "")
+            if not _addr:
+                continue
+            _node = ""
+            for _cand in parts:
+                _lc = _cand.lower()
+                if _cand == _addr or _is_valid_ipv4(_cand):
+                    continue
+                if _lc in ("node", "vserver", "lif", "address"):
+                    continue
+                if cluster_name and _cand == cluster_name:
+                    continue
+                _node = _cand
+                break
+            if not _node:
+                for _nn in node_names:
+                    if any(tok.startswith(_nn) for tok in parts):
+                        _node = _nn
+                        break
+            if _node:
+                result[_node] = _addr
+                _parsed_any = True
+        if _parsed_any:
+            break
 
     return result
 

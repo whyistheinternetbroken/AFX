@@ -65,6 +65,7 @@ Failed-run artifacts are preserved under `script_failures/YYYYMMDD_HHMMSS/` for 
 | **Stale BMC Session Cleanup (5h)** | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. Diagnoses stale socket connections, runs `ipmitool sol deactivate`, and optionally SIGTERMs prior-run Python processes holding open BMC TCP connections. Returns to main menu when done. |
 | **2b upfront cluster-auth decision** | Mode 2b now asks before node-add work begins whether to use current BMC credentials for cluster-network IP lookup, so join automation does not stop later for a mid-run credential prompt. |
 | **2b “Add another node” timeout** | The post-join `Add another node to the cluster? [Y/N]` prompt now times out after 5 minutes and defaults to **No**. |
+| **2a/2b selective node omission + auto-skip joined nodes** | Modes 2a and 2b now show numbered secondary-node lists and allow comma-separated omission by number before add starts. During add, the script queries `network interface show -role node-mgmt` and automatically omits nodes already present in the cluster. |
 | **5b known_hosts opt-in auto-accept** | In manual SSH key setup (5b), the operator can choose to auto-accept known_hosts addition; when enabled, acceptance is performed at the end of the workflow before final SSH verification. |
 | Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
 | **Screen output log** | Every line printed to the terminal during a run is captured to `screen_output_<timestamp>.log` in the session log directory. ANSI codes are stripped for clean plain-text reading. |
@@ -322,8 +323,8 @@ The script presents a menu at startup. Enter the number corresponding to the des
 |---|---|---|
 | **1a** | Initialize First Node (interactive) | Boots to LOADER, sets `destroy-all-storage-pods` flag, selects boot menu option 9 (Clean System Configuration). Prompts the operator for all cluster setup wizard inputs. |
 | **1b** | Initialize First Node (automated) | Same as 1a, but drives the full ONTAP cluster setup wizard automatically using values from config file or prompts. |
-| **2a** | Add Node to Cluster (interactive) | Boots to LOADER, selects boot menu option 4 (Initialize and configure system). Operator completes the node-join wizard. |
-| **2b** | Add Node to Cluster (automated) | Same as 2a, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel. |
+| **2a** | Add Node to Cluster (interactive) | Boots to LOADER, selects boot menu option 4 (Initialize and configure system). Operator completes the node-join wizard. In multi-node runs, supports numbered omit selection and auto-skips nodes already in cluster. |
+| **2b** | Add Node to Cluster (automated) | Same as 2a, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel, numbered omit selection, and auto-skips nodes already in cluster. |
 | **2c** | Resume Node Additions | Resumes interrupted node-join operations from the last successful checkpoint. Use when a previous mode 2b or mode 3 run was interrupted before all secondary nodes completed. |
 | **3** | End-to-End Auto Reinit | Runs mode 1b on the primary node, then runs mode 2b on all secondary nodes in parallel. Fully unattended with a config file. |
 | **4a** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. See [Why 4a uses the BMC](#why-4a-uses-the-bmc). |
