@@ -61,15 +61,18 @@ Failed-run artifacts are preserved under `script_failures/YYYYMMDD_HHMMSS/` for 
 | Config Backup (5c) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. After gathering, the saved `reinit-config.json` includes `cluster`, `primary_node`, and `secondary_nodes` blocks, fully populated with management IPs and BMC addresses. The retained configuration summary displays Cluster LIFs and Management LIFs in separate tables. |
 | BMC Auth Verify (5d) | Batch-tests BMC SSH credentials for all nodes in the config file. |
 | Reset to LOADER (5e) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
-| **Cluster Health Check (5f)** | Connects to the cluster management LIF via SSH and runs `cluster show`, `storage failover show`, and `system image show` to confirm all nodes are healthy and report the running ONTAP version. Auto-loads connection details from `reinit-config.json`; if no config is present it offers to run 5c (config gather) first, then returns to the health check automatically. |
-| **Stale BMC Session Cleanup (5g)** | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. Diagnoses stale socket connections, runs `ipmitool sol deactivate`, and optionally SIGTERMs prior-run Python processes holding open BMC TCP connections. Returns to main menu when done. |
+| **Cluster Health Check (5g)** | Connects to the cluster management LIF via SSH and runs `cluster show`, `storage failover show`, and `system image show` to confirm all nodes are healthy and report the running ONTAP version. Auto-loads connection details from `reinit-config.json`; if no config is present it offers to run 5c (config gather) first, then returns to the health check automatically. If the cluster shell is not reached or node discovery fails, the check now reports **not healthy** (no false healthy pass). |
+| **Stale BMC Session Cleanup (5h)** | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. Diagnoses stale socket connections, runs `ipmitool sol deactivate`, and optionally SIGTERMs prior-run Python processes holding open BMC TCP connections. Returns to main menu when done. |
+| **2b upfront cluster-auth decision** | Mode 2b now asks before node-add work begins whether to use current BMC credentials for cluster-network IP lookup, so join automation does not stop later for a mid-run credential prompt. |
+| **2b “Add another node” timeout** | The post-join `Add another node to the cluster? [Y/N]` prompt now times out after 5 minutes and defaults to **No**. |
+| **5b known_hosts opt-in auto-accept** | In manual SSH key setup (5b), the operator can choose to auto-accept known_hosts addition; when enabled, acceptance is performed at the end of the workflow before final SSH verification. |
 | Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
 | **Screen output log** | Every line printed to the terminal during a run is captured to `screen_output_<timestamp>.log` in the session log directory. ANSI codes are stripped for clean plain-text reading. |
 | Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |
 | Screen Mode | `--screen` flag: automatically re-launches the script inside a detached GNU screen session. Protects against SSH disconnections and terminal timeouts. Implies `--bg`. |
 | Node add resume | Resumes interrupted node add processes. |
 | Physical disk zeroing | Adds option to physically zero disks rather than fast zero (which helps ensure performance consistency). |
-| BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 5d offers an interactive cleanup pass when BMC verification fails. Use option 5g for a standalone interactive stale-session cleanup tool. |
+| BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 5d offers an interactive cleanup pass when BMC verification fails. Use option 5h for a standalone interactive stale-session cleanup tool. |
 | Diagnostic bootarg injection (`--diag`) | Injects custom LOADER `setenv` bootargs (from a `bootargs.txt` or `bootargs` file in `configs/` or the script directory, or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Accepts any `option_name value` format (not just `bootarg.` prefix). All entries printed and confirmed before proceeding. Validates format, detects LOADER errors on apply, and checkpoints the bootarg list for resume. |
 
 ---
@@ -330,8 +333,9 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **5c** | Config Backup | Connects to the cluster and captures its current configuration (name, IPs, licenses, nodes) to a JSON file. Can also build a config file manually from user prompts. |
 | **5d** | BMC Auth Verify | Tests BMC SSH authentication for all nodes defined in the config file and reports pass/fail. |
 | **5e** | Reset to LOADER | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging all nodes before a manual reinit or netboot run. |
-| **5f** | Cluster Health Check | Connects to the cluster management LIF via SSH and checks health/version. |
-| **5g** | Stale BMC Session Cleanup | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. |
+| **5f** | Check Node Status | Connects to each BMC and reports whether nodes are at LOADER, ONTAP shell, login prompt, boot menu, or unknown state. |
+| **5g** | Cluster Health Check | Connects to the cluster management LIF via SSH and checks health/version. |
+| **5h** | Stale BMC Session Cleanup | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. |
 
 > **Warning:** Options 1a and 1b destroy all storage on the target node and reinitialize the cluster. If a cluster already exists, use option 2 instead.
 
@@ -721,7 +725,7 @@ Once the LOADER prompt appears, the script:
 Depending on the mode:
 
 - **1a (interactive):** The script provides a live terminal passthrough. The operator answers wizard questions manually.
-- **1b / 2b / 3 (automated):** The script drives the wizard using config file values or pre-supplied prompts. No operator interaction is required once the run starts.
+- **1b / 2b / 3 (automated):** The script drives the wizard using config file values or pre-supplied prompts. For 1b netboot-before-reinit flows, the autopilot banner is shown after package selection (right before HTTP server/start of unattended phases).
 
 ### Step 10: Multi-Node Parallel Operations (modes 2b and 3)
 
