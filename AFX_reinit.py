@@ -9379,7 +9379,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             while not _ev.wait(30):
                 elapsed = time.monotonic() - _t0
                 _status_ts(f"  ⏳ [{node_label}] Image downloading... ({elapsed:.0f}s elapsed)")
-        threading.Thread(target=_dl_progress, daemon=True).start()
+        _dl_thread = threading.Thread(target=_dl_progress, daemon=True)
+        _dl_thread.start()
 
         # Wait for boot menu ────────────────────────────────────────────────
         buf = ""
@@ -9388,38 +9389,40 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         menu_detected = False
         netboot_failed = False
         netboot_fail_reason = ""
-        while time.monotonic() - start < boot_menu_timeout:
-            if _shutdown_event.is_set():
-                return False
-            if channel.recv_ready():
-                chunk = channel.recv(4096).decode("utf-8", errors="replace")
-                buf += chunk
-                buf_lower += chunk.lower()
-                if nf:
-                    _par_write(nf, chunk)
-                else:
-                    sys.stdout.write(chunk)
-                    sys.stdout.flush()
-                for sig in sig_lower:
-                    if sig in buf_lower:
-                        menu_detected = True
-                        buf_lower = ""
+        try:
+            while time.monotonic() - start < boot_menu_timeout:
+                if _shutdown_event.is_set():
+                    return False
+                if channel.recv_ready():
+                    chunk = channel.recv(4096).decode("utf-8", errors="replace")
+                    buf += chunk
+                    buf_lower += chunk.lower()
+                    if nf:
+                        _par_write(nf, chunk)
+                    else:
+                        sys.stdout.write(chunk)
+                        sys.stdout.flush()
+                    for sig in sig_lower:
+                        if sig in buf_lower:
+                            menu_detected = True
+                            buf_lower = ""
+                            break
+                    if menu_detected:
                         break
-                if menu_detected:
-                    break
-                # Bail early if the bootloader reported a download error.
-                for fsig in _netboot_fail_sigs:
-                    if fsig in buf_lower:
-                        netboot_failed = True
-                        netboot_fail_reason = fsig
+                    # Bail early if the bootloader reported a download error.
+                    for fsig in _netboot_fail_sigs:
+                        if fsig in buf_lower:
+                            netboot_failed = True
+                            netboot_fail_reason = fsig
+                            break
+                    if netboot_failed:
                         break
-                if netboot_failed:
-                    break
-                if len(buf_lower) > 16384:
-                    buf_lower = buf_lower[-8192:]
-            time.sleep(0.1)
-
-        _dl_stop.set()  # stop download progress thread for this attempt
+                    if len(buf_lower) > 16384:
+                        buf_lower = buf_lower[-8192:]
+                time.sleep(0.1)
+        finally:
+            _dl_stop.set()  # stop download progress thread for this attempt
+            _dl_thread.join(timeout=1.0)
 
         if menu_detected:
             break  # success — exit retry loop
@@ -11888,8 +11891,9 @@ def _run_4b_standalone(log, resuming: bool = False):
                 log.log(f"4b mode 3: peer reinit issues: {_peer_errors}", prefix="ERROR")
 
         # ── Bulk cluster add via the primary node's cluster shell ──────────
-        _4b_collected_ips = [_4b_cluster_ips_out[ip] for ip in _peers_for_reinit
-                             if ip in _4b_cluster_ips_out]
+        _4b_collected_ips = _ordered_cluster_ips_for_add(
+            _4b_cluster_ips_out, preferred_bmcs=_peers_for_reinit
+        )
         _4b_pch = None
         _4b_pcl = None
         if _4b_collected_ips:
@@ -14786,6 +14790,68 @@ def _run_ontap_upgrade(log):
                 log.log("Temporary HTTP server stopped")
 
 
+def _accept_ssh_host_key(host: str):
+    """Pre-seed known_hosts so first-use SSH trust prompts never block."""
+    if not host:
+        return False
+    _scan_bin = shutil.which("ssh-keyscan")
+    if not _scan_bin:
+        return False
+    try:
+        import pathlib
+        _ssh_dir = pathlib.Path.home() / ".ssh"
+        _ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _known_hosts = _ssh_dir / "known_hosts"
+        _scan = subprocess.run(
+            [_scan_bin, "-H", "-t", "rsa,ecdsa,ed25519", host],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if _scan.returncode == 0 and (_scan.stdout or "").strip():
+            with _known_hosts.open("a", encoding="utf-8") as _kh:
+                _kh.write(_scan.stdout)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _ssh_accept_known_host_via_client(host: str, ssh_user: str = "admin",
+                                      key_path: str = ""):
+    """Use the local ssh client to accept a first-use known_hosts prompt."""
+    if not host:
+        return False, "no host specified"
+    _ssh_bin = shutil.which("ssh")
+    if not _ssh_bin:
+        return False, "ssh client not found on PATH"
+    _cmd = [
+        _ssh_bin,
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=20",
+    ]
+    if key_path:
+        _cmd.extend(["-i", key_path])
+    _cmd.extend([f"{ssh_user}@{host}", "exit"])
+    try:
+        _res = subprocess.run(
+            _cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        _combined = ((_res.stdout or "") + "\n" + (_res.stderr or "")).strip()
+        _accepted = (
+            _res.returncode == 0
+            or "permanently added" in _combined.lower()
+            or "known hosts" in _combined.lower()
+        )
+        return _accepted, _combined
+    except Exception as _exc:
+        return False, str(_exc)
+
+
 def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
     """Configure passwordless SSH for `ssh_user` on the cluster at `mgmt_ip`.
 
@@ -14840,6 +14906,10 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
         print(f"  \u274c Public key not found at {id_rsa_pub}. Skipping.")
         return
     pub_key = id_rsa_pub.read_text(encoding="utf-8").strip()
+
+    if _accept_ssh_host_key(mgmt_ip):
+        print(f"  \u2705 Accepted SSH host key for {mgmt_ip}.")
+        _slog(f"Accepted SSH host key for {mgmt_ip}")
 
     # 3. Get cluster name from prompt.
     channel.send("\r")
@@ -15437,7 +15507,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     cluster_iface_ip = _fetch_existing_cluster_ip(
         bmc_user=sp_user,
         bmc_password=sp_pass,
-        prompt_before_auth=True,
+        prompt_before_auth=False,
     )
 
     print("\n⏳ Waiting for cluster-network IP prompt...")
@@ -15541,9 +15611,12 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     while True:
         try:
             _real_stdout.write("\n  " + "─" * 58 + "\n")
-            _real_stdout.write("\n➕ Add another node to the cluster? [Y/N]: ")
             _real_stdout.flush()
-            ans = sys.stdin.readline().strip().lower()
+            ans = _prompt_with_timeout(
+                "\n➕ Add another node to the cluster? [Y/N]: ",
+                default="n",
+                timeout=300,
+            ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             ans = "n"
         if _session_log:
@@ -15669,7 +15742,7 @@ def _login_primary_cluster_shell(channel, admin_password):
 def _abort_wizard_get_cluster_ip(ch, label, admin_password,
                                   cluster_ips_out, peer_bmc, node_log=None):
     """Abort the ONTAP cluster setup wizard with Ctrl+C, log in as admin,
-    run ``net int show -role cluster -fields address``, and store the first
+    run ``net int show`` for cluster-role interfaces, and store the first
     cluster interface IP found in ``cluster_ips_out[peer_bmc]``.
 
     Returns the cluster IP string, or None on failure.
@@ -15704,39 +15777,115 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
                 _slog(f"[{label}] no ::> after admin login", prefix="WARN")
                 return None
 
-    print(f"\n📡 [{label}] Capturing cluster interface IP...")
-    _slog(f"[{label}] running net int show -role cluster -fields address")
-    ch.send("net int show -role cluster -fields address\r")
-    time.sleep(1)
-    _netint_buf = ""
-    _s = time.monotonic()
-    while time.monotonic() - _s < 30:
-        if ch.recv_ready():
-            chunk = ch.recv(4096).decode("utf-8", errors="replace")
-            if node_log:
-                _par_write(node_log, chunk)
-            _netint_buf += chunk
-            if "::>" in _netint_buf or "::*>" in _netint_buf:
-                break
-        time.sleep(0.2)
+    def _capture_cluster_netint(_cmd):
+        _slog(f"[{label}] running {_cmd}")
+        ch.send(_cmd + "\r")
+        time.sleep(1)
+        _buf = ""
+        _s = time.monotonic()
+        while time.monotonic() - _s < 30:
+            if ch.recv_ready():
+                chunk = ch.recv(4096).decode("utf-8", errors="replace")
+                if node_log:
+                    _par_write(node_log, chunk)
+                _buf += chunk
+                if "::>" in _buf or "::*>" in _buf:
+                    break
+            time.sleep(0.2)
+        return _buf
 
+    def _parse_cluster_node_and_ip(_buf):
+        _cluster_node = ""
+        _cluster_ip_local = None
+        _in_table = False
+        for _line in _buf.splitlines():
+            _sline = _line.strip()
+            if not _sline:
+                continue
+            _lline = _sline.lower()
+            if "::" in _sline or _lline.startswith("net int"):
+                continue
+            if "entries were displayed" in _lline:
+                break
+            if set(_sline) <= {"-", " "}:
+                _in_table = True
+                continue
+            if not _in_table:
+                continue
+            _parts = _sline.split()
+            _ips = [p for p in _parts if _is_valid_ipv4(p)]
+            if not _ips:
+                continue
+            _cluster_ip_local = _ips[0]
+            if _parts:
+                _cand = _parts[0]
+                if not _is_valid_ipv4(_cand) and _cand.lower() not in ("node", "vserver", "lif", "address"):
+                    _cluster_node = _cand
+            return _cluster_node, _cluster_ip_local
+        return "", None
+
+    print(f"\n📡 [{label}] Capturing cluster interface IP...")
+    _cluster_node_name = ""
     _cluster_ip = None
-    for _line in _netint_buf.splitlines():
-        _m = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b', _line)
-        if _m:
-            _cluster_ip = _m.group(1)
+    for _cmd in (
+        "set -rows 0; net int show -role cluster -fields node,address",
+        "net int show -role cluster -fields node,address",
+        "set -rows 0; net int show -role cluster -fields address",
+        "net int show -role cluster -fields address",
+    ):
+        _netint_buf = _capture_cluster_netint(_cmd)
+        _cluster_node_name, _cluster_ip = _parse_cluster_node_and_ip(_netint_buf)
+        if _cluster_ip:
             break
 
     if _cluster_ip:
         print(f"\n✅ [{label}] Cluster interface IP: {_cluster_ip}")
         _slog(f"[{label}] cluster IP: {_cluster_ip}")
         if cluster_ips_out is not None:
-            cluster_ips_out[peer_bmc] = _cluster_ip
+            cluster_ips_out[peer_bmc] = {
+                "cluster_ip": _cluster_ip,
+                "node_name": _cluster_node_name,
+                "bmc": peer_bmc,
+            }
     else:
         print(f"\n⚠️  [{label}] Could not parse cluster IP from net int show output.")
         _slog(f"[{label}] cluster IP parse failed", prefix="WARN")
 
     return _cluster_ip
+
+
+def _ordered_cluster_ips_for_add(cluster_ips_out, preferred_bmcs=None):
+    """Return cluster add-node IPs ordered by node name, then stable fallback."""
+    if not isinstance(cluster_ips_out, dict) or not cluster_ips_out:
+        return []
+
+    _pref_index = {
+        str(_bmc): _idx
+        for _idx, _bmc in enumerate(preferred_bmcs or [])
+    }
+    _rows = []
+    for _bmc, _entry in cluster_ips_out.items():
+        if isinstance(_entry, dict):
+            _ip = str(_entry.get("cluster_ip") or "").strip()
+            _node = str(_entry.get("node_name") or "").strip()
+        else:
+            _ip = str(_entry or "").strip()
+            _node = ""
+        if not _ip:
+            continue
+        _rows.append({
+            "bmc": str(_bmc),
+            "cluster_ip": _ip,
+            "node_name": _node,
+        })
+
+    _rows.sort(key=lambda r: (
+        1 if not r["node_name"] else 0,
+        r["node_name"].lower(),
+        _pref_index.get(r["bmc"], len(_pref_index)),
+        r["cluster_ip"],
+    ))
+    return [r["cluster_ip"] for r in _rows]
 
 
 def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
@@ -16119,9 +16268,9 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
     Each thread runs LOADER → option 4 → disk erase → node-mgmt in parallel.
     After node-mgmt is complete the cluster wizard is aborted (Ctrl+C) and the
     thread logs in as admin, captures the node's cluster interface IP via
-    ``net int show``, and stores it in ``cluster_ips_out[peer_bmc]``.  The
-    caller is responsible for then running ``cluster add-node`` with all
-    collected IPs.
+    ``net int show``, and stores it in ``cluster_ips_out[peer_bmc]`` along
+    with the discovered node name. The caller is responsible for then running
+    ``cluster add-node`` with all collected IPs.
 
     ``join_barrier``, ``join_proceed_events``, and related parameters are
     accepted for backward compatibility but are no longer used.
@@ -16782,8 +16931,9 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
     _2b_add_node_timings: "dict[str, float]" = {}
     if primary_channel and _cluster_ips_out:
-        _collected_ips = [_cluster_ips_out[ip] for ip in peer_bmcs
-                          if ip in _cluster_ips_out]
+        _collected_ips = _ordered_cluster_ips_for_add(
+            _cluster_ips_out, preferred_bmcs=peer_bmcs
+        )
         if _collected_ips:
             _cluster_add_nodes_bulk(primary_channel, _collected_ips, log=log,
                                     node_timings_out=_2b_add_node_timings)
@@ -17003,8 +17153,9 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
     _2a_add_node_timings: "dict[str, float]" = {}
     if primary_channel and _cluster_ips_out:
-        _collected_ips = [_cluster_ips_out[ip] for ip in peer_bmcs
-                          if ip in _cluster_ips_out]
+        _collected_ips = _ordered_cluster_ips_for_add(
+            _cluster_ips_out, preferred_bmcs=peer_bmcs
+        )
         if _collected_ips:
             _cluster_add_nodes_bulk(primary_channel, _collected_ips, log=log,
                                     node_timings_out=_2a_add_node_timings)
@@ -17578,8 +17729,9 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         _m3_pending = _m3_failed
 
     # ── Bulk cluster join via cluster add-node ─────────────────────────────
-    _m3_collected_ips = [_m3_cluster_ips_out[ip] for ip in peer_bmcs
-                         if ip in _m3_cluster_ips_out]
+    _m3_collected_ips = _ordered_cluster_ips_for_add(
+        _m3_cluster_ips_out, preferred_bmcs=peer_bmcs
+    )
     _m3_add_node_timings: "dict[str, float]" = {}
     if _m3_collected_ips:
         _cluster_add_nodes_bulk(primary_channel, _m3_collected_ips,
@@ -19074,7 +19226,9 @@ def _run_2c_resume():
 
     # Bulk add via cluster add-node
     _2c_add_node_timings: "dict[str, float]" = {}
-    _2c_ips = [_2c_cluster_ips_out[b] for b in retry_bmc_list if b in _2c_cluster_ips_out]
+    _2c_ips = _ordered_cluster_ips_for_add(
+        _2c_cluster_ips_out, preferred_bmcs=retry_bmc_list
+    )
     if primary_channel and _2c_ips:
         _cluster_add_nodes_bulk(primary_channel, _2c_ips, log=_session_log,
                                 node_timings_out=_2c_add_node_timings)
@@ -20692,9 +20846,22 @@ def main():
                 except Exception:
                     pass
                 with _suppress_console():
-                    _wait_for_cluster_prompt(_ch49, timeout=30)
+                    _at_cluster49 = _wait_for_cluster_prompt(_ch49, timeout=30)
+                if not _at_cluster49:
+                    print(f"  \u274c Could not reach the cluster shell on {_ch49_ip}.")
+                    _session_log.log(f"5g: cluster shell not reached on {_ch49_ip}", prefix="ERROR")
+                    try:
+                        _ch49.close()
+                    except Exception:
+                        pass
+                    try:
+                        _cl49.close()
+                    except Exception:
+                        pass
+                    print(f"\U0001f4dd Session log: {_session_log.log_file}")
+                    raise _ReturnToMenu
                 print(f"  \u2705 Connected to {_ch49_ip}")
-                _session_log.log(f"5f: connected to {_ch49_ip}")
+                _session_log.log(f"5g: connected to {_ch49_ip}")
 
                 # ── Health check ─────────────────────────────────────────────────
                 print("\n  \U0001f50d Running cluster health check...")
@@ -20726,15 +20893,18 @@ def main():
                 for _r49 in _parse_failover_show(_fo49_out):
                     if _r49["node"] and _r49["node"] not in _nodes49:
                         _nodes49.append(_r49["node"])
-                _session_log.log(f"5f: nodes discovered: {_nodes49}")
+                _session_log.log(f"5g: nodes discovered: {_nodes49}")
 
                 if not _nodes49:
                     print("  \u26a0\ufe0f  Could not discover node names from 'storage failover show'.")
-
-                _healthy49 = _wait_for_cluster_healthy(
-                    _ch49, _nodes49, total_timeout=600, poll_interval=60,
-                    log=_session_log,
-                )
+                    _session_log.log("5g: no node names discovered from storage failover show",
+                                     prefix="WARN")
+                    _healthy49 = False
+                else:
+                    _healthy49 = _wait_for_cluster_healthy(
+                        _ch49, _nodes49, total_timeout=600, poll_interval=60,
+                        log=_session_log,
+                    )
 
                 # ── Version check ────────────────────────────────────────────────
                 print("\n  \U0001f50d Checking ONTAP version...")
@@ -20763,7 +20933,7 @@ def main():
                     for _il49 in _img49_lines[-12:]:
                         print(f"    {_il49}")
 
-                _session_log.log(f"5f: running version={_running49}")
+                _session_log.log(f"5g: running version={_running49}")
 
                 # ── Cleanup & exit ───────────────────────────────────────────────
                 try:
@@ -21388,6 +21558,12 @@ def main():
                 if not ssh_user:
                     print("  No username entered. Exiting.")
                     sys.exit(0)
+                _auto_accept_known_host_45 = (
+                    _prompt(
+                        "  Auto-accept known_hosts addition at end of setup? [Y/n]: ",
+                        "y",
+                    ).strip().lower() not in ("n", "no")
+                )
 
                 # 1. Remove any existing known_hosts entries for this IP.
                 known_hosts = pathlib.Path.home() / ".ssh" / "known_hosts"
@@ -21567,6 +21743,23 @@ def main():
                     client_45.close()
                 except Exception:
                     pass
+
+                if _auto_accept_known_host_45:
+                    print(f"\n  \U0001f510 Auto-accepting SSH host key for {ssh_user}@{mgmt_ip}...")
+                    _accepted_45, _accept_msg_45 = _ssh_accept_known_host_via_client(
+                        mgmt_ip, ssh_user=ssh_user, key_path=str(id_rsa)
+                    )
+                    if _accepted_45:
+                        print(f"  \u2705 SSH host key accepted for {mgmt_ip}.")
+                        _slog(f"SSH host key accepted for {ssh_user}@{mgmt_ip}")
+                    else:
+                        print("  \u26a0\ufe0f  Could not auto-accept SSH host key with local ssh client.")
+                        if _accept_msg_45:
+                            print(f"     {_accept_msg_45.splitlines()[-1]}")
+                        _slog(
+                            f"SSH host-key auto-accept failed for {ssh_user}@{mgmt_ip}: {_accept_msg_45}",
+                            prefix="WARN",
+                        )
 
                 # Test passwordless login from this host — open an interactive shell
                 # and wait for the cluster prompt (::>) without a password prompt.
@@ -22589,45 +22782,59 @@ def main():
                         _cluster_config["mgmt_ip"] = _pre_mgmt_ip
                         _session_log.log(f"Mode 2: cluster mgmt IP set up-front: {_pre_mgmt_ip}")
 
-                # Ensure cluster admin credentials are known upfront so
-                # _fetch_existing_cluster_ip() can authenticate silently during
-                # the join wizard (avoids the mid-run "no credentials found" prompt).
-                if _initial_operation_mode == 2:
+                # For 2b, decide cluster-shell credentials before the node-add
+                # workflow starts so the join wizard never pauses for auth.
+                if _initial_operation_mode == 2 and _auto_add:
                     cfg_cluster_2 = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
-                    _has_creds = (
+                    _has_cluster_creds = (
                         _cluster_config.get("admin_user") and _cluster_config.get("admin_password")
                     ) or (
                         cfg_cluster_2.get("user") and cfg_cluster_2.get("password")
-                    ) or (
-                        sp_pass  # BMC creds are always a fallback candidate
                     )
-                    if not _has_creds:
+                    if not _has_cluster_creds:
                         _print_banner("\U0001f510 Existing Cluster Admin Credentials")
                         print("\n  These are needed to look up the cluster-network IP")
-                        print("  during the join wizard. Enter blank to use the BMC")
-                        print("  credentials as a fallback.")
-                        try:
-                            _pre_cl_user = input(
-                                "\n  Cluster admin username [admin]: "
-                            ).strip() or "admin"
-                            _pre_cl_pass = getpass.getpass(
-                                "  Cluster admin password (blank = use BMC password): "
-                            )
-                        except (EOFError, KeyboardInterrupt):
-                            _pre_cl_user = "admin"
-                            _pre_cl_pass = ""
-                        if _pre_cl_pass:
-                            _cluster_config["admin_user"] = _pre_cl_user
-                            _cluster_config["admin_password"] = _pre_cl_pass
+                        print("  before the node joins the existing cluster.")
+                        _use_bmc_for_cluster = "y"
+                        if sp_pass:
+                            _use_bmc_for_cluster = _prompt(
+                                "  Use the current BMC credentials for cluster lookup? [Y/n]: ",
+                                "y",
+                            ).strip().lower()
+                        if sp_pass and _use_bmc_for_cluster not in ("n", "no"):
+                            _cluster_config["admin_user"] = sp_user or "admin"
+                            _cluster_config["admin_password"] = sp_pass
                             _session_log.log(
-                                f"Mode 2: cluster admin credentials collected upfront "
-                                f"(user={_pre_cl_user})"
+                                f"Mode 2b: using BMC credentials for cluster lookup "
+                                f"(user={sp_user or 'admin'})"
                             )
                         else:
-                            _session_log.log(
-                                "Mode 2: no cluster admin password entered; "
-                                "will fall back to BMC credentials"
-                            )
+                            try:
+                                _pre_cl_user = input(
+                                    "\n  Cluster admin username [admin]: "
+                                ).strip() or "admin"
+                                _pre_cl_pass = getpass.getpass(
+                                    f"  Cluster admin password for {_pre_cl_user}@"
+                                    f"{_cluster_config.get('mgmt_ip') or cfg_cluster_2.get('clus_mgmt_address') or '<cluster-mgmt>'}: "
+                                )
+                            except (EOFError, KeyboardInterrupt):
+                                _pre_cl_user = "admin"
+                                _pre_cl_pass = ""
+                            if _pre_cl_pass:
+                                _cluster_config["admin_user"] = _pre_cl_user
+                                _cluster_config["admin_password"] = _pre_cl_pass
+                                _session_log.log(
+                                    f"Mode 2b: cluster admin credentials collected upfront "
+                                    f"(user={_pre_cl_user})"
+                                )
+                            else:
+                                _session_log.log(
+                                    "Mode 2b: no upfront cluster admin password entered; "
+                                    "cluster lookup will still try BMC credentials",
+                                    prefix="WARN",
+                                )
+                    elif _session_log:
+                        _session_log.log("Mode 2b: cluster lookup credentials already available")
 
                 collect_node_mgmt_per_bmc(sp_host, [])
 
