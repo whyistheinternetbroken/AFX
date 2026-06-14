@@ -1280,6 +1280,53 @@ def _config_secondary_nodes(ctx=None) -> list:
     nodes = cd.get("nodes") or []
     return [n for n in nodes[1:] if isinstance(n, dict)]
 
+
+def _display_node_label(bmc_host: str = "", mode=None) -> str:
+    """Return a user-facing node label such as primary or secondary-01."""
+    _mode = _operation_mode if mode is None else mode
+    _host = str(bmc_host or "").strip()
+
+    if _mode == 1:
+        return "primary"
+
+    if _mode in (2, 41, 42):
+        _pn = _config_primary_node()
+        if str(_pn.get("bmc") or "").strip() == _host:
+            return "primary"
+        for _idx, _node in enumerate(_config_secondary_nodes(), start=1):
+            if str(_node.get("bmc") or "").strip() == _host:
+                return f"secondary-{_idx:02d}"
+        return "secondary-01" if _mode == 2 else (_host or "node")
+
+    if _mode == 3:
+        _pn = _config_primary_node()
+        if str(_pn.get("bmc") or "").strip() == _host:
+            return "primary"
+        for _idx, _node in enumerate(_config_secondary_nodes(), start=1):
+            if str(_node.get("bmc") or "").strip() == _host:
+                return f"secondary-{_idx:02d}"
+        return "primary" if not _host else _host
+
+    return _host or "node"
+
+
+def _display_ontap_node_label(nodename: str, node_mgmt_by_name: dict | None = None) -> str:
+    """Return primary / secondary-## for an ONTAP node name when possible."""
+    _name = str(nodename or "").strip()
+    _ip = ""
+    if isinstance(node_mgmt_by_name, dict):
+        _ip = str(node_mgmt_by_name.get(_name) or "").strip()
+
+    _pn = _config_primary_node()
+    if _ip and str(_pn.get("node_mgmt_ip") or "").strip() == _ip:
+        return "primary"
+
+    for _idx, _node in enumerate(_config_secondary_nodes(), start=1):
+        if _ip and str(_node.get("node_mgmt_ip") or "").strip() == _ip:
+            return f"secondary-{_idx:02d}"
+
+    return _name or "node"
+
 # ---------------------------------------------------------------------------
 # Per-node log writer – redirects sys.stdout during automated phases
 # ---------------------------------------------------------------------------
@@ -9229,6 +9276,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     # Decide I/O routing: parallel (node_file) vs sequential (stdout).
     nf = node_file
     _status = status_cb if callable(status_cb) else print
+    def _status_ts(msg: str):
+        _status(f"{msg} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     def _recv(look_for_list, timeout=30):
         if nf:
@@ -9250,7 +9299,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         _mask  = static_ifconfig.get("netmask") or ""
         _gw    = static_ifconfig.get("gateway") or ""
         _ifc_cmd = f"ifconfig {_iface} -addr={_addr} -mask={_mask} -gw={_gw}"
-        _status(f"\n  [{node_label}] Static LOADER ifconfig: {_iface}  addr={_addr}  mask={_mask}  gw={_gw}")
+        _status_ts(f"\n  [{node_label}] Static LOADER ifconfig: {_iface}  addr={_addr}  mask={_mask}  gw={_gw}")
         if log:
             log.log(f"[{node_label}] static ifconfig: priv set diag; {_ifc_cmd}")
         # Switch to diag privilege level so ifconfig accepts -addr/-mask/-gw flags.
@@ -9263,9 +9312,9 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             direct_send_and_wait(channel, "priv set diag", "LOADER-", timeout=15)
             output = direct_send_and_wait(channel, _ifc_cmd, "LOADER-", timeout=60)
         if "loader-" not in output.lower():
-            _status(f"  ⚠️  [{node_label}] LOADER prompt not seen after static ifconfig; continuing...")
+            _status_ts(f"  ⚠️  [{node_label}] LOADER prompt not seen after static ifconfig; continuing...")
     else:
-        _status(f"\n  [{node_label}] Running ifconfig e0M -auto...")
+        _status_ts(f"\n  [{node_label}] Running ifconfig e0M -auto...")
         if log:
             log.log(f"[{node_label}] ifconfig e0M -auto")
         if nf:
@@ -9274,7 +9323,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         else:
             output = direct_send_and_wait(channel, "ifconfig e0M -auto", "LOADER-", timeout=60)
         if "loader-" not in output.lower():
-            _status(f"  ⚠️  [{node_label}] LOADER prompt not seen after ifconfig; continuing...")
+            _status_ts(f"  ⚠️  [{node_label}] LOADER prompt not seen after ifconfig; continuing...")
 
     # ── 2+3. netboot + wait for boot menu (retry on download failure) ────────
     _NETBOOT_MAX_ATTEMPTS = 3
@@ -9295,7 +9344,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     # Discard the contents of NVRAM on the next boot so the netboot install
     # starts from a clean slate (required for 4b reinit; safe to set as it
     # only affects the next boot).
-    _status(f"\n  [{node_label}] Setting LOADER env: setenv nvram_discard 1")
+    _status_ts(f"\n  [{node_label}] Setting LOADER env: setenv nvram_discard 1")
     if log:
         log.log(f"[{node_label}] setenv nvram_discard 1")
     if nf:
@@ -9306,11 +9355,11 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
 
     for _nb_attempt in range(1, _NETBOOT_MAX_ATTEMPTS + 1):
         if _nb_attempt == 1:
-            _status(f"\n  [{node_label}] Starting netboot: {pkg_url}")
+            _status_ts(f"\n  [{node_label}] Starting netboot: {pkg_url}")
             if log:
                 log.log(f"[{node_label}] netboot {pkg_url}")
         else:
-            _status(
+            _status_ts(
                 f"\n  [{node_label}] Retrying netboot "
                 f"(attempt {_nb_attempt}/{_NETBOOT_MAX_ATTEMPTS}): {pkg_url}"
             )
@@ -9320,7 +9369,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                     f"{_nb_attempt}/{_NETBOOT_MAX_ATTEMPTS}: {pkg_url}"
                 )
         _send_raw(f"netboot {pkg_url}")
-        _status(f"\n  [{node_label}] 📥 Downloading ONTAP image — this may take several minutes...")
+        _status_ts(f"\n  [{node_label}] 📥 Downloading ONTAP image — this may take several minutes...")
 
         # Download-phase progress thread: emits a status line every 30 s so
         # the terminal doesn't look hung while the image transfers.
@@ -9329,7 +9378,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         def _dl_progress(_ev=_dl_stop, _t0=_dl_t0):
             while not _ev.wait(30):
                 elapsed = time.monotonic() - _t0
-                _status(f"  ⏳ [{node_label}] Image downloading... ({elapsed:.0f}s elapsed)")
+                _status_ts(f"  ⏳ [{node_label}] Image downloading... ({elapsed:.0f}s elapsed)")
         threading.Thread(target=_dl_progress, daemon=True).start()
 
         # Wait for boot menu ────────────────────────────────────────────────
@@ -9376,7 +9425,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             break  # success — exit retry loop
         if netboot_failed:
             if _nb_attempt < _NETBOOT_MAX_ATTEMPTS:
-                _status(
+                _status_ts(
                     f"\n  ⚠️  [{node_label}] Netboot download failed "
                     f"('{netboot_fail_reason}'); retrying in 10s..."
                 )
@@ -9399,7 +9448,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             break  # timeout with no menu and no download error — don't retry
 
     if netboot_failed:
-        _status(
+        _status_ts(
             f"  ❌ [{node_label}] Netboot download failed "
             f"('{netboot_fail_reason}' seen in bootloader output). "
             f"Check that the HTTP server IP is reachable from the node's "
@@ -9414,14 +9463,14 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         return False
 
     if not menu_detected:
-        _status(f"  ❌ [{node_label}] Boot menu not detected after netboot.")
+        _status_ts(f"  ❌ [{node_label}] Boot menu not detected after netboot.")
         if log:
             log.log(f"[{node_label}] boot menu not detected after netboot", prefix="ERROR")
         return False
 
     time.sleep(1)  # let the selection prompt fully render
-    _status(f"\n  ✅ [{node_label}] Download complete — boot menu detected.")
-    _status(f"  [{node_label}] 💿 Installing ONTAP image (selecting option 7)...")
+    _status_ts(f"\n  ✅ [{node_label}] Download complete — boot menu detected.")
+    _status_ts(f"  [{node_label}] 💿 Installing ONTAP image (selecting option 7)...")
     if log:
         log.log(f"[{node_label}] boot menu detected – sending option 7")
     _send_raw("7")
@@ -9435,7 +9484,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     )
     if m and "selection (1-" in m.lower():
         # menu re-appeared — option 7 wasn't registered; retry once
-        _status(f"  ↻ [{node_label}] Resending option 7...")
+        _status_ts(f"  ↻ [{node_label}] Resending option 7...")
         if log:
             log.log(f"[{node_label}] resending boot menu option 7")
         _send_raw("7")
@@ -9444,12 +9493,12 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             timeout=120,
         )
     if m and "do you want to continue" in m.lower():
-        _status(f"  [{node_label}] Answering 'do you want to continue?' → y")
+        _status_ts(f"  [{node_label}] Answering 'do you want to continue?' → y")
         _send_raw("y")
     elif m and "url for the package" in m.lower():
         pass  # ONTAP skipped the first question; fall through
     else:
-        _status(f"  ⚠️  [{node_label}] Did not see continuation prompt; continuing anyway...")
+        _status_ts(f"  ⚠️  [{node_label}] Did not see continuation prompt; continuing anyway...")
 
     # Prompt 2: "What is the URL for the package?"
     out, m = _recv(
@@ -9457,7 +9506,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         timeout=120,
     )
     if m and "url for the package" in m.lower():
-        _status(f"  [{node_label}] Entering package URL: {pkg_url}")
+        _status_ts(f"  [{node_label}] Entering package URL: {pkg_url}")
         if log:
             log.log(f"[{node_label}] sending package URL")
         _send_raw(pkg_url)
@@ -9474,7 +9523,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         if _progress_stop[0] is not None:
             _progress_stop[0].set()
         _send_raw("y")
-        _status(f"\n  ✅ [{node_label}] Image installed — 🔄 node rebooting...")
+        _status_ts(f"\n  ✅ [{node_label}] Image installed — 🔄 node rebooting...")
         if log:
             log.log(f"[{node_label}] reboot triggered; install complete")
         return True
@@ -9485,9 +9534,9 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         timeout=300,
     )
     if m and "user name" in m.lower():
-        _status(f"  [{node_label}] User name prompt → (blank)")
+        _status_ts(f"  [{node_label}] User name prompt → (blank)")
         if nf and hasattr(nf, "name"):
-            _status(f"  [{node_label}] 📝 Installing — log: {nf.name}")
+            _status_ts(f"  [{node_label}] 📝 Installing — log: {nf.name}")
         _send_raw("")
         # Start a periodic progress reporter so the terminal doesn't look hung.
         _ps = threading.Event()
@@ -9496,16 +9545,16 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         def _progress_reporter(_ev=_ps, _t0=_install_start):
             while not _ev.wait(30):
                 elapsed = time.monotonic() - _t0
-                _status(f"  ⏳ [{node_label}] 💿 Image installing... ({elapsed:.0f}s elapsed)")
+                _status_ts(f"  ⏳ [{node_label}] 💿 Image installing... ({elapsed:.0f}s elapsed)")
         threading.Thread(target=_progress_reporter, daemon=True).start()
         # Fall through to prompt 4.
     elif m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
         # ONTAP skipped both username and backup prompts.
-        _status(f"  [{node_label}] Reboot prompt (early, username+backup skipped) → y")
+        _status_ts(f"  [{node_label}] Reboot prompt (early, username+backup skipped) → y")
         return _do_reboot()
     elif m and "restore the backup" in m.lower():
         # ONTAP skipped the username prompt; handle backup restore inline.
-        _status(f"  [{node_label}] Restore backup prompt (username skipped) → n")
+        _status_ts(f"  [{node_label}] Restore backup prompt (username skipped) → n")
         if log:
             log.log(f"[{node_label}] restore backup (username skipped) → n")
         _send_raw("n")
@@ -9513,8 +9562,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         out, m = _recv(["reboot now", "do you want to reboot"], timeout=180)
         if m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
             return _do_reboot()
-        _status(f"  ⚠️  [{node_label}] Reboot prompt not seen; node may reboot automatically.")
-        _status(f"  ✅ [{node_label}] Install complete.")
+        _status_ts(f"  ⚠️  [{node_label}] Reboot prompt not seen; node may reboot automatically.")
+        _status_ts(f"  ✅ [{node_label}] Install complete.")
         if log:
             log.log(f"[{node_label}] install complete (reboot prompt not seen)")
         return True
@@ -9525,7 +9574,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         timeout=600,
     )
     if m and "restore the backup" in m.lower():
-        _status(f"  [{node_label}] Restore backup prompt → n")
+        _status_ts(f"  [{node_label}] Restore backup prompt → n")
         if log:
             log.log(f"[{node_label}] restore backup → n")
         _send_raw("n")
@@ -9533,7 +9582,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
 
     elif m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
         # ONTAP skipped the backup-restore step and jumped straight to reboot.
-        _status(f"  [{node_label}] Reboot prompt (early, backup skipped) → y")
+        _status_ts(f"  [{node_label}] Reboot prompt (early, backup skipped) → y")
         return _do_reboot()
 
     # Prompt 5: "Do you want to reboot now? {y|n}"
@@ -9542,8 +9591,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         return _do_reboot()
     if _progress_stop[0] is not None:
         _progress_stop[0].set()
-    _status(f"  ⚠️  [{node_label}] Reboot prompt not seen; node may reboot automatically.")
-    _status(f"  ✅ [{node_label}] Install complete.")
+    _status_ts(f"  ⚠️  [{node_label}] Reboot prompt not seen; node may reboot automatically.")
+    _status_ts(f"  ✅ [{node_label}] Install complete.")
     if log:
         log.log(f"[{node_label}] install complete (reboot prompt not seen)")
     return True
@@ -9688,6 +9737,9 @@ def _run_4b_standalone(log, resuming: bool = False):
     _stdout_lock = threading.Lock()
 
     def _status(msg):
+        for _ip in bmc_ips:
+            _label = _display_node_label(_ip, mode=42)
+            msg = msg.replace(f"[{_ip}]", f"[{_label}]")
         with _stdout_lock:
             print(msg)
         # Mirror to the session log so the log file is a complete record.
@@ -13135,6 +13187,27 @@ def _run_ontap_upgrade(log):
         if log:
             log.log(f"Current images: {node_image}")
 
+        _node_mgmt_by_name = {}
+        try:
+            with _suppress_console():
+                _lif_map_out = _run_cluster_command(
+                    _cl_ch,
+                    "set advanced -c off; network interface show "
+                    "-role node-mgmt -fields node,curr-address",
+                    timeout=30,
+                )
+            for _ln in _lif_map_out.splitlines():
+                _parts = _ln.split()
+                if len(_parts) >= 2:
+                    _maybe_ip = _parts[-1]
+                    try:
+                        socket.inet_aton(_maybe_ip)
+                        _node_mgmt_by_name[_parts[0]] = _maybe_ip
+                    except OSError:
+                        pass
+        except Exception:
+            _node_mgmt_by_name = {}
+
         # Group nodes by which image they are currently running.
         # The replacement image for each node is the OTHER image slot.
         image_to_nodes = {}
@@ -13442,6 +13515,7 @@ def _run_ontap_upgrade(log):
             for nodename, replace_img, _ci in _update_tasks:
                 def _val_worker(nn=nodename, ri=replace_img, rd=_val_results):
                     label_v = f"validate/{nn}"
+                    _disp = _display_ontap_node_label(nn, _node_mgmt_by_name)
                     _target = _node_ssh_targets.get(nn, _cl_mgmt_ip)
                     try:
                         clv, _, _ = _ssh_connect_with_retry(
@@ -13460,17 +13534,17 @@ def _run_ontap_upgrade(log):
                             f"-setdefault true "
                             f"-validate-only true"
                         )
-                        print(f"  [{nn}] \U0001f50e Validating... ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, this may take 3-5 minutes)")
+                        print(f"  [{_disp}] \U0001f50e Validating... ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, this may take 3-5 minutes)")
                         _t0_v = time.monotonic()
                         out_v = _shell_run_cmd(clv, vcmd2, timeout=360)
                         _val_elapsed = time.monotonic() - _t0_v
                         failed_v = "error" in out_v.lower() or "failed" in out_v.lower()
                         rd[nn] = (not failed_v, out_v, _val_elapsed)
                         status = "\u274c Failed" if failed_v else "\u2705 Passed"
-                        print(f"  [{nn}] Validation {status} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, {_val_elapsed:.0f}s)")
+                        print(f"  [{_disp}] Validation {status} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, {_val_elapsed:.0f}s)")
                     except Exception as ev:
                         rd[nn] = (False, f"Exception: {ev}", 0.0)
-                        print(f"  [{nn}] \u274c Validation exception: {ev}")
+                        print(f"  [{_disp}] \u274c Validation exception: {ev}")
                     finally:
                         try:
                             clv.close()
@@ -13529,6 +13603,7 @@ def _run_ontap_upgrade(log):
 
                 def _par_worker(nn=nodename, ri=replace_img, rd=_par_results):
                     label2 = f"upgrade/{nn}"
+                    _disp = _display_ontap_node_label(nn, _node_mgmt_by_name)
                     _target = _node_ssh_targets.get(nn, _cl_mgmt_ip)
                     try:
                         cl2, _, _ = _ssh_connect_with_retry(
@@ -13547,7 +13622,7 @@ def _run_ontap_upgrade(log):
                             f"-setdefault true"
                         )
                         _ts_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        print(f"  [{nn}] \U0001f4e5 Installing image... ({_ts_start})")
+                        print(f"  [{_disp}] \U0001f4e5 Installing image... ({_ts_start})")
                         _t0_inst = time.monotonic()
                         out_u2 = _shell_run_cmd(cl2, ucmd2, timeout=960)
                         _inst_elapsed = time.monotonic() - _t0_inst
@@ -13560,13 +13635,13 @@ def _run_ontap_upgrade(log):
                         _ts_end = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         if upd_failed2:
                             rd[nn] = (False, out_u2[-500:], _inst_elapsed)
-                            print(f"  [{nn}] \u274c Install failed ({_ts_end}, {_inst_elapsed:.0f}s). See log for details.")
+                            print(f"  [{_disp}] \u274c Install failed ({_ts_end}, {_inst_elapsed:.0f}s). See log for details.")
                         else:
                             rd[nn] = (True, "", _inst_elapsed)
-                            print(f"  [{nn}] \u2705 Image installed. ({_ts_end}, {_inst_elapsed:.0f}s)")
+                            print(f"  [{_disp}] \u2705 Image installed. ({_ts_end}, {_inst_elapsed:.0f}s)")
                     except Exception as e2:
                         rd[nn] = (False, f"Exception: {e2}", 0.0)
-                        print(f"  [{nn}] \u274c Exception: {e2}")
+                        print(f"  [{_disp}] \u274c Exception: {e2}")
                     finally:
                         try:
                             cl2.close()
@@ -13607,7 +13682,8 @@ def _run_ontap_upgrade(log):
         else:
             # ── Sequential path (original behaviour) ──────────────────────
             for nodename, replace_img, current_img in _update_tasks:
-                print(f"\n  \u27a1\ufe0f  Node: {nodename}  (current={current_img}, replace={replace_img})")
+                _disp = _display_ontap_node_label(nodename, _node_mgmt_by_name)
+                print(f"\n  \u27a1\ufe0f  Node: {_disp}  (current={current_img}, replace={replace_img})")
                 if log:
                     log.log(f"Updating node {nodename}: replace={replace_img} pkg={pkg_url}")
 
@@ -13619,13 +13695,13 @@ def _run_ontap_upgrade(log):
                     f"-setdefault true "
                     f"-validate-only true"
                 )
-                print(f"  \U0001f50e Validating update on {nodename}... ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, may take 3-5 minutes)")
+                print(f"  \U0001f50e Validating update on {_disp}... ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, may take 3-5 minutes)")
                 _t0_seq_val = time.monotonic()
                 with _suppress_console():
                     out_val = _run_cluster_command(_cl_ch, vcmd, timeout=300)
                 _seq_val_elapsed = time.monotonic() - _t0_seq_val
                 if "error" in out_val.lower() or "failed" in out_val.lower():
-                    print(f"\n  \u274c Validation failed for {nodename} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}):\n{out_val}")
+                    print(f"\n  \u274c Validation failed for {_disp} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}):\n{out_val}")
                     if log:
                         log.log(f"Validation failed for {nodename}: {out_val[-500:]}", prefix="ERROR")
                         log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] image validate", _seq_val_elapsed)
@@ -13638,7 +13714,7 @@ def _run_ontap_upgrade(log):
                         print("  Exiting.")
                         return False
                 else:
-                    print(f"  \u2705 Validation passed for {nodename}. ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
+                    print(f"  \u2705 Validation passed for {_disp}. ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
                     if log:
                         log.log(f"Validation passed for {nodename}")
                         log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] image validate", _seq_val_elapsed)
@@ -13653,18 +13729,18 @@ def _run_ontap_upgrade(log):
                     f"-replace-package true "
                     f"-setdefault true"
                 )
-                print(f"  \U0001f4e5 Downloading/installing image on {nodename} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, may take several minutes)...")
+                print(f"  \U0001f4e5 Downloading/installing image on {_disp} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, may take several minutes)...")
                 _t0_seq_inst = time.monotonic()
                 with _suppress_console():
                     out_upd = _run_cluster_command(_cl_ch, ucmd, timeout=900)
                 _seq_inst_elapsed = time.monotonic() - _t0_seq_inst
                 if "error" in out_upd.lower() or "failed" in out_upd.lower():
-                    print(f"\n  \u274c Image update failed for {nodename} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}):\n{out_upd}")
+                    print(f"\n  \u274c Image update failed for {_disp} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}):\n{out_upd}")
                     if log:
                         log.log(f"Image update failed for {nodename}: {out_upd[-500:]}", prefix="ERROR")
                         log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] download + install", _seq_inst_elapsed)
                     return False
-                print(f"  \u2705 Image installed on {nodename}. ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, {_seq_inst_elapsed:.0f}s)")
+                print(f"  \u2705 Image installed on {_disp}. ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, {_seq_inst_elapsed:.0f}s)")
                 if log:
                     log.log(f"Image installed on {nodename}")
                     log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] download + install", _seq_inst_elapsed)
@@ -17826,37 +17902,16 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
         direct_send_and_wait(channel, "set-defaults", "LOADER-",
                              timeout=15, node_log=_env_log)
 
-        _run_bootarg_check = True
-        if _bootarg_check_enabled is not None:
-            _run_bootarg_check = bool(_bootarg_check_enabled)
-        elif _operation_mode == 1 and _auto_setup:
-            _run_bootarg_check = True
-            _slog("Option 1b: bootarg.init.dna verification required; running automatically")
-        elif interactive:
-            _real_stdout.write(
-                "\n  Run bootarg.init.dna verification now? [Y/n]: "
-            )
-            _real_stdout.flush()
-            try:
-                _dna_ans = sys.stdin.readline().strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                _dna_ans = ""
-            if _dna_ans in ("n", "no"):
-                _run_bootarg_check = False
-                _slog("User chose to skip bootarg.init.dna verification")
-
-        if _run_bootarg_check:
-            if not _verify_boot_dna(channel, node_log=_env_log):
-                if _session_log:
-                    _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
-                    _session_log.set_outcome("FAIL", "unsupported boot DNA")
-                    _session_log.close()
-                if _close_env_log and _env_log:
-                    with suppress(Exception):
-                        _env_log.close()
-                sys.exit(1)
-        else:
-            _slog("bootarg.init.dna verification skipped by operator")
+        _slog("bootarg.init.dna verification required; running automatically")
+        if not _verify_boot_dna(channel, node_log=_env_log):
+            if _session_log:
+                _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
+                _session_log.set_outcome("FAIL", "unsupported boot DNA")
+                _session_log.close()
+            if _close_env_log and _env_log:
+                with suppress(Exception):
+                    _env_log.close()
+            sys.exit(1)
 
         if _close_env_log and _env_log:
             with suppress(Exception):
@@ -17873,38 +17928,17 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     direct_send_and_wait(channel, "set-defaults", "LOADER-",
                          timeout=15, node_log=_env_log)
 
-    # Verify boot DNA (optional in interactive mode; required in non-interactive).
-    _run_bootarg_check = True
-    if _bootarg_check_enabled is not None:
-        _run_bootarg_check = bool(_bootarg_check_enabled)
-    elif _operation_mode == 1 and _auto_setup:
-        _run_bootarg_check = True
-        _slog("Option 1b: bootarg.init.dna verification required; running automatically")
-    elif interactive:
-        _real_stdout.write(
-            "\n  Run bootarg.init.dna verification now? [Y/n]: "
-        )
-        _real_stdout.flush()
-        try:
-            _dna_ans = sys.stdin.readline().strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            _dna_ans = ""
-        if _dna_ans in ("n", "no"):
-            _run_bootarg_check = False
-            _slog("User chose to skip bootarg.init.dna verification")
-
-    if _run_bootarg_check:
-        if not _verify_boot_dna(channel, node_log=_env_log):
-            if _session_log:
-                _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
-                _session_log.set_outcome("FAIL", "unsupported boot DNA")
-                _session_log.close()
-            if _close_env_log and _env_log:
-                with suppress(Exception):
-                    _env_log.close()
-            sys.exit(1)
-    else:
-        _slog("bootarg.init.dna verification skipped by operator")
+    # Verify boot DNA (required in all modes).
+    _slog("bootarg.init.dna verification required; running automatically")
+    if not _verify_boot_dna(channel, node_log=_env_log):
+        if _session_log:
+            _session_log.end_phase(outcome="FAIL", note="unsupported boot DNA")
+            _session_log.set_outcome("FAIL", "unsupported boot DNA")
+            _session_log.close()
+        if _close_env_log and _env_log:
+            with suppress(Exception):
+                _env_log.close()
+        sys.exit(1)
 
     # Capture post-defaults env
     _slog("Capturing LOADER env (post set-defaults)")
@@ -18039,7 +18073,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     _slog(f"LOADER commands for mode {_operation_mode}: {loader_commands}")
 
     # Mode 3 runs additional peer LOADER flows in worker threads; ask once here
-    # so the same env-stage and bootarg-check choices apply to all nodes.
+    # so the same env-stage choice applies to all nodes.
     if _operation_mode == 3:
         if _loader_env_stage_enabled is None:
             _real_stdout.write(
@@ -18056,20 +18090,9 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
                 f"{'enabled' if _loader_env_stage_enabled else 'skipped'} by operator"
             )
 
-        if _loader_env_stage_enabled is not False and _bootarg_check_enabled is None:
-            _real_stdout.write(
-                "\n  Run bootarg.init.dna verification for option 3 nodes? [Y/n]: "
-            )
-            _real_stdout.flush()
-            try:
-                _m3_dna_ans = sys.stdin.readline().strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                _m3_dna_ans = ""
-            _bootarg_check_enabled = (_m3_dna_ans not in ("n", "no"))
-            _slog(
-                "Option 3 bootarg.init.dna verification "
-                f"{'enabled' if _bootarg_check_enabled else 'skipped'} by operator"
-            )
+        if _loader_env_stage_enabled is not False:
+            _bootarg_check_enabled = True
+            _slog("Option 3 bootarg.init.dna verification required; running automatically")
 
     # Capture env before set-defaults, run set-defaults, capture after, diff,
     # and (interactively) ask whether to restore cleared vars.
@@ -18154,8 +18177,9 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             _real_stdout.flush()
 
         _nb_static = _node_mgmt_by_bmc.get(sp_host) if _netboot_static_ip else None
+        _nb_label = _display_node_label(sp_host, mode=_operation_mode)
         ok = _run_netboot_install_sequence(
-            channel, _nb_pkg_url, node_label="primary", log=_session_log,
+            channel, _nb_pkg_url, node_label=_nb_label, log=_session_log,
             status_cb=_nb_screen,
             static_ifconfig=_nb_static,
         )
