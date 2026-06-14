@@ -9,6 +9,14 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Blank-password credential retries now require explicit skip.**
+  SSH credential re-prompts now treat blank passwords as intentional retry
+  values across the shared retry helper and mode 2a/2b pre-auth flows. To stop
+  retrying, operators must enter `SKIP` explicitly.
+- **5d/5g now pause before returning to menu.**
+  After BMC auth verify (5d) and cluster health/version check (5g), the script
+  now prompts `Press Enter to return to the main menu...` so result output
+  remains visible until the operator acknowledges it.
 - **4b skip prompts and continue prompt wording simplified.**
   The LOADER backup/printenv skip prompts no longer include the parenthetical
   "DNA check still runs". 4b continue prompts now read

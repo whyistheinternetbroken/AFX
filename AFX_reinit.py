@@ -4085,6 +4085,7 @@ def _reclaim_system_console(channel, node_log=None):
 
 _BMC_CONSOLE_KEEPALIVE_INTERVAL = 30  # seconds between null-byte keepalives
 _BMC_CONSOLE_SILENCE_RECONNECT_INTERVAL = 300  # 5 minutes with no console data
+_BMC_RECONNECT_NOTICE_LIMIT = 5
 
 
 def _make_reconnect_ctx(host, user, password, client=None, channel=None, label=""):
@@ -4096,7 +4097,72 @@ def _make_reconnect_ctx(host, user, password, client=None, channel=None, label="
         "client": client,
         "channel": channel,
         "label": label or host or "BMC",
+        "reconnect_notice_limit": _BMC_RECONNECT_NOTICE_LIMIT,
+        "reconnect_notice_streak": 0,
+        "reconnect_notice_suppressed": False,
     }
+
+
+def _emit_reconnect_notice_with_suppression(
+        state_holder, label, console_msg="", log_msg="", log_prefix="WARN",
+        console_writer=None, log_writer=None):
+    """Emit reconnect status with suppression after N consecutive notices."""
+    if state_holder is None:
+        if console_msg:
+            if console_writer:
+                console_writer(console_msg)
+            else:
+                print(console_msg)
+        if log_msg:
+            if log_writer:
+                log_writer(log_msg, log_prefix)
+            else:
+                _slog(log_msg, prefix=log_prefix)
+        return
+
+    limit = state_holder.get("reconnect_notice_limit", _BMC_RECONNECT_NOTICE_LIMIT)
+    streak = int(state_holder.get("reconnect_notice_streak", 0)) + 1
+    suppressed = bool(state_holder.get("reconnect_notice_suppressed", False))
+    state_holder["reconnect_notice_streak"] = streak
+
+    if streak <= limit:
+        if console_msg:
+            if console_writer:
+                console_writer(console_msg)
+            else:
+                print(console_msg)
+        if log_msg:
+            if log_writer:
+                log_writer(log_msg, log_prefix)
+            else:
+                _slog(log_msg, prefix=log_prefix)
+        return
+
+    if not suppressed:
+        _sup_msg = (
+            f"ℹ️  [{label}] Suppressing repeated BMC reconnect messages "
+            "until reconnect succeeds or timeout."
+        )
+        if console_writer:
+            console_writer(_sup_msg)
+        else:
+            print(_sup_msg)
+        _sup_log = (
+            f"[{label}] suppressing repeated BMC reconnect messages after "
+            f"{limit} consecutive notices"
+        )
+        if log_writer:
+            log_writer(_sup_log, "WARN")
+        else:
+            _slog(_sup_log, prefix="WARN")
+        state_holder["reconnect_notice_suppressed"] = True
+
+
+def _reset_reconnect_notice_suppression(state_holder):
+    if state_holder is None:
+        return
+    state_holder["reconnect_notice_streak"] = 0
+    state_holder["reconnect_notice_suppressed"] = False
 
 
 def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=False,
@@ -4162,6 +4228,7 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                 if lower_m in output_lower:
                     return output, orig_m
         if time.monotonic() - start_time > timeout:
+            _reset_reconnect_notice_suppression(reconnect_ctx)
             return output, None
         # Periodic null-byte keepalive to prevent BMC application-level
         # autologout during long waits (e.g. waiting for node to boot).
@@ -4189,9 +4256,15 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
             _pw = reconnect_ctx.get("password")
             _client = reconnect_ctx.get("client")
             _label = reconnect_ctx.get("label") or _host or "BMC"
-            print(f"\n⚠️  [{_label}] No BMC console output for 5 minutes. Reconnecting SSH/session console...")
-            _slog(f"[{_label}] no console activity for 5 minutes; reconnecting BMC SSH/system console",
-                  prefix="WARN")
+            _emit_reconnect_notice_with_suppression(
+                reconnect_ctx, _label,
+                console_msg=(
+                    f"\n⚠️  [{_label}] No BMC console output for 5 minutes. "
+                    "Reconnecting SSH/session console..."
+                ),
+                log_msg=f"[{_label}] no console activity for 5 minutes; reconnecting BMC SSH/system console",
+                log_prefix="WARN",
+            )
             try:
                 try:
                     channel.close()
@@ -4239,6 +4312,7 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                 reconnect_ctx["client"] = _new_client
                 reconnect_ctx["user"] = _new_user
                 reconnect_ctx["password"] = _new_pw
+                _reset_reconnect_notice_suppression(reconnect_ctx)
                 output = ""
                 output_lower = ""
                 last_console_data = time.monotonic()
@@ -10606,6 +10680,11 @@ def _run_4b_standalone(log, resuming: bool = False):
             ]
             _sel_sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
             _all_sigs = _early_sigs + _sel_sigs + ["login:"]
+            _reconnect_notice_state6 = {
+                "reconnect_notice_limit": _BMC_RECONNECT_NOTICE_LIMIT,
+                "reconnect_notice_streak": 0,
+                "reconnect_notice_suppressed": False,
+            }
 
             # ── BMC reconnect helper ────────────────────────────────────────
             # If the BMC SSH session or system-console session has dropped, this
@@ -10613,9 +10692,21 @@ def _run_4b_standalone(log, resuming: bool = False):
             # boot-menu wait can continue on the same `ch` binding.
             def _reenter_console():
                 nonlocal ch
-                _status(f"  ⚠️  [{ip}] BMC session dropped – reconnecting and re-entering system console...")
-                if log:
-                    log.log(f"[{ip}] BMC session dropped; reconnecting", prefix="WARN")
+                def _log_notice6(_msg, _prefix):
+                    if log:
+                        log.log(_msg, prefix=_prefix)
+                _emit_reconnect_notice_with_suppression(
+                    _reconnect_notice_state6,
+                    ip,
+                    console_msg=(
+                        f"  ⚠️  [{ip}] BMC session dropped – reconnecting and "
+                        "re-entering system console..."
+                    ),
+                    log_msg=f"[{ip}] BMC session dropped; reconnecting",
+                    log_prefix="WARN",
+                    console_writer=_status,
+                    log_writer=_log_notice6,
+                )
                 try:
                     _old_cl = loader_clients.get(ip)
                     if _old_cl:
@@ -10662,13 +10753,20 @@ def _run_4b_standalone(log, resuming: bool = False):
                     ch = _new_ch
                     loader_channels[ip] = _new_ch
                     loader_clients[ip]  = _new_cl
+                    _reset_reconnect_notice_suppression(_reconnect_notice_state6)
                     _status(f"  ✅ [{ip}] BMC reconnected – system console active.")
                     if log:
                         log.log(f"[{ip}] BMC reconnected; system console active")
                 except Exception as _exc:
-                    _status(f"  ❌ [{ip}] BMC reconnect failed: {_exc}")
-                    if log:
-                        log.log(f"[{ip}] BMC reconnect failed: {_exc}", prefix="ERROR")
+                    _emit_reconnect_notice_with_suppression(
+                        _reconnect_notice_state6,
+                        ip,
+                        console_msg=f"  ❌ [{ip}] BMC reconnect failed: {_exc}",
+                        log_msg=f"[{ip}] BMC reconnect failed: {_exc}",
+                        log_prefix="ERROR",
+                        console_writer=_status,
+                        log_writer=_log_notice6,
+                    )
 
             buf_lower = ""
             start = time.monotonic()
@@ -18878,12 +18976,26 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
     output_buffer = ""
     _last_data = time.monotonic()
     _BMC_IDLE_TIMEOUT = 60  # seconds of no console data before reconnecting
+    _monitor_reconnect_notice_state = {
+        "reconnect_notice_limit": _BMC_RECONNECT_NOTICE_LIMIT,
+        "reconnect_notice_streak": 0,
+        "reconnect_notice_suppressed": False,
+    }
+
+    def _log_monitor_reconnect_notice(_msg, _prefix):
+        _slog(_msg, prefix=_prefix)
 
     try:
         while not _shutdown_event.is_set():
             if not is_session_alive(client, channel):
-                print("\n⚠️  Session dropped during monitoring. Reconnecting...")
-                _slog("Session dropped during monitoring", prefix="WARN")
+                _emit_reconnect_notice_with_suppression(
+                    _monitor_reconnect_notice_state,
+                    sp_host or "primary",
+                    console_msg="\n⚠️  Session dropped during monitoring. Reconnecting...",
+                    log_msg="Session dropped during monitoring",
+                    log_prefix="WARN",
+                    log_writer=_log_monitor_reconnect_notice,
+                )
                 client, channel = reconnect_to_sp(sp_host, sp_user, sp_pass)
                 if client is None:
                     print("❌ Reconnection failed. Press Ctrl+C to exit...")
@@ -18909,6 +19021,7 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     channel.send("\r")
                 output_buffer = ""
                 _last_data = time.monotonic()
+                _reset_reconnect_notice_suppression(_monitor_reconnect_notice_state)
                 continue
 
             if channel.recv_ready():
@@ -18947,10 +19060,14 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
             elif time.monotonic() - _last_data > _BMC_IDLE_TIMEOUT:
                 # No console data for 60s — BMC session may have gone stale.
                 _idle_s = int(time.monotonic() - _last_data)
-                print(f"\n⚠️  [{sp_host}] No console data for {_idle_s}s — reconnecting to BMC...")
-                _slog(f"[{sp_host}] no console data for {_idle_s}s; reconnecting", prefix="WARN")
-                if _session_log:
-                    _session_log.log(f"[{sp_host}] BMC idle {_idle_s}s – reconnect attempt")
+                _emit_reconnect_notice_with_suppression(
+                    _monitor_reconnect_notice_state,
+                    sp_host or "primary",
+                    console_msg=f"\n⚠️  [{sp_host}] No console data for {_idle_s}s — reconnecting to BMC...",
+                    log_msg=f"[{sp_host}] no console data for {_idle_s}s; reconnecting",
+                    log_prefix="WARN",
+                    log_writer=_log_monitor_reconnect_notice,
+                )
                 try:
                     try:
                         channel.close()
@@ -18980,11 +19097,18 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     channel.send("\r")
                     output_buffer = ""
                     _last_data = time.monotonic()
+                    _reset_reconnect_notice_suppression(_monitor_reconnect_notice_state)
                     print(f"   ✅ [{sp_host}] Reconnected to BMC (60s idle); resuming boot monitoring...")
                     _slog(f"[{sp_host}] BMC reconnect successful; boot monitoring resumed")
                 except Exception as _idle_err:
-                    print(f"   ❌ [{sp_host}] Reconnect failed: {_idle_err}")
-                    _slog(f"[{sp_host}] BMC reconnect failed: {_idle_err}", prefix="ERROR")
+                    _emit_reconnect_notice_with_suppression(
+                        _monitor_reconnect_notice_state,
+                        sp_host or "primary",
+                        console_msg=f"   ❌ [{sp_host}] Reconnect failed: {_idle_err}",
+                        log_msg=f"[{sp_host}] BMC reconnect failed: {_idle_err}",
+                        log_prefix="ERROR",
+                        log_writer=_log_monitor_reconnect_notice,
+                    )
                     _last_data = time.monotonic()  # reset so we don't spam retries
 
             time.sleep(0.1)
