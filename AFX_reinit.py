@@ -5200,6 +5200,129 @@ def _build_credential_list(*triplets):
     return result
 
 
+def _collect_password_groups_for_nodes(node_ips, prompt_prefix="  "):
+    """Optionally collect experimental password groups for a set of node IPs.
+
+    Returns:
+      - ``None`` when operator chooses not to use groups.
+      - ``dict[ip] = password`` when groups are accepted.
+    Unassigned nodes are allowed and can be handled by caller with manual prompts.
+    """
+    _targets = [str(_ip).strip() for _ip in (node_ips or []) if str(_ip).strip()]
+    _targets = list(dict.fromkeys(_targets))
+    if not _targets:
+        return {}
+
+    while True:
+        _use_groups = _prompt(
+            f"{prompt_prefix}Use password groups - EXPERIMENTAL? (y/n): ", "n"
+        ).strip().lower()
+        if _use_groups != "y":
+            return None
+
+        _remaining = list(_targets)
+        _groups = []
+        _group_idx = 1
+
+        while True:
+            try:
+                _gpw = getpass.getpass(
+                    f"{prompt_prefix}Password for password group {_group_idx} "
+                    "(Type end to exit): "
+                )
+            except (EOFError, KeyboardInterrupt):
+                _gpw = "end"
+
+            if str(_gpw).strip().lower() == "end":
+                break
+            if not _remaining:
+                print(f"{prompt_prefix}All nodes already assigned to a password group.")
+                break
+
+            while True:
+                print(
+                    f"{prompt_prefix}Which nodes do we add to password group {_group_idx}? "
+                    "(comma separated; Enter to move on)"
+                )
+                for _idx, _ip in enumerate(_remaining, 1):
+                    print(f"{prompt_prefix}{_idx}. {_ip}")
+                _sel = input(f"{prompt_prefix}Nodes for group {_group_idx}: ").strip()
+                if not _sel:
+                    _selected = []
+                    break
+
+                _picked = []
+                _bad = []
+                for _tok in [p.strip() for p in _sel.split(",") if p.strip()]:
+                    if _tok.isdigit():
+                        _i = int(_tok)
+                        if 1 <= _i <= len(_remaining):
+                            _picked.append(_remaining[_i - 1])
+                        else:
+                            _bad.append(_tok)
+                    else:
+                        _match = next((ip for ip in _remaining if ip.lower() == _tok.lower()), None)
+                        if _match is None:
+                            _bad.append(_tok)
+                        else:
+                            _picked.append(_match)
+                if _bad:
+                    print(
+                        f"{prompt_prefix}⚠️  Invalid selection: {', '.join(_bad)}. "
+                        "Use node numbers or IP values from the list."
+                    )
+                    continue
+                _selected = list(dict.fromkeys(_picked))
+                break
+
+            if _selected:
+                _groups.append(
+                    {
+                        "index": _group_idx,
+                        "password": _gpw,
+                        "ips": _selected,
+                    }
+                )
+                _selected_set = set(_selected)
+                _remaining = [ip for ip in _remaining if ip not in _selected_set]
+
+            _group_idx += 1
+            if not _remaining:
+                print(f"{prompt_prefix}✅ All listed nodes have been assigned to a password group.")
+                break
+
+        print(f"\n{prompt_prefix}Password group manifest:")
+        if _groups:
+            for _g in _groups:
+                print(f"{prompt_prefix}  Group {_g['index']}:")
+                for _ip in _g["ips"]:
+                    print(f"{prompt_prefix}    - {_ip}")
+        else:
+            print(f"{prompt_prefix}  (No password groups defined)")
+        if _remaining:
+            print(f"{prompt_prefix}  Unassigned nodes (manual prompt later):")
+            for _ip in _remaining:
+                print(f"{prompt_prefix}    - {_ip}")
+
+        _ok = _prompt(
+            f"\n{prompt_prefix}Does this list look ok?\n"
+            f"{prompt_prefix}1. Yes - continue\n"
+            f"{prompt_prefix}2. No - Delete manifest and start over\n"
+            f"{prompt_prefix}Choose [1/2]: ",
+            "1",
+        ).strip()
+        if _ok == "1":
+            _pw_map = {}
+            for _g in _groups:
+                for _ip in _g["ips"]:
+                    _pw_map[_ip] = _g["password"]
+            return _pw_map
+        if _ok == "2":
+            print(f"{prompt_prefix}Deleting password group manifest and restarting...")
+            continue
+        print(f"{prompt_prefix}⚠️  Invalid choice. Restarting password-group setup...")
+
+
 def _candidate_cluster_logins():
     """Return an ordered list of (user, password, source) candidates to try
     against the cluster console `login:` prompt. Drops duplicates and any
@@ -6030,9 +6153,11 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
     _peer_reconnect_ctx = None
     try:
         try:
+            _fb_peer = _bmc_fallback_passwords(host, {host: password})
             client, username, password = _ssh_connect_with_retry(
                 host, username, password, label=f"peer/{host}",
                 max_attempts=5, interactive=True,
+                fallback_passwords=_fb_peer,
             )
         except Exception as e:
             _tprint(f"   ❌ [{host}] Could not authenticate: {e}")
@@ -6532,6 +6657,10 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                     max_attempts=3,
                     interactive=True,
                     is_reconnect=True,
+                    fallback_passwords=(
+                        _bmc_fallback_passwords(_host, {_host: _pw})
+                        if _host else None
+                    ),
                 )
                 _new_ch = _open_shell(_new_client)
                 if not _reach_bmc_prompt(_new_ch, timeout=15, node_log=node_log):
@@ -9700,10 +9829,14 @@ def _collect_netboot_bmcs():
                     for _ip in _missing:
                         _bmc_passwords[_ip] = _shared_pass
                 else:
+                    _group_pw_map = _collect_password_groups_for_nodes(_missing, prompt_prefix="  ")
                     for _ip in _missing:
-                        _bmc_passwords[_ip] = getpass.getpass(
-                            f"  Password for {_ip}: "
-                        )
+                        if _group_pw_map is not None and _ip in _group_pw_map:
+                            _bmc_passwords[_ip] = _group_pw_map[_ip]
+                        else:
+                            _bmc_passwords[_ip] = getpass.getpass(
+                                f"  Password for {_ip}: "
+                            )
 
             for _ip in _has_from_file:
                 # Only prompt to override if this came from a BMC_IP.json
@@ -9780,9 +9913,13 @@ def _collect_netboot_bmcs():
             bmc_pass = getpass.getpass("  BMC password: ")
             bmc_passwords = {ip: bmc_pass for ip in bmc_ips}
         else:
+            _group_pw_map = _collect_password_groups_for_nodes(bmc_ips, prompt_prefix="  ")
             bmc_passwords = {}
             for ip in bmc_ips:
-                bmc_passwords[ip] = getpass.getpass(f"  Password for {ip}: ")
+                if _group_pw_map is not None and ip in _group_pw_map:
+                    bmc_passwords[ip] = _group_pw_map[ip]
+                else:
+                    bmc_passwords[ip] = getpass.getpass(f"  Password for {ip}: ")
 
         # ── Verification (auto-retries each failing BMC up to 3 times) ─────
         all_ok, bmc_user, failing_ips = _verify_bmc_list_with_retries(
@@ -10541,9 +10678,13 @@ def _run_4b_standalone(log, resuming: bool = False):
             _shared_pw = getpass.getpass("  BMC password: ")
             bmc_passwords = {ip: _shared_pw for ip in bmc_ips}
         else:
+            _group_pw_map = _collect_password_groups_for_nodes(bmc_ips, prompt_prefix="  ")
             bmc_passwords = {}
             for _ip in bmc_ips:
-                bmc_passwords[_ip] = getpass.getpass(f"  Password for {_ip}: ")
+                if _group_pw_map is not None and _ip in _group_pw_map:
+                    bmc_passwords[_ip] = _group_pw_map[_ip]
+                else:
+                    bmc_passwords[_ip] = getpass.getpass(f"  Password for {_ip}: ")
         if log:
             log.log(f"4b resume: using {len(bmc_ips)} BMC(s) from checkpoint: {bmc_ips}")
     else:
@@ -17154,12 +17295,14 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
     ch = None
     try:
         try:
+            _fb_init = _bmc_fallback_passwords(peer_bmc, {peer_bmc: peer_password})
             client, peer_user, peer_password = _ssh_connect_with_retry(
                 peer_bmc, peer_user, peer_password,
                 # Threaded 2a/2b worker path: never block on hidden
                 # credential re-prompts; fail this node and surface retry
                 # selection at the batch level instead.
                 label=label, max_attempts=5, interactive=False,
+                fallback_passwords=_fb_init,
             )
         except Exception as e:
             print(f"   ❌ [{label}] could not authenticate: {e}")
@@ -17390,7 +17533,11 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         peer_bmc, peer_user, peer_password,
                         label=label, max_attempts=3, interactive=False,
                         is_reconnect=True,
+                        fallback_passwords=_bmc_fallback_passwords(
+                            peer_bmc, {peer_bmc: peer_password}
+                        ),
                     )
+                    _peer_bmc_creds[peer_bmc] = {"user": peer_user, "password": peer_password}
                     ch = _open_shell(client)
                     if _peer_reconnect_ctx is not None:
                         _peer_reconnect_ctx["client"] = client
@@ -17549,7 +17696,11 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         peer_bmc, peer_user, peer_password,
                         label=label, max_attempts=3, interactive=False,
                         is_reconnect=True,
+                        fallback_passwords=_bmc_fallback_passwords(
+                            peer_bmc, {peer_bmc: peer_password}
+                        ),
                     )
+                    _peer_bmc_creds[peer_bmc] = {"user": peer_user, "password": peer_password}
                     ch = _open_shell(client)
                     if _peer_reconnect_ctx is not None:
                         _peer_reconnect_ctx["client"] = client
@@ -17812,6 +17963,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         , "n").lower()
 
         _shared_pw = None
+        _group_pw_map = None
         if _same_pw == "y":
             # Reuse primary (sp_host) password if it's already known;
             # otherwise prompt once.
@@ -17824,6 +17976,13 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     _shared_pw = getpass.getpass("  BMC password for all nodes: ")
                 except (EOFError, KeyboardInterrupt):
                     _shared_pw = ""
+        else:
+            _group_targets = []
+            for _ip in _needs_creds:
+                _cfg_pw = (_node_cfg_for(_ip) or {}).get("bmc_password")
+                if not _cfg_pw:
+                    _group_targets.append(_ip)
+            _group_pw_map = _collect_password_groups_for_nodes(_group_targets, prompt_prefix="  ")
 
         for ip in _needs_creds:
             _nc = _node_cfg_for(ip)
@@ -17834,6 +17993,8 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 _ep_p = _ep_p_cfg
             elif _shared_pw is not None:
                 _ep_p = _shared_pw
+            elif _group_pw_map is not None and ip in _group_pw_map:
+                _ep_p = _group_pw_map[ip]
             else:
                 try:
                     _primary_pw = (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password")
@@ -17884,9 +18045,12 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             _p = bmc_passwords.get(_ip, "")
         while True:
             try:
+                _fb_auth = _bmc_fallback_passwords(_ip, {_ip: _p})
                 _cl, _u, _p = _ssh_connect_with_retry(
                     _ip, _u, _p, label=f"auth-check/{_ip}",
-                    max_attempts=1, interactive=False,
+                    max_attempts=max(1, 1 + len(_fb_auth)),
+                    interactive=False,
+                    fallback_passwords=_fb_auth,
                 )
                 try:
                     _cl.close()
@@ -18273,6 +18437,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             f"\n  Are the BMC passwords the same for all {len(peer_bmcs)} node(s)? [y/n]: "
         , "n").lower()
         _shared_pw = None
+        _group_pw_map = None
         if _same_pw == "y":
             _primary_p = (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password") or ""
             if _primary_p:
@@ -18283,6 +18448,13 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     _shared_pw = getpass.getpass("  BMC password for all nodes: ")
                 except (EOFError, KeyboardInterrupt):
                     _shared_pw = ""
+        else:
+            _group_targets = []
+            for _ip in _needs_creds:
+                _cfg_pw = (_node_cfg_for(_ip) or {}).get("bmc_password")
+                if not _cfg_pw:
+                    _group_targets.append(_ip)
+            _group_pw_map = _collect_password_groups_for_nodes(_group_targets, prompt_prefix="  ")
         for ip in _needs_creds:
             _nc = _node_cfg_for(ip)
             _ep_u = ((_nc.get("bmc_user") or "").strip() or bmc_user)
@@ -18292,6 +18464,8 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 _ep_p = _ep_p_cfg
             elif _shared_pw is not None:
                 _ep_p = _shared_pw
+            elif _group_pw_map is not None and ip in _group_pw_map:
+                _ep_p = _group_pw_map[ip]
             else:
                 try:
                     _primary_pw = (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password")
@@ -19856,6 +20030,9 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                         sp_host, sp_user, sp_pass,
                         label=sp_host, max_attempts=5, interactive=True,
                         is_reconnect=True,
+                        fallback_passwords=_bmc_fallback_passwords(
+                            sp_host, {sp_host: sp_pass}
+                        ),
                     )
                     channel = _open_shell(client)
                     if not _reach_bmc_prompt(channel, timeout=15):
@@ -21789,10 +21966,14 @@ def main():
                         for _ip47 in _missing47:
                             _creds47[_ip47] = (_shared_user47, _shared_pass47)
                     else:
+                        _group_pw47 = _collect_password_groups_for_nodes(_missing47, prompt_prefix="  ")
                         for _ip47 in _missing47:
                             print(f"\n  Credentials for {_ip47}:")
                             _u47 = input(f"    Username [{_default_user47}]: ").strip() or _default_user47
-                            _p47 = getpass.getpass("    Password (blank = none): ")
+                            if _group_pw47 is not None and _ip47 in _group_pw47:
+                                _p47 = _group_pw47[_ip47]
+                            else:
+                                _p47 = getpass.getpass("    Password (blank = none): ")
                             _creds47[_ip47] = (_u47, _p47)
 
                 _ensure_creds47(_bmc_ips47)
@@ -22055,10 +22236,14 @@ def main():
                     for _ip48 in _bmc_ips48:
                         _creds48[_ip48] = (_shared_user48, _shared_pass48)
                 else:
+                    _group_pw48 = _collect_password_groups_for_nodes(_bmc_ips48, prompt_prefix="  ")
                     for _ip48 in _bmc_ips48:
                         print(f"\n  Credentials for {_ip48}:")
                         _u48 = input("    Username [admin]: ").strip() or "admin"
-                        _p48 = getpass.getpass("    Password (blank = none): ")
+                        if _group_pw48 is not None and _ip48 in _group_pw48:
+                            _p48 = _group_pw48[_ip48]
+                        else:
+                            _p48 = getpass.getpass("    Password (blank = none): ")
                         _creds48[_ip48] = (_u48, _p48)
                 print("")
 
@@ -22475,10 +22660,14 @@ def main():
                     for _ip50 in _bmc_ips50:
                         _creds50[_ip50] = (_shared_user50, _shared_pass50)
                 else:
+                    _group_pw50 = _collect_password_groups_for_nodes(_bmc_ips50, prompt_prefix="  ")
                     for _ip50 in _bmc_ips50:
                         print(f"\n  Credentials for {_ip50}:")
                         _u50 = input("    Username [admin]: ").strip() or "admin"
-                        _p50pw = getpass.getpass("    Password (blank = none): ")
+                        if _group_pw50 is not None and _ip50 in _group_pw50:
+                            _p50pw = _group_pw50[_ip50]
+                        else:
+                            _p50pw = getpass.getpass("    Password (blank = none): ")
                         _creds50[_ip50] = (_u50, _p50pw)
 
                 # ── Interactive loop ──────────────────────────────────────────────
@@ -22602,9 +22791,13 @@ def main():
                     for _ip51 in _bmc_ips51:
                         _creds51[_ip51] = (_shared_user51, _shared_pass51)
                 else:
+                    _group_pw51 = _collect_password_groups_for_nodes(_bmc_ips51, prompt_prefix="  ")
                     for _ip51 in _bmc_ips51:
                         _u51 = input(f"  Username for {_ip51} [admin]: ").strip() or "admin"
-                        _p51pw = getpass.getpass(f"  Password for {_ip51}: ")
+                        if _group_pw51 is not None and _ip51 in _group_pw51:
+                            _p51pw = _group_pw51[_ip51]
+                        else:
+                            _p51pw = getpass.getpass(f"  Password for {_ip51}: ")
                         _creds51[_ip51] = (_u51, _p51pw)
 
                 # ── Probe each node in parallel ───────────────────────────────────
@@ -22807,9 +23000,13 @@ def main():
                     for _ip52 in _bmc_ips52:
                         _creds52[_ip52] = (_shared_user52, _shared_pass52)
                 else:
+                    _group_pw52 = _collect_password_groups_for_nodes(_bmc_ips52, prompt_prefix="  ")
                     for _ip52 in _bmc_ips52:
                         _u52 = input(f"  Username for {_ip52} [admin]: ").strip() or "admin"
-                        _p52pw = getpass.getpass(f"  Password for {_ip52}: ")
+                        if _group_pw52 is not None and _ip52 in _group_pw52:
+                            _p52pw = _group_pw52[_ip52]
+                        else:
+                            _p52pw = getpass.getpass(f"  Password for {_ip52}: ")
                         _creds52[_ip52] = (_u52, _p52pw)
 
                 _ld52_log_dir = _session_log.log_dir if _session_log else os.getcwd()
@@ -22945,9 +23142,13 @@ def main():
                     for _ip53 in _bmc_ips53:
                         _creds53[_ip53] = (_shared_user53, _shared_pass53)
                 else:
+                    _group_pw53 = _collect_password_groups_for_nodes(_bmc_ips53, prompt_prefix="  ")
                     for _ip53 in _bmc_ips53:
                         _u53 = input(f"  Username for {_ip53} [admin]: ").strip() or "admin"
-                        _p53pw = getpass.getpass(f"  Password for {_ip53}: ")
+                        if _group_pw53 is not None and _ip53 in _group_pw53:
+                            _p53pw = _group_pw53[_ip53]
+                        else:
+                            _p53pw = getpass.getpass(f"  Password for {_ip53}: ")
                         _creds53[_ip53] = (_u53, _p53pw)
 
                 _ld53_log_dir = _session_log.log_dir if _session_log else os.getcwd()
@@ -24076,6 +24277,20 @@ def main():
                     except (EOFError, KeyboardInterrupt):
                         _same_creds_ans = ""
                     _same_creds_all = (_same_creds_ans != "n")
+                    _group_pw_peer = None
+                    if not _same_creds_all:
+                        _group_targets_peer = []
+                        for _addr in other_sps:
+                            _cfg_peer = _node_cfg_for(_addr)
+                            _pass_in_cfg_peer = (
+                                "bmc_password" in _cfg_peer
+                                and isinstance(_cfg_peer["bmc_password"], str)
+                            )
+                            if not _pass_in_cfg_peer:
+                                _group_targets_peer.append(_addr)
+                        _group_pw_peer = _collect_password_groups_for_nodes(
+                            _group_targets_peer, prompt_prefix="  "
+                        )
 
                     for addr in other_sps:
                         node_cfg = _node_cfg_for(addr)
@@ -24123,6 +24338,8 @@ def main():
                                 else:
                                     print(f"    📄 Password blank in config for {addr}; "
                                           "will attempt SSH with no password.")
+                            elif _group_pw_peer is not None and addr in _group_pw_peer:
+                                p = _group_pw_peer[addr]
                             else:
                                 _pin = getpass.getpass(
                                     f"    Password for {addr} "
@@ -24558,6 +24775,9 @@ def main():
                                 sp_host, sp_user, sp_pass,
                                 label=sp_host, max_attempts=1, interactive=True,
                                 is_reconnect=True,
+                                fallback_passwords=_bmc_fallback_passwords(
+                                    sp_host, {sp_host: sp_pass}
+                                ),
                             )
                             channel = _open_shell(_rc_client)
                             _bmc_reconnect_ok = True

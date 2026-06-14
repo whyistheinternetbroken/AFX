@@ -9,6 +9,14 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Experimental password groups added for per-node credential collection.**
+  In same-password prompts across node/BMC workflows, choosing per-node
+  passwords now offers an experimental password-group mode that lets operators
+  assign one password to numbered subsets of nodes, review a manifest, and
+  restart grouping before continuing.
+- **2a/2b/3 now include the same blank-password fallback used by 4b.**
+  BMC SSH connect/reconnect paths in options 2a, 2b, and 3 now silently try
+  fallback credentials (including blank password) before prompting again.
 - **4b now probes longer for LOADER before issuing resets.**
   In option 4b LOADER transitions (initial reset and reconnect), the pre-reset
   LOADER probe timeout was increased and now explicitly skips `system reset`
