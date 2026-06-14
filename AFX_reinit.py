@@ -3622,12 +3622,13 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         f"   Enter username for {host} [{username}] (blank to keep): "
                     ).strip() or username
                     new_pass = getpass.getpass(
-                        f"   Enter password for {new_user}@{host}: "
+                        f"   Enter password for {new_user}@{host} "
+                        "(blank=try blank, type SKIP to stop): "
                     )
             except (EOFError, KeyboardInterrupt):
                 break
-            if not new_pass:
-                print("   ⚠️  Empty password; aborting retry.")
+            if isinstance(new_pass, str) and new_pass.strip().upper() == "SKIP":
+                print("   ⚠️  Credential retry skipped by operator.")
                 break
             username, password = new_user, new_pass
             if _session_log:
@@ -3915,11 +3916,12 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                             f"   Enter username for {host} [{username}] (blank to keep): "
                         ).strip() or username
                         new_pass = getpass.getpass(
-                            f"   Enter password for {new_user}@{host}: "
+                            f"   Enter password for {new_user}@{host} "
+                            "(blank=try blank, type SKIP to stop): "
                         )
                 except (EOFError, KeyboardInterrupt):
                     break
-                if not new_pass:
+                if isinstance(new_pass, str) and new_pass.strip().upper() == "SKIP":
                     break
                 username, password = new_user, new_pass
                 continue
@@ -16951,8 +16953,12 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
     # ── 2. BMC credentials ─────────────────────────────────────────────────
     # Check whether any node still needs a password collected.
-    _needs_creds = [ip for ip in peer_bmcs if ip not in _peer_bmc_creds
-                    or not (_peer_bmc_creds[ip] or {}).get("password")]
+    _needs_creds = [
+        ip for ip in peer_bmcs
+        if ip not in _peer_bmc_creds
+        or "password" not in (_peer_bmc_creds[ip] or {})
+        or (_peer_bmc_creds[ip] or {}).get("password") is None
+    ]
     if _needs_creds:
         # Ask if all passwords are the same to avoid N prompts.
         _same_pw = _prompt(
@@ -17019,7 +17025,10 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     for _ip in list(peer_bmcs):
         _c = _peer_bmc_creds.get(_ip) or {}
         _u = _c.get("user") or bmc_user
-        _p = _c.get("password") or bmc_passwords.get(_ip, "")
+        if "password" in _c and _c.get("password") is not None:
+            _p = _c.get("password")
+        else:
+            _p = bmc_passwords.get(_ip, "")
         while True:
             try:
                 _cl, _u, _p = _ssh_connect_with_retry(
@@ -17039,15 +17048,20 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 print(f"    ❌ {_ip} — authentication failed: {_ae}")
                 if log:
                     log.log(f"2b pre-auth FAIL: {_ip}: {_ae}", prefix="WARN")
-                print(f"    Re-enter credentials for {_ip} "
-                      "(or leave password blank to skip this node):")
+                print(
+                    f"    Re-enter credentials for {_ip} "
+                    "(blank password will be tried; type 'skip' for username to skip):"
+                )
                 try:
-                    _u = input(f"      Username [{_u}]: ").strip() or _u
+                    _u_in = input(f"      Username [{_u}]: ").strip()
+                    if _u_in.lower() == "skip":
+                        print(f"    ⚠️  Skipping {_ip} — operator requested skip.")
+                        _auth_failed_nodes.append(_ip)
+                        break
+                    _u = _u_in or _u
                     _p = getpass.getpass(f"      Password for {_u}@{_ip}: ")
                 except (EOFError, KeyboardInterrupt):
-                    _p = ""
-                if not _p:
-                    print(f"    ⚠️  Skipping {_ip} — no credentials entered.")
+                    print(f"    ⚠️  Skipping {_ip} — input cancelled.")
                     _auth_failed_nodes.append(_ip)
                     break
     if _auth_failed_nodes:
@@ -17093,7 +17107,12 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             dict(
                 bmc=addr,
                 bmc_user=(_peer_bmc_creds.get(addr) or {}).get("user") or bmc_user,
-                bmc_password=(_peer_bmc_creds.get(addr) or {}).get("password") or bmc_passwords.get(addr, ""),
+                bmc_password=(
+                    (_peer_bmc_creds.get(addr) or {}).get("password")
+                    if "password" in (_peer_bmc_creds.get(addr) or {})
+                    and (_peer_bmc_creds.get(addr) or {}).get("password") is not None
+                    else bmc_passwords.get(addr, "")
+                ),
                 **{k: v for k, v in (_node_cfg_for(addr) or {}).items()
                    if k in ("node_mgmt_ip", "node_mgmt_port",
                             "node_mgmt_netmask", "node_mgmt_gateway")},
@@ -17208,7 +17227,12 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 dict(
                     bmc=addr,
                     bmc_user=(_peer_bmc_creds.get(addr) or {}).get("user") or bmc_user,
-                    bmc_password=(_peer_bmc_creds.get(addr) or {}).get("password") or bmc_passwords.get(addr, ""),
+                    bmc_password=(
+                        (_peer_bmc_creds.get(addr) or {}).get("password")
+                        if "password" in (_peer_bmc_creds.get(addr) or {})
+                        and (_peer_bmc_creds.get(addr) or {}).get("password") is not None
+                        else bmc_passwords.get(addr, "")
+                    ),
                     **{k: v for k, v in (_node_cfg_for(addr) or {}).items()
                        if k in ("node_mgmt_ip", "node_mgmt_port",
                                 "node_mgmt_netmask", "node_mgmt_gateway")},
@@ -17381,8 +17405,12 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         return True
 
     # ── 2. Collect BMC credentials ───────────────────────────────────────────
-    _needs_creds = [ip for ip in peer_bmcs if ip not in _peer_bmc_creds
-                    or not (_peer_bmc_creds[ip] or {}).get("password")]
+    _needs_creds = [
+        ip for ip in peer_bmcs
+        if ip not in _peer_bmc_creds
+        or "password" not in (_peer_bmc_creds[ip] or {})
+        or (_peer_bmc_creds[ip] or {}).get("password") is None
+    ]
     if _needs_creds:
         _same_pw = _prompt(
             f"\n  Are the BMC passwords the same for all {len(peer_bmcs)} node(s)? [y/n]: "
@@ -17491,7 +17519,10 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         for idx, addr in enumerate(_pending):
             _creds = _peer_bmc_creds.get(addr) or {}
             u = _creds.get("user") or bmc_user
-            p = _creds.get("password") or bmc_passwords.get(addr, "")
+            if "password" in _creds and _creds.get("password") is not None:
+                p = _creds.get("password")
+            else:
+                p = bmc_passwords.get(addr, "")
             def _run_2a(_ri=idx, _addr=addr, _u=u, _p=p):
                 _batch_results[_ri] = _add_peer_node_thread(
                     _addr, _u, _p, primary_channel, admin_password,
