@@ -4925,7 +4925,7 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
                 channel.send("y\r")
                 buf = ""
                 continue
-            if _LOADER_PROMPT_RE.search(buf):
+            if _LOADER_PROMPT_RE.search(buf) or "LOADER-" in buf.upper():
                 loader_found = True
                 break
             # If ONTAP output is seen, no need to keep waiting.
@@ -15296,9 +15296,24 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None):
 
     # Mode 3: launch parallel auto-add for every peer BMC.
     if _operation_mode == 3 and _peer_bmc_list:
-        add_peer_nodes_parallel(channel, _peer_bmc_list, cc.get("admin_password"),
-                                primary_bmc=primary_bmc)
-        _option3_finalize(_run_context, cc.get("mgmt_ip"))
+        _mode3_ok = add_peer_nodes_parallel(
+            channel, _peer_bmc_list, cc.get("admin_password"),
+            primary_bmc=primary_bmc,
+        )
+        if _mode3_ok:
+            _option3_finalize(_run_context, cc.get("mgmt_ip"))
+        print("\n❌ Mode 3 did not complete: one or more peer nodes failed to add.")
+        if _session_log:
+            _session_log.log(
+                "Mode 3 aborted before finalize: peer add did not complete",
+                prefix="ERROR",
+            )
+            _session_log.set_outcome("FAIL", "peer add did not complete")
+            try:
+                _session_log.close()
+            except Exception:
+                pass
+        sys.exit(1)
 
     # Mode 1 (1a/1b) only initialises the first node — exit cleanly here.
     if _operation_mode == 1:
@@ -16333,7 +16348,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
 
         _ts_print(f"[{label}] Starting node add process...")
         # Check if already at LOADER; skip system reset if so.
-        if not _already_at_loader(ch, label=label, node_log=node_file):
+        _already_loader = _already_at_loader(ch, label=label, node_log=node_file)
+        if not _already_loader:
             # Reset the node to begin a clean boot cycle.
             print(f"   🔄 [{label}] Sending system reset...")
             _slog(f"[{label}] sending system reset")
@@ -16352,13 +16368,15 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             if matched and "y/n" in matched.lower():
                 ch.send("y\r"); time.sleep(2)
 
-        # Send a CR to wake the console.
-
-        # Monitor for AUTOBOOT and LOADER.
+        # Monitor for AUTOBOOT and LOADER. If _already_at_loader() already
+        # confirmed LOADER, skip this wait and continue directly.
         buf = ""
         start = time.monotonic()
-        loader_seen = False
-        while time.monotonic() - start < 1200:
+        last_nudge = start
+        loader_seen = bool(_already_loader)
+        if not loader_seen:
+            ch.send("\r")
+        while (not loader_seen) and (time.monotonic() - start < 1200):
             if _shutdown_event.is_set():
                 return False
             if ch.recv_ready():
@@ -16372,11 +16390,14 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     for _ in range(5):
                         ch.send("\x03"); time.sleep(0.3)
                     buf = ""
-                elif _LOADER_PROMPT_RE.search(buf):
+                elif _LOADER_PROMPT_RE.search(buf) or "LOADER-" in buf.upper():
                     loader_seen = True
                     break
                 if len(buf) > 8192:
                     buf = buf[-4096:]
+            elif time.monotonic() - last_nudge >= 15.0:
+                ch.send("\r")
+                last_nudge = time.monotonic()
             time.sleep(0.1)
 
         if not loader_seen:
@@ -17586,7 +17607,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     is silently excluded so the primary node is never reset or re-added.
     """
     if not peer_bmcs:
-        return
+        return True
 
     # Safety: exclude any peer BMC that is (or resolves to) the primary.
     if primary_bmc:
@@ -17611,7 +17632,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                     f"from peer list: {_excluded}", prefix="WARN")
         if not peer_bmcs:
             print("  ℹ️  No peer BMCs remain after excluding primary; nothing to do.")
-            return
+            return True
 
     # Checkpoint: primary is up and we're about to add peers. Record this
     # milestone now so a re-run can detect that the cluster already exists
@@ -17640,7 +17661,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                 print("  ✅ All peers already joined per checkpoint; nothing to do.")
                 if _session_log:
                     _session_log.log("checkpoint resume: all peers already joined")
-                return
+                return True
 
     _print_banner(f"🚀 Mode 3: parallel auto-add for {len(peer_bmcs)} peer node(s)")
     print(f"  Peers: {', '.join(peer_bmcs)}")
@@ -17684,6 +17705,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
 
     _m3_pending = list(peer_bmcs)
 
+    _mode3_ok = True
     while _m3_pending:
         _n3 = len(_m3_pending)
         _m3_results = [None] * _n3
@@ -17722,6 +17744,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                              prefix="WARN")
         _m3_retry_ans = _prompt("  Retry failed node(s)? [y/n]: ", "n").lower()
         if _m3_retry_ans != "y":
+            _mode3_ok = False
             break
         print(f"\n🔁 Retrying {len(_m3_failed)} node(s)...")
         if _session_log:
@@ -17734,14 +17757,19 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     )
     _m3_add_node_timings: "dict[str, float]" = {}
     if _m3_collected_ips:
-        _cluster_add_nodes_bulk(primary_channel, _m3_collected_ips,
-                                log=_session_log,
-                                node_timings_out=_m3_add_node_timings)
+        _add_nodes_ok = _cluster_add_nodes_bulk(
+            primary_channel, _m3_collected_ips,
+            log=_session_log,
+            node_timings_out=_m3_add_node_timings,
+        )
+        if not _add_nodes_ok:
+            _mode3_ok = False
     else:
         print("\n⚠️  No cluster IPs collected from peer nodes; skipping cluster add-node.")
         if _session_log:
             _session_log.log("peer add: no cluster IPs collected; skipping cluster add-node",
                              prefix="WARN")
+        _mode3_ok = False
 
     if _session_log:
         _t_mode3_end = time.monotonic()
@@ -17779,7 +17807,11 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                                         key=lambda x: x[1]):
                 _session_log.add_phase_subtiming(
                     _PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
-    print("\n✅ Parallel peer auto-add complete.")
+    if _mode3_ok:
+        print("\n✅ Parallel peer auto-add complete.")
+    else:
+        print("\n❌ Parallel peer auto-add incomplete.")
+    return _mode3_ok
 
 
 def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
