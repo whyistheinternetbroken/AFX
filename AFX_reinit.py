@@ -12233,6 +12233,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 _opt4_boot_timeout = 1200  # 20 minutes
                 _opt4_next_progress = _opt4_boot_start + 300
                 _opt4_buf = ""
+                _opt4_mgmt_answered = False
+                _opt4_mgmt_triggers = [
+                    "node management interface port",
+                    "node management interface ip address",
+                    "node management interface netmask",
+                    "node management interface default gateway",
+                ]
                 _opt4_sigs_lower = ["login:", "timed out waiting for vldb online",
                                     "failed to get number of nodes in cluster",
                                     "nvram changed on this node",
@@ -12281,6 +12288,26 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             time.sleep(2)
                             continue
                         _opt4_buf_lower = _opt4_buf.lower()
+                        if (not _opt4_mgmt_answered
+                                and any(_t in _opt4_buf_lower for _t in _opt4_mgmt_triggers)):
+                            _status(f"  [{ip}] Option 4 node-mgmt prompt detected – auto-answering setup fields...")
+                            if log:
+                                log.log(f"[{ip}] option 4 node-mgmt prompt detected; auto-answering fields")
+                            try:
+                                _cfg_opt4 = _resolve_node_mgmt_config(ip)
+                                _residual_opt4 = _auto_answer_node_mgmt(
+                                    ch, _cfg_opt4, node_log=_nf6
+                                ) or ""
+                                _opt4_buf = _residual_opt4
+                                _opt4_mgmt_answered = True
+                                continue
+                            except Exception as _e_opt4_mgmt:
+                                _status(f"  ⚠️  [{ip}] Failed to auto-answer node-mgmt prompts: {_e_opt4_mgmt}")
+                                if log:
+                                    log.log(
+                                        f"[{ip}] option 4 node-mgmt auto-answer failed: {_e_opt4_mgmt}",
+                                        prefix="WARN",
+                                    )
                         for _s4 in _opt4_sigs_lower:
                             if _s4 in _opt4_buf_lower:
                                 _m3 = _s4
