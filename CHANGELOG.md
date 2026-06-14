@@ -9,6 +9,20 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Modes 1–4 now fail fast globally on unsupported boot DNA.**
+  If any node reports an unsupported `bootarg.init.dna` value during reinit
+  workflows, the run now stops all node work, aborts the script, and tells the
+  operator to contact NetApp Support before retrying.
+- **Added 5k boot-DNA check utility for live clusters and LOADER.**
+  Option 5 now includes a `5k` utility that accepts either a cluster
+  management IP or a BMC IP, detects whether the target lands at a cluster
+  shell or LOADER, and reports `bootarg.init.dna`. The LOADER path uses
+  `printenv bootarg.init.dna`, while the live-cluster path runs
+  `node run * -c "priv set diag; bootargs get bootarg.init.dna"`.
+- **5d rerun can now reselect targets from the numbered BMC list.**
+  When an operator chooses to rerun BMC auth verification, the script now
+  reopens the numbered target picker so a different all/subset selection can be
+  tested without returning to the main menu.
 - **5z reset-to-LOADER now supports numbered subset selection.**
   The LOADER target list is now shown with numeric indices, and operators can
   run the reset against all targets or a comma-separated subset (for example,

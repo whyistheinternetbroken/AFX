@@ -2327,6 +2327,7 @@ def select_operation_mode():
         print("    5h. List and clean up stale BMC SSH sessions")
         print("    5i. Backup LOADER environment variables (experimental)")
         print("    5j. Compare LOADER env to defaults (diff) (experimental)")
+        print("    5k. Check boot DNA (cluster shell or LOADER)")
         print("")
         print("    !!Disruptive commands!!")
         print("      5z. Reset all nodes to LOADER prompt")
@@ -2335,7 +2336,7 @@ def select_operation_mode():
         print("")
         print("  " + "─" * 58)
         print("  (type 'menu' at any prompt to return here)")
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5j/5z, or 6): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5k/5z, or 6): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2538,7 +2539,7 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5z"):
+        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5k", "5z"):
             if choice == "5":
                 _print_banner("🛠️ 5: Administration and maintenance")
                 print("\n  5a. Install license file only")
@@ -2550,12 +2551,13 @@ def select_operation_mode():
                 print("  5h. List and clean up stale BMC SSH sessions")
                 print("  5i. Backup LOADER environment variables (experimental)")
                 print("  5j. Compare LOADER env to defaults (diff) (experimental)")
+                print("  5k. Check boot DNA (cluster shell or LOADER)")
                 print("")
                 print("  !!Disruptive commands!!")
                 print("    5z. Reset all nodes to LOADER prompt")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5j, 5z) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5a–5k, 5z) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -2719,13 +2721,29 @@ def select_operation_mode():
                     print("\n  \u2705 Confirmed. 5j: Compare LOADER env to defaults (diff)\n")
                     return 53, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
+
+            if choice == "5k":
+                _print_banner("\U0001f9ec 5k: Check boot DNA")
+                print("")
+                print("  Connects to a cluster management IP or a BMC IP, then")
+                print("  reads bootarg.init.dna from the cluster shell or LOADER.")
+                print("  If a BMC prompt is detected, the script enters system")
+                print("  console and follows the live-cluster or LOADER path")
+                print("  automatically based on the prompt it finds there.")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  \u2705 Confirmed. 5k: Check boot DNA\n")
+                    return 54, False, False
+                print("\n  \u21a9\ufe0f  Returning to menu...\n")
             continue
 
         if choice == "6":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5j, or 6.")
+        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5k, or 6.")
 
 
 def get_loader_commands():
@@ -2918,6 +2936,9 @@ _bootarg_check_enabled: "bool | None" = None
 _loader_env_stage_enabled: "bool | None" = None
 
 _shutdown_event = threading.Event()
+_fatal_boot_dna_event = threading.Event()
+_fatal_boot_dna_lock = threading.Lock()
+_fatal_boot_dna_label = ""
 _client_lock    = threading.Lock()
 _active_client  = None
 _ctrl_c_count   = 0
@@ -4526,6 +4547,7 @@ DESCRIPTION
       5h   List and clean up stale BMC SSH sessions
       5i   Backup LOADER environment variables (experimental)
       5j   Compare LOADER env to defaults (diff) (experimental)
+      5k   Check boot DNA (cluster shell or LOADER)
       5z   Reset all nodes to LOADER prompt (parallel; disruptive command)
 
 OPTIONS
@@ -6593,6 +6615,31 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
 _REQUIRED_BOOT_DNA = "3088"
 
 
+def _mark_fatal_boot_dna(node_label=""):
+    """Mark unsupported boot DNA as a fatal all-nodes stop condition."""
+    global _fatal_boot_dna_label
+    with _fatal_boot_dna_lock:
+        if not _fatal_boot_dna_event.is_set():
+            _fatal_boot_dna_label = str(node_label or "").strip()
+    _fatal_boot_dna_event.set()
+    _shutdown_event.set()
+
+
+def _print_fatal_boot_dna_abort_message():
+    """Print the shared abort message for unsupported boot DNA."""
+    _node = _fatal_boot_dna_label or "one or more nodes"
+    print("\n❌ Unsupported boot DNA detected.")
+    print(f"  Affected node: {_node}")
+    print("  Aborting this run for all nodes.")
+    print("  Please contact NetApp Support to resolve the issue before retrying.")
+    if _session_log:
+        _session_log.log(
+            f"Fatal unsupported boot DNA detected on {_node}; aborting all node work",
+            prefix="ERROR",
+        )
+        _session_log.set_outcome("FAIL", "unsupported boot DNA")
+
+
 def _verify_boot_dna(channel, node_log=None):
     """Run 'printenv' at the LOADER prompt, save raw output in configs/, and
     confirm bootarg.init.dna is the supported value.
@@ -6620,25 +6667,8 @@ def _verify_boot_dna(channel, node_log=None):
     except Exception as _env_exc:
         _slog(f"Could not save LOADER printenv output: {_env_exc}", prefix="WARN")
 
-    # Find the DNA value in the printenv output. Typical formats:
-    #   bootarg.init.dna=3088
-    #   bootarg.init.dna           3088
-    # We restrict the gap between key and value to spaces/tabs (not \s, which
-    # would span newlines) so the echoed command line "printenv\r\n" is NOT
-    # matched against the next line's "Variable"
-    # table header. We then take the last match, which is the data row.
-    dna_value = None
-    matches = re.findall(
-        r"bootarg\.init\.dna[ \t]*[=:]?[ \t]+(\S+)",
-        output,
-        flags=re.IGNORECASE,
-    )
-    # Reject obvious header/echo tokens.
-    for candidate in reversed(matches):
-        token = candidate.strip().rstrip(",;")
-        if token and token.lower() not in {"value", "name", "variable"}:
-            dna_value = token
-            break
+    records = _extract_boot_dna_records(output)
+    dna_value = records[-1][1] if records else None
 
     if dna_value == _REQUIRED_BOOT_DNA:
         print(f"   ✅ Boot DNA check passed: bootarg.init.dna={dna_value}")
@@ -6663,6 +6693,240 @@ def _verify_boot_dna(channel, node_log=None):
             prefix="ERROR",
         )
     return False
+
+
+def _extract_boot_dna_records(output, default_label=""):
+    """Extract ``[(label, dna_value), ...]`` from LOADER or cluster-shell output."""
+    records = []
+    seen = set()
+    for raw_line in (output or "").splitlines():
+        line = _ANSI_RE.sub("", raw_line).strip()
+        lower = line.lower()
+        if "bootarg.init.dna" not in lower:
+            continue
+        if lower.startswith("printenv bootarg.init.dna"):
+            continue
+        if "node run " in lower and "bootargs get bootarg.init.dna" in lower:
+            continue
+
+        match = re.search(
+            r"bootarg\.init\.dna[ \t]*[=:]?[ \t]+(\S+)",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            continue
+
+        value = match.group(1).strip().rstrip(",;")
+        if not value or value.lower() in {"value", "name", "variable"}:
+            continue
+
+        label = default_label or ""
+        prefix = line[:match.start()]
+        label_match = re.search(r"([A-Za-z0-9_.-]+)\s*:\s*$", prefix)
+        if label_match:
+            label = label_match.group(1)
+
+        key = (label, value)
+        if key in seen:
+            continue
+        seen.add(key)
+        records.append(key)
+
+    if records:
+        return records
+
+    matches = re.findall(
+        r"bootarg\.init\.dna[ \t]*[=:]?[ \t]+(\S+)",
+        output or "",
+        flags=re.IGNORECASE,
+    )
+    for candidate in reversed(matches):
+        token = candidate.strip().rstrip(",;")
+        if token and token.lower() not in {"value", "name", "variable"}:
+            return [(default_label or "target", token)]
+    return []
+
+
+def _print_boot_dna_records(records, *, source_label):
+    """Print a compact boot-DNA summary table."""
+    if not records:
+        print(f"  ⚠️  Could not parse bootarg.init.dna from {source_label}.")
+        return False
+
+    print(f"\n  🧬 bootarg.init.dna values from {source_label}:")
+    print(f"  {'Target':<24}  Value")
+    print(f"  {'-'*24}  {'-'*12}")
+    for label, value in records:
+        print(f"  {(label or 'target'):<24}  {value}")
+    return True
+
+
+def _run_boot_dna_check_mode():
+    """Mode 5k helper: detect cluster-shell vs LOADER and print DNA values."""
+    _target54 = input("  Cluster management IP or BMC IP: ").strip()
+    if not _target54:
+        print("  No target entered. Returning to menu.")
+        return
+    _user54 = input("  Username [admin]: ").strip() or "admin"
+    _pass54 = getpass.getpass("  Password (blank = none): ")
+
+    _cluster_config["admin_user"] = _user54
+    _cluster_config["admin_password"] = _pass54
+
+    _cl54 = _ch54 = _nf54 = None
+    try:
+        _cl54, _user54, _pass54 = _ssh_connect_with_retry(
+            _target54, _user54, _pass54,
+            label=f"5k/{_target54}", max_attempts=3, interactive=True,
+        )
+        _ch54 = _open_shell(_cl54)
+        try:
+            _nf54 = _node_log_open(
+                _target54,
+                _session_log.log_dir if _session_log else os.getcwd(),
+                prefix="5k_boot_dna",
+            )
+        except Exception:
+            _nf54 = None
+
+        _ch54.send("\r")
+        _init54_out, _init54_match = direct_read_until_any(
+            _ch54,
+            ["::>", "::*>", "login:", "y/n", ">", "loader-"],
+            timeout=20,
+            node_log=_nf54,
+            quiet=True,
+        )
+        if _init54_match and "y/n" in _init54_match.lower():
+            _ch54.send("y\r")
+            time.sleep(1)
+            _more54_out, _init54_match = direct_read_until_any(
+                _ch54,
+                ["::>", "::*>", "login:", ">", "loader-"],
+                timeout=20,
+                node_log=_nf54,
+                quiet=True,
+            )
+            _init54_out += _more54_out
+
+        _source54 = "direct SSH session"
+        _cluster_ready54 = False
+        _loader_ready54 = False
+
+        if _init54_match and ("::>" in _init54_match or "::*>" in _init54_match):
+            print("  ✅ Cluster shell detected directly.")
+            _cluster_ready54 = True
+            _source54 = "cluster shell"
+        elif _init54_match and "login:" in _init54_match.lower():
+            print("  🔐 Cluster login prompt detected directly.")
+            if not _wait_for_cluster_prompt(_ch54, timeout=45):
+                print("  ❌ Could not reach the cluster shell.")
+                return
+            _cluster_ready54 = True
+            _source54 = "cluster shell"
+        elif _init54_match and "loader-" in _init54_match.lower():
+            print("  ✅ LOADER prompt detected directly.")
+            _loader_ready54 = True
+            _source54 = "LOADER"
+        else:
+            if not (_init54_match and ">" in _init54_match):
+                if not _reach_bmc_prompt(
+                    _ch54,
+                    node_log=_nf54,
+                    takeover_msg=f"[{_target54}] taking over existing BMC session for boot DNA check",
+                ):
+                    print("  ❌ Could not reach a BMC or cluster prompt.")
+                    return
+
+            print("  🖥️  BMC prompt detected; entering system console...")
+            _ch54.send("system console\r")
+            _sc54_out, _sc54_match = direct_read_until_any(
+                _ch54,
+                ["y/n", "ctrl-d", "loader-", "::>", "::*>",
+                 "login:", "password:", "selection", "autoboot",
+                 "boot loader"],
+                timeout=25,
+                node_log=_nf54,
+                quiet=True,
+            )
+            if _sc54_match and "y/n" in _sc54_match.lower():
+                _ch54.send("y\r")
+                time.sleep(1)
+                _sc54_out2, _sc54_match = direct_read_until_any(
+                    _ch54,
+                    ["loader-", "::>", "::*>", "login:",
+                     "password:", "selection", "autoboot",
+                     "boot loader"],
+                    timeout=25,
+                    node_log=_nf54,
+                    quiet=True,
+                )
+                _sc54_out += _sc54_out2
+
+            _ch54.send("\r")
+            _nudge54, _nudge54_match = direct_read_until_any(
+                _ch54,
+                ["loader-", "::>", "::*>", "login:",
+                 "password:", "selection", "autoboot",
+                 "boot loader"],
+                timeout=10,
+                node_log=_nf54,
+                quiet=True,
+            )
+            _combined54 = (_sc54_out + _nudge54).lower()
+
+            if _LOADER_PROMPT_RE.search(_sc54_out + _nudge54):
+                print("  ✅ LOADER prompt detected via system console.")
+                _loader_ready54 = True
+                _source54 = "LOADER via BMC console"
+            elif ("::>" in _combined54 or "::*>" in _combined54
+                  or "login:" in _combined54 or "password:" in _combined54):
+                print("  ✅ Live-cluster console detected; reaching cluster shell...")
+                if not _wait_for_cluster_prompt(_ch54, timeout=45):
+                    print("  ❌ Could not reach the cluster shell from system console.")
+                    return
+                _cluster_ready54 = True
+                _source54 = "cluster shell via BMC console"
+            else:
+                print("  ❌ Could not determine whether the node is at LOADER or a live cluster prompt.")
+                return
+
+        if _cluster_ready54:
+            print('\n  ▶ Running: node run * -c "priv set diag; bootargs get bootarg.init.dna"\n')
+            _boot54_out = _run_cluster_command(
+                _ch54,
+                'node run * -c "priv set diag; bootargs get bootarg.init.dna"',
+                timeout=90,
+            )
+            _boot54_records = _extract_boot_dna_records(_boot54_out, default_label=_target54)
+            _print_boot_dna_records(_boot54_records, source_label=_source54)
+        elif _loader_ready54:
+            print("\n  ▶ Running: printenv bootarg.init.dna\n")
+            _boot54_out = direct_send_and_wait(
+                _ch54,
+                "printenv bootarg.init.dna",
+                "LOADER-",
+                timeout=20,
+                node_log=_nf54,
+            )
+            _boot54_records = _extract_boot_dna_records(_boot54_out, default_label=_target54)
+            _print_boot_dna_records(_boot54_records, source_label=_source54)
+
+        if _session_log:
+            print(f"\n📝 Session log: {_session_log.log_file}")
+    finally:
+        if _nf54:
+            try:
+                _nf54.close()
+            except Exception:
+                pass
+        for _obj54 in (_ch54, _cl54):
+            try:
+                if _obj54:
+                    _obj54.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -12059,9 +12323,16 @@ def _run_4b_standalone(log, resuming: bool = False):
             return
         # From LOADER: capture env, run set-defaults, then send remaining commands.
         _log_dir = _session_log.log_dir if _session_log else os.getcwd()
-        _loader_env_pre_post_prompt(
+        _env_restore_state = _loader_env_pre_post_prompt(
             ch, ip, _log_dir, node_log=_rl_nf, interactive=False
         )
+        if _env_restore_state is None:
+            with _reconnect_lock:
+                _reconnect_errors.append(ip)
+            _status(
+                f"  ❌ [{ip}] Unsupported boot DNA detected; aborting all node work."
+            )
+            return
         for cmd in get_loader_commands():
             if cmd == "set-defaults":
                 continue  # already run inside _loader_env_pre_post_prompt
@@ -12080,6 +12351,10 @@ def _run_4b_standalone(log, resuming: bool = False):
                 log.log(f"[{ip}] checkpoint: reinit_loader saved")
 
     _run_parallel(bmc_ips, _reconnect_worker, with_index=True)
+
+    if _fatal_boot_dna_event.is_set():
+        _print_fatal_boot_dna_abort_message()
+        return False
 
     if _reconnect_errors:
         print(f"\n  ⚠️  Reconnect failed for: {', '.join(_reconnect_errors)}")
@@ -16665,6 +16940,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
     can render a per-node breakdown in the session summary.
     """
     label = f"peer/{peer_bmc}"
+    if _fatal_boot_dna_event.is_set():
+        return False
     print(f"\n🧵 [{label}] Starting peer auto-add thread...")
     if _session_log:
         _session_log.log(f"[{label}] thread starting")
@@ -17631,6 +17908,10 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         for t in threads:
             t.join()
 
+        if _fatal_boot_dna_event.is_set():
+            _print_fatal_boot_dna_abort_message()
+            return False
+
         _failed = [_pending[i] for i, r in enumerate(_batch_results) if not r]
 
         if not _failed:
@@ -17890,6 +18171,10 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         print(f"\n  ⏳ Nodes running in parallel. Answer prompts above when asked...")
         for t in threads:
             t.join()
+
+        if _fatal_boot_dna_event.is_set():
+            _print_fatal_boot_dna_abort_message()
+            return False
 
         _failed = [_pending[i] for i, r in enumerate(_batch_results) if not r]
 
@@ -18466,6 +18751,10 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         for t in threads:
             t.join()
 
+        if _fatal_boot_dna_event.is_set():
+            _print_fatal_boot_dna_abort_message()
+            return False
+
         _m3_failed = [_m3_pending[i] for i, r in enumerate(_m3_results) if not r]
 
         if not _m3_failed:
@@ -18822,6 +19111,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
         _slog("bootarg.init.dna verification required; running automatically")
         if not _verify_boot_dna(channel, node_log=_env_log):
+            _mark_fatal_boot_dna(label)
             if _close_env_log and _env_log:
                 with suppress(Exception):
                     _env_log.close()
@@ -18852,6 +19142,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     # Verify boot DNA (required in all modes).
     _slog("bootarg.init.dna verification required; running automatically")
     if not _verify_boot_dna(channel, node_log=_env_log):
+        _mark_fatal_boot_dna(label)
         if _close_env_log and _env_log:
             with suppress(Exception):
                 _env_log.close()
@@ -21207,48 +21498,68 @@ def main():
                     print("  No BMC addresses to test. Exiting.")
                     sys.exit(0)
 
-                print("\n  BMC targets:")
-                for _idx47, _ip47 in enumerate(_bmc_ips47, 1):
-                    print(f"    {_idx47:>2}. {_ip47}")
-                while True:
-                    _pick47 = _prompt(
-                        "  Test all BMCs or subset by number(s) (comma-separated, "
-                        "blank=all): ",
-                        "all",
-                    ).strip().lower()
-                    if _pick47 in ("", "all", "a", "*"):
+                _all_bmc_ips47 = list(_bmc_ips47)
+
+                def _select_bmc_targets47(_candidate_ips47):
+                    _selected47 = list(_candidate_ips47)
+                    print("\n  BMC targets:")
+                    for _idx47, _ip47 in enumerate(_candidate_ips47, 1):
+                        print(f"    {_idx47:>2}. {_ip47}")
+                    while True:
+                        _pick47 = _prompt(
+                            "  Test all BMCs or subset by number(s) (comma-separated, "
+                            "blank=all): ",
+                            "all",
+                        ).strip().lower()
+                        if _pick47 in ("", "all", "a", "*"):
+                            break
+                        _parts47 = [p.strip() for p in _pick47.split(",") if p.strip()]
+                        if not _parts47:
+                            break
+                        _bad47 = [p for p in _parts47 if not p.isdigit()]
+                        if _bad47:
+                            print(f"  ⚠️  Invalid entry: {', '.join(_bad47)}. Use numbers like: 1,3")
+                            continue
+                        _idxs47 = sorted(set(int(p) for p in _parts47))
+                        _oor47 = [str(i) for i in _idxs47 if i < 1 or i > len(_candidate_ips47)]
+                        if _oor47:
+                            print(f"  ⚠️  Out of range: {', '.join(_oor47)} (valid: 1-{len(_candidate_ips47)})")
+                            continue
+                        _selected47 = [_candidate_ips47[i - 1] for i in _idxs47]
                         break
-                    _parts47 = [p.strip() for p in _pick47.split(",") if p.strip()]
-                    if not _parts47:
-                        break
-                    _bad47 = [p for p in _parts47 if not p.isdigit()]
-                    if _bad47:
-                        print(f"  ⚠️  Invalid entry: {', '.join(_bad47)}. Use numbers like: 1,3")
-                        continue
-                    _idxs47 = sorted(set(int(p) for p in _parts47))
-                    _oor47 = [str(i) for i in _idxs47 if i < 1 or i > len(_bmc_ips47)]
-                    if _oor47:
-                        print(f"  ⚠️  Out of range: {', '.join(_oor47)} (valid: 1-{len(_bmc_ips47)})")
-                        continue
-                    _bmc_ips47 = [_bmc_ips47[i - 1] for i in _idxs47]
-                    break
-                print(f"  ✅ Selected {len(_bmc_ips47)} BMC(s): {', '.join(_bmc_ips47)}")
+                    print(f"  ✅ Selected {len(_selected47)} BMC(s): {', '.join(_selected47)}")
+                    return _selected47
+
+                _bmc_ips47 = _select_bmc_targets47(_all_bmc_ips47)
 
                 # ── Credentials ──────────────────────────────────────────────────
                 print("")
-                _same_creds47 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
                 _creds47 = {}   # ip -> (user, password)
-                if _same_creds47 != "n":
-                    _shared_user47 = input("  BMC username [admin]: ").strip() or "admin"
-                    _shared_pass47 = getpass.getpass("  BMC password (blank = none): ")
-                    for _ip47 in _bmc_ips47:
-                        _creds47[_ip47] = (_shared_user47, _shared_pass47)
-                else:
-                    for _ip47 in _bmc_ips47:
-                        print(f"\n  Credentials for {_ip47}:")
-                        _u47 = input("    Username [admin]: ").strip() or "admin"
-                        _p47 = getpass.getpass("    Password (blank = none): ")
-                        _creds47[_ip47] = (_u47, _p47)
+
+                def _ensure_creds47(_selected_ips47):
+                    _missing47 = [_ip for _ip in _selected_ips47 if _ip not in _creds47]
+                    if not _missing47:
+                        return
+                    _default_user47 = "admin"
+                    if _creds47:
+                        _default_user47 = next(iter(_creds47.values()))[0] or "admin"
+                    _same_creds47 = input(
+                        f"  Use the same username and password for all {len(_missing47)} "
+                        "selected BMC(s)? [Y/n]: "
+                    ).strip().lower()
+                    if _same_creds47 != "n":
+                        _shared_user47 = input(f"  BMC username [{_default_user47}]: ").strip() or _default_user47
+                        _shared_pass47 = getpass.getpass("  BMC password (blank = none): ")
+                        for _ip47 in _missing47:
+                            _creds47[_ip47] = (_shared_user47, _shared_pass47)
+                    else:
+                        for _ip47 in _missing47:
+                            print(f"\n  Credentials for {_ip47}:")
+                            _u47 = input(f"    Username [{_default_user47}]: ").strip() or _default_user47
+                            _p47 = getpass.getpass("    Password (blank = none): ")
+                            _creds47[_ip47] = (_u47, _p47)
+
+                _ensure_creds47(_bmc_ips47)
                 print("")
 
                 while True:
@@ -21404,6 +21715,9 @@ def main():
                         "n",
                     ).strip().lower()
                     if _rerun47 == "y":
+                        _bmc_ips47 = _select_bmc_targets47(_all_bmc_ips47)
+                        print("")
+                        _ensure_creds47(_bmc_ips47)
                         print("")
                         continue
                     break
@@ -22469,6 +22783,14 @@ def main():
                 print("  Diff/restore complete.")
                 if _session_log:
                     print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
+                raise _ReturnToMenu
+
+            # ── Mode 54 (5k): Check boot DNA ───────────────────────────────────────
+            if _operation_mode == 54:
+                _print_banner("\U0001f9ec 5k: Check boot DNA")
+                _make_session_log("Mode 5k: boot DNA check")
+                print("")
+                _run_boot_dna_check_mode()
                 raise _ReturnToMenu
 
             # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
