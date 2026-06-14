@@ -22886,7 +22886,23 @@ def main():
                     if _rerun47 == "y":
                         _bmc_ips47 = _select_bmc_targets47(_all_bmc_ips47)
                         print("")
-                        _ensure_creds47(_bmc_ips47)
+                        _reuse_creds47 = _prompt(
+                            "  Reuse same user password combination? [Y/n]: ",
+                            "y",
+                        ).strip().lower()
+                        if _reuse_creds47 in ("", "y", "yes"):
+                            _ensure_creds47(_bmc_ips47)
+                        else:
+                            _default_user47 = "admin"
+                            if _creds47:
+                                _default_user47 = next(iter(_creds47.values()))[0] or "admin"
+                            _new_user47 = _prompt(
+                                f"  BMC username [{_default_user47}]: ",
+                                _default_user47,
+                            ).strip() or _default_user47
+                            _new_pass47 = getpass.getpass("  BMC password (blank = none): ")
+                            for _ip47 in _bmc_ips47:
+                                _creds47[_ip47] = (_new_user47, _new_pass47)
                         print("")
                         continue
                     break
