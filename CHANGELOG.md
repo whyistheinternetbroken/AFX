@@ -9,6 +9,21 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Added mode 5l to build `configs/cluster_IP.json` for node-add reuse.**
+  New utility option `5l` connects to cluster management, queries
+  cluster-role interfaces (`-role cluster`), and writes an ordered cluster-IP
+  manifest used by node-add flows.
+- **Node-add IP ordering now prefers `configs/cluster_IP.json`.**
+  Options 2a/2b/3/4b now use manifest order for `cluster add-node -cluster-ips`
+  when available, with runtime-collected IPs appended if missing from file.
+- **`cluster_IP.json` now records one cluster IP per node.**
+  The 5l writer keeps the first cluster-role IP returned per node (in command
+  output order) to avoid dual-cluster-LIF duplication in add-node arguments.
+- **Modes 1–4 now evaluate AUTOBOOT during boot-DNA review.**
+  During LOADER boot-DNA verification, the script now checks `AUTOBOOT` and,
+  when it is `false`, asks once whether to force `AUTOBOOT=true` after
+  `set-defaults`. If approved, `setenv AUTOBOOT true` is injected with the
+  post-default LOADER bootarg commands.
 - **Experimental password groups added for per-node credential collection.**
   In same-password prompts across node/BMC workflows, choosing per-node
   passwords now offers an experimental password-group mode that lets operators

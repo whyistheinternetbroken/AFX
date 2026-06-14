@@ -487,6 +487,7 @@ _netboot_static_ip = False
 # Path to the most recently written node-add manifest file (set by
 # _write_node_add_manifest). Used by option 2c to locate the last run.
 _last_node_add_manifest: str = ""
+_cluster_ip_manifest_lock = threading.Lock()
 
 # Set to True by _run_4b_standalone when the operator selected a reinit
 # sub-mode (1a/1b/3).  Read by main() to decide whether to offer the
@@ -2328,6 +2329,7 @@ def select_operation_mode():
         print("    5i. Backup LOADER environment variables (experimental)")
         print("    5j. Compare LOADER env to defaults (diff) (experimental)")
         print("    5k. Check boot DNA (cluster shell or LOADER)")
+        print("    5l. Build cluster_IP manifest for node-add ordering")
         print("")
         print("    !!Disruptive commands!!")
         print("      5z. Reset all nodes to LOADER prompt")
@@ -2336,7 +2338,7 @@ def select_operation_mode():
         print("")
         print("  " + "─" * 58)
         print("  (type 'menu' at any prompt to return here)")
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5k/5z, or 6): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5l/5z, or 6): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2436,6 +2438,10 @@ def select_operation_mode():
             print("  cluster. The script auto-answers zero/erase/yes prompts,")
             print("  populates node-management info from the config or prompts,")
             print("  and answers 'join' at the create/join step.")
+            print("  When per-node credentials are used, you can optionally")
+            print("  define experimental password groups by node list.")
+            print("  BMC auth/connect retries also include silent fallback")
+            print("  passwords (including blank) before re-prompting.")
             print("")
             print("  " + "*" * 58)
             print("  * CAUTION: 2b REQUIRES AN EXISTING CLUSTER. IF NONE    *")
@@ -2471,6 +2477,9 @@ def select_operation_mode():
             print("       additional BMC in PARALLEL. The 'create or join'")
             print("       step is serialized so each node is fully added")
             print("       (verified via 'cluster show') before the next one.")
+            print("    3) Per-node credential prompts support experimental")
+            print("       password groups and silent fallback passwords")
+            print("       (including blank) on BMC auth/connect retries.")
             print("")
             print("  " + "*" * 58)
             print("  * THIS DESTROYS ALL DATA ON ALL TARGETED NODES.        *")
@@ -2539,7 +2548,7 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5k", "5z"):
+        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5k", "5l", "5z"):
             if choice == "5":
                 _print_banner("🛠️ 5: Administration and maintenance")
                 print("\n  5a. Install license file only")
@@ -2552,12 +2561,13 @@ def select_operation_mode():
                 print("  5i. Backup LOADER environment variables (experimental)")
                 print("  5j. Compare LOADER env to defaults (diff) (experimental)")
                 print("  5k. Check boot DNA (cluster shell or LOADER)")
+                print("  5l. Build cluster_IP manifest for node-add ordering")
                 print("")
                 print("  !!Disruptive commands!!")
                 print("    5z. Reset all nodes to LOADER prompt")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5k, 5z) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5a–5l, 5z) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -2737,24 +2747,40 @@ def select_operation_mode():
                     print("\n  \u2705 Confirmed. 5k: Check boot DNA\n")
                     return 54, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
+
+            if choice == "5l":
+                _print_banner("🧭 5l: Build cluster_IP manifest")
+                print("")
+                print("  Connects to the cluster management shell and collects")
+                print("  all cluster-role interface IP addresses in command output")
+                print("  order. Writes configs/cluster_IP.json for reuse by node-add")
+                print("  workflows and deterministic cluster add-node ordering.")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  ✅ Confirmed. 5l: Build cluster_IP manifest\n")
+                    return 55, False, False
+                print("\n  ↩️  Returning to menu...\n")
             continue
 
         if choice == "6":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5k, or 6.")
+        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5l, or 6.")
 
 
 def get_loader_commands():
     _fw_cmds = ["setenv AUTO_FW_UPDATE false"] if _prevent_bios_fw_update else []
+    _autoboot_cmds = ["setenv AUTOBOOT true"] if _force_autoboot_true else []
     # Mode 3 primary uses mode-1 LOADER commands (full cluster init); peers in
     # mode 3 are driven by their own threads with their own LOADER commands.
     if _operation_mode in (1, 3):
         cmds = [
             "set-defaults",
             "setenv bootarg.destroy.all.storage.pods true",
-        ] + _fw_cmds
+        ] + _fw_cmds + _autoboot_cmds
         if _physical_zeroing:
             cmds.append("setenv raid.use-physical-zeroing? true")
         else:
@@ -2767,7 +2793,7 @@ def get_loader_commands():
     else:
         cmds = [
             "set-defaults",
-        ] + _fw_cmds
+        ] + _fw_cmds + _autoboot_cmds
         # Physical zeroing is a per-node LOADER setting; apply it to
         # peers too when the operator opted in so the whole cluster ends
         # up with consistent raid.use-physical-zeroing? behaviour.
@@ -2934,6 +2960,13 @@ _bootarg_check_enabled: "bool | None" = None
 #   True  -> run pre/post printenv capture + bootarg check + diff flow
 #   False -> skip that stage entirely
 _loader_env_stage_enabled: "bool | None" = None
+
+# Tri-state operator choice for AUTOBOOT handling after set-defaults:
+#   None  -> not asked yet
+#   True  -> force "setenv AUTOBOOT true" in LOADER command stage
+#   False -> leave AUTOBOOT unchanged
+_force_autoboot_true: "bool | None" = None
+_force_autoboot_lock = threading.Lock()
 
 _shutdown_event = threading.Event()
 _fatal_boot_dna_event = threading.Event()
@@ -4534,8 +4567,11 @@ DESCRIPTION
       1a   Initialize first node — interactive wizard
       1b   Initialize first node — fully automated
       2a   Add node to existing cluster — interactive wizard
+           (supports password groups + blank-password fallback retries)
       2b   Add node to existing cluster — automated (parallel multi-node)
+           (supports password groups + blank-password fallback retries)
        3   End-to-end reinit: mode 1b on primary + mode 2b on all peers
+           (same credential-grouping/fallback behavior as 2b)
       4a   ONTAP rolling upgrade (takeover / software update / giveback)
       4b   Netboot and install ONTAP image
       5a   Standalone license install
@@ -4548,6 +4584,7 @@ DESCRIPTION
       5i   Backup LOADER environment variables (experimental)
       5j   Compare LOADER env to defaults (diff) (experimental)
       5k   Check boot DNA (config target picker + state-aware query)
+      5l   Build cluster_IP.json manifest for node-add workflows
       5z   Reset all nodes to LOADER prompt (parallel; disruptive command)
 
 OPTIONS
@@ -6548,6 +6585,8 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     last_keepalive_cr = start_time
     waiting_for_bmc_seen = False
     waiting_for_bmc_retry_armed = False
+    loader_recovery_attempted = False
+    boot_wait_extension = 0
 
     def _screen_status(msg):
         try:
@@ -6556,7 +6595,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
         except Exception:
             print(msg)
 
-    while time.monotonic() - start_time < timeout:
+    while time.monotonic() - start_time < (timeout + boot_wait_extension):
         if _shutdown_event.is_set():
             return False
         _wait_if_paused("boot menu wait")
@@ -6717,6 +6756,34 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
             channel.send("\r")
             last_nudge = now
             _slog("No console output for 30s; sending CR to nudge boot menu")
+        if (not loader_recovery_attempted and _force_autoboot_true is False
+                and now - start_time >= 600):
+            loader_recovery_attempted = True
+            _screen_status(
+                f"🔁 {_pfx}No boot menu after 10 minutes; checking for LOADER and "
+                "running 'boot_ontap menu' if needed..."
+            )
+            _recovered, _booting = _recover_boot_menu_from_loader(
+                channel,
+                node_label=node_label or "primary",
+                node_log=node_log,
+                selection_sigs=sig_lower,
+            )
+            if _recovered:
+                output_lower = "selection (1-"
+                break
+            if _booting and boot_wait_extension == 0:
+                boot_wait_extension = 600
+                _screen_status(
+                    f"⏳ {_pfx}Node still appears to be booting; extending boot-menu "
+                    "wait by another 10 minutes."
+                )
+                if _session_log:
+                    _session_log.log(
+                        f"[{node_label or 'primary'}] extending boot-menu wait by 600s "
+                        "because node still appears to be booting",
+                        prefix="WARN",
+                    )
         time.sleep(0.1)
     else:
         print("⚠️  Boot menu prompt not detected within timeout.")
@@ -6791,7 +6858,122 @@ def _print_fatal_boot_dna_abort_message():
         _session_log.set_outcome("FAIL", "unsupported boot DNA")
 
 
-def _verify_boot_dna(channel, node_log=None):
+def _extract_autoboot_value(output):
+    """Extract AUTOBOOT value ('true'/'false'/other) from LOADER/cluster output."""
+    for raw_line in (output or "").splitlines():
+        line = _ANSI_RE.sub("", raw_line).strip()
+        lower = line.lower()
+        if "autoboot" not in lower:
+            continue
+        if lower.startswith("printenv autoboot"):
+            continue
+        if "node run " in lower and "bootargs get autoboot" in lower:
+            continue
+        match = re.search(r"\bAUTOBOOT\b[ \t]*[=:]?[ \t]+(\S+)", line, flags=re.IGNORECASE)
+        if not match:
+            continue
+        return match.group(1).strip().rstrip(",;").lower()
+    return None
+
+
+def _maybe_prompt_autoboot_true(node_label=""):
+    """Ask once whether AUTOBOOT=false should be forced to true."""
+    global _force_autoboot_true
+    with _force_autoboot_lock:
+        if _force_autoboot_true is not None:
+            return _force_autoboot_true
+        _target = f"[{node_label}] " if node_label else ""
+        with _stdin_lock:
+            _real_stdout.write(
+                f"\n  ⚠️  {_target}AUTOBOOT is set to false. "
+                "This will break the script. "
+                "Would you like to set to true? (y/n): "
+            )
+            _real_stdout.flush()
+            try:
+                _ans = sys.stdin.readline().strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                _ans = ""
+        _force_autoboot_true = _ans in ("y", "yes")
+        _slog(
+            "AUTOBOOT(false) operator choice: "
+            f"{'force true' if _force_autoboot_true else 'leave unchanged'}"
+        )
+        return _force_autoboot_true
+
+
+def _looks_like_boot_in_progress(output):
+    _lower = (output or "").lower()
+    if not _lower.strip():
+        return False
+    _markers = [
+        "initializing system memory",
+        "loading device drivers",
+        "configuring devices",
+        "boot loader version",
+        "bios version",
+        "acpi rsdp found",
+        "system halting",
+        "node rebooting",
+        "autoboot",
+        "starting",
+    ]
+    return any(m in _lower for m in _markers)
+
+
+def _recover_boot_menu_from_loader(channel, *, node_label="", node_log=None, selection_sigs=None):
+    """If waiting on boot menu stalls, recover from LOADER via boot_ontap menu."""
+    _sigs = list(selection_sigs or ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"])
+    _probe_sigs = _sigs + ["loader-", "login:", "::>", "::*>", "y/n", ">"]
+    _pfx = f"[{node_label}] " if node_label else ""
+    _slog(f"{_pfx}10-minute boot-menu recovery: probing current state")
+
+    with suppress(Exception):
+        channel.send("\r")
+    _out, _m = direct_read_until_any(
+        channel, _probe_sigs, timeout=12, node_log=node_log, quiet=True
+    )
+    if _m and "y/n" in _m.lower():
+        with suppress(Exception):
+            channel.send("y\r")
+        time.sleep(1)
+        _out2, _m2 = direct_read_until_any(
+            channel, _sigs + ["loader-", "login:", "::>", "::*>", ">"],
+            timeout=10, node_log=node_log, quiet=True
+        )
+        _out = (_out or "") + (_out2 or "")
+        _m = _m2
+
+    _lower = (_out or "").lower()
+    if _m and any(sig in _m.lower() for sig in _sigs):
+        _slog(f"{_pfx}Boot menu already visible during recovery probe")
+        return True, False
+    if any(sig in _lower for sig in _sigs):
+        _slog(f"{_pfx}Boot menu detected in recovery probe output")
+        return True, False
+
+    _at_loader = bool(_LOADER_PROMPT_RE.search(_out or "") or "loader-" in _lower)
+    if not _at_loader:
+        _slog(f"{_pfx}Recovery probe did not find LOADER; skipping boot_ontap menu", prefix="WARN")
+        return False, _looks_like_boot_in_progress(_out)
+
+    _slog(f"{_pfx}At LOADER after 10-minute wait; sending 'boot_ontap menu'")
+    direct_send_and_wait(channel, "boot_ontap menu", "", timeout=1, node_log=node_log, quiet=True)
+    _out3, _m3 = direct_read_until_any(
+        channel, _sigs, timeout=180, node_log=node_log, quiet=True
+    )
+    if _m3 and any(sig in _m3.lower() for sig in _sigs):
+        _slog(f"{_pfx}Recovery succeeded: boot menu appeared after boot_ontap menu")
+        return True, False
+    if any(sig in (_out3 or "").lower() for sig in _sigs):
+        _slog(f"{_pfx}Recovery succeeded: boot menu text detected after boot_ontap menu")
+        return True, False
+
+    _slog(f"{_pfx}Recovery attempt did not produce boot menu", prefix="WARN")
+    return False, _looks_like_boot_in_progress((_out or "") + (_out3 or ""))
+
+
+def _verify_boot_dna(channel, node_log=None, node_label=""):
     """Run 'printenv' at the LOADER prompt, save raw output in configs/, and
     confirm bootarg.init.dna is the supported value.
     Returns True if supported, False otherwise.
@@ -6820,6 +7002,24 @@ def _verify_boot_dna(channel, node_log=None):
 
     records = _extract_boot_dna_records(output)
     dna_value = records[-1][1] if records else None
+
+    # Also validate AUTOBOOT posture while we are reviewing boot DNA.
+    autoboot_value = _extract_autoboot_value(output)
+    if autoboot_value is None:
+        _ab_out = direct_send_and_wait(
+            channel, "printenv AUTOBOOT", "LOADER-", timeout=15, node_log=node_log
+        )
+        autoboot_value = _extract_autoboot_value(_ab_out)
+    if autoboot_value == "true":
+        _slog("AUTOBOOT check: value=true")
+    elif autoboot_value == "false":
+        _slog("AUTOBOOT check: value=false")
+        _maybe_prompt_autoboot_true(node_label=node_label)
+    else:
+        _slog(
+            f"AUTOBOOT check: unable to parse value ({autoboot_value!r})",
+            prefix="WARN",
+        )
 
     if dna_value == _REQUIRED_BOOT_DNA:
         print(f"   ✅ Boot DNA check passed: bootarg.init.dna={dna_value}")
@@ -16832,6 +17032,12 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
                 "node_name": _cluster_node_name,
                 "bmc": peer_bmc,
             }
+        _record_cluster_ip_manifest_entry(
+            _cluster_ip,
+            node_name=_cluster_node_name,
+            bmc=peer_bmc,
+            source="node-add runtime",
+        )
     else:
         print(f"\n⚠️  [{label}] Could not parse cluster IP from net int show output.")
         _slog(f"[{label}] cluster IP parse failed", prefix="WARN")
@@ -16840,9 +17046,9 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
 
 
 def _ordered_cluster_ips_for_add(cluster_ips_out, preferred_bmcs=None):
-    """Return cluster add-node IPs ordered by node name, then stable fallback."""
+    """Return cluster add-node IPs ordered by cluster_IP.json when available."""
     if not isinstance(cluster_ips_out, dict) or not cluster_ips_out:
-        return []
+        cluster_ips_out = {}
 
     _pref_index = {
         str(_bmc): _idx
@@ -16863,6 +17069,34 @@ def _ordered_cluster_ips_for_add(cluster_ips_out, preferred_bmcs=None):
             "cluster_ip": _ip,
             "node_name": _node,
         })
+
+    _manifest_rows = _load_cluster_ip_manifest_entries()
+    if _manifest_rows:
+        _want_bmcs = set(str(_b) for _b in (preferred_bmcs or []))
+        _mem_ips = set(r["cluster_ip"] for r in _rows)
+        _ordered = []
+        _seen = set()
+        for _mr in _manifest_rows:
+            _ip = str(_mr.get("cluster_ip") or "").strip()
+            if not _ip or _ip in _seen:
+                continue
+            _bmc = str(_mr.get("bmc") or "").strip()
+            if _want_bmcs:
+                if _bmc and _bmc in _want_bmcs:
+                    pass
+                elif _ip in _mem_ips:
+                    pass
+                else:
+                    continue
+            _ordered.append(_ip)
+            _seen.add(_ip)
+        for _r in _rows:
+            _ip = _r["cluster_ip"]
+            if _ip not in _seen:
+                _ordered.append(_ip)
+                _seen.add(_ip)
+        if _ordered:
+            return _ordered
 
     _rows.sort(key=lambda r: (
         1 if not r["node_name"] else 0,
@@ -17609,6 +17843,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         _peer_loader_cmds = []
         if _prevent_bios_fw_update:
             _peer_loader_cmds.append("setenv AUTO_FW_UPDATE false")
+        if _force_autoboot_true:
+            _peer_loader_cmds.append("setenv AUTOBOOT true")
         if _physical_zeroing:
             _peer_loader_cmds.append("setenv raid.use-physical-zeroing? true")
         else:
@@ -17635,7 +17871,9 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         last_recv = time.monotonic()
         last_keepalive = time.monotonic()
         seen_menu = False
-        while time.monotonic() - s < 1200:
+        loader_recovery_attempted = False
+        boot_wait_extension = 0
+        while time.monotonic() - s < (1200 + boot_wait_extension):
             if _shutdown_event.is_set():
                 return False
             if ch.recv_ready():
@@ -17740,6 +17978,34 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     if _session_log:
                         _session_log.log(f"[{label}] BMC reconnect failed: {_rc_err}", prefix="ERROR")
                     return False
+            if (not loader_recovery_attempted and _force_autoboot_true is False
+                    and time.monotonic() - s >= 600):
+                loader_recovery_attempted = True
+                print(
+                    f"   🔁 [{label}] No boot menu after 10 minutes; checking LOADER "
+                    "and running 'boot_ontap menu' if needed..."
+                )
+                _recovered, _booting = _recover_boot_menu_from_loader(
+                    ch,
+                    node_label=label,
+                    node_log=node_file,
+                    selection_sigs=sig_lower,
+                )
+                if _recovered:
+                    seen_menu = True
+                    break
+                if _booting and boot_wait_extension == 0:
+                    boot_wait_extension = 600
+                    print(
+                        f"   ⏳ [{label}] Node still appears to be booting; extending "
+                        "boot-menu wait by another 10 minutes."
+                    )
+                    if _session_log:
+                        _session_log.log(
+                            f"[{label}] extending boot-menu wait by 600s "
+                            "because node still appears to be booting",
+                            prefix="WARN",
+                        )
             time.sleep(0.1)
         if not seen_menu:
             print(f"   ⚠️  [{label}] boot menu not detected; aborting.")
@@ -19312,12 +19578,14 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
     start = time.monotonic()
     last_progress = start
     found = False
+    loader_recovery_attempted = False
+    boot_wait_extension = 0
     _rc = reconnect_ctx
     if _rc is None and _primary_bmc_reconnect_ctx:
         _rc = _primary_bmc_reconnect_ctx
     if _rc is not None:
         _rc["channel"] = channel
-    while time.monotonic() - start < 2400:
+    while time.monotonic() - start < (2400 + boot_wait_extension):
         if _shutdown_event.is_set():
             return
         now = time.monotonic()
@@ -19355,12 +19623,43 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         if matched:
             found = True
             break
+        if (not loader_recovery_attempted and _force_autoboot_true is False
+                and time.monotonic() - start >= 600):
+            loader_recovery_attempted = True
+            print(
+                f"   🔁 {_node_pfx(bmc_host)}No second boot menu after 10 minutes; "
+                "checking LOADER and running 'boot_ontap menu' if needed..."
+            )
+            _ch2 = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
+            _recovered, _booting = _recover_boot_menu_from_loader(
+                _ch2,
+                node_label=bmc_host or "primary",
+                node_log=_boot_log,
+                selection_sigs=sig_lower,
+            )
+            if _recovered:
+                if _rc and _rc.get("channel") is not None:
+                    channel = _rc["channel"]
+                found = True
+                break
+            if _booting and boot_wait_extension == 0:
+                boot_wait_extension = 600
+                print(
+                    f"   ⏳ {_node_pfx(bmc_host)}Node still appears to be booting; "
+                    "extending second boot-menu wait by another 10 minutes."
+                )
+                _slog(
+                    f"[{bmc_host}] extending second boot-menu wait by 600s "
+                    "because node still appears to be booting",
+                    prefix="WARN",
+                )
         time.sleep(0.1)
 
     if not found:
-        print("⚠️  2nd boot menu not detected within 2400s; aborting auto-init.")
+        _limit = 2400 + boot_wait_extension
+        print(f"⚠️  2nd boot menu not detected within {_limit}s; aborting auto-init.")
         if _session_log:
-            _session_log.log("2nd boot menu not detected within 2400s", prefix="WARN")
+            _session_log.log(f"2nd boot menu not detected within {_limit}s", prefix="WARN")
             _session_log.end_phase()
         _close_boot_log()
         return
@@ -19520,7 +19819,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
                              timeout=15, node_log=_env_log)
 
         _slog("bootarg.init.dna verification required; running automatically")
-        if not _verify_boot_dna(channel, node_log=_env_log):
+        if not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
             _mark_fatal_boot_dna(label)
             if _close_env_log and _env_log:
                 with suppress(Exception):
@@ -19551,7 +19850,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
     # Verify boot DNA (required in all modes).
     _slog("bootarg.init.dna verification required; running automatically")
-    if not _verify_boot_dna(channel, node_log=_env_log):
+    if not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
         _mark_fatal_boot_dna(label)
         if _close_env_log and _env_log:
             with suppress(Exception):
@@ -20188,6 +20487,115 @@ def _write_node_add_manifest(nodes, cluster_mgmt_ip="",
     return session_path
 
 
+def _cluster_ip_manifest_path():
+    try:
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        _script_dir = os.getcwd()
+    _cfg_dir = os.path.join(_script_dir, "configs")
+    os.makedirs(_cfg_dir, exist_ok=True)
+    return os.path.join(_cfg_dir, "cluster_IP.json")
+
+
+def _load_cluster_ip_manifest_entries():
+    _path = _cluster_ip_manifest_path()
+    if not os.path.isfile(_path):
+        return []
+    try:
+        with open(_path, "r", encoding="utf-8") as _f:
+            _data = json.load(_f)
+    except Exception as _e:
+        _slog(f"Could not read cluster IP manifest {_path}: {_e}", prefix="WARN")
+        return []
+
+    if isinstance(_data, dict):
+        _entries = _data.get("entries")
+    elif isinstance(_data, list):
+        _entries = _data
+    else:
+        _entries = []
+
+    _out = []
+    for _entry in _entries or []:
+        if not isinstance(_entry, dict):
+            continue
+        _ip = str(_entry.get("cluster_ip") or _entry.get("ip") or "").strip()
+        if not _is_valid_ipv4(_ip):
+            continue
+        _out.append({
+            "cluster_ip": _ip,
+            "node_name": str(_entry.get("node_name") or _entry.get("node") or "").strip(),
+            "bmc": str(_entry.get("bmc") or "").strip(),
+            "source": str(_entry.get("source") or "").strip(),
+        })
+    return _out
+
+
+def _write_cluster_ip_manifest_entries(entries, reason=""):
+    _path = _cluster_ip_manifest_path()
+    _norm = []
+    _seen = set()
+    for _entry in entries or []:
+        if not isinstance(_entry, dict):
+            continue
+        _ip = str(_entry.get("cluster_ip") or "").strip()
+        if not _is_valid_ipv4(_ip) or _ip in _seen:
+            continue
+        _seen.add(_ip)
+        _norm.append({
+            "cluster_ip": _ip,
+            "node_name": str(_entry.get("node_name") or "").strip(),
+            "bmc": str(_entry.get("bmc") or "").strip(),
+            "source": str(_entry.get("source") or reason or "").strip(),
+        })
+
+    _payload = {
+        "schema_version": 1,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "reason": reason or "",
+        "entries": _norm,
+    }
+    try:
+        with open(_path, "w", encoding="utf-8") as _f:
+            json.dump(_payload, _f, indent=2)
+    except Exception as _e:
+        _slog(f"Could not write cluster IP manifest {_path}: {_e}", prefix="WARN")
+        return ""
+    return _path
+
+
+def _record_cluster_ip_manifest_entry(cluster_ip, *, node_name="", bmc="", source="runtime"):
+    _ip = str(cluster_ip or "").strip()
+    if not _is_valid_ipv4(_ip):
+        return
+
+    with _cluster_ip_manifest_lock:
+        _entries = _load_cluster_ip_manifest_entries()
+        _new_entry = {
+            "cluster_ip": _ip,
+            "node_name": str(node_name or "").strip(),
+            "bmc": str(bmc or "").strip(),
+            "source": str(source or "runtime").strip(),
+        }
+        _updated = False
+        for _idx, _entry in enumerate(_entries):
+            _same_bmc = bool(_new_entry["bmc"] and _entry.get("bmc") == _new_entry["bmc"])
+            _same_ip = _entry.get("cluster_ip") == _ip
+            if not (_same_bmc or _same_ip):
+                continue
+            _entries[_idx] = {
+                "cluster_ip": _ip,
+                "node_name": _new_entry["node_name"] or str(_entry.get("node_name") or "").strip(),
+                "bmc": _new_entry["bmc"] or str(_entry.get("bmc") or "").strip(),
+                "source": _new_entry["source"] or str(_entry.get("source") or "").strip(),
+            }
+            _updated = True
+            break
+        if not _updated:
+            _entries.append(_new_entry)
+        _write_cluster_ip_manifest_entries(_entries, reason="runtime capture")
+
+
 def _get_cluster_node_mgmt_ips(channel, cluster_name=None):
     """Return {node_name: mgmt_ip} for every node currently in the cluster.
 
@@ -20297,6 +20705,161 @@ def _get_cluster_node_mgmt_ips(channel, cluster_name=None):
             break
 
     return result
+
+
+def _get_cluster_role_ips(channel):
+    """Return first cluster-role IP per node in command output order."""
+    _cmds = [
+        "set -rows 0; net int show -role cluster -fields node,address",
+        "net int show -role cluster -fields node,address",
+        "set -rows 0; network interface show -role cluster -fields node,address",
+        "network interface show -role cluster -fields node,address",
+    ]
+    for _cmd in _cmds:
+        try:
+            with _primary_shell_lock:
+                _out = _run_cluster_command(channel, _cmd, timeout=30)
+        except Exception as _e:
+            _slog(f"{_cmd} failed: {_e}", prefix="WARN")
+            continue
+        _rows = []
+        _dashes_seen = False
+        for _line in (_out or "").splitlines():
+            _s = _line.strip()
+            if not _s:
+                continue
+            _ll = _s.lower()
+            if "::" in _s or _ll.startswith("net int") or _ll.startswith("network interface"):
+                continue
+            if "entries were displayed" in _ll:
+                break
+            if set(_s) <= {"-", " "}:
+                _dashes_seen = True
+                continue
+            if not _dashes_seen:
+                continue
+            _parts = _s.split()
+            _ip = next((p for p in reversed(_parts) if _is_valid_ipv4(p)), "")
+            if not _ip:
+                continue
+            _node = ""
+            for _cand in _parts:
+                _lc = _cand.lower()
+                if _cand == _ip or _is_valid_ipv4(_cand):
+                    continue
+                if _lc in ("node", "vserver", "lif", "address"):
+                    continue
+                _node = _cand
+                break
+            _rows.append({"node_name": _node, "cluster_ip": _ip})
+        if _rows:
+            _deduped = []
+            _seen_nodes = set()
+            _seen_ips = set()
+            for _row in _rows:
+                _node = str(_row.get("node_name") or "").strip()
+                _ip = str(_row.get("cluster_ip") or "").strip()
+                if not _ip or _ip in _seen_ips:
+                    continue
+                if _node:
+                    if _node in _seen_nodes:
+                        continue
+                    _seen_nodes.add(_node)
+                _seen_ips.add(_ip)
+                _deduped.append({"node_name": _node, "cluster_ip": _ip})
+            if _deduped:
+                return _deduped
+    return []
+
+
+def _run_cluster_ip_manifest_mode():
+    """Mode 5l: fetch cluster-role IPs from cluster shell and write manifest."""
+    _print_banner("🧭 5l: Build cluster IP manifest")
+    _make_session_log("Mode 5l: cluster IP manifest")
+
+    _cluster_cfg = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
+    _mgmt_ip = (
+        _cluster_config.get("mgmt_ip")
+        or _cluster_cfg.get("mgmt_ip")
+        or _cluster_cfg.get("clus_mgmt_address")
+        or ""
+    )
+    _admin_user = (
+        _cluster_config.get("admin_user")
+        or _cluster_cfg.get("admin_user")
+        or _cluster_cfg.get("user")
+        or "admin"
+    )
+    _admin_pw = (
+        _cluster_config.get("admin_password")
+        or _cluster_cfg.get("admin_password")
+        or _cluster_cfg.get("password")
+        or ""
+    )
+
+    if _mgmt_ip:
+        print(f"\n  Cluster management IP [{_mgmt_ip}]")
+        _in = _prompt("  Press Enter to use this value, or type a different IP: ", "").strip()
+        if _in:
+            _mgmt_ip = _in
+    else:
+        _mgmt_ip = _prompt("  Cluster management IP address: ").strip()
+    if not _mgmt_ip:
+        print("  ❌ Cluster management IP is required.")
+        return
+
+    _u_in = _prompt(f"  Cluster admin username [{_admin_user}]: ", "").strip()
+    if _u_in:
+        _admin_user = _u_in
+    if not _admin_pw:
+        try:
+            _admin_pw = getpass.getpass(f"  Cluster admin password for {_admin_user}@{_mgmt_ip}: ")
+        except (EOFError, KeyboardInterrupt):
+            _admin_pw = ""
+
+    _client = None
+    _ch = None
+    try:
+        _client, _admin_user, _admin_pw = _ssh_connect_with_retry(
+            _mgmt_ip,
+            _admin_user,
+            _admin_pw,
+            label=f"cluster/{_mgmt_ip}",
+            max_attempts=3,
+            interactive=False,
+        )
+        _ch = _open_shell(_client)
+        if not _login_primary_cluster_shell(_ch, _admin_pw):
+            print("  ❌ Could not reach cluster shell (::>).")
+            return
+        _rows = _get_cluster_role_ips(_ch)
+        if not _rows:
+            print("  ⚠️  No cluster-role interface IPs were parsed.")
+            return
+
+        _entries = []
+        for _row in _rows:
+            _entries.append({
+                "cluster_ip": str(_row.get("cluster_ip") or "").strip(),
+                "node_name": str(_row.get("node_name") or "").strip(),
+                "bmc": "",
+                "source": "5l cluster query",
+            })
+        _path = _write_cluster_ip_manifest_entries(_entries, reason="mode 5l")
+        if not _path:
+            print("  ❌ Could not write cluster_IP.json.")
+            return
+
+        print(f"\n  ✅ Wrote cluster IP manifest: {_path}")
+        print("  Entries:")
+        for _idx, _e in enumerate(_entries, 1):
+            _node = _e["node_name"] or "unknown-node"
+            print(f"    {_idx:>2}. {_node:<20} {_e['cluster_ip']}")
+    finally:
+        for _obj in (_ch, _client):
+            with suppress(Exception):
+                if _obj:
+                    _obj.close()
 
 
 def _run_2c_resume():
@@ -23228,6 +23791,11 @@ def main():
                 _make_session_log("Mode 5k: boot DNA check")
                 print("")
                 _run_boot_dna_check_mode()
+                raise _ReturnToMenu
+
+            # ── Mode 55 (5l): Build cluster_IP manifest ───────────────────────────
+            if _operation_mode == 55:
+                _run_cluster_ip_manifest_mode()
                 raise _ReturnToMenu
 
             # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
