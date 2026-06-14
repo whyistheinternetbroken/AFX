@@ -9,6 +9,9 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Added mode 4c for install-only netboot image deployment.**
+  New mode `4c` reuses the 4b netboot/install pipeline but always stops after
+  ONTAP image install, skipping reinit and any cluster create/node-add flows.
 - **Cluster health gates now validate cluster-port link/health state.**
   End-of-run health checks (modes 1–4) and utility mode 5g now run
   `network port show -ipspace Cluster` and fail when any cluster port is not

@@ -2293,10 +2293,10 @@ def select_operation_mode():
       3  -> End-to-end auto initialize: 1b on primary + parallel auto-add
             for every other BMC discovered/entered.
       4  -> Install/manage ONTAP  (sub-menu)
-        4a: Install ONTAP from cluster shell          (not yet implemented)
-        4b: Netboot and install ONTAP                 (not yet implemented)
-        4c: Install license file only                 (44 internally)
-      5  -> Exit.
+        4a: Upgrade ONTAP (rolling takeover/giveback)
+        4b: Netboot and install ONTAP (with optional reinit)
+        4c: Netboot and install image only (no cluster create/node add)
+      6  -> Exit.
     """
     global _setup_passwordless_ssh, _netboot_before_reinit, _physical_zeroing
     global _diag_bootargs, _netboot_static_ip
@@ -2338,7 +2338,7 @@ def select_operation_mode():
         print("")
         print("  " + "─" * 58)
         print("  (type 'menu' at any prompt to return here)")
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4b, 5a-5l/5z, or 6): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4c, 5a-5l/5z, or 6): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2501,15 +2501,16 @@ def select_operation_mode():
             print("\n  ↩️  Returning to menu...\n")
             continue
 
-        if choice in ("4", "4a", "4b"):
+        if choice in ("4", "4a", "4b", "4c"):
             if choice == "4":
                 # Show the sub-menu and re-prompt.
                 _print_banner("\U0001f4e6 4: Install ONTAP")
                 print("\n  4a. Upgrade ONTAP (rolling takeover/giveback)")
                 print("  4b. Netboot and install ONTAP")
+                print("  4c. Netboot and install image only (no cluster create/node add)")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (4a, 4b) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (4a, 4b, 4c) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -2545,6 +2546,22 @@ def select_operation_mode():
                 if confirm == "y":
                     print("\n  \u2705 Confirmed. 4b: Netboot and install ONTAP\n")
                     return 42, False, False
+                print("\n  \u21a9\ufe0f  Returning to menu...\n")
+                continue
+
+            if choice == "4c":
+                # 4c: Netboot and install ONTAP only (no reinit/create/add)
+                _print_banner("\U0001f4e6 4c: Netboot and install image only")
+                print("")
+                print("  Runs the same netboot + ONTAP image install path as 4b,")
+                print("  but stops after install. It does not run reinit,")
+                print("  cluster create, or node add workflows.")
+                print("")
+                print("  " + "\u2500" * 58)
+                confirm = input("  Continue with install-only netboot? [y/N]: ").strip().lower()
+                if confirm == "y":
+                    print("\n  \u2705 Confirmed. 4c: Netboot and install image only\n")
+                    return 43, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
@@ -4861,7 +4878,7 @@ def parse_args():
                         help="Skip the menu and run mode 4b: netboot and "
                              "install ONTAP.")
     parser.add_argument("--add-lic", action="store_true", default=False,
-                        help="Skip the menu and run mode 4c: install license "
+                        help="Skip the menu and run mode 5a: install license "
                              "file only.")
     parser.add_argument("--passwordless", action="store_true", default=False,
                         help="Skip the menu and run mode 4d: configure "
@@ -10816,11 +10833,13 @@ def _peer_reinit_worker(ip, ctx):
         sys.stdout = _prev_stdout
 
 
-def _run_4b_standalone(log, resuming: bool = False):
-    """Full standalone 4b workflow: collect BMCs, reset to LOADER,
-    netboot-install ONTAP, verify version.  If *resuming* is True the
-    module-level ``_checkpoint`` is used to skip already-completed phases.
-    Returns True on success.
+def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
+    """Standalone netboot workflow used by 4b/4c.
+
+    4b runs netboot install and can continue into reinit.
+    4c runs netboot install only and always exits before reinit.
+    If *resuming* is True the module-level ``_checkpoint`` is used to skip
+    already-completed phases. Returns True on success.
     """
     global _peer_log_paths, _checkpoint, _loader_env_stage_enabled, _bootarg_check_enabled
     _peer_log_paths = {}  # reset for this run
@@ -10945,21 +10964,27 @@ def _run_4b_standalone(log, resuming: bool = False):
             log.end_phase()
 
     # ── Step 1c: Reinit questions (ask now, before operations begin) ───────
-    _cp_do_reinit   = _checkpoint.get_param("do_reinit") if (resuming and _checkpoint) else None
-    _cp_mode_sel    = _checkpoint.get_param("reinit_mode") if (resuming and _checkpoint) else None
-    _cp_skip_env    = _checkpoint.get_param("skip_loader_env_stage") if (resuming and _checkpoint) else None
-
-    if resuming and _cp_do_reinit is not None:
-        _do_reinit = _cp_do_reinit
-        _mode_sel  = _cp_mode_sel
-        print(f"\n  🔖 Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
-    else:
-        print("\n  ✅ Package selected. Now collecting all setup information upfront.")
-        reinit_ans = input(
-            "\n  Would you like to reinit the cluster after the ONTAP installation? [y/N]: "
-        ).strip().lower()
-        _do_reinit = reinit_ans == "y"
+    if install_only:
+        _do_reinit = False
         _mode_sel = None
+        _cp_skip_env = None
+        print("\n  ✅ Package selected. Mode 4c will stop after netboot/install (no reinit).")
+    else:
+        _cp_do_reinit   = _checkpoint.get_param("do_reinit") if (resuming and _checkpoint) else None
+        _cp_mode_sel    = _checkpoint.get_param("reinit_mode") if (resuming and _checkpoint) else None
+        _cp_skip_env    = _checkpoint.get_param("skip_loader_env_stage") if (resuming and _checkpoint) else None
+
+        if resuming and _cp_do_reinit is not None:
+            _do_reinit = _cp_do_reinit
+            _mode_sel  = _cp_mode_sel
+            print(f"\n  🔖 Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
+        else:
+            print("\n  ✅ Package selected. Now collecting all setup information upfront.")
+            reinit_ans = input(
+                "\n  Would you like to reinit the cluster after the ONTAP installation? [y/N]: "
+            ).strip().lower()
+            _do_reinit = reinit_ans == "y"
+            _mode_sel = None
 
     if _do_reinit and _mode_sel is None and not resuming:
         print("\n  Select reinit mode:")
@@ -11145,14 +11170,14 @@ def _run_4b_standalone(log, resuming: bool = False):
         # On resume: update metadata only — do NOT call init_run(), which
         # would wipe all the install_done/option6_done phase data we loaded.
         _checkpoint.resume_run(
-            mode=f"4b-{_mode_sel or 'no-reinit'}",
+            mode=f"{'4c' if install_only else '4b'}-{_mode_sel or 'no-reinit'}",
             log_dir=_log_dir,
         )
     else:
         if _checkpoint is None:
             _checkpoint = CheckpointManager()
         _checkpoint.init_run(
-            mode=f"4b-{_mode_sel or 'no-reinit'}",
+            mode=f"{'4c' if install_only else '4b'}-{_mode_sel or 'no-reinit'}",
             bmc_ips=bmc_ips,
             log_dir=_log_dir,
             config_path=getattr(log, "log_file", "") or "",
@@ -21614,7 +21639,7 @@ def main():
                     print("\n  ⚡ --netboot-install: launching mode 4b (netboot and install ONTAP).")
                 elif args.add_lic:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 44, False, False
-                    print("\n  ⚡ --add-lic: launching mode 4c (install license).")
+                    print("\n  ⚡ --add-lic: launching mode 5a (install license).")
                 elif args.passwordless:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 45, False, False
                     print("\n  ⚡ --passwordless: launching mode 4d (passwordless SSH setup).")
@@ -21654,7 +21679,7 @@ def main():
             # at the end so any downstream legacy code still sees fresh values.
             _run_context = RunContext.from_globals()
 
-            # Mode 4 (4b/4c): not yet implemented placeholders.
+            # Legacy mode 4 entry is intentionally unused; sub-modes use 41/42/43.
             if _operation_mode == 4:
                 _print_banner("\U0001f4e6 This ONTAP install sub-option is not yet implemented.")
                 print("  Please check back in a future release.")
@@ -21741,6 +21766,16 @@ def main():
                 print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
+            # ── Mode 43 (4c): Netboot/install image only (no reinit) ──────────────
+            if _operation_mode == 43:
+                _make_session_log("Mode 43: netboot and install image only (4c)")
+                ok = _run_4b_standalone(_session_log, resuming=False, install_only=True)
+                _session_log.record_completion(normal_exit=ok)
+                if ok:
+                    _checkpoint.clear()
+                print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
+                sys.exit(0 if ok else 1)
+
             # ── Mode 41 (4a): ONTAP upgrade ────────────────────────────────────────
             if _operation_mode == 41:
                 _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
@@ -21753,7 +21788,7 @@ def main():
                     print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
                     sys.exit(0 if ok else 1)
 
-            # ── Mode 44 (4c): standalone license-only install ──────────────────────
+            # ── Mode 44 (5a): standalone license-only install ──────────────────────
             if _operation_mode == 44:
                 _collect_license_config(_run_context)
                 if not _license_mode:
@@ -24481,8 +24516,10 @@ def main():
                 mode_desc = "Initialize first node (1a, option 9, destroy storage pods)"
             elif _operation_mode == 41:
                 mode_desc = "ONTAP upgrade - rolling takeover/giveback (4a)"
+            elif _operation_mode == 43:
+                mode_desc = "Netboot and install image only (4c, no reinit)"
             elif _operation_mode == 44:
-                mode_desc = "Install license file only (4c, standalone)"
+                mode_desc = "Install license file only (5a, standalone)"
             elif _operation_mode == 45:
                 mode_desc = "Set up passwordless SSH to cluster management (4d)"
             elif _operation_mode == 46:
