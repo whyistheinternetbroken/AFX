@@ -42,6 +42,29 @@ from dataclasses import dataclass, field
 
 SCRIPT_VERSION = "1.1.1"
 
+# Keep a handle to the original getpass prompt function so we can provide a
+# confirmed-password wrapper without recursion.
+_RAW_GETPASS = getpass.getpass
+
+
+def _prompt_password_with_confirmation(prompt: str = "Password: ", stream=None):
+    """Prompt for a password and require confirmation before returning.
+
+    This wrapper is intentionally used for all interactive password entry so
+    operators can correct mistyped passwords inline without restarting flows.
+    """
+    while True:
+        _pw = _RAW_GETPASS(prompt, stream=stream)
+        _confirm_prompt = "  Confirm password: "
+        _pw_confirm = _RAW_GETPASS(_confirm_prompt, stream=stream)
+        if _pw == _pw_confirm:
+            return _pw
+        print("  ⚠️  Passwords do not match. Please re-enter.")
+
+
+# Enforce confirmation for all subsequent getpass.getpass(...) calls in this script.
+getpass.getpass = _prompt_password_with_confirmation
+
 # OPT: compile LOADER prompt regex once at module level instead of per-iteration
 _LOADER_PROMPT_RE = re.compile(r'LOADER-\w+>')
 
@@ -961,8 +984,8 @@ def _print_banner(title: str, *, width: int = 60) -> None:
 def _print_autopilot_banner() -> None:
     """Print the 'no more admin interaction required' transition notice."""
     bar = "=" * 60
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print("  Autopilot engaged. Check back periodically for job completion.")
+    print("\n" + bar)
+    print("  ✅ Autopilot engaged. Check back periodically for job completion.")
     print(bar + "\n")
 
 
@@ -3178,6 +3201,7 @@ def setup_logging(debug: bool):
 
 _ssh_log_lock = threading.Lock()
 _ssh_log_file_path = None
+_ssh_remediation_log_file_path = None
 
 
 def _resolve_ssh_log_file() -> str:
@@ -3235,7 +3259,66 @@ def _log_ssh_event(host: str, username: str, label: str, event: str,
         pass
 
 
-def _silent_ping(host):
+def _resolve_ssh_remediation_log_file() -> str:
+    """Return the SSH remediation log file path (ssh_remediation_<ts>.log).
+
+    Mirrors the placement logic of _resolve_ssh_log_file but produces a
+    separate file dedicated to remediation actions (known_hosts cleanup,
+    SOL deactivate, stale-session kills, etc.).
+    """
+    global _ssh_remediation_log_file_path
+
+    if _session_log and getattr(_session_log, "log_dir", None):
+        _ssh_base = os.path.join(_session_log.log_dir, "SSH_logs")
+    else:
+        _ssh_base = os.path.join(_script_dir(), "logs", "SSH_logs")
+
+    os.makedirs(_ssh_base, exist_ok=True)
+
+    if (
+        not _ssh_remediation_log_file_path
+        or os.path.dirname(_ssh_remediation_log_file_path) != _ssh_base
+    ):
+        _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _ssh_remediation_log_file_path = os.path.join(
+            _ssh_base, f"ssh_remediation_{_ts}.log"
+        )
+
+    return _ssh_remediation_log_file_path
+
+
+def _log_ssh_remediation_event(
+    host: str, action: str, outcome: str, detail: str = ""
+) -> None:
+    """Append one SSH remediation event to the dedicated remediation log file.
+
+    Args:
+        host:    IP or hostname of the BMC that was remediated.
+        action:  Short keyword describing what was done (e.g. 'known_hosts_remove',
+                 'sol_deactivate', 'drop_clients', 'kill_pid', 'stale_diagnosis').
+        outcome: 'ok', 'skipped', 'failed', or 'info'.
+        detail:  Optional freeform detail appended to the log line.
+    """
+    try:
+        with _ssh_log_lock:
+            _path = _resolve_ssh_remediation_log_file()
+            _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            _phase = None
+            if _session_log:
+                _phase = getattr(_session_log, "_current_phase", None)
+            _phase = (_phase or "-").replace(" ", "_")
+            _line = (
+                f"[{_ts}] host={host} action={action} outcome={outcome} phase={_phase}"
+            )
+            if detail:
+                _line += f" detail={detail}"
+            with open(_path, "a", encoding="utf-8") as _fh:
+                _fh.write(_line + "\n")
+    except Exception:
+        pass
+
+
+
     """Return True if `host` responds to a single ICMP ping, False otherwise."""
     import subprocess as _sp
     import platform as _pl
@@ -3274,6 +3357,8 @@ def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
         if log is not None:
             with suppress(Exception):
                 log.log(f"[{host}] known_hosts cleanup skipped: ssh-keygen not found", prefix="WARN")
+        _log_ssh_remediation_event(host, "known_hosts_remove", "skipped",
+                                   "ssh-keygen not found on PATH")
         return False
     try:
         _res = subprocess.run(
@@ -3290,11 +3375,15 @@ def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
                 if log is not None:
                     with suppress(Exception):
                         log.log(f"[{host}] known_hosts cleanup: no entry found")
+                _log_ssh_remediation_event(host, "known_hosts_remove", "skipped",
+                                           "no entry found")
             else:
                 print(f"  🗑️  Removed known_hosts entry for {host}.")
                 if log is not None:
                     with suppress(Exception):
                         log.log(f"[{host}] known_hosts cleanup: entry removed")
+                _log_ssh_remediation_event(host, "known_hosts_remove", "ok",
+                                           "entry removed")
             return True
         print(f"  ⚠️  ssh-keygen -R {host} returned rc={_res.returncode}.")
         if log is not None:
@@ -3303,6 +3392,8 @@ def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
                     f"[{host}] known_hosts cleanup failed rc={_res.returncode}",
                     prefix="WARN",
                 )
+        _log_ssh_remediation_event(host, "known_hosts_remove", "failed",
+                                   f"rc={_res.returncode}")
         return False
     except Exception as _kh_ex:
         print(f"  ⚠️  Failed to run ssh-keygen -R for {host}: {_kh_ex}")
@@ -3312,6 +3403,8 @@ def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
                     f"[{host}] known_hosts cleanup exception: {_kh_ex}",
                     prefix="WARN",
                 )
+        _log_ssh_remediation_event(host, "known_hosts_remove", "failed",
+                                   f"exception={_kh_ex}")
         return False
 
 
@@ -3453,6 +3546,8 @@ def _drop_bmc_clients_for(host: str, log=None) -> int:
                 "in-process SSH client(s) to free BMC session slot",
                 prefix="WARN",
             )
+    _log_ssh_remediation_event(host, "drop_clients", "ok",
+                               f"closed={len(clients)}")
     return len(clients)
 
 
@@ -3544,6 +3639,9 @@ def _kill_stale_local_pids_for(host: str, log=None) -> int:
         except Exception as _kex:
             with suppress(Exception):
                 print(f"   ⚠️  [{host}] could not signal pid={pid}: {_kex}")
+    if killed:
+        _log_ssh_remediation_event(host, "kill_stale_pids", "ok",
+                                   f"pids_killed={killed}")
     return killed
 
 
@@ -3580,12 +3678,15 @@ def _ipmi_sol_deactivate(host: str, username: str, password: str,
         with suppress(Exception):
             if rc == 0:
                 print(f"   🧹 [{host}] ipmitool: SOL session deactivated.")
+                _log_ssh_remediation_event(host, "sol_deactivate", "ok", f"rc={rc}")
             else:
                 # rc != 0 is common (no session to deactivate); just log.
                 print(
                     f"   ℹ️  [{host}] ipmitool sol deactivate rc={rc} "
                     "(likely no active SOL session)."
                 )
+                _log_ssh_remediation_event(host, "sol_deactivate", "info",
+                                           f"rc={rc} no_active_session")
         return True
     except subprocess.TimeoutExpired:
         if log is not None:
@@ -3594,6 +3695,7 @@ def _ipmi_sol_deactivate(host: str, username: str, password: str,
                     f"[{host}] banner-retry: ipmitool sol deactivate timed out",
                     prefix="WARN",
                 )
+        _log_ssh_remediation_event(host, "sol_deactivate", "failed", "timeout")
         return True
     except Exception as _iex:
         if log is not None:
@@ -3602,6 +3704,8 @@ def _ipmi_sol_deactivate(host: str, username: str, password: str,
                     f"[{host}] banner-retry: ipmitool sol deactivate failed: {_iex}",
                     prefix="WARN",
                 )
+        _log_ssh_remediation_event(host, "sol_deactivate", "failed",
+                                   f"exception={_iex}")
         return False
 
 
@@ -3669,6 +3773,8 @@ def _diagnose_stale_bmc_sessions(host: str, log=None) -> "dict":
                     f"[{host}] stale-session diagnosis: psutil unavailable; "
                     f"registry={reg}"
                 )
+        _log_ssh_remediation_event(host, "stale_diagnosis", "info",
+                                   f"psutil_unavailable registered_clients={reg}")
         return findings
 
     if not (reg or others or nonpy):
@@ -3681,6 +3787,7 @@ def _diagnose_stale_bmc_sessions(host: str, log=None) -> "dict":
         if log is not None:
             with suppress(Exception):
                 log.log(f"[{host}] stale-session diagnosis: clean")
+        _log_ssh_remediation_event(host, "stale_diagnosis", "info", "clean")
         return findings
 
     with suppress(Exception):
@@ -3712,6 +3819,10 @@ def _diagnose_stale_bmc_sessions(host: str, log=None) -> "dict":
                 f"other_python={[p for p,_ in others]}, "
                 f"non_python={[p for p,_ in nonpy]}"
             )
+    _log_ssh_remediation_event(
+        host, "stale_diagnosis", "info",
+        f"registered={reg} other_python_pids={len(others)} non_python={len(nonpy)}"
+    )
     return findings
 
 
@@ -4753,6 +4864,19 @@ OPTIONS
             Arrow/PgUp/PgDn  Navigate scrollback
             q            Exit scrollback mode
             Ctrl+A d     Detach from session
+
+    TERMINAL COLOR SETUP (SSH / PuTTY)
+        Linux/macOS terminal clients:
+          • Prefer a 256-color terminal profile.
+          • Ensure TERM is set to xterm-256color:
+                export TERM=xterm-256color
+          • If needed, add to your shell profile (~/.bashrc):
+                echo 'export TERM=xterm-256color' >> ~/.bashrc
+
+        PuTTY (Windows -> Linux jump host):
+          • Window > Colours: enable ANSI color and bright colors.
+          • Connection > Data: set Terminal-type string to xterm-256color.
+          • Save the PuTTY session and reconnect.
 
         Note: GNU screen is available on Linux and macOS only.  On Windows
         use WSL or a Linux jump host for equivalent functionality.
@@ -11176,8 +11300,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             )
         else:
             _skip_env_q = _prompt(
-                "\n  Skip LOADER backup/printenv capture during 4b reinit? [y/N]: "
-            , "n").lower()
+                "\n  Skip LOADER backup/printenv capture during 4b reinit? [Y/n]: "
+            , "y").lower()
             _loader_env_stage_enabled = (_skip_env_q not in ("y", "yes"))
         if log:
             log.log(
@@ -13442,17 +13566,25 @@ def _find_upgrade_package():
         print("\n  Found upgrade package(s) in ONTAP/ folder:")
         for i, p in enumerate(tgz_files, 1):
             print(f"    {i}. {os.path.basename(p)}")
-        print("    0. Enter a different path or URL")
+        _manual_idx = len(tgz_files) + 1
+        _exit_idx = len(tgz_files) + 2
+        print(f"    {_manual_idx}. Enter a different path or URL")
+        print(f"    {_exit_idx}. Exit")
         print("")
         while True:
             try:
-                sel = input("  Select package [1] or 0 for manual entry, blank to exit: ").strip()
+                sel = input(
+                    f"  Select package [1-{len(tgz_files)}], {_manual_idx} for manual entry, "
+                    f"or {_exit_idx} to exit (blank=exit): "
+                ).strip()
             except (EOFError, KeyboardInterrupt):
                 return None, None
             if sel == "":
                 return None, None
-            if sel == "0":
+            if sel.isdigit() and int(sel) == _manual_idx:
                 break
+            if sel.isdigit() and int(sel) == _exit_idx:
+                return None, None
             if sel.isdigit() and 1 <= int(sel) <= len(tgz_files):
                 return "file", tgz_files[int(sel) - 1]
             print("  ⚠️  Out of range.")
@@ -13486,14 +13618,21 @@ def _find_upgrade_package():
             print(f"\n  Found {len(dir_tgz)} package(s) in {expanded}:")
             for i, p in enumerate(dir_tgz, 1):
                 print(f"    {i}. {os.path.basename(p)}")
+            _exit_idx = len(dir_tgz) + 1
+            print(f"    {_exit_idx}. Exit")
             print("")
             while True:
                 try:
-                    sel = input(f"  Select package [1-{len(dir_tgz)}] or blank to re-enter path: ").strip()
+                    sel = input(
+                        f"  Select package [1-{len(dir_tgz)}], {_exit_idx} to exit, "
+                        "or blank to re-enter path: "
+                    ).strip()
                 except (EOFError, KeyboardInterrupt):
                     return None, None
                 if sel == "":
                     break  # back to outer path prompt
+                if sel.isdigit() and int(sel) == _exit_idx:
+                    return None, None
                 if sel.isdigit() and 1 <= int(sel) <= len(dir_tgz):
                     return "file", dir_tgz[int(sel) - 1]
                 print("  ⚠️  Out of range.")
@@ -20158,13 +20297,15 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
             _env_log = None
     if _loader_env_stage_enabled is None and interactive:
         _real_stdout.write(
-            "\n  Skip LOADER backup/printenv capture? [y/N]: "
+            "\n  Skip LOADER backup/printenv capture? [Y/n]: "
         )
         _real_stdout.flush()
         try:
             _skip_env_ans = sys.stdin.readline().strip().lower()
         except (EOFError, KeyboardInterrupt):
             _skip_env_ans = ""
+        if not _skip_env_ans:
+            _skip_env_ans = "y"
         _loader_env_stage_enabled = (_skip_env_ans not in ("y", "yes"))
         _slog(
             "LOADER bootarg backup/printenv stage "
@@ -20363,13 +20504,15 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     if _operation_mode == 3:
         if _loader_env_stage_enabled is None:
             _real_stdout.write(
-                "\n  Skip LOADER backup/printenv capture for option 3 nodes? [y/N]: "
+                "\n  Skip LOADER backup/printenv capture for option 3 nodes? [Y/n]: "
             )
             _real_stdout.flush()
             try:
                 _m3_env_ans = sys.stdin.readline().strip().lower()
             except (EOFError, KeyboardInterrupt):
                 _m3_env_ans = ""
+            if not _m3_env_ans:
+                _m3_env_ans = "y"
             _loader_env_stage_enabled = (_m3_env_ans not in ("y", "yes"))
             _slog(
                 "Option 3 LOADER bootarg backup/printenv stage "
