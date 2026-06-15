@@ -5740,6 +5740,61 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
     return False
 
 
+def _probe_console_prompt_state(channel, *, node_log=None, selection_sigs=None, timeout=8):
+    """Probe the current console prompt after sending Enter.
+
+    Returns ``(state, output)`` where ``state`` is one of:
+      - ``boot_menu``
+      - ``loader``
+      - ``login``
+      - ``cluster``
+      - ``bmc``
+      - ``booting``
+      - ``unknown``
+    """
+    _sel_sigs = [str(s or "").lower() for s in (selection_sigs or []) if str(s or "").strip()]
+    _probe_sigs = list(selection_sigs or []) + ["loader-", "login:", "::>", "::*>", "y/n", ">", "autoboot"]
+
+    with suppress(Exception):
+        channel.send("\r")
+    _out, _m = direct_read_until_any(
+        channel, _probe_sigs, timeout=timeout, node_log=node_log, quiet=True
+    )
+    _out = _out or ""
+    _lower = _out.lower()
+
+    if _m and "y/n" in _m.lower():
+        with suppress(Exception):
+            channel.send("y\r")
+        time.sleep(1)
+        _out2, _m2 = direct_read_until_any(
+            channel,
+            list(selection_sigs or []) + ["loader-", "login:", "::>", "::*>", ">", "autoboot"],
+            timeout=max(4, timeout),
+            node_log=node_log,
+            quiet=True,
+        )
+        _out += _out2 or ""
+        _lower = _out.lower()
+        _m = _m2
+
+    if _sel_sigs and any(_sig in _lower for _sig in _sel_sigs):
+        return "boot_menu", _out
+    if _LOADER_PROMPT_RE.search(_out) or "loader-" in _lower:
+        return "loader", _out
+    if "login:" in _lower:
+        return "login", _out
+    if "::>" in _lower or "::*>" in _lower:
+        return "cluster", _out
+    if "autoboot" in _lower or _looks_like_boot_in_progress(_out):
+        return "booting", _out
+    if _looks_like_bmc_drop(_out):
+        return "bmc", _out
+    if _m == ">":
+        return "bmc", _out
+    return "unknown", _out
+
+
 # ---------------------------------------------------------------------------
 # Retain-config helpers (mode 1: capture cluster name / network LIFs)
 # ---------------------------------------------------------------------------
@@ -12699,6 +12754,66 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             time.sleep(0.1)
                             continue
                         _preempted6 = _BMC_PREEMPTED_SIG in _chunk.lower()
+                        _probe_state6, _probe_out6 = _probe_console_prompt_state(
+                            ch,
+                            node_log=_nf6,
+                            selection_sigs=_boot_menu_sigs_6,
+                            timeout=6,
+                        )
+                        if _probe_state6 == "boot_menu":
+                            _status(f"  ⚠️  [{ip}] Boot menu detected during boot wait – continuing with option 4...")
+                            if log:
+                                log.log(f"[{ip}] boot menu detected during option 6 boot wait probe", prefix="WARN")
+                            _boot_wait_notice_state6["console_reentry_pending"] = False
+                            _boot_wait_notice_state6["console_reentry_last_send"] = 0.0
+                            _reset_reconnect_notice_suppression(_boot_wait_notice_state6)
+                            _m3 = "selection (1-"
+                            _boot_buf = _probe_out6 or "selection (1-"
+                            break
+                        if _probe_state6 == "loader":
+                            _status(f"  ⚠️  [{ip}] LOADER prompt detected during boot wait – recovering boot menu...")
+                            if log:
+                                log.log(f"[{ip}] LOADER prompt detected during option 6 boot wait; recovering boot menu", prefix="WARN")
+                            _recovered6, _booting6 = _recover_boot_menu_from_loader(
+                                ch,
+                                node_label=ip,
+                                node_log=_nf6,
+                                selection_sigs=["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"],
+                            )
+                            _boot_wait_notice_state6["console_reentry_pending"] = False
+                            _boot_wait_notice_state6["console_reentry_last_send"] = 0.0
+                            _reset_reconnect_notice_suppression(_boot_wait_notice_state6)
+                            if _recovered6:
+                                _m3 = "selection (1-"
+                                _boot_buf = "selection (1-"
+                                break
+                            if _booting6:
+                                _boot_buf = ""
+                                time.sleep(1)
+                                continue
+                            _boot_buf = ""
+                            time.sleep(1)
+                            continue
+                        if _probe_state6 == "login":
+                            _status(f"  ✅ [{ip}] Login prompt detected during boot wait.")
+                            if log:
+                                log.log(f"[{ip}] login prompt detected during option 6 boot wait probe")
+                            _boot_wait_notice_state6["console_reentry_pending"] = False
+                            _boot_wait_notice_state6["console_reentry_last_send"] = 0.0
+                            _reset_reconnect_notice_suppression(_boot_wait_notice_state6)
+                            _m3 = "login:"
+                            _boot_buf = _probe_out6 or "login:"
+                            break
+                        if _probe_state6 in ("cluster", "booting", "unknown") and not _preempted6:
+                            if log and _probe_state6 != "booting":
+                                log.log(
+                                    f"[{ip}] prompt probe during option 6 boot wait returned "
+                                    f"{_probe_state6}; skipping system console retry",
+                                    prefix="WARN",
+                                )
+                            _boot_buf = _probe_out6 or ""
+                            time.sleep(1)
+                            continue
                         _drop_reason = "session preempted" if _preempted6 else "BMC prompt detected"
                         _now_drop6 = time.monotonic()
                         _retry_due6 = (
@@ -12965,6 +13080,46 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 time.sleep(0.1)
                                 continue
                             _preempted4 = _BMC_PREEMPTED_SIG in _chunk4.lower()
+                            _probe_state4, _probe_out4 = _probe_console_prompt_state(
+                                ch,
+                                node_log=_nf6,
+                                selection_sigs=[],
+                                timeout=6,
+                            )
+                            if _probe_state4 == "loader":
+                                _status(f"  ⚠️  [{ip}] LOADER prompt detected during option 4 boot wait – sending boot_ontap...")
+                                if log:
+                                    log.log(f"[{ip}] LOADER prompt detected during option 4 boot wait; sending boot_ontap", prefix="WARN")
+                                if _nf6:
+                                    _par_write(_nf6, "\n>>> [loader] boot_ontap\n")
+                                with suppress(Exception):
+                                    ch.send("boot_ontap\r")
+                                _opt4_notice_state["console_reentry_pending"] = False
+                                _opt4_notice_state["console_reentry_last_send"] = 0.0
+                                _reset_reconnect_notice_suppression(_opt4_notice_state)
+                                _opt4_buf = ""
+                                time.sleep(1)
+                                continue
+                            if _probe_state4 == "login":
+                                _status(f"  ✅ [{ip}] Login prompt detected during option 4 boot wait.")
+                                if log:
+                                    log.log(f"[{ip}] login prompt detected during option 4 boot wait probe")
+                                _opt4_notice_state["console_reentry_pending"] = False
+                                _opt4_notice_state["console_reentry_last_send"] = 0.0
+                                _reset_reconnect_notice_suppression(_opt4_notice_state)
+                                _m3 = "login:"
+                                _opt4_buf = _probe_out4 or "login:"
+                                break
+                            if _probe_state4 in ("cluster", "booting", "unknown", "boot_menu") and not _preempted4:
+                                if log and _probe_state4 not in ("booting",):
+                                    log.log(
+                                        f"[{ip}] prompt probe during option 4 boot wait returned "
+                                        f"{_probe_state4}; skipping system console retry",
+                                        prefix="WARN",
+                                    )
+                                _opt4_buf = _probe_out4 or ""
+                                time.sleep(1)
+                                continue
                             _drop_reason4 = "session preempted" if _preempted4 else "BMC prompt detected"
                             _now_drop4 = time.monotonic()
                             _retry_due4 = (
