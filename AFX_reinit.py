@@ -17336,8 +17336,11 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
         print(f"\n  📊 Node add status ({elapsed_hdr}s elapsed):")
         in_table = False
         status_rows = []
+        _parsed_rows = []
+        _current_row = None
         for _sl in status_out.splitlines():
-            stripped = _sl.strip()
+            _raw = _sl.rstrip("\r\n")
+            stripped = _raw.strip()
             if not stripped:
                 continue
             if set(stripped) <= {'-', ' '}:
@@ -17346,29 +17349,57 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             if in_table and '::' not in stripped:
                 # Skip footer lines like "N entries were displayed."
                 if 'entries were displayed' in stripped.lower():
+                    if _current_row is not None:
+                        _parsed_rows.append(_current_row)
+                        _current_row = None
                     continue
                 # Skip the header row (contains "Node" and "Status" but no IP-like token)
                 if stripped.lower().startswith('node') and 'status' in stripped.lower():
                     continue
-                row_lower = stripped.lower()
-                status_rows.append(row_lower)
-                # Print per-node status to screen in a clean format.
-                parts = stripped.split()
-                if len(parts) >= 3:
-                    _node_name = parts[0]
-                    _node_status = parts[2]
-                    _node_err = " ".join(parts[3:]) if len(parts) > 3 else ""
-                    _icon = "✅" if _node_status.lower() == "success" else "⏳"
-                    _err_suffix = f" ({_node_err})" if _node_err else ""
-                    print(f"    {_icon} {_node_name}: {_node_status}{_err_suffix}")
-                # Track per-node first-success timestamp.
-                if 'success' in row_lower and node_timings_out is not None:
-                    parts = stripped.split()
-                    _row_ip = parts[0] if parts else ""
-                    if _row_ip and _row_ip not in _already_succeeded:
-                        _already_succeeded.add(_row_ip)
-                        node_timings_out[_row_ip] = round(
-                            time.monotonic() - start, 1)
+                # Continuation lines in the "Error Reason" column are indented;
+                # attach them to the current row so each status row logs once.
+                if _raw[:1].isspace():
+                    if _current_row is not None:
+                        _extra = stripped
+                        if _extra:
+                            _current_row["error"] = (
+                                f"{_current_row['error']} {_extra}".strip()
+                                if _current_row["error"] else _extra
+                            )
+                    continue
+
+                if _current_row is not None:
+                    _parsed_rows.append(_current_row)
+                    _current_row = None
+
+                _cols = [c.strip() for c in re.split(r"\s{2,}", stripped) if c.strip()]
+                if len(_cols) >= 3:
+                    _current_row = {
+                        "node": _cols[0],
+                        "cluster_ip": _cols[1],
+                        "status": _cols[2],
+                        "error": " ".join(_cols[3:]).strip() if len(_cols) > 3 else "",
+                    }
+
+        if _current_row is not None:
+            _parsed_rows.append(_current_row)
+
+        for _row in _parsed_rows:
+            _node_name = _row["node"]
+            _node_status = _row["status"]
+            _node_err = _row["error"]
+            row_lower = f"{_node_name} {_node_status} {_node_err}".lower()
+            status_rows.append(row_lower)
+            _icon = "✅" if _node_status.lower() == "success" else "⏳"
+            _err_suffix = f" ({_node_err})" if _node_err else ""
+            print(f"    {_icon} {_node_name}: {_node_status}{_err_suffix}")
+            # Track per-node first-success timestamp.
+            if _node_status.lower() == "success" and node_timings_out is not None:
+                _row_ip = _node_name
+                if _row_ip and _row_ip not in _already_succeeded:
+                    _already_succeeded.add(_row_ip)
+                    node_timings_out[_row_ip] = round(
+                        time.monotonic() - start, 1)
 
         if status_rows and all('success' in row for row in status_rows):
             elapsed_total = round(time.monotonic() - start, 1)
