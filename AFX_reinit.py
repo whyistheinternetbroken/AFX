@@ -16628,7 +16628,7 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
         _tc.connect(
             mgmt_ip, username=ssh_user,
             key_filename=_pk_path,
-            look_for_keys=True, allow_agent=False,
+            look_for_keys=False, allow_agent=False,
             timeout=20,
             disabled_algorithms={"pubkeys": ["ssh-dss"]},
         )
@@ -16665,11 +16665,22 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
         )
         _slog("SSH test: AuthenticationException", prefix="WARN")
     except Exception as _te:
-        print(
-            f"  \u26a0\ufe0f  SSH test failed: {_te}\n"
-            f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
-        )
-        _slog(f"SSH test exception: {_te}", prefix="WARN")
+        _te_msg = str(_te)
+        if "q must be exactly 160, 224, or 256 bits long" in _te_msg:
+            print(
+                f"  \u26a0\ufe0f  SSH test could not load a local legacy SSH key format.\n"
+                f"     Retest manually with: ssh {ssh_user}@{mgmt_ip}"
+            )
+            _slog(
+                f"SSH test exception (local key parse issue): {_te_msg}",
+                prefix="WARN",
+            )
+        else:
+            print(
+                f"  \u26a0\ufe0f  SSH test failed: {_te}\n"
+                f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
+            )
+            _slog(f"SSH test exception: {_te}", prefix="WARN")
 
 
 def _run_cluster_setup_wizard(channel, primary_bmc=None):
@@ -24749,7 +24760,7 @@ def main():
                     _tc_45.connect(
                         mgmt_ip, username=ssh_user,
                         key_filename=_pk_path_45,
-                        look_for_keys=True, allow_agent=False,
+                        look_for_keys=False, allow_agent=False,
                         timeout=20,
                         disabled_algorithms={"pubkeys": ["ssh-dss"]},
                     )
@@ -24780,11 +24791,22 @@ def main():
                     )
                     _slog("SSH test: AuthenticationException", prefix="WARN")
                 except Exception as _te_45:
-                    print(
-                        f"  \u26a0\ufe0f  SSH test failed: {_te_45}\n"
-                        f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
-                    )
-                    _slog(f"SSH test exception: {_te_45}", prefix="WARN")
+                    _te_45_msg = str(_te_45)
+                    if "q must be exactly 160, 224, or 256 bits long" in _te_45_msg:
+                        print(
+                            f"  \u26a0\ufe0f  SSH test could not load a local legacy SSH key format.\n"
+                            f"     Retest manually with: ssh {ssh_user}@{mgmt_ip}"
+                        )
+                        _slog(
+                            f"SSH test exception (local key parse issue): {_te_45_msg}",
+                            prefix="WARN",
+                        )
+                    else:
+                        print(
+                            f"  \u26a0\ufe0f  SSH test failed: {_te_45}\n"
+                            f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
+                        )
+                        _slog(f"SSH test exception: {_te_45}", prefix="WARN")
 
                 _session_log.record_completion(normal_exit=True)
                 print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
