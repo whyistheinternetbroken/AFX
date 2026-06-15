@@ -9,6 +9,10 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **SSH remediation now includes known_hosts reset (`ssh-keygen -R`).**
+  Added a dedicated "Remove BMC from known hosts" action in mode 5h and
+  integrated the same step into post-failure SSH remediation used by modes
+  1–4 (via the shared diagnostics helper).
 - **5c gather/build now writes `configs/cluster_IP.json` automatically.**
   When mode 5c connects to an existing cluster (gather path or build/add path),
   it now captures cluster-role interface IPs and writes `cluster_IP.json` in

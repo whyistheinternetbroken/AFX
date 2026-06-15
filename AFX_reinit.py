@@ -2327,7 +2327,7 @@ def select_operation_mode():
         print("    5d. Verify BMC authentication")
         print("    5f. Check node status (LOADER / cluster prompt)")
         print("    5g. Cluster health and version check")
-        print("    5h. List and clean up stale BMC SSH sessions")
+        print("    5h. SSH diagnostics, cleanup, and known_hosts reset")
         print("    5i. Backup LOADER environment variables (experimental)")
         print("    5j. Compare LOADER env to defaults (diff) (experimental)")
         print("    5k. Check boot DNA (cluster shell or LOADER)")
@@ -2592,7 +2592,7 @@ def select_operation_mode():
                 print("  5d. Verify BMC authentication")
                 print("  5f. Check node status (LOADER / cluster prompt)")
                 print("  5g. Cluster health and version check")
-                print("  5h. List and clean up stale BMC SSH sessions")
+                print("  5h. SSH diagnostics, cleanup, and known_hosts reset")
                 print("  5i. Backup LOADER environment variables (experimental)")
                 print("  5j. Compare LOADER env to defaults (diff) (experimental)")
                 print("  5k. Check boot DNA (cluster shell or LOADER)")
@@ -2721,6 +2721,8 @@ def select_operation_mode():
                 _print_banner("\U0001f9f9 5h: List and clean up stale BMC SSH sessions")
                 print("")
                 print("  Diagnoses stale SSH socket connections to BMC/SP ports,")
+                print("  can remove stale local known_hosts entries via")
+                print("  'ssh-keygen -R <BMC IP>',")
                 print("  deactivates any stuck SOL sessions via ipmitool, and")
                 print("  optionally SIGTERMs stale prior-run python processes holding")
                 print("  open TCP connections to the BMC.")
@@ -3243,6 +3245,73 @@ def _silent_ping(host):
     try:
         return _sp.run(_cmd, capture_output=True, timeout=5).returncode == 0
     except Exception:
+        return False
+
+
+def _diagnostic_ping_precheck(host, log=None):
+    """Run a lightweight ping precheck before SSH stale-session diagnostics."""
+    _ok = _silent_ping(host)
+    if _ok:
+        print(f"  ✅ Ping OK: {host} is reachable.")
+        if log is not None:
+            with suppress(Exception):
+                log.log(f"[{host}] ping precheck: reachable")
+    else:
+        print(f"  ⚠️  Ping failed: {host} did not respond. Continuing SSH diagnostics anyway.")
+        if log is not None:
+            with suppress(Exception):
+                log.log(f"[{host}] ping precheck: no response", prefix="WARN")
+    return _ok
+
+
+def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
+    """Remove a BMC host key entry from known_hosts via `ssh-keygen -R`."""
+    if not host:
+        return False
+    _ssh_keygen = shutil.which("ssh-keygen")
+    if not _ssh_keygen:
+        print("  ⚠️  ssh-keygen not found on PATH; cannot remove known_hosts entries.")
+        if log is not None:
+            with suppress(Exception):
+                log.log(f"[{host}] known_hosts cleanup skipped: ssh-keygen not found", prefix="WARN")
+        return False
+    try:
+        _res = subprocess.run(
+            [_ssh_keygen, "-R", host],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        _combined = ((_res.stdout or "") + "\n" + (_res.stderr or "")).strip().lower()
+        if _res.returncode == 0:
+            if "not found in" in _combined:
+                print(f"  ℹ️  No known_hosts entry found for {host}.")
+                if log is not None:
+                    with suppress(Exception):
+                        log.log(f"[{host}] known_hosts cleanup: no entry found")
+            else:
+                print(f"  🗑️  Removed known_hosts entry for {host}.")
+                if log is not None:
+                    with suppress(Exception):
+                        log.log(f"[{host}] known_hosts cleanup: entry removed")
+            return True
+        print(f"  ⚠️  ssh-keygen -R {host} returned rc={_res.returncode}.")
+        if log is not None:
+            with suppress(Exception):
+                log.log(
+                    f"[{host}] known_hosts cleanup failed rc={_res.returncode}",
+                    prefix="WARN",
+                )
+        return False
+    except Exception as _kh_ex:
+        print(f"  ⚠️  Failed to run ssh-keygen -R for {host}: {_kh_ex}")
+        if log is not None:
+            with suppress(Exception):
+                log.log(
+                    f"[{host}] known_hosts cleanup exception: {_kh_ex}",
+                    prefix="WARN",
+                )
         return False
 
 
@@ -4616,7 +4685,7 @@ DESCRIPTION
       5d   Verify BMC SSH authentication for selected/all nodes
       5f   Check node status (LOADER / cluster prompt)
       5g   Cluster health and version check
-      5h   List and clean up stale BMC SSH sessions
+      5h   SSH diagnostics, cleanup, and known_hosts reset
       5i   Backup LOADER environment variables (experimental)
       5j   Compare LOADER env to defaults (diff) (experimental)
       5k   Check boot DNA (config target picker + state-aware query)
@@ -9540,7 +9609,22 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
     for _ip in _targets:
         print(f"\n  🔍 Diagnosing SSH state for {_ip}...")
         with suppress(Exception):
+            _diagnostic_ping_precheck(_ip, log=_session_log)
+        with suppress(Exception):
             _diagnose_stale_bmc_sessions(_ip, log=_session_log)
+
+    try:
+        _kh_ans = input(
+            "\n  Remove BMC from known hosts for these target(s)?"
+            " (runs ssh-keygen -R <BMC IP>) [y/N]: "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        _kh_ans = "n"
+    if _kh_ans == "y":
+        for _ip in _targets:
+            print(f"\n  🗑️  Removing known_hosts entry for {_ip}...")
+            with suppress(Exception):
+                _remove_bmc_from_known_hosts(_ip, log=_session_log)
 
     try:
         ipmi_only_ans = input(
@@ -9559,6 +9643,7 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
     try:
         fix_ans = input(
             "\n  Attempt to clear stale SSH sessions for these BMC(s)?"
+            "\n    • run 'ssh-keygen -R <BMC IP>' to clear known_hosts entries"
             "\n    • drop in-process SSH clients we still hold"
             "\n    • run 'ipmitool sol deactivate' (if ipmitool is installed)"
             f"\n    • SIGTERM other-python PIDs only if --auto-clear-stale-bmc was given"
@@ -9573,6 +9658,8 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
     for _ip in _targets:
         _pw = (bmc_passwords or {}).get(_ip, "") if isinstance(bmc_passwords, dict) else ""
         print(f"\n  🧹 Cleaning stale SSH sessions for {_ip}...")
+        with suppress(Exception):
+            _remove_bmc_from_known_hosts(_ip, log=_session_log)
         with suppress(Exception):
             _clear_stale_bmc_sessions(_ip, bmc_user, _pw, log=_session_log)
     print(
@@ -22813,6 +22900,13 @@ def main():
                     _default_user47 = "admin"
                     if _creds47:
                         _default_user47 = next(iter(_creds47.values()))[0] or "admin"
+                    if len(_missing47) == 1:
+                        _only_ip47 = _missing47[0]
+                        print(f"\n  Credentials for {_only_ip47}:")
+                        _u47 = input(f"    Username [{_default_user47}]: ").strip() or _default_user47
+                        _p47 = getpass.getpass("    Password (blank = none): ")
+                        _creds47[_only_ip47] = (_u47, _p47)
+                        return
                     _same_creds47 = input(
                         f"  Use the same username and password for all {len(_missing47)} "
                         "selected BMC(s)? [Y/n]: "
@@ -23101,23 +23195,30 @@ def main():
 
                 # ── Credentials ──────────────────────────────────────────────────
                 print("")
-                _same_creds48 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
                 _creds48 = {}   # ip -> (user, password)
-                if _same_creds48 != "n":
-                    _shared_user48 = input("  BMC username [admin]: ").strip() or "admin"
-                    _shared_pass48 = getpass.getpass("  BMC password (blank = none): ")
-                    for _ip48 in _bmc_ips48:
-                        _creds48[_ip48] = (_shared_user48, _shared_pass48)
+                if len(_bmc_ips48) == 1:
+                    _only_ip48 = _bmc_ips48[0]
+                    print(f"\n  Credentials for {_only_ip48}:")
+                    _u48 = input("    Username [admin]: ").strip() or "admin"
+                    _p48 = getpass.getpass("    Password (blank = none): ")
+                    _creds48[_only_ip48] = (_u48, _p48)
                 else:
-                    _group_pw48 = _collect_password_groups_for_nodes(_bmc_ips48, prompt_prefix="  ")
-                    for _ip48 in _bmc_ips48:
-                        print(f"\n  Credentials for {_ip48}:")
-                        _u48 = input("    Username [admin]: ").strip() or "admin"
-                        if _group_pw48 is not None and _ip48 in _group_pw48:
-                            _p48 = _group_pw48[_ip48]
-                        else:
-                            _p48 = getpass.getpass("    Password (blank = none): ")
-                        _creds48[_ip48] = (_u48, _p48)
+                    _same_creds48 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
+                    if _same_creds48 != "n":
+                        _shared_user48 = input("  BMC username [admin]: ").strip() or "admin"
+                        _shared_pass48 = getpass.getpass("  BMC password (blank = none): ")
+                        for _ip48 in _bmc_ips48:
+                            _creds48[_ip48] = (_shared_user48, _shared_pass48)
+                    else:
+                        _group_pw48 = _collect_password_groups_for_nodes(_bmc_ips48, prompt_prefix="  ")
+                        for _ip48 in _bmc_ips48:
+                            print(f"\n  Credentials for {_ip48}:")
+                            _u48 = input("    Username [admin]: ").strip() or "admin"
+                            if _group_pw48 is not None and _ip48 in _group_pw48:
+                                _p48 = _group_pw48[_ip48]
+                            else:
+                                _p48 = getpass.getpass("    Password (blank = none): ")
+                            _creds48[_ip48] = (_u48, _p48)
                 print("")
 
                 _make_session_log("5z: reset all nodes to LOADER")
@@ -23578,25 +23679,32 @@ def main():
 
                 # ── Credentials ──────────────────────────────────────────────────
                 print("")
-                _same_creds50 = input(
-                    "  Use the same username and password for all BMCs? [Y/n]: "
-                ).strip().lower()
                 _creds50 = {}
-                if _same_creds50 != "n":
-                    _shared_user50 = input("  BMC username [admin]: ").strip() or "admin"
-                    _shared_pass50 = getpass.getpass("  BMC password (blank = none): ")
-                    for _ip50 in _bmc_ips50:
-                        _creds50[_ip50] = (_shared_user50, _shared_pass50)
+                if len(_bmc_ips50) == 1:
+                    _only_ip50 = _bmc_ips50[0]
+                    print(f"\n  Credentials for {_only_ip50}:")
+                    _u50 = input("    Username [admin]: ").strip() or "admin"
+                    _p50pw = getpass.getpass("    Password (blank = none): ")
+                    _creds50[_only_ip50] = (_u50, _p50pw)
                 else:
-                    _group_pw50 = _collect_password_groups_for_nodes(_bmc_ips50, prompt_prefix="  ")
-                    for _ip50 in _bmc_ips50:
-                        print(f"\n  Credentials for {_ip50}:")
-                        _u50 = input("    Username [admin]: ").strip() or "admin"
-                        if _group_pw50 is not None and _ip50 in _group_pw50:
-                            _p50pw = _group_pw50[_ip50]
-                        else:
-                            _p50pw = getpass.getpass("    Password (blank = none): ")
-                        _creds50[_ip50] = (_u50, _p50pw)
+                    _same_creds50 = input(
+                        "  Use the same username and password for all BMCs? [Y/n]: "
+                    ).strip().lower()
+                    if _same_creds50 != "n":
+                        _shared_user50 = input("  BMC username [admin]: ").strip() or "admin"
+                        _shared_pass50 = getpass.getpass("  BMC password (blank = none): ")
+                        for _ip50 in _bmc_ips50:
+                            _creds50[_ip50] = (_shared_user50, _shared_pass50)
+                    else:
+                        _group_pw50 = _collect_password_groups_for_nodes(_bmc_ips50, prompt_prefix="  ")
+                        for _ip50 in _bmc_ips50:
+                            print(f"\n  Credentials for {_ip50}:")
+                            _u50 = input("    Username [admin]: ").strip() or "admin"
+                            if _group_pw50 is not None and _ip50 in _group_pw50:
+                                _p50pw = _group_pw50[_ip50]
+                            else:
+                                _p50pw = getpass.getpass("    Password (blank = none): ")
+                            _creds50[_ip50] = (_u50, _p50pw)
 
                 # ── Interactive loop ──────────────────────────────────────────────
                 while True:
@@ -23604,8 +23712,9 @@ def main():
                     print("    1) List stale SSH sessions (all BMCs or one IP)")
                     print("    2) Clean up stale SSH sessions (all BMCs or one IP)")
                     print("    3) Run ipmitool SOL deactivate (all BMCs or one IP)")
-                    print("    4) Exit (return to main menu)")
-                    _act50 = _prompt("  Your choice [1/2/3/4]: ").strip()
+                    print("    4) Remove BMC from known hosts (ssh-keygen -R)")
+                    print("    5) Exit (return to main menu)")
+                    _act50 = _prompt("  Your choice [1/2/3/4/5]: ").strip()
                     if _act50 == "1":
                         _targets50 = _prompt_bmc_target_scope(
                             _bmc_ips50, scope_label="SSH diagnostics", prompt_prefix="  ",
@@ -23618,6 +23727,8 @@ def main():
                         for _ip50 in _targets50:
                             print(f"\n  \U0001f50d Diagnosing SSH state for {_ip50}...")
                             with suppress(Exception):
+                                _diagnostic_ping_precheck(_ip50, log=_session_log)
+                            with suppress(Exception):
                                 _diagnose_stale_bmc_sessions(_ip50, log=_session_log)
                     elif _act50 == "2":
                         _targets50 = _prompt_bmc_target_scope(
@@ -23629,6 +23740,8 @@ def main():
                         for _ip50 in _targets50:
                             _u50, _p50pw = _creds50.get(_ip50, ("admin", ""))
                             print(f"\n  \U0001f9f9 Cleaning stale SSH sessions for {_ip50}...")
+                            with suppress(Exception):
+                                _remove_bmc_from_known_hosts(_ip50, log=_session_log)
                             with suppress(Exception):
                                 _clear_stale_bmc_sessions(_ip50, _u50, _p50pw,
                                                           log=_session_log)
@@ -23646,10 +23759,24 @@ def main():
                             with suppress(Exception):
                                 _ipmi_sol_deactivate(_ip50, _u50, _p50pw, log=_session_log)
                         print("\n  ✅ ipmitool pass complete.")
-                    elif _act50 in ("4", ""):
+                    elif _act50 == "4":
+                        _targets50 = _prompt_bmc_target_scope(
+                            _bmc_ips50, scope_label="known_hosts cleanup", prompt_prefix="  ",
+                            config_data=_cfg_data50, config_path=_found_file50,
+                            include_config_ips=True,
+                        )
+                        if not _targets50:
+                            continue
+                        print("")
+                        for _ip50 in _targets50:
+                            print(f"\n  🗑️  Removing known_hosts entry for {_ip50}...")
+                            with suppress(Exception):
+                                _remove_bmc_from_known_hosts(_ip50, log=_session_log)
+                        print("\n  ✅ known_hosts cleanup complete.")
+                    elif _act50 in ("5", ""):
                         break
                     else:
-                        print("  \u26a0\ufe0f  Please enter 1, 2, 3, or 4.")
+                        print("  \u26a0\ufe0f  Please enter 1, 2, 3, 4, or 5.")
 
                 print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
