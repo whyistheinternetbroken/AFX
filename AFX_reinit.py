@@ -9161,7 +9161,7 @@ _WIZARD_START_TRIGGERS = [
     "do you want to create a new cluster or join",
 ]
 
-def _wait_for_wizard_start(channel, timeout=1800, node_log=None):
+def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: str = ""):
     """Wait for the ONTAP cluster-setup wizard to display its first prompt.
 
     Periodically sends CR (every 15 s of console silence) so the node sees
@@ -9170,11 +9170,15 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None):
     Returns the matched trigger string, or None on timeout.
     """
     triggers_lower = [t.lower() for t in _WIZARD_START_TRIGGERS]
-    output = ""
-    output_lower = ""
+    output = initial_buf or ""
+    output_lower = output.lower()
     start = time.monotonic()
     last_data = start
     last_nudge = start
+
+    for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
+        if trigger_lower in output_lower:
+            return trigger
 
     while time.monotonic() - start < timeout:
         if _shutdown_event.is_set():
@@ -17257,7 +17261,7 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
             _slog(f"SSH test exception: {_te}", prefix="WARN")
 
 
-def _run_cluster_setup_wizard(channel, primary_bmc=None):
+def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     """Drive the post-node-mgmt cluster setup wizard non-interactively using
     values gathered in `_cluster_config`.
 
@@ -17314,7 +17318,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None):
     # comes first, sending CR every 15 s of silence to nudge the prompt.
     print("\n⏳ Waiting for cluster setup wizard to begin...")
     _slog("Waiting for wizard start (press-enter or create/join prompt)")
-    _which = _wait_for_wizard_start(channel, timeout=1800)
+    _which = _wait_for_wizard_start(channel, timeout=1800, initial_buf=initial_buf)
     if _which is None:
         print("\n❌ Timed out waiting for cluster setup wizard start.")
         if _session_log:
@@ -17686,7 +17690,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None):
 # Mode 2b / Mode 3 peer: auto join wizard
 # ---------------------------------------------------------------------------
 
-def _run_join_wizard(channel, label="join wizard"):
+def _run_join_wizard(channel, label="join wizard", initial_buf: str = ""):
     """Drive the post-option-4 setup wizard to JOIN an existing cluster.
 
     Assumes node-management config has already been answered. Acquires
@@ -17701,7 +17705,7 @@ def _run_join_wizard(channel, label="join wizard"):
     # comes first, sending CR every 15 s of silence to nudge the prompt.
     print(f"\n⏳ [{label}] Waiting for cluster setup wizard to begin...")
     _slog(f"[{label}] waiting for wizard start (press-enter or create/join prompt)")
-    _which = _wait_for_wizard_start(channel, timeout=1800)
+    _which = _wait_for_wizard_start(channel, timeout=1800, initial_buf=initial_buf)
     if _which is None:
         print(f"\n❌ [{label}] Timed out waiting for cluster setup wizard start.")
         _slog(f"[{label}] Timeout waiting for wizard start", prefix="ERROR")
@@ -17765,10 +17769,11 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         v = cfg.get(k)
         print(f"   {k:<8} = {v if v else '(prompt manually)'}")
     _slog(f"Node mgmt config to use: {cfg}")
-    _auto_answer_node_mgmt(channel, cfg)
+    _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
 
     # Drive the join wizard (sends "join" at create-or-join prompt).
-    _run_join_wizard(channel, label=f"2b/{bmc_host or 'this node'}")
+    _run_join_wizard(channel, label=f"2b/{bmc_host or 'this node'}",
+                     initial_buf=_mgmt_residual)
 
     # ---- Post-create/join: drive every remaining prompt through "login:".
     # 1. Confirm "use this configuration?" with yes.
@@ -20903,7 +20908,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         v = cfg.get(k)
         print(f"   {k:<8} = {v if v else '(prompt manually)'}")
     _slog(f"Node mgmt config to use: {cfg}")
-    _auto_answer_node_mgmt(channel, cfg)
+    _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
 
     print("\n✅ Mode 1b auto-init complete; driving cluster setup wizard...")
     if _session_log:
@@ -20911,7 +20916,11 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         _session_log.end_phase()
 
     # Drive the post-node-mgmt cluster setup wizard from gathered values.
-    wizard_ok = _run_cluster_setup_wizard(channel, primary_bmc=bmc_host)
+    wizard_ok = _run_cluster_setup_wizard(
+        channel,
+        primary_bmc=bmc_host,
+        initial_buf=_mgmt_residual,
+    )
     if wizard_ok is False:
         print("\n❌ Cluster setup wizard failed – cannot proceed. Exiting.")
         if _session_log:
