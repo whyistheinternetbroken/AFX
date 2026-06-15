@@ -109,6 +109,18 @@ def _node_pfx(label: str = "") -> str:
     lbl = label or _reinit_label
     return f"[{lbl}] " if lbl else ""
 
+
+def _print_wait_log_hint(*, node_log=None, log_path: str = "") -> None:
+    """Print a standard 'for details' hint for long-running wait states."""
+    _path = str(log_path or "").strip()
+    if not _path and node_log is not None:
+        _path = str(getattr(node_log, "name", "") or "").strip()
+    if not _path and _session_log:
+        _path = str(getattr(_session_log, "log_file", "") or "").strip()
+    if not _path:
+        return
+    print(f"   For details, see log at:\n   {_path}\n   (open in a separate SSH session)")
+
 # ---------------------------------------------------------------------------
 # Checkpoint manager
 # ---------------------------------------------------------------------------
@@ -245,6 +257,7 @@ class CheckpointManager:
             "done": True, "ts": datetime.now().isoformat(),
         }
         self._save()
+        _maybe_inject_checkpoint_failure(phase)
 
     def is_done(self, phase: str) -> bool:
         """Return True if a global phase is marked complete."""
@@ -257,6 +270,7 @@ class CheckpointManager:
             "done": True, "ts": datetime.now().isoformat(),
         }
         self._save()
+        _maybe_inject_checkpoint_failure(phase, ip)
 
     def is_node_done(self, phase: str, ip: str) -> bool:
         """Return True if the per-node phase is marked complete for *ip*."""
@@ -511,6 +525,14 @@ _netboot_static_ip = False
 # _write_node_add_manifest). Used by option 2c to locate the last run.
 _last_node_add_manifest: str = ""
 _cluster_ip_manifest_lock = threading.Lock()
+
+# --test: injected checkpoint failure configuration.
+_checkpoint_test_enabled = False
+_checkpoint_test_target = ""
+_checkpoint_test_mode_label = ""
+_checkpoint_test_consumed = False
+_pending_checkpoint_test_failure: "Exception | None" = None
+_checkpoint_test_lock = threading.Lock()
 
 # Set to True by _run_4b_standalone when the operator selected a reinit
 # sub-mode (1a/1b/3).  Read by main() to decide whether to offer the
@@ -803,6 +825,151 @@ def _ctx_sync_from_globals() -> None:
 class _ReturnToMenu(Exception):
     """Raised when the user types 'menu' at any interactive prompt to escape
     back to the main selection menu without completing the current operation."""
+
+
+class _InjectedCheckpointFailure(RuntimeError):
+    """Synthetic failure raised by ``--test`` immediately after a checkpoint is saved."""
+
+
+_CHECKPOINT_TEST_OPTIONS = {
+    1: [
+        ("primary_install_done", "Primary ONTAP install recorded"),
+        ("primary_format_done", "Primary disk format recorded"),
+        ("primary_bootmenu_done", "Primary boot menu cleared"),
+        ("cluster_formed", "Cluster creation completed"),
+        ("primary_setup_done", "Primary setup completed"),
+        ("option1_complete", "Option 1 completion recorded"),
+    ],
+    2: [
+        ("node_install_done", "Node ONTAP install recorded"),
+        ("node_format_done", "Node disk format recorded"),
+        ("node_joined", "Node joined cluster"),
+        ("option2_complete", "Option 2 completion recorded"),
+    ],
+    3: [
+        ("cluster_formed", "Primary cluster creation completed"),
+        ("primary_setup_done", "Primary setup completed"),
+        ("peer_option4_done", "Peer reached add-node checkpoint"),
+        ("option3_complete", "Option 3 completion recorded"),
+    ],
+    42: [
+        ("option6_done", "Option 6 accepted for a node"),
+        ("install_done", "Node install/login checkpoint recorded"),
+        ("reinit_loader", "Node returned to LOADER after install"),
+        ("primary_bootmenu_done", "Primary boot menu cleared"),
+        ("cluster_formed", "Cluster creation completed"),
+        ("peer_option4_done", "Peer reached add-node checkpoint"),
+    ],
+    43: [
+        ("option6_done", "Option 6 accepted for a node"),
+        ("install_done", "Node install/login checkpoint recorded"),
+        ("reinit_loader", "Node returned to LOADER after install"),
+        ("primary_bootmenu_done", "Primary boot menu cleared"),
+        ("cluster_formed", "Cluster creation completed"),
+        ("peer_option4_done", "Peer reached add-node checkpoint"),
+    ],
+}
+
+
+def _clear_checkpoint_test_config() -> None:
+    global _checkpoint_test_enabled, _checkpoint_test_target
+    global _checkpoint_test_mode_label, _checkpoint_test_consumed
+    global _pending_checkpoint_test_failure
+    _checkpoint_test_enabled = False
+    _checkpoint_test_target = ""
+    _checkpoint_test_mode_label = ""
+    _checkpoint_test_consumed = False
+    _pending_checkpoint_test_failure = None
+
+
+def _checkpoint_test_mode_name(operation_mode: int) -> str:
+    return {
+        1: "1",
+        2: "2",
+        3: "3",
+        41: "4a",
+        42: "4b",
+        43: "4c",
+    }.get(operation_mode, str(operation_mode))
+
+
+def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> None:
+    """When ``--test`` is enabled, let the operator choose a checkpoint to fail at."""
+    global _checkpoint_test_enabled, _checkpoint_test_target, _checkpoint_test_mode_label
+    _clear_checkpoint_test_config()
+    if not enabled:
+        return
+
+    _options = list(_CHECKPOINT_TEST_OPTIONS.get(operation_mode) or [])
+    _mode_name = _checkpoint_test_mode_name(operation_mode)
+    if not _options:
+        print(f"\n🧪 --test: no checkpoint failure injection points are available for mode {_mode_name}.")
+        return
+
+    _print_banner(f"🧪 Test failure injection ({_mode_name})")
+    print("\n  Select a checkpoint to fail immediately after it is saved.")
+    print("  This is intended to validate resume/checkpoint pickup on the next run.")
+    print("")
+    print("  0. Disable injected checkpoint failure for this run")
+    for _idx, (_phase, _label) in enumerate(_options, 1):
+        print(f"  {_idx}. {_phase:<22} {_label}")
+
+    while True:
+        _sel = _prompt(f"\n  Inject failure after checkpoint [0-{len(_options)}]: ", "0").strip()
+        if _sel == "":
+            _sel = "0"
+        if not _sel.isdigit():
+            print("  ⚠️  Enter a number from the list.")
+            continue
+        _idx = int(_sel)
+        if _idx == 0:
+            print("  ✅ Checkpoint failure injection disabled for this run.")
+            return
+        if 1 <= _idx <= len(_options):
+            _phase, _label = _options[_idx - 1]
+            _checkpoint_test_enabled = True
+            _checkpoint_test_target = _phase
+            _checkpoint_test_mode_label = _mode_name
+            _slog(f"--test armed for mode {_mode_name}: checkpoint '{_phase}' ({_label})")
+            print(f"  ✅ Will fail after checkpoint '{_phase}' is saved.")
+            return
+        print("  ⚠️  Out of range.")
+
+
+def _raise_pending_checkpoint_failure() -> None:
+    if _pending_checkpoint_test_failure is not None:
+        raise _pending_checkpoint_test_failure
+
+
+def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
+    """Abort once when the configured checkpoint phase is saved."""
+    global _checkpoint_test_consumed, _pending_checkpoint_test_failure
+
+    _phase = str(phase or "").strip()
+    if (not _checkpoint_test_enabled
+            or _checkpoint_test_consumed
+            or not _phase
+            or _phase != _checkpoint_test_target):
+        return
+
+    with _checkpoint_test_lock:
+        if (not _checkpoint_test_enabled
+                or _checkpoint_test_consumed
+                or _phase != _checkpoint_test_target):
+            return
+        _checkpoint_test_consumed = True
+        _msg = f"Injected --test failure after checkpoint '{_phase}' was saved"
+        _node_id = str(node_id or "").strip()
+        if _node_id:
+            _msg += f" for {_node_id}"
+        _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_msg)
+
+    print(f"\n🧪 {_msg}")
+    _slog(_msg, prefix="FATAL")
+    if _session_log:
+        with suppress(Exception):
+            _session_log.log(_msg, prefix="FATAL")
+    raise _pending_checkpoint_test_failure
 
 
 def _prompt(prompt: str, default: str = "") -> str:
@@ -1198,12 +1365,18 @@ def _run_parallel(items, target, *, with_index=False, join_timeout=None):
     threads = []
     for idx, item in enumerate(items):
         args = (item, idx) if with_index else (item,)
-        t = threading.Thread(target=target, args=args, daemon=True)
+        def _wrapped_target(*_args):
+            try:
+                target(*_args)
+            except _InjectedCheckpointFailure:
+                return
+        t = threading.Thread(target=_wrapped_target, args=args, daemon=True)
         threads.append(t)
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=join_timeout) if join_timeout is not None else t.join()
+    _raise_pending_checkpoint_failure()
     return threads
 
 
@@ -5128,6 +5301,9 @@ def parse_args():
     parser.add_argument("--loader", action="store_true", default=False,
                         help="Skip the menu and run mode 5z: reset all nodes "
                              "to the LOADER prompt in parallel.")
+    parser.add_argument("--test", action="store_true", default=False,
+                        help="Interactive checkpoint failure injection for "
+                             "resume testing in modes 1-4.")
     args = parser.parse_args()
     if args.help:
         _print_man_page()
@@ -8124,6 +8300,40 @@ def write_config_snapshot(target_path):
     return target_path
 
 
+def _normalize_node_mgmt_config(cfg):
+    """Return node-mgmt config with canonical port/ip/netmask/gateway keys.
+
+    Some callers persist node-management values with ``node_mgmt_*`` field
+    names (for example in the node-add manifest used by option 2c), while the
+    prompt automation consumes the shorter ``port/ip/netmask/gateway`` keys.
+    Normalize both spellings here so resume paths stay non-interactive.
+    """
+    if not isinstance(cfg, dict):
+        return {}
+
+    _out = dict(cfg)
+    _aliases = {
+        "port": ("port", "node_mgmt_port"),
+        "ip": ("ip", "node_mgmt_ip"),
+        "netmask": ("netmask", "node_mgmt_netmask"),
+        "gateway": ("gateway", "node_mgmt_gateway"),
+    }
+    for _canon, _names in _aliases.items():
+        _val = None
+        for _name in _names:
+            _raw = _out.get(_name)
+            if isinstance(_raw, str):
+                _raw = _raw.strip()
+            if _raw:
+                _val = _raw
+                break
+        if _val:
+            _out[_canon] = _val
+        elif _canon in _out and not _out.get(_canon):
+            _out.pop(_canon, None)
+    return _out
+
+
 def _resolve_node_mgmt_config(bmc_host=None):
     """Return the node-management config to use for `bmc_host`.
 
@@ -8133,8 +8343,8 @@ def _resolve_node_mgmt_config(bmc_host=None):
     pre-collection step.
     """
     if bmc_host and bmc_host in _node_mgmt_by_bmc:
-        return dict(_node_mgmt_by_bmc[bmc_host])
-    return _resolve_node_mgmt_config_from_retained()
+        return _normalize_node_mgmt_config(_node_mgmt_by_bmc[bmc_host])
+    return _normalize_node_mgmt_config(_resolve_node_mgmt_config_from_retained())
 
 
 def _prompt_with_default(label, default):
@@ -8947,7 +9157,6 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
          "type-yes confirmation"),
     ):
         if lbl == "type-yes confirmation":
-            _log_path = _session_log.log_file if _session_log else "the log file"
             if _node_add:
                 _boot_action = "join the cluster"
                 _still_waiting_msg = "Still waiting for cluster join"
@@ -8955,7 +9164,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                 _boot_action = "begin cluster creation"
                 _still_waiting_msg = "Still waiting for cluster creation"
             print(f"\n⏳ {_pfx}Waiting for node to boot and {_boot_action}.{_elapsed_str()}")
-            print(f"   For details, see log at:\n   {_log_path}\n   (open in a separate SSH session)")
+            _print_wait_log_hint(node_log=node_log)
             _cc_done_ev = threading.Event()
             _cc_t0 = time.monotonic()
             def _cc_reporter(_ev=_cc_done_ev, _t0=_cc_t0, _msg=_still_waiting_msg, _p=_pfx):
@@ -9028,6 +9237,8 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                 _checkpoint.mark_done("primary_install_done")
                 _checkpoint.mark_done("primary_format_done")
                 _slog("checkpoint: primary_install_done and primary_format_done saved")
+        except _InjectedCheckpointFailure:
+            raise
         except Exception:
             pass
 
@@ -10564,6 +10775,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
         # Raw console output (BIOS init, driver load, etc.) goes to node_log
         # only; status milestones are printed to the terminal.
         print(f"  ⏳ [{host}] Waiting for AUTOBOOT / LOADER prompt...")
+        _print_wait_log_hint(node_log=node_log)
         # Some BMC consoles stay silent until Enter is pressed.
         with suppress(Exception):
             ch.send("\r")
@@ -11876,11 +12088,16 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _static = _node_mgmt_by_bmc.get(ip) if _netboot_static_ip else None
             def _scb(msg):
                 _status(msg)
-            ok = _run_netboot_install_sequence(
-                ch, pkg_url, node_label=ip, log=log,
-                boot_menu_timeout=900, node_file=nf, status_cb=_scb,
-                static_ifconfig=_static,
-            )
+            try:
+                ok = _run_netboot_install_sequence(
+                    ch, pkg_url, node_label=ip, log=log,
+                    boot_menu_timeout=900, node_file=nf, status_cb=_scb,
+                    static_ifconfig=_static,
+                )
+            except _InjectedCheckpointFailure:
+                with connect_lock:
+                    install_results[ip] = False
+                return
             with connect_lock:
                 install_results[ip] = ok
             # Note: install_done checkpoint is marked AFTER option 6 completes
@@ -11903,6 +12120,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
         for t in threads:
             t.join()
+        _raise_pending_checkpoint_failure()
 
         if httpd:
             try:
@@ -11977,6 +12195,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _checkpoint.mark_node_done("install_done", ip)
                 if log:
                     log.log(f"[{ip}] checkpoint: install_done saved")
+            except _InjectedCheckpointFailure:
+                raise
             except Exception:
                 pass
 
@@ -11994,6 +12214,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _checkpoint.mark_node_done("option6_done", ip)
                 if log:
                     log.log(f"[{ip}] checkpoint: option6_done saved")
+            except _InjectedCheckpointFailure:
+                raise
             except Exception:
                 pass
 
@@ -12331,6 +12553,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _boot_timeout = 1800
             _boot_timeout_min = _boot_timeout // 60
             _status(f"  ⏳ [{ip}] Option 6 confirmed – waiting for node to boot (up to {_boot_timeout_min} min)...")
+            _print_wait_log_hint(node_log=_nf6)
             if log:
                 log.log(f"[{ip}] option 6 confirmed; waiting for login prompt (up to {_boot_timeout_min} min)")
 
@@ -12583,6 +12806,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                     "nvram changed on this node",
                                     "type yes to confirm and continue"]
                 _status(f"  ⏳ [{ip}] Option 4 boot: waiting for node to boot (up to 20 min)...")
+                _print_wait_log_hint(node_log=_nf6)
                 if log:
                     log.log(f"[{ip}] option 4 sent; waiting for login prompt (up to 20 min)")
                 while time.monotonic() - _opt4_boot_start < _opt4_boot_timeout:
@@ -12862,6 +13086,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             t.start()
         for t in opt6_threads:
             t.join()
+        _raise_pending_checkpoint_failure()
 
         # ── Checkpoint: mark install_done for every node that reached login ─
         # Per-node marks are already written inside _select_option6 as soon
@@ -12875,6 +13100,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _checkpoint.mark_node_done("install_done", _ip_ok)
                     if log:
                         log.log(f"[{_ip_ok}] checkpoint: install_done saved")
+                except _InjectedCheckpointFailure:
+                    raise
                 except Exception:
                     pass
 
@@ -13329,6 +13556,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _checkpoint.mark_done("primary_bootmenu_done")
             if log:
                 log.log("4b: checkpoint: primary_bootmenu_done saved")
+        except _InjectedCheckpointFailure:
+            raise
         except Exception:
             pass
 
@@ -13444,6 +13673,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             t.start()
         for t in peer_threads:
             t.join()
+        _raise_pending_checkpoint_failure()
 
         if _peer_errors:
             print(f"  ⚠️  Peer reinit issues: {_peer_errors}")
@@ -16949,6 +17179,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None):
         try:
             _checkpoint.mark_done("cluster_formed")
             _slog("checkpoint: cluster_formed saved")
+        except _InjectedCheckpointFailure:
+            raise
         except Exception:
             pass
 
@@ -16957,6 +17189,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None):
         try:
             _checkpoint.mark_done("primary_setup_done")
             _slog("checkpoint: primary_setup_done saved")
+        except _InjectedCheckpointFailure:
+            raise
         except Exception:
             pass
 
@@ -17042,6 +17276,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None):
             try:
                 _checkpoint.mark_done("option1_complete")
                 _slog("checkpoint: option1_complete saved")
+            except _InjectedCheckpointFailure:
+                raise
             except Exception:
                 pass
         sys.exit(0)
@@ -17318,6 +17554,8 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         try:
             _checkpoint.mark_done("node_joined")
             _slog("checkpoint: node_joined saved")
+        except _InjectedCheckpointFailure:
+            raise
         except Exception:
             pass
 
@@ -17351,6 +17589,8 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
                 try:
                     _checkpoint.mark_done("option2_complete")
                     _slog("checkpoint: option2_complete saved")
+                except _InjectedCheckpointFailure:
+                    raise
                 except Exception:
                     pass
             _shutdown_event.set()
@@ -17594,6 +17834,11 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             bmc=peer_bmc,
             source="node-add runtime",
         )
+        _update_node_add_manifest_node(
+            peer_bmc,
+            cluster_ip=_cluster_ip,
+            node_name=_cluster_node_name,
+        )
     else:
         print(f"\n⚠️  [{label}] Could not parse cluster IP from net int show output.")
         _slog(f"[{label}] cluster IP parse failed", prefix="WARN")
@@ -17683,6 +17928,20 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     if log:
         log.log(f"cluster add-node -cluster-ips {ips_str}")
 
+    _baseline_count = -1
+    _target_count = None
+    try:
+        _baseline_count = _cluster_show_node_count(primary_channel)
+    except Exception as _e:
+        if log:
+            log.log(f"cluster add-node: baseline cluster show failed: {_e}",
+                    prefix="WARN")
+    if _baseline_count >= 0:
+        _target_count = _baseline_count + len(cluster_ips)
+        if log:
+            log.log(f"cluster add-node: baseline count={_baseline_count}, "
+                    f"target count={_target_count}")
+
     global _console_quiet
     _prev_quiet = _console_quiet
     _console_quiet = True
@@ -17769,16 +18028,17 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
 
         for _row in _parsed_rows:
             _node_name = _row["node"]
+            _row_ip = _row["cluster_ip"]
             _node_status = _row["status"]
             _node_err = _row["error"]
-            row_lower = f"{_node_name} {_node_status} {_node_err}".lower()
+            row_lower = f"{_node_name} {_row_ip} {_node_status} {_node_err}".lower()
             status_rows.append(row_lower)
             _icon = "✅" if _node_status.lower() == "success" else "⏳"
             _err_suffix = f" ({_node_err})" if _node_err else ""
-            print(f"    {_icon} {_node_name}: {_node_status}{_err_suffix}")
+            _ip_suffix = f" [{_row_ip}]" if _row_ip else ""
+            print(f"    {_icon} {_node_name}{_ip_suffix}: {_node_status}{_err_suffix}")
             # Track per-node first-success timestamp.
             if _node_status.lower() == "success" and node_timings_out is not None:
-                _row_ip = _node_name
                 if _row_ip and _row_ip not in _already_succeeded:
                     _already_succeeded.add(_row_ip)
                     node_timings_out[_row_ip] = round(
@@ -17792,6 +18052,37 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                 log.log(f"cluster add-node: {len(cluster_ips)} node(s) all success "
                         f"in {elapsed_total}s")
             return True
+
+        if not status_rows and _target_count is not None:
+            try:
+                _count, _all_true, _has_warning = _cluster_show_node_status(primary_channel)
+                _port_issues = _cluster_port_health_issues(primary_channel, log=log)
+                _ports_ok = not _port_issues
+            except Exception as _e:
+                _count, _all_true, _has_warning, _ports_ok = -1, False, False, False
+                if log:
+                    log.log(f"cluster add-node: fallback cluster health check failed: {_e}",
+                            prefix="WARN")
+            else:
+                if log:
+                    log.log("cluster add-node: add-node-status had no rows; "
+                            f"fallback cluster show -> count={_count}, "
+                            f"all_true={_all_true}, has_warning={_has_warning}, "
+                            f"ports_ok={_ports_ok}")
+                if _count >= _target_count and _all_true and not _has_warning and _ports_ok:
+                    elapsed_total = round(time.monotonic() - start, 1)
+                    print(f"\n  ✅ Cluster reports {_count} healthy node(s); "
+                          f"treating cluster add-node as complete ({elapsed_total}s).")
+                    if log:
+                        log.log("cluster add-node: completed via cluster-show fallback "
+                                f"(count={_count}, target={_target_count}) in "
+                                f"{elapsed_total}s")
+                    for _ip in cluster_ips:
+                        if (node_timings_out is not None and _ip
+                                and _ip not in _already_succeeded):
+                            _already_succeeded.add(_ip)
+                            node_timings_out[_ip] = elapsed_total
+                    return True
 
         elapsed = int(time.monotonic() - start)
         remaining = max(0, total_timeout - elapsed)
@@ -18642,6 +18933,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             try:
                 _checkpoint.mark_node_done("peer_option4_done", peer_bmc)
                 _slog(f"[{label}] checkpoint: peer_option4_done saved")
+            except _InjectedCheckpointFailure:
+                raise
             except Exception:
                 pass
 
@@ -19148,12 +19441,15 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             if p is None:
                 p = bmc_passwords.get(addr, "")
             def _run_with_result(_ri=idx, _addr=addr, _u=u, _p=p):
-                _batch_results[_ri] = _add_peer_node_thread(
-                    _addr, _u, _p, primary_channel, admin_password,
-                    cluster_ips_out=_cluster_ips_out,
-                    timings_record=_2b_peer_timings,
-                    timings_lock=_2b_timings_lock,
-                )
+                try:
+                    _batch_results[_ri] = _add_peer_node_thread(
+                        _addr, _u, _p, primary_channel, admin_password,
+                        cluster_ips_out=_cluster_ips_out,
+                        timings_record=_2b_peer_timings,
+                        timings_lock=_2b_timings_lock,
+                    )
+                except _InjectedCheckpointFailure:
+                    _batch_results[_ri] = False
             t = threading.Thread(
                 target=_run_with_result,
                 daemon=True,
@@ -19167,6 +19463,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
               f"(parallel LOADER/format/node-mgmt, then bulk cluster join)...")
         for t in threads:
             t.join()
+        _raise_pending_checkpoint_failure()
 
         if _fatal_boot_dna_event.is_set():
             _print_fatal_boot_dna_abort_message()
@@ -19422,13 +19719,16 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             else:
                 p = bmc_passwords.get(addr, "")
             def _run_2a(_ri=idx, _addr=addr, _u=u, _p=p):
-                _batch_results[_ri] = _add_peer_node_thread(
-                    _addr, _u, _p, primary_channel, admin_password,
-                    broker=broker,
-                    cluster_ips_out=_cluster_ips_out,
-                    timings_record=_2a_peer_timings,
-                    timings_lock=_2a_timings_lock,
-                )
+                try:
+                    _batch_results[_ri] = _add_peer_node_thread(
+                        _addr, _u, _p, primary_channel, admin_password,
+                        broker=broker,
+                        cluster_ips_out=_cluster_ips_out,
+                        timings_record=_2a_peer_timings,
+                        timings_lock=_2a_timings_lock,
+                    )
+                except _InjectedCheckpointFailure:
+                    _batch_results[_ri] = False
             t = threading.Thread(
                 target=_run_2a,
                 daemon=True,
@@ -19441,6 +19741,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         print(f"\n  ⏳ Nodes running in parallel. Answer prompts above when asked...")
         for t in threads:
             t.join()
+        _raise_pending_checkpoint_failure()
 
         if _fatal_boot_dna_event.is_set():
             _print_fatal_boot_dna_abort_message()
@@ -19861,6 +20162,8 @@ def _option3_finalize(ctx, cluster_mgmt_ip):
         try:
             checkpoint.mark_done("option3_complete")
             checkpoint.clear()
+        except _InjectedCheckpointFailure:
+            raise
         except Exception:
             pass
     mgmt_ip = cluster_mgmt_ip or "<cluster-management-ip>"
@@ -19929,6 +20232,8 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     if _checkpoint:
         try:
             _checkpoint.mark_done("primary_setup_done")
+        except _InjectedCheckpointFailure:
+            raise
         except Exception:
             pass
 
@@ -20004,12 +20309,15 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
             u = creds.get("user") or "admin"
             p = creds.get("password") or ""
             def _run_m3(_ri=idx, _addr=addr, _u=u, _p=p):
-                _m3_results[_ri] = _add_peer_node_thread(
-                    _addr, _u, _p, primary_channel, admin_password,
-                    timings_record=_m3_peer_timings,
-                    timings_lock=_m3_timings_lock,
-                    cluster_ips_out=_m3_cluster_ips_out,
-                )
+                try:
+                    _m3_results[_ri] = _add_peer_node_thread(
+                        _addr, _u, _p, primary_channel, admin_password,
+                        timings_record=_m3_peer_timings,
+                        timings_lock=_m3_timings_lock,
+                        cluster_ips_out=_m3_cluster_ips_out,
+                    )
+                except _InjectedCheckpointFailure:
+                    _m3_results[_ri] = False
             t = threading.Thread(
                 target=_run_m3,
                 daemon=True,
@@ -20020,6 +20328,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
 
         for t in threads:
             t.join()
+        _raise_pending_checkpoint_failure()
 
         if _fatal_boot_dna_event.is_set():
             _print_fatal_boot_dna_abort_message()
@@ -20775,6 +21084,8 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         try:
             _checkpoint.mark_done("primary_bootmenu_done")
             _slog("checkpoint: primary_bootmenu_done saved")
+        except _InjectedCheckpointFailure:
+            raise
         except Exception:
             pass
 
@@ -21083,6 +21394,109 @@ def _write_node_add_manifest(nodes, cluster_mgmt_ip="",
     _last_node_add_manifest = session_path
     _slog(f"Node-add manifest written: {session_path} ({len(nodes)} node(s))")
     return session_path
+
+
+def _update_node_add_manifest_node(bmc, *, cluster_ip="", node_name=""):
+    """Best-effort in-place update of saved node-add manifests for one BMC.
+
+    Used to persist runtime-discovered peer metadata (especially cluster-role
+    IPs captured after option 4) so option 2c can resume directly at
+    cluster add-node without replaying the destructive reinit steps.
+    """
+    _bmc = str(bmc or "").strip()
+    if not _bmc:
+        return
+
+    _updates = {}
+    _cluster_ip = str(cluster_ip or "").strip()
+    if _is_valid_ipv4(_cluster_ip):
+        _updates["cluster_ip"] = _cluster_ip
+    _node_name = str(node_name or "").strip()
+    if _node_name:
+        _updates["node_name"] = _node_name
+    if not _updates:
+        return
+
+    try:
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        _script_dir = os.getcwd()
+    _cfg_dir = os.path.join(_script_dir, "configs")
+    _pointer_path = os.path.join(_cfg_dir, "last_node_add_manifest.json")
+
+    _paths = []
+    if _last_node_add_manifest and os.path.isfile(_last_node_add_manifest):
+        _paths.append(_last_node_add_manifest)
+    if os.path.isfile(_pointer_path) and _pointer_path not in _paths:
+        _paths.append(_pointer_path)
+
+    for _path in _paths:
+        try:
+            with open(_path, "r", encoding="utf-8") as _f:
+                _data = json.load(_f)
+            _nodes = _data.get("nodes")
+            if not isinstance(_nodes, list):
+                continue
+            _changed = False
+            for _node in _nodes:
+                if not isinstance(_node, dict):
+                    continue
+                if str(_node.get("bmc") or "").strip() != _bmc:
+                    continue
+                for _k, _v in _updates.items():
+                    if _v and _node.get(_k) != _v:
+                        _node[_k] = _v
+                        _changed = True
+                break
+            if _changed:
+                with open(_path, "w", encoding="utf-8") as _f:
+                    json.dump(_data, _f, indent=2)
+        except Exception as _e:
+            _slog(f"Could not update node-add manifest {_path}: {_e}", prefix="WARN")
+
+
+def _recover_cluster_ip_from_checkpoint_log(checkpoint, bmc):
+    """Best-effort recovery of a peer cluster IP from the prior checkpoint log_dir.
+
+    Older manifests did not persist per-peer ``cluster_ip`` values. When a
+    checkpoint says the peer already reached ``peer_option4_done``, search that
+    checkpoint's prior log directory for a line like
+    ``Cluster interface IP: 169.254.x.x`` in the peer's per-node log.
+    """
+    if not checkpoint or not getattr(checkpoint, "log_dir", ""):
+        return ""
+    _bmc = str(bmc or "").strip()
+    if not _bmc:
+        return ""
+    _log_dir = str(checkpoint.log_dir or "").strip()
+    if not _log_dir or not os.path.isdir(_log_dir):
+        return ""
+
+    _bmc_tag = _bmc.replace(".", "_")
+    _cand_files = []
+    try:
+        for _root, _dirs, _files in os.walk(_log_dir):
+            for _name in _files:
+                _nl = _name.lower()
+                if not _nl.endswith(".log"):
+                    continue
+                if _bmc_tag in _name or _bmc in _name:
+                    _cand_files.append(os.path.join(_root, _name))
+    except Exception:
+        return ""
+
+    _ip_re = re.compile(r"Cluster interface IP:\s*((?:\d{1,3}\.){3}\d{1,3})", re.IGNORECASE)
+    for _path in sorted(_cand_files, reverse=True):
+        try:
+            with open(_path, "r", encoding="utf-8", errors="replace") as _f:
+                _text = _f.read()
+        except Exception:
+            continue
+        _matches = _ip_re.findall(_text)
+        for _ip in reversed(_matches):
+            if _is_valid_ipv4(_ip):
+                return _ip
+    return ""
 
 
 def _cluster_ip_manifest_path():
@@ -21662,6 +22076,19 @@ def _run_2c_resume():
         print("  ❌ No nodes found in manifest or config. Aborting.")
         return False
 
+    _cp2c = CheckpointManager()
+    _cp2c_loaded = _cp2c.load()
+    _cp2c_joined = set(_cp2c.nodes_done_for("peer_joined")) if _cp2c_loaded else set()
+    _cp2c_opt4 = set(_cp2c.nodes_done_for("peer_option4_done")) if _cp2c_loaded else set()
+    if _cp2c_loaded and (_cp2c_joined or _cp2c_opt4):
+        print("\n  🔖 Checkpoint resume state:")
+        if _cp2c_opt4:
+            print(f"    peer_option4_done : {', '.join(sorted(_cp2c_opt4))}")
+        if _cp2c_joined:
+            print(f"    peer_joined       : {', '.join(sorted(_cp2c_joined))}")
+        if _cp2c.log_dir:
+            print(f"    prior log_dir     : {_cp2c.log_dir}")
+
     # ── 2. Display node list ──────────────────────────────────────────────
     print(f"  Source   : {_manifest_source}")
     print(f"  Nodes    : {len(manifest_nodes)}")
@@ -21793,8 +22220,11 @@ def _run_2c_resume():
     nodes_to_retry  = []
     nodes_already   = []
     for _nd in manifest_nodes:
+        _bmc = str(_nd.get("bmc") or "").strip()
         _nip = (_nd.get("node_mgmt_ip") or "").strip()
         if _nip and _nip in already_joined_ips:
+            nodes_already.append(_nd)
+        elif not primary_channel and _bmc and _bmc in _cp2c_joined:
             nodes_already.append(_nd)
         else:
             nodes_to_retry.append(_nd)
@@ -21836,7 +22266,72 @@ def _run_2c_resume():
                 pass
         return False
 
-    # ── 7. Seed in-memory state from manifest and launch threads ──────────
+    # ── 7. Reuse checkpoint/manifest state when possible, then launch only
+    #        the peers that still need destructive reinit replay. ───────────
+    _saved_cluster_entries = _load_cluster_ip_manifest_entries()
+    _saved_cluster_by_bmc = {
+        str(_e.get("bmc") or "").strip(): _e
+        for _e in _saved_cluster_entries
+        if str(_e.get("bmc") or "").strip()
+    }
+    _nodes_ready_for_add = []
+    _nodes_needing_replay = []
+    for _nd in nodes_to_retry:
+        _bmc = str(_nd.get("bmc") or "").strip()
+        _peer_opt4_done = bool(
+            _cp2c_loaded
+            and _bmc
+            and _cp2c.is_node_done("peer_option4_done", _bmc)
+            and not _cp2c.is_node_done("peer_joined", _bmc)
+        )
+        if not _peer_opt4_done:
+            _nodes_needing_replay.append(_nd)
+            continue
+
+        _saved_ip = str(_nd.get("cluster_ip") or "").strip()
+        _saved_node = str(_nd.get("node_name") or "").strip()
+        if not _is_valid_ipv4(_saved_ip):
+            _saved = _saved_cluster_by_bmc.get(_bmc) or {}
+            _saved_ip = str(_saved.get("cluster_ip") or "").strip()
+            _saved_node = _saved_node or str(_saved.get("node_name") or "").strip()
+        if not _is_valid_ipv4(_saved_ip):
+            _saved_ip = _recover_cluster_ip_from_checkpoint_log(_cp2c, _bmc)
+            if _is_valid_ipv4(_saved_ip):
+                _session_log.log(
+                    f"2c: recovered cluster IP for {_bmc} from checkpoint log_dir -> {_saved_ip}"
+                )
+                _update_node_add_manifest_node(_bmc, cluster_ip=_saved_ip, node_name=_saved_node)
+                _record_cluster_ip_manifest_entry(
+                    _saved_ip,
+                    node_name=_saved_node,
+                    bmc=_bmc,
+                    source="2c checkpoint log recovery",
+                )
+
+        if _is_valid_ipv4(_saved_ip):
+            _nodes_ready_for_add.append(_nd)
+            _session_log.log(
+                f"2c: checkpoint reuse for {_bmc} -> cluster_ip={_saved_ip}"
+            )
+        else:
+            _nodes_needing_replay.append(_nd)
+            _session_log.log(
+                f"2c: {_bmc} marked peer_option4_done but no saved cluster IP was found; "
+                "replaying reinit path",
+                prefix="WARN",
+            )
+
+    if _nodes_ready_for_add:
+        print(f"\n  Checkpoint-ready for cluster add-node only ({len(_nodes_ready_for_add)}):")
+        for _nd in _nodes_ready_for_add:
+            _bmc = str(_nd.get("bmc") or "").strip()
+            _saved = _saved_cluster_by_bmc.get(_bmc) or {}
+            _saved_ip = str(_nd.get("cluster_ip") or _saved.get("cluster_ip") or "?").strip()
+            _saved_node = str(_nd.get("node_name") or _saved.get("node_name") or "").strip()
+            _label = _saved_node or _bmc
+            print(f"    ✅ {_label}: {_saved_ip}")
+
+    # ── 8. Seed in-memory state from manifest and launch threads ──────────
     # Populate credential + node-mgmt caches so _add_peer_node_thread can
     # look up the same data it would have from a fresh 2b run.
     _cluster_config["mgmt_ip"]          = cluster_mgmt_ip
@@ -21844,7 +22339,20 @@ def _run_2c_resume():
     _cluster_config["admin_password"]    = cluster_admin_password
 
     retry_bmc_list = []
-    for _nd in nodes_to_retry:
+    _2c_cluster_ips_out = {}
+    for _nd in _nodes_ready_for_add:
+        _bmc = str(_nd.get("bmc") or "").strip()
+        _saved = _saved_cluster_by_bmc.get(_bmc) or {}
+        _saved_ip = str(_nd.get("cluster_ip") or _saved.get("cluster_ip") or "").strip()
+        _saved_node = str(_nd.get("node_name") or _saved.get("node_name") or "").strip()
+        if _is_valid_ipv4(_saved_ip):
+            _2c_cluster_ips_out[_bmc] = {
+                "cluster_ip": _saved_ip,
+                "node_name": _saved_node,
+                "bmc": _bmc,
+            }
+
+    for _nd in _nodes_needing_replay:
         _bmc = (_nd.get("bmc") or "").strip()
         if not _bmc:
             continue
@@ -21858,6 +22366,10 @@ def _run_2c_resume():
         _peer_bmc_creds[_bmc] = {"user": _bu, "password": _bp}
         if _nd.get("node_mgmt_ip"):
             _node_mgmt_by_bmc[_bmc] = {
+                "port":              _nd.get("node_mgmt_port")    or "e0M",
+                "ip":                _nd.get("node_mgmt_ip"),
+                "netmask":           _nd.get("node_mgmt_netmask") or "255.255.255.0",
+                "gateway":           _nd.get("node_mgmt_gateway") or "",
                 "node_mgmt_port":    _nd.get("node_mgmt_port")    or "e0M",
                 "node_mgmt_ip":      _nd.get("node_mgmt_ip"),
                 "node_mgmt_netmask": _nd.get("node_mgmt_netmask") or "255.255.255.0",
@@ -21866,7 +22378,7 @@ def _run_2c_resume():
         retry_bmc_list.append(_bmc)
         _session_log.log(f"2c: will retry BMC {_bmc} (user={_bu})")
 
-    if not retry_bmc_list:
+    if not retry_bmc_list and not _2c_cluster_ips_out:
         print("  ❌ No valid BMC IPs to retry. Aborting.")
         _session_log.log("2c: no valid BMCs to retry", prefix="ERROR")
         if primary_client:
@@ -21878,7 +22390,6 @@ def _run_2c_resume():
 
     baseline      = len(cluster_node_ips) if primary_channel else 0
     _n2c          = len(retry_bmc_list)
-    _2c_cluster_ips_out = {}
     _2c_peer_timings: "dict[str, dict]" = {}
     _2c_timings_lock = threading.Lock()
 
@@ -21888,12 +22399,18 @@ def _run_2c_resume():
         _creds = _peer_bmc_creds.get(_bmc) or {}
         _u = _creds.get("user") or "admin"
         _p = _creds.get("password") or ""
+        def _run_2c(_addr=_bmc, _u2=_u, _p2=_p):
+            try:
+                _add_peer_node_thread(
+                    _addr, _u2, _p2, primary_channel, cluster_admin_password,
+                    cluster_ips_out=_2c_cluster_ips_out,
+                    timings_record=_2c_peer_timings,
+                    timings_lock=_2c_timings_lock,
+                )
+            except _InjectedCheckpointFailure:
+                return
         _t = threading.Thread(
-            target=_add_peer_node_thread,
-            args=(_bmc, _u, _p, primary_channel, cluster_admin_password),
-            kwargs={"cluster_ips_out": _2c_cluster_ips_out,
-                    "timings_record": _2c_peer_timings,
-                    "timings_lock": _2c_timings_lock},
+            target=_run_2c,
             daemon=True,
             name=f"2c-resume-{_bmc}",
         )
@@ -21901,14 +22418,23 @@ def _run_2c_resume():
         threads.append(_t)
         print(f"  ▶️  [{_bmc}] Thread started.")
 
-    print(f"\n  ⏳ Waiting for {_n2c} node(s) to complete...")
-    for _t in threads:
-        _t.join()
+    if _n2c:
+        print(f"\n  ⏳ Waiting for {_n2c} node(s) to complete...")
+        for _t in threads:
+            _t.join()
+        _raise_pending_checkpoint_failure()
+    else:
+        print("\n  ✅ No nodes need option 4 replay; using checkpointed cluster IPs directly.")
 
     # Bulk add via cluster add-node
     _2c_add_node_timings: "dict[str, float]" = {}
+    _2c_preferred_bmcs = [
+        str(_nd.get("bmc") or "").strip()
+        for _nd in nodes_to_retry
+        if str(_nd.get("bmc") or "").strip()
+    ]
     _2c_ips = _ordered_cluster_ips_for_add(
-        _2c_cluster_ips_out, preferred_bmcs=retry_bmc_list
+        _2c_cluster_ips_out, preferred_bmcs=_2c_preferred_bmcs
     )
     if primary_channel and _2c_ips:
         _cluster_add_nodes_bulk(primary_channel, _2c_ips, log=_session_log,
@@ -22092,6 +22618,7 @@ def main():
                     _operation_mode, _auto_setup, _auto_add = select_operation_mode()
             else:
                 pass  # _resume_autodispatch already set _operation_mode above
+            _configure_checkpoint_test_for_mode(_operation_mode, args.test)
             # Remember the mode the operator explicitly chose at startup.  Mid-run
             # transitions (e.g. 1b → add nodes) change _operation_mode but leave
             # _initial_operation_mode intact so mode-specific up-front prompts only
