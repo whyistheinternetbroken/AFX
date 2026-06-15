@@ -3563,6 +3563,17 @@ def _diagnostic_ping_precheck(host, log=None):
     return _ok
 
 
+def _print_ping_precheck_summary(results_by_host):
+    """Print a compact ping precheck summary for the diagnosed BMC targets."""
+    if not results_by_host:
+        return
+    print("\n  Ping precheck summary:")
+    for _host, _ok in results_by_host.items():
+        _status = "reachable" if _ok else "no response"
+        _icon = "✅" if _ok else "⚠️"
+        print(f"    {_icon} {_host}: {_status}")
+
+
 def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
     """Remove a BMC host key entry from known_hosts via `ssh-keygen -R`."""
     if not host:
@@ -4043,7 +4054,9 @@ def _diagnose_stale_bmc_sessions(host: str, log=None) -> "dict":
 
 
 def _clear_stale_bmc_sessions(host: str, username: str, password: str,
-                              log=None) -> None:
+                              log=None, diagnose_first: bool = True,
+                              run_known_hosts_cleanup: bool = False,
+                              run_ipmi_sol_deactivate: bool = True) -> None:
     """Best-effort sweep called from the banner-retry block before each
     retry sleep. Always closes in-process SSH clients to `host` (safe).
     When `--auto-clear-stale-bmc` is set, additionally scans for stale
@@ -4052,14 +4065,19 @@ def _clear_stale_bmc_sessions(host: str, username: str, password: str,
     # (0) Diagnose: report what stale sessions exist BEFORE we touch
     # anything, so the operator can see exactly what's holding BMC slots
     # and whether --auto-clear-stale-bmc would help.
-    with suppress(Exception):
-        _diagnose_stale_bmc_sessions(host, log=log)
+    if diagnose_first:
+        with suppress(Exception):
+            _diagnose_stale_bmc_sessions(host, log=log)
+    if run_known_hosts_cleanup:
+        with suppress(Exception):
+            _remove_bmc_from_known_hosts(host, log=log)
     # (1) Always safe: drop our own registered clients to this host.
     _drop_bmc_clients_for(host, log=log)
     # (2) Always safe: ipmitool sol deactivate. Cheap; clears a frequent
     # offender (a hung SOL session keeping the BMC's session pool full).
-    with suppress(Exception):
-        _ipmi_sol_deactivate(host, username, password, log=log)
+    if run_ipmi_sol_deactivate:
+        with suppress(Exception):
+            _ipmi_sol_deactivate(host, username, password, log=log)
     # (3) Opt-in only: signal stale prior-run python PIDs that hold a TCP
     # socket to <host>:22. Skipped by default because it can kill the
     # operator's own concurrent script invocation.
@@ -10075,13 +10093,15 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
     if not _targets:
         return
 
+    _ping_results = {}
     for _ip in _targets:
         print(f"\n  🔍 Diagnosing SSH state for {_ip}...")
-        with suppress(Exception):
-            _diagnostic_ping_precheck(_ip, log=_session_log)
+        _ping_results[_ip] = _diagnostic_ping_precheck(_ip, log=_session_log)
         with suppress(Exception):
             _diagnose_stale_bmc_sessions(_ip, log=_session_log)
+    _print_ping_precheck_summary(_ping_results)
 
+    _ran_known_hosts_cleanup = False
     try:
         _kh_ans = input(
             "\n  Remove BMC from known hosts for these target(s)?"
@@ -10094,7 +10114,9 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
             print(f"\n  🗑️  Removing known_hosts entry for {_ip}...")
             with suppress(Exception):
                 _remove_bmc_from_known_hosts(_ip, log=_session_log)
+        _ran_known_hosts_cleanup = True
 
+    _ran_ipmi_only = False
     try:
         ipmi_only_ans = input(
             "\n  Run only 'ipmitool sol deactivate' for these BMC(s) now?"
@@ -10108,17 +10130,28 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
             print(f"\n  🔧 Running ipmitool sol deactivate for {_ip}...")
             with suppress(Exception):
                 _ipmi_sol_deactivate(_ip, bmc_user, _pw, log=_session_log)
+        _ran_ipmi_only = True
+
+    _cleanup_actions = []
+    if not _ran_known_hosts_cleanup:
+        _cleanup_actions.append("    • run 'ssh-keygen -R <BMC IP>' to clear known_hosts entries")
+    _cleanup_actions.append("    • drop in-process SSH clients we still hold")
+    if not _ran_ipmi_only:
+        _cleanup_actions.append("    • run 'ipmitool sol deactivate' (if ipmitool is installed)")
+    if _auto_clear_stale_bmc:
+        _cleanup_actions.append("    • SIGTERM other-python PIDs holding stale BMC SSH sessions")
+    else:
+        _cleanup_actions.append(
+            "    • SIGTERM other-python PIDs only if --auto-clear-stale-bmc was given (currently: OFF)"
+        )
+    _cleanup_prompt = (
+        "\n  Attempt the remaining stale SSH cleanup steps for these BMC(s)?"
+        + ("\n" + "\n".join(_cleanup_actions) if _cleanup_actions else "")
+        + "\n  Proceed? [y/N]: "
+    )
 
     try:
-        fix_ans = input(
-            "\n  Attempt to clear stale SSH sessions for these BMC(s)?"
-            "\n    • run 'ssh-keygen -R <BMC IP>' to clear known_hosts entries"
-            "\n    • drop in-process SSH clients we still hold"
-            "\n    • run 'ipmitool sol deactivate' (if ipmitool is installed)"
-            f"\n    • SIGTERM other-python PIDs only if --auto-clear-stale-bmc was given"
-            f" (currently: {'ON' if _auto_clear_stale_bmc else 'OFF'})"
-            "\n  Proceed? [y/N]: "
-        ).strip().lower()
+        fix_ans = input(_cleanup_prompt).strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
     if fix_ans != "y":
@@ -10128,9 +10161,15 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
         _pw = (bmc_passwords or {}).get(_ip, "") if isinstance(bmc_passwords, dict) else ""
         print(f"\n  🧹 Cleaning stale SSH sessions for {_ip}...")
         with suppress(Exception):
-            _remove_bmc_from_known_hosts(_ip, log=_session_log)
-        with suppress(Exception):
-            _clear_stale_bmc_sessions(_ip, bmc_user, _pw, log=_session_log)
+            _clear_stale_bmc_sessions(
+                _ip,
+                bmc_user,
+                _pw,
+                log=_session_log,
+                diagnose_first=False,
+                run_known_hosts_cleanup=not _ran_known_hosts_cleanup,
+                run_ipmi_sol_deactivate=not _ran_ipmi_only,
+            )
     print(
         "\n  ✅ Cleanup pass complete. Re-run the script (or the same"
         " option) to retry BMC verification."
@@ -24640,12 +24679,13 @@ def main():
                         if not _targets50:
                             continue
                         print("")
+                        _ping_results50 = {}
                         for _ip50 in _targets50:
                             print(f"\n  \U0001f50d Diagnosing SSH state for {_ip50}...")
-                            with suppress(Exception):
-                                _diagnostic_ping_precheck(_ip50, log=_session_log)
+                            _ping_results50[_ip50] = _diagnostic_ping_precheck(_ip50, log=_session_log)
                             with suppress(Exception):
                                 _diagnose_stale_bmc_sessions(_ip50, log=_session_log)
+                        _print_ping_precheck_summary(_ping_results50)
                     elif _act50 == "2":
                         _targets50 = _prompt_bmc_target_scope(
                             _bmc_ips50, scope_label="stale-session cleanup", prompt_prefix="  "
