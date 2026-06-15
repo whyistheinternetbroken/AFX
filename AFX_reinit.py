@@ -8646,7 +8646,7 @@ def collect_cluster_config():
         _session_log.end_phase()
 
 
-def _auto_answer_node_mgmt(channel, cfg, node_log=None):
+def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
     """Wait for each node-management setup prompt and answer it, falling back
     to interactive input() when the value isn't in the config.
 
@@ -8655,6 +8655,11 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None):
     avoids the previous race where ONTAP's next prompt arrived inside the
     rejection-check window and was silently consumed, causing the subsequent
     direct_send_and_wait to wait 900 s for something it had already missed.
+
+    ``initial_buf`` may be pre-populated by callers that have already read
+    channel data containing the first trigger (e.g. the option-4 boot loop),
+    preventing a deadlock where the trigger was consumed before this function
+    was entered.
     """
     prompts = [
         ("port",    "node management interface port",            "node management interface port"),
@@ -8663,10 +8668,10 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None):
         ("gateway", "node management interface default gateway", "node management interface default gateway"),
     ]
 
-    # _buf accumulates raw channel output across all prompts.  It is only
-    # replaced (with the rejection-check buffer) after a value is sent, so
-    # any prompt text that arrived early is never discarded.
-    _buf = ""
+    # Seed the buffer with any data the caller already consumed from the
+    # channel.  This prevents a deadlock when the first trigger was already
+    # in the caller's read buffer (e.g. option-4 boot wait loop).
+    _buf = initial_buf
     pending = list(prompts)
     _overall_start = time.monotonic()
     _overall_timeout = 900
@@ -12572,7 +12577,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             try:
                                 _cfg_opt4 = _resolve_node_mgmt_config(ip)
                                 _residual_opt4 = _auto_answer_node_mgmt(
-                                    ch, _cfg_opt4, node_log=_nf6
+                                    ch, _cfg_opt4, node_log=_nf6,
+                                    initial_buf=_opt4_buf,
                                 ) or ""
                                 _opt4_buf = _residual_opt4
                                 _opt4_mgmt_answered = True
