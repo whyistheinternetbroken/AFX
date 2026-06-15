@@ -2296,8 +2296,8 @@ def select_operation_mode():
         4a: Upgrade ONTAP (rolling takeover/giveback)
         4b: Netboot and install ONTAP (with optional reinit)
         4c: Netboot and install image only (no cluster create/node add)
-      7  -> Script help and instructions
-      6  -> Exit.
+      6  -> Script help and instructions
+      7  -> Exit.
     """
     global _setup_passwordless_ssh, _netboot_before_reinit, _physical_zeroing
     global _diag_bootargs, _netboot_static_ip
@@ -2336,14 +2336,15 @@ def select_operation_mode():
         print("    !!Disruptive commands!!")
         print("      5z. Reset all nodes to LOADER prompt")
         print("")
-        print("  6.  Exit")
-        print("  7.  Script help and instructions")
+        print("  6.  Script help and instructions")
+        print("  7.  Exit")
         print("")
         print("  " + "─" * 58)
         print("  (type 'menu' at any prompt to return here)")
-        print("  Screen tips (--screen): Ctrl+A Esc=scroll, arrows/PgUp/PgDn navigate,")
-        print("  q exits scroll mode, Ctrl+A d detaches, and 'screen -r afx-reinit' reattaches.")
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4c, 5a-5l/5z, 6, or 7): ").strip().lower()
+        print("")
+        print("  💡 Screen tips (--screen): Ctrl+A Esc=scroll, arrows/PgUp/PgDn navigate, q exits scroll mode, Ctrl+A d detaches, and 'screen -r afx-reinit' reattaches.")
+        print("")
+        choice = input("❯❯  Enter your choice from the menu above (ie, 1a, 2b, 3, etc.): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2570,8 +2571,8 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-        if choice == "7":
-            _print_banner("📘 7: Script help and instructions")
+        if choice == "6":
+            _print_banner("📘 6: Script help and instructions")
             print("")
             _print_man_page()
             _print_runtime_controls_help()
@@ -2798,7 +2799,7 @@ def select_operation_mode():
                 print("\n  ↩️  Returning to menu...\n")
             continue
 
-        if choice == "6":
+        if choice == "7":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
@@ -4677,6 +4678,12 @@ OPTIONS
 
         List all sessions:
             screen -ls
+
+        Screen navigation tips:
+            Ctrl+A Esc   Enter scrollback mode
+            Arrow/PgUp/PgDn  Navigate scrollback
+            q            Exit scrollback mode
+            Ctrl+A d     Detach from session
 
         Note: GNU screen is available on Linux and macOS only.  On Windows
         use WSL or a Linux jump host for equivalent functionality.
