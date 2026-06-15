@@ -5769,6 +5769,21 @@ def _attempt_console_cluster_login(channel):
         drain_channel(channel, seconds=0.5)
 
 
+def _has_real_cluster_login_prompt(output: str) -> bool:
+    """Return True only for an actual cluster `login:` prompt line.
+
+    This deliberately ignores MOTD/banner text such as `last login:` which can
+    appear before the `::>` shell prompt on direct cluster SSH sessions.
+    """
+    for _line in (output or "").splitlines():
+        _clean = _ANSI_RE.sub("", _line).strip().lower()
+        if _clean == "login:":
+            return True
+        if _clean.endswith(" login:") and "last login:" not in _clean:
+            return True
+    return False
+
+
 def _wait_for_cluster_prompt(channel, timeout=30):
     """Wake the console and wait for the ONTAP cluster shell prompt.
 
@@ -5780,7 +5795,19 @@ def _wait_for_cluster_prompt(channel, timeout=30):
         channel, ["login:", "::>", "::*>"], timeout=timeout
     )
 
+    if output and (_CLUSTER_PROMPT_RE.search(output[-200:]) or "::>" in output or "::*>" in output):
+        return True
+
     if matched and "login:" in matched.lower():
+        if not _has_real_cluster_login_prompt(output):
+            output2, _matched2 = direct_read_until_any(
+                channel, ["::>", "::*>", "login:"], timeout=10
+            )
+            output += output2
+            if output and (_CLUSTER_PROMPT_RE.search(output[-200:]) or "::>" in output or "::*>" in output):
+                return True
+            if not _has_real_cluster_login_prompt(output):
+                return False
         if not _attempt_console_cluster_login(channel):
             return False
         # `_attempt_console_cluster_login` already verified that `::>`/`::*>`
@@ -17420,10 +17447,19 @@ def _login_primary_cluster_shell(channel, admin_password):
     out, matched = direct_read_until_any(
         channel, ["login:", "::>", "::*>"], timeout=20
     )
-    if matched and ("::>" in matched or "::*>" in matched):
+    if out and (_CLUSTER_PROMPT_RE.search(out[-200:]) or "::>" in out or "::*>" in out):
         return True
     if not matched:
         return False
+    if matched and "login:" in matched.lower() and not _has_real_cluster_login_prompt(out):
+        out2, _matched2 = direct_read_until_any(
+            channel, ["::>", "::*>", "login:"], timeout=10
+        )
+        out += out2
+        if out and (_CLUSTER_PROMPT_RE.search(out[-200:]) or "::>" in out or "::*>" in out):
+            return True
+        if not _has_real_cluster_login_prompt(out):
+            return False
     _slog("Logging into primary cluster shell as admin (for cluster show)")
     channel.send("admin\r")
     out, matched = direct_read_until_any(channel, ["password:", "login:"], timeout=15)
@@ -17458,7 +17494,17 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
         _slog(f"[{label}] no login/shell after Ctrl+C", prefix="WARN")
         return None
 
-    if "::>" not in _matched and "::*>" not in _matched:
+    if not (_out and (_CLUSTER_PROMPT_RE.search(_out[-200:]) or "::>" in _out or "::*>" in _out)):
+        if _matched and "login:" in _matched.lower() and not _has_real_cluster_login_prompt(_out):
+            _out2, _matched2 = direct_read_until_any(
+                ch, ["::>", "::*>", "login:"], timeout=20, node_log=node_log
+            )
+            _out += _out2
+        if not (_out and (_CLUSTER_PROMPT_RE.search(_out[-200:]) or "::>" in _out or "::*>" in _out)):
+            if not _has_real_cluster_login_prompt(_out):
+                print(f"   ⚠️  [{label}] No real cluster login: or ::> seen after Ctrl+C; aborting.")
+                _slog(f"[{label}] no real login/shell after Ctrl+C", prefix="WARN")
+                return None
         print(f"\n⏳ [{label}] Logging in as admin...")
         ch.send("admin\r")
         _pw_out, _pw_matched = direct_read_until_any(
