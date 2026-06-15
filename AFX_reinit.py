@@ -2296,6 +2296,7 @@ def select_operation_mode():
         4a: Upgrade ONTAP (rolling takeover/giveback)
         4b: Netboot and install ONTAP (with optional reinit)
         4c: Netboot and install image only (no cluster create/node add)
+      7  -> Script help and instructions
       6  -> Exit.
     """
     global _setup_passwordless_ssh, _netboot_before_reinit, _physical_zeroing
@@ -2336,10 +2337,13 @@ def select_operation_mode():
         print("      5z. Reset all nodes to LOADER prompt")
         print("")
         print("  6.  Exit")
+        print("  7.  Script help and instructions")
         print("")
         print("  " + "─" * 58)
         print("  (type 'menu' at any prompt to return here)")
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4c, 5a-5l/5z, or 6): ").strip().lower()
+        print("  Screen tips (--screen): Ctrl+A Esc=scroll, arrows/PgUp/PgDn navigate,")
+        print("  q exits scroll mode, Ctrl+A d detaches, and 'screen -r afx-reinit' reattaches.")
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4c, 5a-5l/5z, 6, or 7): ").strip().lower()
 
         if choice == "1a":
             _print_banner("⚠️  WARNING ⚠️")
@@ -2566,6 +2570,18 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
+        if choice == "7":
+            _print_banner("📘 7: Script help and instructions")
+            print("")
+            _print_man_page()
+            _print_runtime_controls_help()
+            try:
+                input("  Press Enter to return to the main menu...")
+            except (EOFError, KeyboardInterrupt):
+                pass
+            print("")
+            continue
+
         if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5k", "5l", "5z"):
             if choice == "5":
                 _print_banner("🛠️ 5: Administration and maintenance")
@@ -2786,7 +2802,7 @@ def select_operation_mode():
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 3, 4a-4b, 5a-5l, or 6.")
+        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 2c, 3, 4a-4c, 5a-5l/5z, 6, or 7.")
 
 
 def get_loader_commands():
@@ -4592,6 +4608,7 @@ DESCRIPTION
            (same credential-grouping/fallback behavior as 2b)
       4a   ONTAP rolling upgrade (takeover / software update / giveback)
       4b   Netboot and install ONTAP image
+      4c   Netboot and install ONTAP image only (no reinit)
       5a   Standalone license install
       5b   Set up passwordless SSH to cluster management
       5c   Create / save cluster configuration backup (JSON)
@@ -4772,6 +4789,24 @@ SEE ALSO
     NetApp ONTAP documentation: https://docs.netapp.com/us-en/ontap/
 {rule}"""
     print(page)
+
+
+def _print_runtime_controls_help():
+    """Print runtime pause/checkpoint controls used during active runs."""
+    _pause_path = _pause_sentinel_path()
+    _checkpoint_req_path = _checkpoint_request_path()
+    _pid = os.getpid()
+    print("\nRuntime pause/checkpoint controls:\n")
+    print(f"  Pause file (toggle):    {_pause_path}")
+    print("  Remove pause file to resume automation.")
+    if hasattr(signal, "SIGUSR1"):
+        print(f"  Signal pause toggle:    kill -USR1 {_pid}")
+    if hasattr(signal, "SIGUSR2"):
+        print(f"  Signal force resume:    kill -USR2 {_pid}")
+    print(f"\n  Manual checkpoint file: {_checkpoint_req_path}")
+    if hasattr(signal, "SIGURG"):
+        print(f"  Signal checkpoint:      kill -URG {_pid}")
+    print("")
 
 
 def _script_last_update_timestamp() -> str:
@@ -21617,23 +21652,6 @@ def main():
         # happens in the 4b upfront config phase. We just initialise the
         # list here so _diag_bootargs is always defined.
         _diag_bootargs = []
-
-    _pause_path = _pause_sentinel_path()
-    _checkpoint_req_path = _checkpoint_request_path()
-    _pid = os.getpid()
-    print("\n⏯️  Runtime pause control:")
-    print(f"   create file: {_pause_path}")
-    print("   remove file: resume automation")
-    if hasattr(signal, "SIGUSR1"):
-        print(f"   signal toggle: kill -USR1 {_pid}")
-    if hasattr(signal, "SIGUSR2"):
-        print(f"   signal resume: kill -USR2 {_pid}")
-    print("\n💾 Runtime manual checkpoint:")
-    print(f"   create file: {_checkpoint_req_path}")
-    if hasattr(signal, "SIGURG"):
-        print(f"   signal checkpoint: kill -URG {_pid}")
-    if os.path.isfile(_pause_path):
-        print("   ⚠️  Pause file already exists; script will remain paused until removed.")
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
