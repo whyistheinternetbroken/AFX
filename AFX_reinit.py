@@ -3532,9 +3532,7 @@ def _log_ssh_remediation_event(
                 _fh.write(_line + "\n")
     except Exception:
         pass
-
-
-
+def _silent_ping(host):
     """Return True if `host` responds to a single ICMP ping, False otherwise."""
     import subprocess as _sp
     import platform as _pl
@@ -10404,16 +10402,24 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                     "failing BMCs? [Y/n]: "
                 , "n").lower()
                 if _same != "n":
+                    _existing_pw_values = {
+                        str(bmc_passwords.get(_ip, "") or "")
+                        for _ip in _auth_ips
+                    }
                     _new_user = input(
                         f"    BMC username [{bmc_user}] (blank to keep): "
                     ).strip() or bmc_user
-                    _new_pass = getpass.getpass(
-                        f"    BMC password for {_new_user}: "
-                    )
-                    if _new_pass:
-                        bmc_user = _new_user
-                        for _ip in _auth_ips:
-                            bmc_passwords[_ip] = _new_pass
+                    bmc_user = _new_user
+                    if len(_existing_pw_values) == 1:
+                        print("    ↩️  Reusing current password for all failing BMCs.")
+                    else:
+                        _new_pass = getpass.getpass(
+                            f"    BMC password for {_new_user} "
+                            "(blank to keep existing per-BMC password): "
+                        )
+                        if _new_pass:
+                            for _ip in _auth_ips:
+                                bmc_passwords[_ip] = _new_pass
                 else:
                     for _ip in _auth_ips:
                         print(f"    Credentials for {_ip}:")
@@ -10421,18 +10427,19 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                             f"      Username [{bmc_user}] (blank to keep): "
                         ).strip() or bmc_user
                         _p = getpass.getpass(
-                            f"      Password for {_u}@{_ip}: "
+                            f"      Password for {_u}@{_ip} "
+                            "(blank to keep current password): "
                         )
+                        # Per-IP username override is not supported
+                        # downstream; warn if the operator changes it.
+                        if _u != bmc_user:
+                            print(
+                                f"      ℹ️  Note: a single username is "
+                                f"used for all BMCs. '{_u}' will replace "
+                                f"'{bmc_user}' for every BMC."
+                            )
+                            bmc_user = _u
                         if _p:
-                            # Per-IP username override is not supported
-                            # downstream; warn if the operator changes it.
-                            if _u != bmc_user:
-                                print(
-                                    f"      ℹ️  Note: a single username is "
-                                    f"used for all BMCs. '{_u}' will replace "
-                                    f"'{bmc_user}' for every BMC."
-                                )
-                                bmc_user = _u
                             bmc_passwords[_ip] = _p
             print(
                 f"\n  ↻ Retrying verification for {len(pending)} BMC(s) "
