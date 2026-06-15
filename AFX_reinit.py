@@ -5388,6 +5388,22 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
         if _session_log:
             _session_log.log(msg.strip())
 
+    def _looks_like_bmc_prompt(text: str) -> bool:
+        lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+        if not lines:
+            return False
+        tail = "\n".join(lines[-3:]).lower()
+        if "bmc" in tail:
+            return True
+        last = lines[-1].lower()
+        return (
+            last.endswith(">")
+            and "loader-" not in last
+            and "::>" not in last
+            and "::*>" not in last
+            and "login:" not in last
+        )
+
     # Hit Enter first so any existing prompt echoes back.
     channel.send("\r")
     time.sleep(0.3)
@@ -5456,9 +5472,33 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
     # Not at LOADER — exit console and let caller do system reset.
     if _entered_console:
         _tprint(f"  ℹ️  {pfx}Not at LOADER. Exiting console for system reset...")
-        channel.send("\x04")  # Ctrl+D
-        time.sleep(1)
-        direct_read_until(channel, ">", timeout=10, node_log=node_log)
+        _exit_buf = ""
+        for _exit_attempt in range(1, 4):
+            if _session_log:
+                _session_log.log_sent(
+                    f"Ctrl-D (console exit after loader probe, attempt {_exit_attempt}/3)"
+                )
+            channel.send("\x04")  # Ctrl+D
+            time.sleep(0.8)
+            channel.send("\r")
+            time.sleep(0.3)
+            _exit_buf += drain_channel(
+                channel, seconds=1.6, node_log=node_log, quiet=True
+            )
+            if _LOADER_PROMPT_RE.search(_exit_buf) or "LOADER-" in _exit_buf.upper():
+                _tprint(f"  ✅ {pfx}LOADER prompt appeared while exiting console.")
+                return True
+            if _looks_like_bmc_prompt(_exit_buf):
+                return False
+            if _exit_attempt < 3:
+                _tprint(
+                    f"  ⚠️  {pfx}BMC prompt not returned after Ctrl-D; retrying console exit..."
+                )
+        _tprint(
+            f"  ❌ {pfx}Could not return to BMC prompt after console probe; "
+            "aborting reset to avoid sending commands to the node console."
+        )
+        raise RuntimeError("failed to return to BMC prompt after console probe")
     return False
 
 
