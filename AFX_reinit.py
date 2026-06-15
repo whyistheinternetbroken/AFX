@@ -173,6 +173,11 @@ class CheckpointManager:
                                 resume. Treated as install-equivalent
                                 by the resume skip logic.
       ``reinit_loader``       — Reconnected to BMC for reinit; back at LOADER
+      ``primary_node_mgmt_done`` — (global) primary node-management prompts
+                                were answered and the cluster-setup wizard is
+                                about to begin. Used by 4b resume so the
+                                primary does not get reset again after node
+                                configuration is already complete.
       ``primary_bootmenu_done`` — (global) primary node has cleared the
                                   ONTAP boot menu (option 9 for mode 1b/3,
                                   option 4 for mode 2). Cluster setup
@@ -867,6 +872,7 @@ _CHECKPOINT_TEST_OPTIONS = {
     1: [
         ("primary_install_done", "Primary ONTAP install recorded"),
         ("primary_format_done", "Primary disk format recorded"),
+        ("primary_node_mgmt_done", "Primary node management configured"),
         ("primary_bootmenu_done", "Primary boot menu cleared"),
         ("cluster_formed", "Cluster creation completed"),
         ("primary_setup_done", "Primary setup completed"),
@@ -879,6 +885,7 @@ _CHECKPOINT_TEST_OPTIONS = {
         ("option2_complete", "Option 2 completion recorded"),
     ],
     3: [
+        ("primary_node_mgmt_done", "Primary node management configured"),
         ("cluster_formed", "Primary cluster creation completed"),
         ("primary_setup_done", "Primary setup completed"),
         ("peer_option4_done", "Peer reached add-node checkpoint"),
@@ -888,6 +895,7 @@ _CHECKPOINT_TEST_OPTIONS = {
         ("option6_done", "Option 6 accepted for a node"),
         ("install_done", "Node install/login checkpoint recorded"),
         ("reinit_loader", "Node returned to LOADER after install"),
+        ("primary_node_mgmt_done", "Primary node management configured"),
         ("primary_bootmenu_done", "Primary boot menu cleared"),
         ("cluster_formed", "Cluster creation completed"),
         ("peer_option4_done", "Peer reached add-node checkpoint"),
@@ -896,6 +904,7 @@ _CHECKPOINT_TEST_OPTIONS = {
         ("option6_done", "Option 6 accepted for a node"),
         ("install_done", "Node install/login checkpoint recorded"),
         ("reinit_loader", "Node returned to LOADER after install"),
+        ("primary_node_mgmt_done", "Primary node management configured"),
         ("primary_bootmenu_done", "Primary boot menu cleared"),
         ("cluster_formed", "Cluster creation completed"),
         ("peer_option4_done", "Peer reached add-node checkpoint"),
@@ -5745,6 +5754,7 @@ def _probe_console_prompt_state(channel, *, node_log=None, selection_sigs=None, 
       - ``boot_menu``
       - ``loader``
       - ``login``
+      - ``wizard``
       - ``cluster``
       - ``bmc``
       - ``booting``
@@ -5782,6 +5792,8 @@ def _probe_console_prompt_state(channel, *, node_log=None, selection_sigs=None, 
         return "loader", _out
     if "login:" in _lower:
         return "login", _out
+    if _output_contains_wizard_start(_out):
+        return "wizard", _out
     if "::>" in _lower or "::*>" in _lower:
         return "cluster", _out
     if "autoboot" in _lower or _looks_like_boot_in_progress(_out):
@@ -9161,6 +9173,10 @@ _WIZARD_START_TRIGGERS = [
     "do you want to create a new cluster or join",
 ]
 
+def _output_contains_wizard_start(text: str) -> bool:
+    _lower = str(text or "").lower()
+    return any(_trigger in _lower for _trigger in _WIZARD_START_TRIGGERS)
+
 def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: str = ""):
     """Wait for the ONTAP cluster-setup wizard to display its first prompt.
 
@@ -10985,6 +11001,60 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
         return None, None, "ssh"
 
 
+def _bmc_attach_console_without_reset(host, username, password, node_log=None,
+                                      fallback_passwords=None):
+    """Reconnect to a BMC and probe the live console state without resetting.
+
+    Returns ``(client, channel, state, output)`` where ``state`` comes from
+    ``_probe_console_prompt_state()``. On failure returns
+    ``(None, None, "ssh", "")``.
+    """
+    print(f"\n  🔁 [{host}] Reconnecting without reset to inspect current console state...")
+    if node_log:
+        _par_write(node_log, f"\n=== _bmc_attach_console_without_reset: {host} ===\n")
+    try:
+        client, username, password = _ssh_connect_with_retry(
+            host, username, password, label=f"BMC/{host}",
+            max_attempts=max(3, 1 + len(fallback_passwords or [])),
+            interactive=False, fallback_passwords=fallback_passwords,
+        )
+    except Exception as exc:
+        print(f"  ❌ [{host}] SSH failed during non-destructive reconnect: {exc}")
+        return None, None, "ssh", ""
+
+    try:
+        ch = _open_shell(client)
+        if not _reach_bmc_prompt(ch, node_log=node_log):
+            print(f"  ❌ [{host}] No BMC prompt received.")
+            ch.close()
+            client.close()
+            return None, None, "ssh", ""
+
+        _sel_sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
+        _state, _out = _probe_console_prompt_state(
+            ch, node_log=node_log, selection_sigs=_sel_sigs, timeout=8
+        )
+        if _state == "bmc":
+            _reclaim_system_console(ch, node_log=node_log)
+            _state2, _out2 = _probe_console_prompt_state(
+                ch, node_log=node_log, selection_sigs=_sel_sigs, timeout=8
+            )
+            _out = (_out or "") + (_out2 or "")
+            _state = _state2
+        return client, ch, _state, _out or ""
+    except Exception as exc:
+        print(f"  ❌ [{host}] Error probing current console state: {exc}")
+        try:
+            ch.close()
+        except Exception:
+            pass
+        try:
+            client.close()
+        except Exception:
+            pass
+        return None, None, "ssh", ""
+
+
 # ---------------------------------------------------------------------------
 # Per-node parallel I/O helpers
 # Raw channel I/O that writes to a per-node file instead of stdout.
@@ -11927,6 +11997,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             print(f"     [{_ip}] {', '.join(_flags) if _flags else '(no prior progress)'}")
         if _checkpoint.is_done("primary_bootmenu_done"):
             print("     primary_bootmenu_done : ✅ (primary cleared boot menu)")
+        if _checkpoint.is_done("primary_node_mgmt_done"):
+            print("     primary_node_mgmt_done: ✅ (primary node configuration completed)")
         if _checkpoint.is_done("cluster_formed"):
             print("     cluster_formed        : ✅ (prior run completed cluster setup)")
         if _checkpoint.is_done("primary_setup_done"):
@@ -11941,6 +12013,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 f"peer_option4_done={_opt4_done_ips}, "
                 f"peer_joined={_joined_ips}, "
                 f"primary_bootmenu_done={_checkpoint.is_done('primary_bootmenu_done')}, "
+                f"primary_node_mgmt_done={_checkpoint.is_done('primary_node_mgmt_done')}, "
                 f"cluster_formed={_checkpoint.is_done('cluster_formed')}, "
                 f"primary_setup_done={_checkpoint.is_done('primary_setup_done')}"
             )
@@ -13572,17 +13645,41 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             log.log("4b resume: install already done and no reinit requested; exiting cleanly")
         return True
 
+    _resume_primary_from_wizard = bool(
+        resuming
+        and _skip_install
+        and _checkpoint
+        and _checkpoint.is_done("primary_node_mgmt_done")
+        and not _checkpoint.is_done("cluster_formed")
+        and not _checkpoint.is_done("primary_setup_done")
+    )
+    _resume_ready_peer_ips = {}
+    if resuming and _skip_install and _mode_sel == "3" and _checkpoint:
+        for _peer_ip in bmc_ips[1:]:
+            if (_checkpoint.is_node_done("peer_option4_done", _peer_ip)
+                    and not _checkpoint.is_node_done("peer_joined", _peer_ip)):
+                _saved_ip = _recover_cluster_ip_from_checkpoint_log(_checkpoint, _peer_ip)
+                if _is_valid_ipv4(_saved_ip):
+                    _resume_ready_peer_ips[_peer_ip] = _saved_ip
+
     # ── Step 6b: Reinit – reconnect to all BMCs and reach LOADER ──────────
     # All nodes are now at the ONTAP login prompt (4b install finished).
     # Reconnect via BMC, reset each node to LOADER, send the boot commands
     # that bring up the boot menu, and then run the selected init flow.
+    _reconnect_targets = list(bmc_ips)
+    if _resume_primary_from_wizard and first_ip in _reconnect_targets:
+        _reconnect_targets.remove(first_ip)
+    for _peer_ip in list(_resume_ready_peer_ips):
+        if _peer_ip in _reconnect_targets:
+            _reconnect_targets.remove(_peer_ip)
     print(f"\n  ✅ Netboot/install complete on all nodes. Reconnecting to "
-          f"{len(bmc_ips)} BMC(s) for cluster reinit (mode {_mode_sel})...")
+          f"{len(_reconnect_targets)} BMC(s) for cluster reinit (mode {_mode_sel})...")
     if log:
         log.start_phase("4b – Reinit Reconnect to LOADER")
 
     _reconnect_errors = []
     _reconnect_lock = threading.Lock()
+    _primary_resume_buf = ""
 
     # Pre-open one unified per-BMC session log file for reinit phases
     # (reconnect-to-LOADER, boot menu, and init wizard).
@@ -13602,6 +13699,37 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         except Exception as _e:
             _status(f"  ⚠️  [{_ip}] Could not open reinit log: {_e}")
             _node_reinit_logs[_ip] = None
+
+    if _resume_primary_from_wizard:
+        _primary_nf = _node_reinit_logs.get(first_ip)
+        _primary_fb = _bmc_fallback_passwords(first_ip, bmc_passwords)
+        _pcl, _pch, _pstate, _pbuf = _bmc_attach_console_without_reset(
+            first_ip, bmc_user, bmc_passwords.get(first_ip, ""),
+            node_log=_primary_nf, fallback_passwords=_primary_fb,
+        )
+        if _pcl is not None and _pch is not None and _pstate == "wizard":
+            loader_clients[first_ip] = _pcl
+            loader_channels[first_ip] = _pch
+            _primary_resume_buf = _pbuf or ""
+            _status(
+                f"  🔖 [{first_ip}] Resume checkpoint found node already in cluster setup "
+                "wizard; skipping reset/LOADER replay."
+            )
+            if log:
+                log.log(
+                    f"[{first_ip}] resume detected cluster setup wizard; "
+                    "skipping reinit reset/LOADER replay"
+                )
+        else:
+            with suppress(Exception):
+                if _pch is not None:
+                    _pch.close()
+            with suppress(Exception):
+                if _pcl is not None:
+                    _pcl.close()
+            _resume_primary_from_wizard = False
+            if first_ip not in _reconnect_targets:
+                _reconnect_targets.insert(0, first_ip)
 
     def _reconnect_worker(ip, stagger_idx=0):
         # Stagger connection attempts to avoid hammering all BMCs at once,
@@ -13814,7 +13942,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             if log:
                 log.log(f"[{ip}] checkpoint: reinit_loader saved")
 
-    _run_parallel(bmc_ips, _reconnect_worker, with_index=True)
+    _run_parallel(_reconnect_targets, _reconnect_worker, with_index=True)
 
     if _fatal_boot_dna_event.is_set():
         _print_fatal_boot_dna_abort_message()
@@ -13849,38 +13977,41 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     # Reuse the unified log already opened for the primary node.
     _pnf_primary = _node_reinit_logs.get(first_ip)
 
-    if log:
-        log.start_phase("4b – Boot Menu Selection")
-    _first_rc_ctx = _make_reconnect_ctx(
-        first_ip,
-        bmc_user,
-        bmc_passwords.get(first_ip, ""),
-        client=first_cl,
-        channel=first_ch,
-        label=f"4b/bootmenu/{first_ip}",
-    )
-    if not wait_for_boot_menu_and_select(
-            first_ch, node_log=_pnf_primary, reconnect_ctx=_first_rc_ctx):
-        print(f"  ⚠️  [{first_ip}] Boot menu not detected; operator may need to intervene.")
+    if not _resume_primary_from_wizard:
         if log:
-            log.log(f"[{first_ip}] boot menu not seen for primary reinit", prefix="WARN")
-    first_ch = _first_rc_ctx.get("channel") or first_ch
-    first_cl = _first_rc_ctx.get("client") or first_cl
-    loader_channels[first_ip] = first_ch
-    loader_clients[first_ip] = first_cl
-    if log:
-        log.end_phase()
-
-    # Checkpoint: primary cleared the ONTAP boot menu; wizard about to begin.
-    if _checkpoint:
-        try:
-            _checkpoint.mark_done("primary_bootmenu_done")
+            log.start_phase("4b – Boot Menu Selection")
+        _first_rc_ctx = _make_reconnect_ctx(
+            first_ip,
+            bmc_user,
+            bmc_passwords.get(first_ip, ""),
+            client=first_cl,
+            channel=first_ch,
+            label=f"4b/bootmenu/{first_ip}",
+        )
+        if not wait_for_boot_menu_and_select(
+                first_ch, node_log=_pnf_primary, reconnect_ctx=_first_rc_ctx):
+            print(f"  ⚠️  [{first_ip}] Boot menu not detected; operator may need to intervene.")
             if log:
-                log.log("4b: checkpoint: primary_bootmenu_done saved")
-        except _InjectedCheckpointFailure:
-            raise
-        except Exception:
-            pass
+                log.log(f"[{first_ip}] boot menu not seen for primary reinit", prefix="WARN")
+        first_ch = _first_rc_ctx.get("channel") or first_ch
+        first_cl = _first_rc_ctx.get("client") or first_cl
+        loader_channels[first_ip] = first_ch
+        loader_clients[first_ip] = first_cl
+        if log:
+            log.end_phase()
+
+        # Checkpoint: primary cleared the ONTAP boot menu; wizard about to begin.
+        if _checkpoint:
+            try:
+                _checkpoint.mark_done("primary_bootmenu_done")
+                if log:
+                    log.log("4b: checkpoint: primary_bootmenu_done saved")
+            except _InjectedCheckpointFailure:
+                raise
+            except Exception:
+                pass
+    elif log:
+        log.log(f"[{first_ip}] resume: skipping boot-menu replay because wizard is already active")
 
     # ── Run primary init wizard ────────────────────────────────────────────
     # Install _NodeLogWriter on sys.stdout so all wizard/auto_complete output
@@ -13891,7 +14022,18 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         sys.stdout = _primary_nlw
 
     try:
-        if _auto_setup:
+        if _resume_primary_from_wizard:
+            print(f"\n  [{first_ip}] Resuming cluster setup wizard without reset...")
+            if log:
+                log.start_phase("4b – Cluster Initialization (primary resume)")
+            _wizard_ok = _run_cluster_setup_wizard(
+                first_ch, primary_bmc=first_ip, initial_buf=_primary_resume_buf
+            )
+            if log:
+                log.end_phase()
+            if _wizard_ok is False:
+                return False
+        elif _auto_setup:
             print(f"\n  [{first_ip}] Starting automatic cluster initialization...")
             if log:
                 log.start_phase("4b – Cluster Initialization (primary)")
@@ -13966,6 +14108,20 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             "cluster_ips_out":  _4b_cluster_ips_out,
         }
 
+        if _resume_ready_peer_ips:
+            _4b_cluster_ips_out.update(_resume_ready_peer_ips)
+            print(
+                "\n  🔖 Checkpoint: skipping peer LOADER replay for "
+                f"{len(_resume_ready_peer_ips)} node(s) already past node configuration:"
+            )
+            for _peer_ip, _cluster_ip in sorted(_resume_ready_peer_ips.items()):
+                print(f"     [{_peer_ip}] cluster IP { _cluster_ip }")
+            if log:
+                log.log(
+                    "4b resume: reusing peer_option4_done state for peers: "
+                    f"{sorted(_resume_ready_peer_ips)}"
+                )
+
         # Write node-add manifest so option 2c can resume if interrupted.
         _write_node_add_manifest(
             nodes=[
@@ -13984,11 +14140,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             cluster_admin_password=(_cluster_config.get("admin_password") or ""),
         )
 
+        _peer_replay_targets = [
+            _pip for _pip in _peers_for_reinit if _pip not in _resume_ready_peer_ips
+        ]
         peer_threads = [
             threading.Thread(
                 target=_peer_reinit_worker, args=(ip, _peer_ctx), daemon=True
             )
-            for ip in _peers_for_reinit
+            for ip in _peer_replay_targets
         ]
         for t in peer_threads:
             t.start()
@@ -20909,6 +21068,14 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         print(f"   {k:<8} = {v if v else '(prompt manually)'}")
     _slog(f"Node mgmt config to use: {cfg}")
     _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
+    if _checkpoint:
+        try:
+            _checkpoint.mark_done("primary_node_mgmt_done")
+            _slog("checkpoint: primary_node_mgmt_done saved")
+        except _InjectedCheckpointFailure:
+            raise
+        except Exception:
+            pass
 
     print("\n✅ Mode 1b auto-init complete; driving cluster setup wizard...")
     if _session_log:
@@ -23018,6 +23185,8 @@ def main():
                             print(f"     peer_joined           : {', '.join(_joined_ips)}")
                         if _cp.is_done("primary_bootmenu_done"):
                             print("     primary_bootmenu_done : ✅")
+                        if _cp.is_done("primary_node_mgmt_done"):
+                            print("     primary_node_mgmt_done: ✅")
                         if _cp.is_done("cluster_formed"):
                             print("     cluster_formed        : ✅")
                         if _cp.is_done("primary_setup_done"):
