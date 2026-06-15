@@ -5366,12 +5366,19 @@ def _build_credential_list(*triplets):
     return result
 
 
-def _collect_password_groups_for_nodes(node_ips, prompt_prefix="  "):
+def _collect_password_groups_for_nodes(
+    node_ips,
+    prompt_prefix="  ",
+    include_usernames=False,
+    default_username="admin",
+):
     """Optionally collect experimental password groups for a set of node IPs.
 
     Returns:
       - ``None`` when operator chooses not to use groups.
       - ``dict[ip] = password`` when groups are accepted.
+      - When ``include_usernames=True``:
+        ``dict[ip] = (username, password)``.
     Unassigned nodes are allowed and can be handled by caller with manual prompts.
     """
     _targets = [str(_ip).strip() for _ip in (node_ips or []) if str(_ip).strip()]
@@ -5391,6 +5398,15 @@ def _collect_password_groups_for_nodes(node_ips, prompt_prefix="  "):
         _group_idx = 1
 
         while True:
+            _guser = str(default_username or "admin")
+            if include_usernames:
+                try:
+                    _guser = input(
+                        f"{prompt_prefix}Username for password group {_group_idx} "
+                        f"[{_guser}]: "
+                    ).strip() or _guser
+                except (EOFError, KeyboardInterrupt):
+                    _guser = str(default_username or "admin")
             try:
                 _gpw = getpass.getpass(
                     f"{prompt_prefix}Password for password group {_group_idx} "
@@ -5445,6 +5461,7 @@ def _collect_password_groups_for_nodes(node_ips, prompt_prefix="  "):
                 _groups.append(
                     {
                         "index": _group_idx,
+                        "username": _guser,
                         "password": _gpw,
                         "ips": _selected,
                     }
@@ -5461,6 +5478,8 @@ def _collect_password_groups_for_nodes(node_ips, prompt_prefix="  "):
         if _groups:
             for _g in _groups:
                 print(f"{prompt_prefix}  Group {_g['index']}:")
+                if include_usernames:
+                    print(f"{prompt_prefix}    user: {_g['username']}")
                 for _ip in _g["ips"]:
                     print(f"{prompt_prefix}    - {_ip}")
         else:
@@ -5478,11 +5497,14 @@ def _collect_password_groups_for_nodes(node_ips, prompt_prefix="  "):
             "1",
         ).strip().lower()
         if _ok in ("1", "y", "yes"):
-            _pw_map = {}
+            _map = {}
             for _g in _groups:
                 for _ip in _g["ips"]:
-                    _pw_map[_ip] = _g["password"]
-            return _pw_map
+                    if include_usernames:
+                        _map[_ip] = (_g["username"], _g["password"])
+                    else:
+                        _map[_ip] = _g["password"]
+            return _map
         if _ok in ("2", "n", "no"):
             print(f"{prompt_prefix}Deleting password group manifest and restarting...")
             continue
@@ -9757,6 +9779,7 @@ def _prompt_bmc_target_scope(candidate_ips, scope_label="operation", prompt_pref
         for _idx, (_ip, _) in enumerate(_numbered_targets, 1):
             print(f"{prompt_prefix}  {_idx:>2}. {_ip}  [{_label_map.get(_ip, 'target')}]")
         print(f"{prompt_prefix}  {_all_idx:>2}. All listed BMC targets")
+        print(f"{prompt_prefix}  Press Enter on blank input to return to the previous menu.")
         try:
             _pick = input(
                 f"{prompt_prefix}  Pick number (or 'custom'): "
@@ -9764,8 +9787,7 @@ def _prompt_bmc_target_scope(candidate_ips, scope_label="operation", prompt_pref
         except (EOFError, KeyboardInterrupt):
             return []
         if not _pick:
-            print(f"{prompt_prefix}  ⚠️  No selection entered.")
-            continue
+            return []
         if _pick.lower() in ("custom", "c"):
             try:
                 _custom_ip = input(
@@ -22917,13 +22939,18 @@ def main():
                         for _ip47 in _missing47:
                             _creds47[_ip47] = (_shared_user47, _shared_pass47)
                     else:
-                        _group_pw47 = _collect_password_groups_for_nodes(_missing47, prompt_prefix="  ")
+                        _group_creds47 = _collect_password_groups_for_nodes(
+                            _missing47,
+                            prompt_prefix="  ",
+                            include_usernames=True,
+                            default_username=_default_user47,
+                        )
                         for _ip47 in _missing47:
-                            print(f"\n  Credentials for {_ip47}:")
-                            _u47 = input(f"    Username [{_default_user47}]: ").strip() or _default_user47
-                            if _group_pw47 is not None and _ip47 in _group_pw47:
-                                _p47 = _group_pw47[_ip47]
+                            if _group_creds47 is not None and _ip47 in _group_creds47:
+                                _u47, _p47 = _group_creds47[_ip47]
                             else:
+                                print(f"\n  Credentials for {_ip47}:")
+                                _u47 = input(f"    Username [{_default_user47}]: ").strip() or _default_user47
                                 _p47 = getpass.getpass("    Password (blank = none): ")
                             _creds47[_ip47] = (_u47, _p47)
 
@@ -23210,13 +23237,18 @@ def main():
                         for _ip48 in _bmc_ips48:
                             _creds48[_ip48] = (_shared_user48, _shared_pass48)
                     else:
-                        _group_pw48 = _collect_password_groups_for_nodes(_bmc_ips48, prompt_prefix="  ")
+                        _group_creds48 = _collect_password_groups_for_nodes(
+                            _bmc_ips48,
+                            prompt_prefix="  ",
+                            include_usernames=True,
+                            default_username="admin",
+                        )
                         for _ip48 in _bmc_ips48:
-                            print(f"\n  Credentials for {_ip48}:")
-                            _u48 = input("    Username [admin]: ").strip() or "admin"
-                            if _group_pw48 is not None and _ip48 in _group_pw48:
-                                _p48 = _group_pw48[_ip48]
+                            if _group_creds48 is not None and _ip48 in _group_creds48:
+                                _u48, _p48 = _group_creds48[_ip48]
                             else:
+                                print(f"\n  Credentials for {_ip48}:")
+                                _u48 = input("    Username [admin]: ").strip() or "admin"
                                 _p48 = getpass.getpass("    Password (blank = none): ")
                             _creds48[_ip48] = (_u48, _p48)
                 print("")
@@ -23696,13 +23728,18 @@ def main():
                         for _ip50 in _bmc_ips50:
                             _creds50[_ip50] = (_shared_user50, _shared_pass50)
                     else:
-                        _group_pw50 = _collect_password_groups_for_nodes(_bmc_ips50, prompt_prefix="  ")
+                        _group_creds50 = _collect_password_groups_for_nodes(
+                            _bmc_ips50,
+                            prompt_prefix="  ",
+                            include_usernames=True,
+                            default_username="admin",
+                        )
                         for _ip50 in _bmc_ips50:
-                            print(f"\n  Credentials for {_ip50}:")
-                            _u50 = input("    Username [admin]: ").strip() or "admin"
-                            if _group_pw50 is not None and _ip50 in _group_pw50:
-                                _p50pw = _group_pw50[_ip50]
+                            if _group_creds50 is not None and _ip50 in _group_creds50:
+                                _u50, _p50pw = _group_creds50[_ip50]
                             else:
+                                print(f"\n  Credentials for {_ip50}:")
+                                _u50 = input("    Username [admin]: ").strip() or "admin"
                                 _p50pw = getpass.getpass("    Password (blank = none): ")
                             _creds50[_ip50] = (_u50, _p50pw)
 
@@ -23846,12 +23883,17 @@ def main():
                     for _ip51 in _bmc_ips51:
                         _creds51[_ip51] = (_shared_user51, _shared_pass51)
                 else:
-                    _group_pw51 = _collect_password_groups_for_nodes(_bmc_ips51, prompt_prefix="  ")
+                    _group_creds51 = _collect_password_groups_for_nodes(
+                        _bmc_ips51,
+                        prompt_prefix="  ",
+                        include_usernames=True,
+                        default_username="admin",
+                    )
                     for _ip51 in _bmc_ips51:
-                        _u51 = input(f"  Username for {_ip51} [admin]: ").strip() or "admin"
-                        if _group_pw51 is not None and _ip51 in _group_pw51:
-                            _p51pw = _group_pw51[_ip51]
+                        if _group_creds51 is not None and _ip51 in _group_creds51:
+                            _u51, _p51pw = _group_creds51[_ip51]
                         else:
+                            _u51 = input(f"  Username for {_ip51} [admin]: ").strip() or "admin"
                             _p51pw = getpass.getpass(f"  Password for {_ip51}: ")
                         _creds51[_ip51] = (_u51, _p51pw)
 
@@ -24055,12 +24097,17 @@ def main():
                     for _ip52 in _bmc_ips52:
                         _creds52[_ip52] = (_shared_user52, _shared_pass52)
                 else:
-                    _group_pw52 = _collect_password_groups_for_nodes(_bmc_ips52, prompt_prefix="  ")
+                    _group_creds52 = _collect_password_groups_for_nodes(
+                        _bmc_ips52,
+                        prompt_prefix="  ",
+                        include_usernames=True,
+                        default_username="admin",
+                    )
                     for _ip52 in _bmc_ips52:
-                        _u52 = input(f"  Username for {_ip52} [admin]: ").strip() or "admin"
-                        if _group_pw52 is not None and _ip52 in _group_pw52:
-                            _p52pw = _group_pw52[_ip52]
+                        if _group_creds52 is not None and _ip52 in _group_creds52:
+                            _u52, _p52pw = _group_creds52[_ip52]
                         else:
+                            _u52 = input(f"  Username for {_ip52} [admin]: ").strip() or "admin"
                             _p52pw = getpass.getpass(f"  Password for {_ip52}: ")
                         _creds52[_ip52] = (_u52, _p52pw)
 
@@ -24197,12 +24244,17 @@ def main():
                     for _ip53 in _bmc_ips53:
                         _creds53[_ip53] = (_shared_user53, _shared_pass53)
                 else:
-                    _group_pw53 = _collect_password_groups_for_nodes(_bmc_ips53, prompt_prefix="  ")
+                    _group_creds53 = _collect_password_groups_for_nodes(
+                        _bmc_ips53,
+                        prompt_prefix="  ",
+                        include_usernames=True,
+                        default_username="admin",
+                    )
                     for _ip53 in _bmc_ips53:
-                        _u53 = input(f"  Username for {_ip53} [admin]: ").strip() or "admin"
-                        if _group_pw53 is not None and _ip53 in _group_pw53:
-                            _p53pw = _group_pw53[_ip53]
+                        if _group_creds53 is not None and _ip53 in _group_creds53:
+                            _u53, _p53pw = _group_creds53[_ip53]
                         else:
+                            _u53 = input(f"  Username for {_ip53} [admin]: ").strip() or "admin"
                             _p53pw = getpass.getpass(f"  Password for {_ip53}: ")
                         _creds53[_ip53] = (_u53, _p53pw)
 
@@ -25339,7 +25391,7 @@ def main():
                     except (EOFError, KeyboardInterrupt):
                         _same_creds_ans = ""
                     _same_creds_all = (_same_creds_ans != "n")
-                    _group_pw_peer = None
+                    _group_creds_peer = None
                     if not _same_creds_all:
                         _group_targets_peer = []
                         for _addr in other_sps:
@@ -25350,8 +25402,11 @@ def main():
                             )
                             if not _pass_in_cfg_peer:
                                 _group_targets_peer.append(_addr)
-                        _group_pw_peer = _collect_password_groups_for_nodes(
-                            _group_targets_peer, prompt_prefix="  "
+                        _group_creds_peer = _collect_password_groups_for_nodes(
+                            _group_targets_peer,
+                            prompt_prefix="  ",
+                            include_usernames=True,
+                            default_username=sp_user,
                         )
 
                     for addr in other_sps:
@@ -25377,32 +25432,43 @@ def main():
                             p = sp_pass
                         else:
                             print(f"\n  ── Peer BMC {addr} ──")
-                            # Resolve username.
-                            if user_in_cfg:
-                                u = node_cfg["bmc_user"].strip() or sp_user
-                                if not node_cfg["bmc_user"].strip():
-                                    print(f"    📄 Username blank in config for {addr}; "
-                                          f"reusing primary user '{sp_user}'.")
-                            else:
-                                try:
-                                    u = input(
-                                        f"    Username for {addr} "
-                                        f"[hit enter to re-use {sp_user}]: "
-                                    ).strip() or sp_user
-                                except (EOFError, KeyboardInterrupt):
-                                    u = sp_user
-
-                            # Resolve password.
+                            # Resolve username/password.
                             if pass_in_cfg:
+                                if user_in_cfg:
+                                    u = node_cfg["bmc_user"].strip() or sp_user
+                                    if not node_cfg["bmc_user"].strip():
+                                        print(f"    📄 Username blank in config for {addr}; "
+                                              f"reusing primary user '{sp_user}'.")
+                                else:
+                                    try:
+                                        u = input(
+                                            f"    Username for {addr} "
+                                            f"[hit enter to re-use {sp_user}]: "
+                                        ).strip() or sp_user
+                                    except (EOFError, KeyboardInterrupt):
+                                        u = sp_user
                                 p = node_cfg["bmc_password"]
                                 if p:
                                     print(f"    📄 Using config credentials for {addr} (user={u})")
                                 else:
                                     print(f"    📄 Password blank in config for {addr}; "
                                           "will attempt SSH with no password.")
-                            elif _group_pw_peer is not None and addr in _group_pw_peer:
-                                p = _group_pw_peer[addr]
+                            elif _group_creds_peer is not None and addr in _group_creds_peer:
+                                u, p = _group_creds_peer[addr]
                             else:
+                                if user_in_cfg:
+                                    u = node_cfg["bmc_user"].strip() or sp_user
+                                    if not node_cfg["bmc_user"].strip():
+                                        print(f"    📄 Username blank in config for {addr}; "
+                                              f"reusing primary user '{sp_user}'.")
+                                else:
+                                    try:
+                                        u = input(
+                                            f"    Username for {addr} "
+                                            f"[hit enter to re-use {sp_user}]: "
+                                        ).strip() or sp_user
+                                    except (EOFError, KeyboardInterrupt):
+                                        u = sp_user
                                 _pin = getpass.getpass(
                                     f"    Password for {addr} "
                                     "(blank = no password; enter PRIMARY to reuse primary): "
