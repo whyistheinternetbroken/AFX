@@ -8544,10 +8544,6 @@ def collect_cluster_config():
                 print(f"    \u26A0\uFE0F  Password does not meet requirements. "
                       f"{pw_rule_msg}")
                 continue
-            confirm = getpass.getpass("  Confirm admin password: ")
-            if confirm != admin_password:
-                print("    \u26A0\uFE0F  Passwords do not match. Try again.")
-                continue
             break
 
     admin_user = cc_cfg.get("user") or "admin"
@@ -11208,12 +11204,6 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 )
                 if not _pre_cluster_pw:
                     break
-                _pre_cluster_pw_confirm = getpass.getpass(
-                    "  Confirm cluster admin password: "
-                )
-                if _pre_cluster_pw_confirm != _pre_cluster_pw:
-                    print("    ⚠️  Passwords do not match. Try again.")
-                    continue
                 if not isinstance(_cluster_config, dict):
                     _cluster_config = {}
                 _cluster_config["admin_password"] = _pre_cluster_pw
