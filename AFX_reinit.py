@@ -2317,6 +2317,7 @@ def select_operation_mode():
         print("  4.  Install ONTAP")
         print("    4a. Upgrade ONTAP (rolling takeover/giveback)")
         print("    4b. Netboot and install ONTAP")
+        print("    4c. Netboot and install image only (no cluster create/node add)")
         print("")
         print("  5.  Administration and maintenance")
         print("    5a. Install license file only")
