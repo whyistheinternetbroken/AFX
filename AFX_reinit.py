@@ -18290,8 +18290,8 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
     _cluster_node_name = ""
     _cluster_ip = None
     for _cmd in (
-        "set -rows 0; net int show -role cluster -fields node,address",
-        "net int show -role cluster -fields node,address",
+        "set -rows 0; net int show -role cluster -fields home-node,address",
+        "net int show -role cluster -fields home-node,address",
         "set -rows 0; net int show -role cluster -fields address",
         "net int show -role cluster -fields address",
     ):
@@ -18456,7 +18456,8 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             log.log(f"cluster add-node-status:\n{status_out}")
 
         elapsed_hdr = int(time.monotonic() - start)
-        print(f"\n  📊 Node add status ({elapsed_hdr}s elapsed):")
+        if log:
+            log.log(f"Node add status snapshot ({elapsed_hdr}s elapsed)")
         in_table = False
         status_rows = []
         _parsed_rows = []
@@ -18517,7 +18518,11 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             _icon = "✅" if _node_status.lower() == "success" else "⏳"
             _err_suffix = f" ({_node_err})" if _node_err else ""
             _ip_suffix = f" [{_row_ip}]" if _row_ip else ""
-            print(f"    {_icon} {_node_name}{_ip_suffix}: {_node_status}{_err_suffix}")
+            if log:
+                log.log(
+                    f"cluster add-node status: {_icon} {_node_name}{_ip_suffix}: "
+                    f"{_node_status}{_err_suffix}"
+                )
             # Track per-node first-success timestamp.
             if _node_status.lower() == "success" and node_timings_out is not None:
                 if _row_ip and _row_ip not in _already_succeeded:
@@ -18595,7 +18600,8 @@ def _cluster_show_node_status(channel):
     Returns `(-1, False, False)` on parse failure.
     """
     with _primary_shell_lock:
-        out = _run_cluster_command(channel, "cluster show", timeout=30)
+        with _suppress_console():
+            out = _run_cluster_command(channel, "cluster show", timeout=30)
     rows = 0
     dashes_seen = False
     table_done = False
@@ -22150,8 +22156,8 @@ def _get_cluster_node_mgmt_ips(channel, cluster_name=None):
 
     # ── 3. Query node-mgmt interfaces (prefer 'network interface show') ────
     _cmds = [
-        "network interface show -role node-mgmt -fields node,address",
-        "net int show -role node-mgmt -fields node,address",
+        "network interface show -role node-mgmt -fields home-node,address",
+        "net int show -role node-mgmt -fields home-node,address",
     ]
     if cluster_name:
         _cmds.extend([
@@ -22215,10 +22221,10 @@ def _get_cluster_node_mgmt_ips(channel, cluster_name=None):
 def _get_cluster_role_ips(channel):
     """Return first cluster-role IP per node in command output order."""
     _cmds = [
-        "set -rows 0; net int show -role cluster -fields node,address",
-        "net int show -role cluster -fields node,address",
-        "set -rows 0; network interface show -role cluster -fields node,address",
-        "network interface show -role cluster -fields node,address",
+        "set -rows 0; net int show -role cluster -fields home-node,address",
+        "net int show -role cluster -fields home-node,address",
+        "set -rows 0; network interface show -role cluster -fields home-node,address",
+        "network interface show -role cluster -fields home-node,address",
     ]
     for _cmd in _cmds:
         try:
