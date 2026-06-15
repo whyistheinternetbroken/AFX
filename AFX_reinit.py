@@ -121,6 +121,38 @@ def _print_wait_log_hint(*, node_log=None, log_path: str = "") -> None:
         return
     print(f"   For details, see log at:\n   {_path}\n   (open in a separate SSH session)")
 
+
+_log_sequence_lock = threading.Lock()
+_log_sequence_by_scope: dict = {}
+
+
+def _log_sequence_scope(log_dir: str = "", scope_dir: str = "") -> str:
+    """Return the scope key used to number log files in creation order."""
+    _scope = str(scope_dir or "").strip() or str(log_dir or "").strip()
+    if not _scope and "_session_log" in globals() and _session_log:
+        _scope = str(getattr(_session_log, "log_dir", "") or "").strip()
+    if not _scope:
+        _scope = os.getcwd()
+    _scope = os.path.abspath(_scope)
+    if os.path.basename(_scope).lower() == "ssh_logs":
+        _parent = os.path.dirname(_scope)
+        if _parent:
+            _scope = _parent
+    return _scope
+
+
+def _build_numbered_log_path(log_dir: str, filename: str, scope_dir: str = "") -> str:
+    """Return a log path prefixed with an incrementing creation-order number."""
+    os.makedirs(log_dir, exist_ok=True)
+    _scope = _log_sequence_scope(log_dir, scope_dir)
+    with _log_sequence_lock:
+        _seq = _log_sequence_by_scope.get(_scope, 0) + 1
+        _log_sequence_by_scope[_scope] = _seq
+    _base = os.path.basename(filename)
+    if not re.match(r"^\d+-", _base):
+        _base = f"{_seq}-{_base}"
+    return os.path.join(log_dir, _base)
+
 # ---------------------------------------------------------------------------
 # Checkpoint manager
 # ---------------------------------------------------------------------------
@@ -1825,15 +1857,17 @@ class SessionLogger:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_dir = os.path.join(_script_dir, "logs", timestamp)
         os.makedirs(self.log_dir, exist_ok=True)
-        self.log_file = os.path.join(self.log_dir, f"bmc_session_{timestamp}.log")
+        self.log_file = _build_numbered_log_path(
+            self.log_dir, f"bmc_session_{timestamp}.log", scope_dir=self.log_dir
+        )
         self._lock = threading.Lock()
         # buffering=1 = line-buffered; auto-flushes on every \n so the file is
         # safe to read even while the script is still running (or backgrounded).
         self._file = open(self.log_file, "w", encoding="utf-8", buffering=1)
         # Screen output log: captures everything printed to the console so a
         # full transcript of the user-visible run output is preserved.
-        self.screen_log_file = os.path.join(
-            self.log_dir, f"screen_output_{timestamp}.log"
+        self.screen_log_file = _build_numbered_log_path(
+            self.log_dir, f"screen_output_{timestamp}.log", scope_dir=self.log_dir
         )
         self._screen_log = open(
             self.screen_log_file, "w", encoding="utf-8", buffering=1
@@ -2303,9 +2337,10 @@ class SessionLogger:
         Contains only the result, phase timings, and step timings — none of
         the raw console output — so it is fast to read after a run.
         """
-        summary_path = os.path.join(
+        summary_path = _build_numbered_log_path(
             self.log_dir,
             f"summary_{now.strftime('%Y%m%d_%H%M%S')}.log",
+            scope_dir=self.log_dir,
         )
         _status_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(outcome_status, "❓")
         try:
@@ -2438,7 +2473,9 @@ def _write_crash_trace(exc_type, exc_value, exc_tb, context="Unhandled exception
     os.makedirs(_log_dir, exist_ok=True)
 
     _ts_file = datetime.now().strftime("%Y%m%d_%H%M%S")
-    _crash_path = os.path.join(_log_dir, f"crash_trace_{_ts_file}.log")
+    _crash_path = _build_numbered_log_path(
+        _log_dir, f"crash_trace_{_ts_file}.log", scope_dir=_log_dir
+    )
     with open(_crash_path, "w", encoding="utf-8") as _cf:
         _cf.write("=" * 70 + "\n")
         _cf.write("AFX_reinit crash trace\n")
@@ -3401,7 +3438,11 @@ def _resolve_ssh_log_file() -> str:
         or os.path.dirname(_ssh_log_file_path) != _ssh_base
     ):
         _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _ssh_log_file_path = os.path.join(_ssh_base, f"ssh_connections_{_ts}.log")
+        _ssh_log_file_path = _build_numbered_log_path(
+            _ssh_base,
+            f"ssh_connections_{_ts}.log",
+            scope_dir=(getattr(_session_log, "log_dir", "") if _session_log else _ssh_base),
+        )
 
     return _ssh_log_file_path
 
@@ -3453,8 +3494,10 @@ def _resolve_ssh_remediation_log_file() -> str:
         or os.path.dirname(_ssh_remediation_log_file_path) != _ssh_base
     ):
         _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _ssh_remediation_log_file_path = os.path.join(
-            _ssh_base, f"ssh_remediation_{_ts}.log"
+        _ssh_remediation_log_file_path = _build_numbered_log_path(
+            _ssh_base,
+            f"ssh_remediation_{_ts}.log",
+            scope_dir=(getattr(_session_log, "log_dir", "") if _session_log else _ssh_base),
         )
 
     return _ssh_remediation_log_file_path
@@ -4572,6 +4615,7 @@ def _reclaim_system_console(channel, node_log=None):
 
 _BMC_CONSOLE_KEEPALIVE_INTERVAL = 30  # seconds between null-byte keepalives
 _BMC_CONSOLE_SILENCE_RECONNECT_INTERVAL = 300  # 5 minutes with no console data
+_BMC_CONSOLE_REENTRY_RETRY_INTERVAL = 15  # seconds between repeated 'system console' retries
 _BMC_RECONNECT_NOTICE_LIMIT = 5
 
 
@@ -10895,7 +10939,7 @@ def _node_log_open(ip, log_dir, prefix="node", previous_log=None):
     os.makedirs(log_dir, exist_ok=True)
     safe_ip = ip.replace(".", "_").replace(":", "_")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(log_dir, f"{prefix}_{safe_ip}_{ts}.log")
+    path = _build_numbered_log_path(log_dir, f"{prefix}_{safe_ip}_{ts}.log")
     new_file = open(path, "w", encoding="utf-8", buffering=1)
     if previous_log is not None:
         try:
@@ -11712,6 +11756,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         log.log(f"4b: static ifconfig in LOADER: {_netboot_static_ip}")
 
     print("\n  ✅ All setup information collected. Starting operations...")
+    _print_autopilot_banner()
     if log:
         log.log(f"4b: all upfront questions answered; do_reinit={_do_reinit}, mode={_mode_sel}")
 
@@ -12061,7 +12106,6 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         # ── Step 4: Start HTTP server if serving a local file ─────────────────
         if log:
             log.start_phase("4b – HTTP Server")
-        _print_autopilot_banner()
         httpd = None
         if src_type == "file":
             _ht, pkg_url, httpd = _start_http_server(src_value)
@@ -12570,6 +12614,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _all_boot_sigs = ["login:", "type yes to confirm and continue"] + _boot_menu_sigs_6
             _all_boot_sigs_lower = [s.lower() for s in _all_boot_sigs]
             _boot_buf = ""
+            _boot_wait_notice_state6 = {
+                "reconnect_notice_limit": _BMC_RECONNECT_NOTICE_LIMIT,
+                "reconnect_notice_streak": 0,
+                "reconnect_notice_suppressed": False,
+                "console_reentry_pending": False,
+                "console_reentry_last_send": 0.0,
+            }
             while time.monotonic() - _boot_wait_start < _boot_timeout:
                 if _shutdown_event.is_set():
                     break
@@ -12599,23 +12650,52 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     # console exits, we'll receive a BMC prompt instead of
                     # boot output.  Detect and re-enter system console.
                     _bmc_drop6 = _looks_like_bmc_drop(_chunk)
+                    if (not _bmc_drop6
+                            and _boot_wait_notice_state6.get("console_reentry_pending")):
+                        _boot_wait_notice_state6["console_reentry_pending"] = False
+                        _boot_wait_notice_state6["console_reentry_last_send"] = 0.0
+                        _reset_reconnect_notice_suppression(_boot_wait_notice_state6)
                     if _bmc_drop6 and not any(s in _chunk.lower() for s in _all_boot_sigs_lower):
                         if not _pause_allows_reconnect(f"[{ip}] option 6 BMC drop"):
                             time.sleep(0.1)
                             continue
                         _preempted6 = _BMC_PREEMPTED_SIG in _chunk.lower()
                         _drop_reason = "session preempted" if _preempted6 else "BMC prompt detected"
-                        _status(f"  ⚠️  [{ip}] {_drop_reason} during boot wait – "
-                                "re-entering system console...")
-                        if log:
-                            log.log(f"[{ip}] {_drop_reason} during option 6 boot wait; "
-                                    "re-sending system console", prefix="WARN")
-                        if _nf6:
-                            _par_write(_nf6, "\n>>> [bmc-drop] system console\n")
-                        try:
-                            ch.send("system console\r")
-                        except OSError:
-                            pass
+                        _now_drop6 = time.monotonic()
+                        _retry_due6 = (
+                            (not _boot_wait_notice_state6.get("console_reentry_pending"))
+                            or _preempted6
+                            or ((_now_drop6 - float(
+                                _boot_wait_notice_state6.get("console_reentry_last_send", 0.0)
+                            )) >= _BMC_CONSOLE_REENTRY_RETRY_INTERVAL)
+                        )
+                        if _retry_due6:
+                            def _log_notice6(_msg, _prefix):
+                                if log:
+                                    log.log(_msg, prefix=_prefix)
+                            _emit_reconnect_notice_with_suppression(
+                                _boot_wait_notice_state6,
+                                ip,
+                                console_msg=(
+                                    f"  ⚠️  [{ip}] {_drop_reason} during boot wait – "
+                                    "re-entering system console..."
+                                ),
+                                log_msg=(
+                                    f"[{ip}] {_drop_reason} during option 6 boot wait; "
+                                    "re-sending system console"
+                                ),
+                                log_prefix="WARN",
+                                console_writer=_status,
+                                log_writer=_log_notice6,
+                            )
+                            if _nf6:
+                                _par_write(_nf6, "\n>>> [bmc-drop] system console\n")
+                            try:
+                                ch.send("system console\r")
+                            except OSError:
+                                pass
+                            _boot_wait_notice_state6["console_reentry_pending"] = True
+                            _boot_wait_notice_state6["console_reentry_last_send"] = _now_drop6
                         _boot_buf = ""
                         time.sleep(2)
                         continue
@@ -12795,6 +12875,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 _opt4_next_progress = _opt4_boot_start + 300
                 _opt4_buf = ""
                 _opt4_mgmt_answered = False
+                _opt4_notice_state = {
+                    "reconnect_notice_limit": _BMC_RECONNECT_NOTICE_LIMIT,
+                    "reconnect_notice_streak": 0,
+                    "reconnect_notice_suppressed": False,
+                    "console_reentry_pending": False,
+                    "console_reentry_last_send": 0.0,
+                }
                 _opt4_mgmt_triggers = [
                     "node management interface port",
                     "node management interface ip address",
@@ -12829,23 +12916,52 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             _par_write(_nf6, _chunk4)
                         # ── BMC-drop detection ────────────────────────────────
                         _bmc_drop4 = _looks_like_bmc_drop(_chunk4)
+                        if (not _bmc_drop4
+                                and _opt4_notice_state.get("console_reentry_pending")):
+                            _opt4_notice_state["console_reentry_pending"] = False
+                            _opt4_notice_state["console_reentry_last_send"] = 0.0
+                            _reset_reconnect_notice_suppression(_opt4_notice_state)
                         if _bmc_drop4 and not any(s in _chunk4.lower() for s in _opt4_sigs_lower):
                             if not _pause_allows_reconnect(f"[{ip}] option 4 BMC drop"):
                                 time.sleep(0.1)
                                 continue
                             _preempted4 = _BMC_PREEMPTED_SIG in _chunk4.lower()
                             _drop_reason4 = "session preempted" if _preempted4 else "BMC prompt detected"
-                            _status(f"  ⚠️  [{ip}] {_drop_reason4} during option 4 boot wait – "
-                                    "re-entering system console...")
-                            if log:
-                                log.log(f"[{ip}] {_drop_reason4} during option 4 boot wait; "
-                                        "re-sending system console", prefix="WARN")
-                            if _nf6:
-                                _par_write(_nf6, "\n>>> [bmc-drop] system console\n")
-                            try:
-                                ch.send("system console\r")
-                            except OSError:
-                                pass
+                            _now_drop4 = time.monotonic()
+                            _retry_due4 = (
+                                (not _opt4_notice_state.get("console_reentry_pending"))
+                                or _preempted4
+                                or ((_now_drop4 - float(
+                                    _opt4_notice_state.get("console_reentry_last_send", 0.0)
+                                )) >= _BMC_CONSOLE_REENTRY_RETRY_INTERVAL)
+                            )
+                            if _retry_due4:
+                                def _log_notice4(_msg, _prefix):
+                                    if log:
+                                        log.log(_msg, prefix=_prefix)
+                                _emit_reconnect_notice_with_suppression(
+                                    _opt4_notice_state,
+                                    ip,
+                                    console_msg=(
+                                        f"  ⚠️  [{ip}] {_drop_reason4} during option 4 boot wait – "
+                                        "re-entering system console..."
+                                    ),
+                                    log_msg=(
+                                        f"[{ip}] {_drop_reason4} during option 4 boot wait; "
+                                        "re-sending system console"
+                                    ),
+                                    log_prefix="WARN",
+                                    console_writer=_status,
+                                    log_writer=_log_notice4,
+                                )
+                                if _nf6:
+                                    _par_write(_nf6, "\n>>> [bmc-drop] system console\n")
+                                try:
+                                    ch.send("system console\r")
+                                except OSError:
+                                    pass
+                                _opt4_notice_state["console_reentry_pending"] = True
+                                _opt4_notice_state["console_reentry_last_send"] = _now_drop4
                             _opt4_buf = ""
                             time.sleep(2)
                             continue
