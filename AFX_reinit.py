@@ -18182,11 +18182,16 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             _session_log.log("Timeout waiting for wizard start", prefix="ERROR")
             _session_log.set_outcome("FAIL", "wizard start timeout")
         return False
+    # Always send one Enter after wizard-start detection. In fast paths, the
+    # create/join text can be present in residual output while ONTAP still
+    # requires Enter to continue from the "Otherwise, press Enter..." gate.
     if "press enter" in _which.lower():
         print("\n✅ 'Press Enter' prompt detected – sending Enter")
-        _slog("Sent Enter at 'Press Enter to complete cluster setup'")
-        channel.send("\r")
-        time.sleep(0.5)
+    else:
+        print("\nℹ️  Sending Enter to advance past any pending wizard gate...")
+    _slog("Sent Enter after wizard-start detection")
+    channel.send("\r")
+    time.sleep(0.5)
 
     # ONTAP can occasionally echo/repaint the create/join prompt and ignore the
     # first answer due to console timing. Keep sending "create" until the
@@ -18625,11 +18630,17 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = ""):
         print(f"\n❌ [{label}] Timed out waiting for cluster setup wizard start.")
         _slog(f"[{label}] Timeout waiting for wizard start", prefix="ERROR")
         return False
+    # Always send one Enter after wizard-start detection. As with mode 1b,
+    # residual create/join text can appear before ONTAP consumes the required
+    # Enter from the "Otherwise, press Enter..." screen.
     if "press enter" in _which.lower():
         print(f"\n✅ [{label}] 'Press Enter' prompt detected – sending Enter")
-        _slog(f"[{label}] Sent Enter at 'Press Enter to complete cluster setup'")
-        channel.send("\r")
-        time.sleep(0.5)
+    else:
+        print(f"\nℹ️  [{label}] Sending Enter to advance past any pending wizard gate...")
+    _slog(f"[{label}] Sent Enter after wizard-start detection")
+    channel.send("\r")
+    time.sleep(0.5)
+    if "press enter" in _which.lower():
         # Serialize the join keystroke across peer-add threads.
         print(f"\n🔒 [{label}] Waiting for join lock...")
         _slog(f"[{label}] waiting to acquire _join_lock")
