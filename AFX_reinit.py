@@ -23982,7 +23982,7 @@ def main():
                         _joined_ips       = _cp.nodes_done_for("peer_joined")
                         print("\n" + "=" * 60)
                         print("  🔖 Checkpoint found" + _cp_age + " (EXPERIMENTAL)")
-                         print(f"     Mode    : {_cp.mode}")
+                        print(f"     Mode    : {_cp.mode}")
                         print(f"     BMC IPs : {', '.join(_cp.bmc_ips)}")
                         print(f"     Log dir : {_cp.log_dir}")
                         print(f"     Next stage: {_describe_4b_resume_stage(_cp)}")
