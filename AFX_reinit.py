@@ -13377,7 +13377,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 ) or ""
                                 _opt4_buf = _residual_opt4
                                 _opt4_mgmt_answered = True
-                                continue
+                                _opt4_buf_lower = _opt4_buf.lower()
                             except Exception as _e_opt4_mgmt:
                                 _status(f"  ⚠️  [{ip}] Failed to auto-answer node-mgmt prompts: {_e_opt4_mgmt}")
                                 if log:
@@ -13447,6 +13447,25 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 break
                         if len(_opt4_buf) > 16384:
                             _opt4_buf = _opt4_buf[-8192:]
+                    # ── Idle-path wizard check ──────────────────────────────────
+                    # ONTAP displays the wizard prompt then waits silently for
+                    # Enter.  No more data arrives so ch.recv_ready() is always
+                    # False.  Catch the prompt here so we don't time out.
+                    if _opt4_mgmt_answered and _output_contains_wizard_start(_opt4_buf):
+                        _status(f"  \u2705 [{ip}] Cluster setup wizard prompt detected – sending Enter.")
+                        if log:
+                            log.log(f"[{ip}] wizard prompt detected (idle poll); sending Enter")
+                        if _nf6:
+                            _par_write(_nf6, "\n>>> Enter (wizard – idle poll)\n")
+                        with suppress(Exception):
+                            ch.send("\r")
+                        with connect_lock:
+                            _opt6_login_nodes.add(ip)
+                        _mark_install_done(ip)
+                        if _nf6:
+                            with suppress(Exception):
+                                _nf6.close()
+                        return
                     time.sleep(0.1)
                 if not _m3:
                     _status(f"  ⚠️  [{ip}] Option 4 boot timed out after 20 min.")
