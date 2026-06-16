@@ -18199,9 +18199,15 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     print("\n⏳ Waiting for create/join prompt and selecting 'create'...")
     _slog("Waiting for create/join prompt and confirming transition to yes/no")
     _create_deadline = time.monotonic() + 600
-    _create_sent_attempts = 0
+    _create_sent_attempts = 1
     _create_ok = False
     _yes_prompt_seen = False
+    # Prime the wizard once immediately after Enter so resume paths that already
+    # printed create/join in buffered console output still advance.
+    channel.send("create\r")
+    if _session_log:
+        _session_log.log_sent("create")
+    time.sleep(0.5)
     while (not _shutdown_event.is_set()) and (time.monotonic() < _create_deadline):
         _remaining = max(1, int(_create_deadline - time.monotonic()))
         _out_cj, _m_cj = direct_read_until_any(
@@ -18221,7 +18227,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             _create_ok = True
             _yes_prompt_seen = True
             break
-        if ("create or join" in _scan_cj) or ("{create, join}" in _scan_cj):
+        if (("create or join" in _scan_cj)
+                or ("create a new cluster or join" in _scan_cj)
+                or ("{create, join}" in _scan_cj)):
             _create_sent_attempts += 1
             channel.send("create\r")
             if _session_log:
