@@ -18202,7 +18202,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     _create_sent_attempts = 0
     _create_ok = False
     _yes_prompt_seen = False
-    while time.monotonic() < _create_deadline:
+    while (not _shutdown_event.is_set()) and (time.monotonic() < _create_deadline):
         _remaining = max(1, int(_create_deadline - time.monotonic()))
         _out_cj, _m_cj = direct_read_until_any(
             channel,
@@ -18214,6 +18214,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             timeout=min(30, _remaining),
             check_bmc_drop=True,
         )
+        if _shutdown_event.is_set():
+            break
         _scan_cj = (str(_out_cj or "") + "\n" + str(_m_cj or "")).lower()
         if "{yes, no}" in _scan_cj:
             _create_ok = True
@@ -18226,6 +18228,12 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                 _session_log.log_sent("create")
             time.sleep(0.5)
             continue
+    if _shutdown_event.is_set():
+        print("\n👋 Interrupted while waiting for create/join; exiting wizard.")
+        if _session_log:
+            _session_log.log("Interrupted while waiting for create/join", prefix="WARN")
+            _session_log.set_outcome("FAIL", "user interrupted during create/join wait")
+        return False
     if not _create_ok:
         print("\n❌ Timed out advancing past create/join prompt.")
         if _session_log:
@@ -18368,7 +18376,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     _saz_done = False
     _cluster_created = False
     _create_deadline = time.monotonic() + 1800
-    while time.monotonic() < _create_deadline:
+    _matched = None
+    while (not _shutdown_event.is_set()) and (time.monotonic() < _create_deadline):
         _remaining_ms = max(10, int(_create_deadline - time.monotonic()))
         _out, _matched = direct_read_until_any(
             channel,
@@ -18376,6 +18385,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             timeout=_remaining_ms,
             check_bmc_drop=True,
         )
+        if _shutdown_event.is_set():
+            break
         if not _matched:
             break  # timeout – fall through to login: wait below
         _ml = _matched.lower()
@@ -18400,10 +18411,24 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         if "login:" in _ml:
             break  # cluster creation fully complete
 
+    if _shutdown_event.is_set():
+        print("\n👋 Interrupted while finishing cluster configuration; exiting wizard.")
+        if _session_log:
+            _session_log.log("Interrupted during post-create cluster configuration wait",
+                             prefix="WARN")
+            _session_log.set_outcome("FAIL", "user interrupted during cluster create completion")
+        return False
+
     # If we exited the loop without seeing login: yet, wait for it now.
     if not _matched or "login:" not in _matched.lower():
         _slog("Waiting for login: prompt to confirm cluster creation")
         direct_send_and_wait(channel, "", "login:", timeout=1800)
+        if _shutdown_event.is_set():
+            print("\n👋 Interrupted while waiting for login prompt; exiting wizard.")
+            if _session_log:
+                _session_log.log("Interrupted while waiting for login prompt", prefix="WARN")
+                _session_log.set_outcome("FAIL", "user interrupted during login wait")
+            return False
 
     print("\n✅ Cluster creation complete.")
     if _session_log:
