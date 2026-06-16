@@ -2636,13 +2636,29 @@ def select_operation_mode():
             print("  " + "─" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
-                _ssh_ans = input("  Set up passwordless SSH to cluster management after setup? [y/N]: ").strip().lower()
+                while True:
+                    _ssh_ans = input("  Set up passwordless SSH to cluster management after setup? [y/N]: ").strip().lower()
+                    if _ssh_ans in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
                 _setup_passwordless_ssh = (_ssh_ans == "y")
-                _nb_ans = input("  Do you want to install a specific version of ONTAP before re-creating the cluster? [y/N]: ").strip().lower()
+                while True:
+                    _nb_ans = input("  Do you want to install a specific version of ONTAP before re-creating the cluster? [y/N]: ").strip().lower()
+                    if _nb_ans in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the cluster reinit.")
-                    _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                    while True:
+                        while True:
+                            _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                            if _sip_ans in ("y", "n", ""):
+                                break
+                            print("  Please enter y or N.")
+                        if _sip_ans in ("y", "n", ""):
+                            break
+                        print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
                 print("\n  ✅ Confirmed. 1a: Format first node (interactive)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
@@ -2671,13 +2687,29 @@ def select_operation_mode():
             print("  " + "─" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
-                _ssh_ans = input("  Set up passwordless SSH to cluster management after setup? [y/N]: ").strip().lower()
+                while True:
+                    _ssh_ans = input("  Set up passwordless SSH to cluster management after setup? [y/N]: ").strip().lower()
+                    if _ssh_ans in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
                 _setup_passwordless_ssh = (_ssh_ans == "y")
-                _nb_ans = input("  Do you want to install a specific version of ONTAP before re-creating the cluster? [y/N]: ").strip().lower()
+                while True:
+                    _nb_ans = input("  Do you want to install a specific version of ONTAP before re-creating the cluster? [y/N]: ").strip().lower()
+                    if _nb_ans in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the cluster reinit.")
-                    _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                    while True:
+                        while True:
+                            _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                            if _sip_ans in ("y", "n", ""):
+                                break
+                            print("  Please enter y or N.")
+                        if _sip_ans in ("y", "n", ""):
+                            break
+                        print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
                 print("\n  ✅ Confirmed. 1b: Format first node + setup cluster (auto)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
@@ -2698,11 +2730,23 @@ def select_operation_mode():
             print("  " + "─" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
-                _nb_ans = input("  Do you want to install a specific version of ONTAP before adding this node? [y/N]: ").strip().lower()
+                while True:
+                    _nb_ans = input("  Do you want to install a specific version of ONTAP before adding this node? [y/N]: ").strip().lower()
+                    if _nb_ans in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the node join.")
-                    _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                    while True:
+                        while True:
+                            _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                            if _sip_ans in ("y", "n", ""):
+                                break
+                            print("  Please enter y or N.")
+                        if _sip_ans in ("y", "n", ""):
+                            break
+                        print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
                 print("\n  ✅ Confirmed. 2a: Add node (interactive)")
                 print("     → LOADER: set-defaults + saveenv (no destroy storage pods)")
@@ -2731,11 +2775,23 @@ def select_operation_mode():
             print("  " + "─" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
-                _nb_ans = input("  Do you want to install a specific version of ONTAP before adding this node? [y/N]: ").strip().lower()
+                while True:
+                    _nb_ans = input("  Do you want to install a specific version of ONTAP before adding this node? [y/N]: ").strip().lower()
+                    if _nb_ans in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the node join.")
-                    _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                    while True:
+                        while True:
+                            _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                            if _sip_ans in ("y", "n", ""):
+                                break
+                            print("  Please enter y or N.")
+                        if _sip_ans in ("y", "n", ""):
+                            break
+                        print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
                 print("\n  ✅ Confirmed. 2b: Add node (auto)")
                 print("     → LOADER: set-defaults + saveenv")
@@ -2768,13 +2824,29 @@ def select_operation_mode():
             print("  " + "─" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
-                _ssh_ans = input("  Set up passwordless SSH to cluster management after setup? [y/N]: ").strip().lower()
+                while True:
+                    _ssh_ans = input("  Set up passwordless SSH to cluster management after setup? [y/N]: ").strip().lower()
+                    if _ssh_ans in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
                 _setup_passwordless_ssh = (_ssh_ans == "y")
-                _nb_ans = input("  Do you want to install a specific version of ONTAP on all nodes first? [y/N]: ").strip().lower()
+                while True:
+                    _nb_ans = input("  Do you want to install a specific version of ONTAP on all nodes first? [y/N]: ").strip().lower()
+                    if _nb_ans in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER on the primary node before cluster reinit.")
-                    _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                    while True:
+                        while True:
+                            _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                            if _sip_ans in ("y", "n", ""):
+                                break
+                            print("  Please enter y or N.")
+                        if _sip_ans in ("y", "n", ""):
+                            break
+                        print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
                 print("\n  ✅ Confirmed. 3: End-to-end auto initialize\n")
                 return 3, True, True
@@ -2822,7 +2894,11 @@ def select_operation_mode():
                 print("  without taking the nodes down, use option 4a instead.")
                 print("")
                 print("  " + "\u2500" * 58)
-                confirm = input("  Continue with netboot? [y/N]: ").strip().lower()
+                while True:
+                    confirm = input("  Continue with netboot? [y/N]: ").strip().lower()
+                    if confirm in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
                 if confirm == "y":
                     print("\n  \u2705 Confirmed. 4b: Netboot and install ONTAP\n")
                     return 42, False, False
@@ -2838,7 +2914,11 @@ def select_operation_mode():
                 print("  cluster create, or node add workflows.")
                 print("")
                 print("  " + "\u2500" * 58)
-                confirm = input("  Continue with install-only netboot? [y/N]: ").strip().lower()
+                while True:
+                    confirm = input("  Continue with install-only netboot? [y/N]: ").strip().lower()
+                    if confirm in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
                 if confirm == "y":
                     print("\n  \u2705 Confirmed. 4c: Netboot and install image only\n")
                     return 43, False, False
@@ -11853,9 +11933,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             print(f"\n  🔖 Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
         else:
             print("\n  ✅ Package selected. Now collecting all setup information upfront.")
-            reinit_ans = input(
-                "\n  Would you like to reinit the cluster after the ONTAP installation? [y/N]: "
-            ).strip().lower()
+            while True:
+                reinit_ans = input(
+                    "\n  Would you like to reinit the cluster after the ONTAP installation? [y/N]: "
+                ).strip().lower()
+                if reinit_ans in ("y", "n", ""):
+                    break
+                print("  Please enter y or N.")
             _do_reinit = reinit_ans == "y"
             _mode_sel = None
 
@@ -12002,9 +12086,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         _netboot_static_ip = _checkpoint.get_param("netboot_static_ip")
         print(f"  🔖 Resuming: static LOADER ifconfig={'enabled' if _netboot_static_ip else 'disabled'}.")
     else:
-        _sip_ans = _prompt(
-            "\n  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: "
-        , "n").lower()
+        while True:
+            _sip_ans = _prompt(
+                "\n  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: "
+            , "n").lower()
+            if _sip_ans in ("y", "n", ""):
+                break
+            print("  Please enter y or N.")
         _netboot_static_ip = (_sip_ans == "y")
     if _netboot_static_ip:
         # Seed _node_mgmt_by_bmc from the config for any BMC not already
@@ -26253,7 +26341,11 @@ def main():
             if _operation_mode in (1, 3):
                 print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
                 try:
-                    _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
+                    while True:
+                        _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
+                        if _pz_ans in ("y", "n", ""):
+                            break
+                        print("  Please enter y or N.")
                 except (EOFError, KeyboardInterrupt):
                     _pz_ans = ""
                 _physical_zeroing = (_pz_ans == "y")
