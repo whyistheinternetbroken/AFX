@@ -42,6 +42,13 @@ from dataclasses import dataclass, field
 
 SCRIPT_VERSION = "1.1.1"
 
+try:
+    _DEFAULT_INTERACTIVE_TIMEOUT = max(
+        0, int(os.environ.get("AFX_INTERACTIVE_TIMEOUT", "300"))
+    )
+except Exception:
+    _DEFAULT_INTERACTIVE_TIMEOUT = 300
+
 # Keep a handle to the original getpass prompt function so we can provide a
 # confirmed-password wrapper without recursion.
 _RAW_GETPASS = getpass.getpass
@@ -3372,6 +3379,12 @@ _bg_mode        = False  # True when --bg flag is passed
 # and auto-reconnect behavior is suppressed until the file is removed.
 _PAUSE_SENTINEL_FILE = ".afx_pause"
 _CHECKPOINT_REQUEST_FILE = ".afx_checkpoint_now"
+try:
+    _PAUSE_AUTO_CLEAR_SECONDS = max(
+        0, int(os.environ.get("AFX_PAUSE_AUTO_CLEAR_SECONDS", "7200"))
+    )
+except Exception:
+    _PAUSE_AUTO_CLEAR_SECONDS = 7200
 _pause_state_lock = threading.Lock()
 _pause_announced = False
 _runtime_cmd_lock = threading.Lock()
@@ -3462,6 +3475,8 @@ def _wait_if_paused(context: str = "automation") -> None:
     global _pause_announced
     _process_runtime_requests(context)
     _path = _pause_sentinel_path()
+    _pause_started = time.monotonic()
+    _next_reminder = _pause_started + 300
     while not _shutdown_event.is_set() and _pause_requested():
         _process_runtime_requests(context)
         with _pause_state_lock:
@@ -3474,6 +3489,25 @@ def _wait_if_paused(context: str = "automation") -> None:
                 _ts_print(f"   Remove pause file to resume: {_path}")
                 _slog(f"Pause requested ({context}) via {_path}; automation paused",
                       prefix="WARN")
+        _now = time.monotonic()
+        if _now >= _next_reminder:
+            _elapsed = int(_now - _pause_started)
+            _ts_print(f"⏸️  Pause still active ({context}) for {_elapsed}s.")
+            _ts_print(f"   Remove pause file to resume: {_path}")
+            _next_reminder = _now + 300
+        if (_PAUSE_AUTO_CLEAR_SECONDS > 0
+                and (_now - _pause_started) >= _PAUSE_AUTO_CLEAR_SECONDS):
+            _ts_print(
+                f"⏱️  Pause timeout reached ({_PAUSE_AUTO_CLEAR_SECONDS}s); "
+                "auto-clearing pause sentinel."
+            )
+            _slog(
+                f"Pause auto-cleared after {_PAUSE_AUTO_CLEAR_SECONDS}s "
+                f"({context})",
+                prefix="WARN",
+            )
+            _set_pause_state(False, source=f"auto-timeout ({context})")
+            break
         time.sleep(1.0)
     with _pause_state_lock:
         if _pause_announced:
@@ -7673,16 +7707,13 @@ def _maybe_prompt_autoboot_true(node_label=""):
             return _force_autoboot_true
         _target = f"[{node_label}] " if node_label else ""
         with _stdin_lock:
-            _real_stdout.write(
+            _ans = _prompt_with_timeout(
                 f"\n  ⚠️  {_target}AUTOBOOT is set to false. "
                 "This will break the script. "
-                "Would you like to set to true? (y/n): "
-            )
-            _real_stdout.flush()
-            try:
-                _ans = sys.stdin.readline().strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                _ans = ""
+                "Would you like to set to true? (y/n): ",
+                default="n",
+                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+            ).strip().lower()
         _force_autoboot_true = _ans in ("y", "yes")
         _slog(
             "AUTOBOOT(false) operator choice: "
@@ -13598,10 +13629,25 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 _varfs_trigger = "varfs_backup_restore: rebooting to load the new varfs"
                 _pre_buf = ""
                 _last_enter_pre = time.monotonic()
+                _varfs_wait_start = time.monotonic()
+                _varfs_wait_timeout = 1800
+                _next_varfs_progress = _varfs_wait_start + 300
                 _varfs_seen = False
-                while True:
+                while time.monotonic() - _varfs_wait_start < _varfs_wait_timeout:
                     if _shutdown_event.is_set():
                         break
+                    _now_pre = time.monotonic()
+                    if _now_pre >= _next_varfs_progress:
+                        _elapsed_pre = int(_now_pre - _varfs_wait_start)
+                        _status(
+                            f"  ⏳ [{ip}] Still waiting for varfs reboot trigger... "
+                            f"({_elapsed_pre}s elapsed)"
+                        )
+                        if log:
+                            log.log(
+                                f"[{ip}] varfs trigger wait progress: {_elapsed_pre}s elapsed"
+                            )
+                        _next_varfs_progress = _now_pre + 300
                     if time.monotonic() - _last_enter_pre >= 300:
                         try:
                             ch.send("\n")
@@ -13640,12 +13686,26 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         if len(_pre_buf) > 32768:
                             _pre_buf = _pre_buf[-16384:]
                     time.sleep(0.1)
+                if (not _varfs_seen) and (not _shutdown_event.is_set()):
+                    _status(
+                        f"  ⚠️  [{ip}] varfs reboot trigger not seen within "
+                        f"{_varfs_wait_timeout // 60} min; treating option 6 as complete."
+                    )
+                    if log:
+                        log.log(
+                            f"[{ip}] varfs trigger wait timed out after "
+                            f"{_varfs_wait_timeout}s; continuing",
+                            prefix="WARN",
+                        )
 
                 if not _varfs_seen:
                     # Shutdown/interrupt before varfs message – treat as done.
                     _status(f"  ✅ [{ip}] Option 6 complete – node is at login prompt.")
                     if log:
-                        log.log(f"[{ip}] option 6 complete; no varfs reboot trigger (interrupted)")
+                        log.log(
+                            f"[{ip}] option 6 complete; no varfs reboot trigger "
+                            "(interrupted/timeout)"
+                        )
                 else:
                     # Phase 2: varfs reboot confirmed – watch up to 15 min for
                     # boot indicators, then wait for final login prompt.
@@ -13832,20 +13892,20 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
             with _stdout_lock:
                 if _ver_str:
-                    _real_stdout.write(
+                    _cont_prompt = (
                         f"\n  Cluster is at version \"{_ver_str}\"."
                         f" Continue with reinit of entire cluster? [y/n]: "
                     )
                 else:
-                    _real_stdout.write(
+                    _cont_prompt = (
                         "\n  All nodes are at ONTAP login prompt (cluster is running)."
                         " Continue with reinit of entire cluster? [y/n]: "
                     )
-                _real_stdout.flush()
-                try:
-                    _cont_ans = sys.stdin.readline().strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    _cont_ans = "n"
+                _cont_ans = _prompt_with_timeout(
+                    _cont_prompt,
+                    default="n",
+                    timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                ).strip().lower()
             if log:
                 log.log(f"4b: version check prompt answered '{_cont_ans}' "
                         f"(version={_ver_str!r})")
@@ -17865,9 +17925,22 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                     f"Gateway '{_gw_to_send}' rejected: 'not a valid gateway address'",
                     prefix="WARN",
                 )
-            _gw_to_send = _prompt(
-                "  Enter a valid cluster management gateway: "
+            _gw_to_send = _prompt_with_timeout(
+                "  Enter a valid cluster management gateway: ",
+                default="",
+                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
             )
+            if not _gw_to_send:
+                print(
+                    "\n  ❌ No replacement gateway provided in time; "
+                    "aborting wizard automation."
+                )
+                if _session_log:
+                    _session_log.log(
+                        "Cluster wizard aborted: no replacement gateway provided",
+                        prefix="ERROR",
+                    )
+                return False
             # Update cc so the corrected value is persisted in _cluster_config.
             cc["mgmt_gateway"] = _gw_to_send
             _cluster_config["mgmt_gateway"] = _gw_to_send
@@ -18004,8 +18077,10 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     if _setup_passwordless_ssh:
         _ssh_mgmt_ip = cc.get("mgmt_ip") or ""
         if not _ssh_mgmt_ip:
-            _ssh_mgmt_ip = input(
-                "  Cluster management IP for SSH setup: "
+            _ssh_mgmt_ip = _prompt_with_timeout(
+                "  Cluster management IP for SSH setup: ",
+                default="",
+                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
             ).strip()
         if _ssh_mgmt_ip:
             # Ensure we're logged in to the cluster shell before calling.
@@ -18069,14 +18144,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         print("\n✅ Cluster creation complete. Continuing to add nodes... [auto-answered]")
         _slog("Continue to add nodes? y [auto-answered for automated mode]")
     else:
-        try:
-            print("  " + "─" * 58)
-            ans = input(
-                "\nCluster creation complete. Would you like to continue the "
-                "script to add nodes? (y/N): "
-            ).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            ans = "n"
+        print("  " + "─" * 58)
+        ans = _prompt_with_timeout(
+            "\nCluster creation complete. Would you like to continue the "
+            "script to add nodes? (y/N): ",
+            default="n",
+            timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+        ).strip().lower()
         if _session_log:
             _session_log.log_user_input(f"Continue to add nodes? {ans}")
 
@@ -18109,13 +18183,12 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         print("  2b. Add nodes automatically  (auto-answer all prompts)")
         print("")
         while True:
-            try:
-                print("  " + "─" * 58)
-                node_choice = input(
-                    "  Enter sub-option (2a / 2b) or blank to end session: "
-                ).strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                node_choice = ""
+            print("  " + "─" * 58)
+            node_choice = _prompt_with_timeout(
+                "  Enter sub-option (2a / 2b) or blank to end session: ",
+                default="",
+                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+            ).strip().lower()
             if node_choice == "":
                 print("\n  Ending session.")
                 _slog("User chose not to add nodes; ending session")
