@@ -10437,6 +10437,30 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
             _auth_ips = [ip for ip in pending
                          if _is_auth_reason(last_reasons.get(ip))]
             if _auth_ips:
+                _blank_recovered = []
+                for _ip in list(_auth_ips):
+                    # Mirror the option-3 fallback behavior: try blank password
+                    # silently before re-prompting the operator.
+                    if str(bmc_passwords.get(_ip, "") or "") == "":
+                        continue
+                    print(f"    🔁 Trying blank-password fallback for {_ip} before re-prompt...")
+                    _ok_blank, _, _reason_blank = _verify_bmc_ip(_ip, bmc_user, "")
+                    if _ok_blank:
+                        bmc_passwords[_ip] = ""
+                        if _ip in pending:
+                            pending.remove(_ip)
+                        _blank_recovered.append(_ip)
+                        last_reasons.pop(_ip, None)
+                    else:
+                        last_reasons[_ip] = _reason_blank or last_reasons.get(_ip) or "unknown failure"
+                if _blank_recovered:
+                    print(
+                        f"    ✅ Blank-password fallback succeeded for: "
+                        f"{', '.join(_blank_recovered)}"
+                    )
+                _auth_ips = [ip for ip in pending
+                             if _is_auth_reason(last_reasons.get(ip))]
+            if _auth_ips:
                 print(
                     f"\n  🔐 {len(_auth_ips)} BMC(s) failed with an "
                     "auth/permission error. Re-enter credentials before "
@@ -10460,11 +10484,17 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                     if len(_existing_pw_values) == 1:
                         print("    ↩️  Reusing current password for all failing BMCs.")
                     else:
-                        _new_pass = getpass.getpass(
+                        _new_pass_raw = getpass.getpass(
                             f"    BMC password for {_new_user} "
-                            "(blank to keep existing per-BMC password): "
+                            "(blank to keep existing per-BMC password; "
+                            "type 'blank' for empty password): "
                         )
-                        if _new_pass:
+                        _new_pass = _new_pass_raw
+                        if isinstance(_new_pass_raw, str) and _new_pass_raw.lower() == "blank":
+                            _new_pass = ""
+                        if _new_pass_raw == "":
+                            pass
+                        else:
                             for _ip in _auth_ips:
                                 bmc_passwords[_ip] = _new_pass
                 else:
@@ -10473,10 +10503,14 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                         _u = input(
                             f"      Username [{bmc_user}] (blank to keep): "
                         ).strip() or bmc_user
-                        _p = getpass.getpass(
+                        _p_raw = getpass.getpass(
                             f"      Password for {_u}@{_ip} "
-                            "(blank to keep current password): "
+                            "(blank to keep current password; "
+                            "type 'blank' for empty password): "
                         )
+                        _p = _p_raw
+                        if isinstance(_p_raw, str) and _p_raw.lower() == "blank":
+                            _p = ""
                         # Per-IP username override is not supported
                         # downstream; warn if the operator changes it.
                         if _u != bmc_user:
@@ -10486,7 +10520,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                                 f"'{bmc_user}' for every BMC."
                             )
                             bmc_user = _u
-                        if _p:
+                        if _p_raw != "":
                             bmc_passwords[_ip] = _p
             print(
                 f"\n  ↻ Retrying verification for {len(pending)} BMC(s) "
