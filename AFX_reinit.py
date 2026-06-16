@@ -18952,6 +18952,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     poll_interval = 120   # 2 minutes
     start = time.monotonic()
     _already_succeeded: set = set()
+    _requested_ips = {str(_ip).strip() for _ip in cluster_ips if str(_ip).strip()}
 
     while time.monotonic() - start < total_timeout:
         time.sleep(poll_interval)
@@ -18972,6 +18973,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             log.log(f"Node add status snapshot ({elapsed_hdr}s elapsed)")
         in_table = False
         status_rows = []
+        _relevant_rows = []
         _parsed_rows = []
         _current_row = None
         for _sl in status_out.splitlines():
@@ -19025,8 +19027,16 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             _row_ip = _row["cluster_ip"]
             _node_status = _row["status"]
             _node_err = _row["error"]
+            if _row_ip and _requested_ips and _row_ip not in _requested_ips:
+                if log:
+                    log.log(
+                        f"cluster add-node status: ignoring non-target row "
+                        f"{_node_name} [{_row_ip}] -> {_node_status}",
+                    )
+                continue
             row_lower = f"{_node_name} {_row_ip} {_node_status} {_node_err}".lower()
             status_rows.append(row_lower)
+            _relevant_rows.append(_row)
             _icon = "✅" if _node_status.lower() == "success" else "⏳"
             _err_suffix = f" ({_node_err})" if _node_err else ""
             _ip_suffix = f" [{_row_ip}]" if _row_ip else ""
@@ -19036,13 +19046,14 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                     f"{_node_status}{_err_suffix}"
                 )
             # Track per-node first-success timestamp.
-            if _node_status.lower() == "success" and node_timings_out is not None:
-                if _row_ip and _row_ip not in _already_succeeded:
+            if _node_status.lower() == "success" and _row_ip:
+                if _row_ip not in _already_succeeded:
                     _already_succeeded.add(_row_ip)
-                    node_timings_out[_row_ip] = round(
-                        time.monotonic() - start, 1)
+                    if node_timings_out is not None:
+                        node_timings_out[_row_ip] = round(
+                            time.monotonic() - start, 1)
 
-        if status_rows and all('success' in row for row in status_rows):
+        if _requested_ips and _requested_ips.issubset(_already_succeeded):
             elapsed_total = round(time.monotonic() - start, 1)
             print(f"\n  ✅ All {len(cluster_ips)} node(s) added successfully "
                   f"({elapsed_total}s).")
@@ -19051,7 +19062,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                         f"in {elapsed_total}s")
             return True
 
-        if not status_rows and _target_count is not None:
+        if not _relevant_rows and _target_count is not None:
             try:
                 _count, _all_true, _has_warning = _cluster_show_node_status(primary_channel)
                 _port_issues = _cluster_port_health_issues(primary_channel, log=log)
