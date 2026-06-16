@@ -2648,6 +2648,54 @@ _auto_setup = False
 # When True (2b / 3 peers), the script auto-drives the join wizard for an
 # existing cluster after option 4.
 _auto_add = False
+# Set when the start menu checkpoint prompt has already confirmed a 4b resume.
+_resume_from_start_menu = False
+
+
+def _checkpoint_menu_option_label(cp_mode: str) -> str:
+    """Best-effort menu-option label for a checkpoint mode string."""
+    _m = str(cp_mode or "").strip().lower()
+    if _m.startswith("4b"):
+        return "4b"
+    if _m == "3":
+        return "3"
+    if _m == "2":
+        return "2c"
+    if _m == "1":
+        return "1b"
+    return cp_mode or "unknown"
+
+
+def _checkpoint_resume_stage_label(cp) -> str:
+    """Human-readable checkpoint stage summary for menu prompt context."""
+    if not cp:
+        return "Unknown stage"
+    _mode = str(getattr(cp, "mode", "") or "").strip().lower()
+    if _mode.startswith("4b"):
+        return _describe_4b_resume_stage(cp)
+    if _mode == "2":
+        if cp.is_done("node_joined"):
+            return "Node already joined to cluster (finalization stage)."
+        if cp.is_done("node_format_done"):
+            return "Post-format node join workflow."
+        if cp.is_done("node_install_done"):
+            return "Post-install formatting/join workflow."
+        return "Node add workflow startup."
+    if _mode == "1":
+        if cp.is_done("primary_setup_done"):
+            return "Primary cluster already created (finalization stage)."
+        if cp.is_done("primary_format_done"):
+            return "Post-format cluster setup wizard."
+        if cp.is_done("primary_install_done"):
+            return "Post-install format/setup workflow."
+        return "Initial cluster creation startup."
+    if _mode == "3":
+        if cp.is_done("option3_complete") or cp.is_done("cluster_formed"):
+            return "Cluster create complete; peer add finalization."
+        if cp.is_done("primary_setup_done"):
+            return "Peer add workflow after primary setup."
+        return "End-to-end auto initialize startup."
+    return "Resume from last saved checkpoint state."
 
 
 def select_operation_mode():
@@ -2671,6 +2719,8 @@ def select_operation_mode():
     """
     global _setup_passwordless_ssh, _netboot_before_reinit, _physical_zeroing
     global _diag_bootargs, _netboot_static_ip
+    global _resume_from_start_menu
+    _startup_checkpoint_prompt_done = False
     while True:
         _print_banner("NetApp AFX BMC Console Automation 🤖")
         print("\n  What do you want to do?\n")
@@ -2714,6 +2764,46 @@ def select_operation_mode():
         print("")
         print("  💡 Screen tips (--screen): Ctrl+A Esc=scroll, arrows/PgUp/PgDn navigate, q exits scroll mode, Ctrl+A d detaches, and 'screen -r afx-reinit' reattaches.")
         print("")
+        if not _startup_checkpoint_prompt_done:
+            _startup_checkpoint_prompt_done = True
+            _cp_start = CheckpointManager()
+            if _cp_start.load():
+                _cp_mode = str(_cp_start.mode or "").strip()
+                _cp_age = ""
+                try:
+                    _cp_dt = datetime.fromisoformat(_cp_start.created)
+                    _cp_mins = int((datetime.now() - _cp_dt).total_seconds() // 60)
+                    _cp_age = f" from {_cp_mins} minute(s) ago"
+                except Exception:
+                    pass
+                _menu_opt = _checkpoint_menu_option_label(_cp_mode)
+                _stage = _checkpoint_resume_stage_label(_cp_start)
+                print("=" * 60)
+                print(f"  🔖 Existing checkpoint found{_cp_age}")
+                print(f"     Last menu option : {_menu_opt}")
+                print(f"     Checkpoint mode  : {_cp_mode}")
+                print(f"     Resume stage     : {_stage}")
+                print("=" * 60)
+                _resume_now = _prompt_with_timeout(
+                    "  Resume from this checkpoint now? [y/N]: ",
+                    default="n",
+                    timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                ).strip().lower()
+                if _resume_now == "y":
+                    if _cp_mode.lower().startswith("4b"):
+                        _resume_from_start_menu = True
+                        print("\n  ✅ Resuming checkpoint via menu option 4b.")
+                        return 42, False, False
+                    if _cp_mode == "2":
+                        print("\n  ✅ Resuming checkpoint via menu option 2c.")
+                        return 26, False, False
+                    if _cp_mode == "3":
+                        print("\n  ✅ Resuming checkpoint via menu option 3.")
+                        return 3, True, True
+                    if _cp_mode == "1":
+                        print("\n  ✅ Resuming checkpoint via menu option 1b.")
+                        return 1, True, False
+                    print("  ⚠️  Checkpoint mode is not auto-routable from the start menu.")
         choice = input("❯❯  Enter your choice from the menu above (ie, 1a, 2b, 3, etc.): ").strip().lower()
 
         if choice == "1a":
@@ -14071,6 +14161,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         and not _checkpoint.is_done("cluster_formed")
         and not _checkpoint.is_done("primary_setup_done")
     )
+    _resume_mode3_add_only = bool(
+        resuming
+        and _skip_install
+        and _mode_sel == "3"
+        and _checkpoint
+        and (_checkpoint.is_done("cluster_formed")
+             or _checkpoint.is_done("primary_setup_done"))
+    )
     _resume_ready_peer_ips = {}
     if resuming and _skip_install and _mode_sel == "3" and _checkpoint:
         for _peer_ip in bmc_ips[1:]:
@@ -14085,15 +14183,26 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     # Reconnect via BMC, reset each node to LOADER, send the boot commands
     # that bring up the boot menu, and then run the selected init flow.
     _reconnect_targets = list(bmc_ips)
+    if _resume_mode3_add_only:
+        _reconnect_targets = []
     if _resume_primary_from_wizard and first_ip in _reconnect_targets:
         _reconnect_targets.remove(first_ip)
     for _peer_ip in list(_resume_ready_peer_ips):
         if _peer_ip in _reconnect_targets:
             _reconnect_targets.remove(_peer_ip)
-    print(f"\n  ✅ Netboot/install complete on all nodes. Reconnecting to "
-          f"{len(_reconnect_targets)} BMC(s) for cluster reinit (mode {_mode_sel})...")
+    if _resume_mode3_add_only:
+        print(
+            "\n  🔖 Resume checkpoint indicates cluster creation already completed; "
+            "skipping destructive reinit and resuming add-node phase."
+        )
+    else:
+        print(f"\n  ✅ Netboot/install complete on all nodes. Reconnecting to "
+              f"{len(_reconnect_targets)} BMC(s) for cluster reinit (mode {_mode_sel})...")
     if log:
-        log.start_phase("4b – Reinit Reconnect to LOADER")
+        if _resume_mode3_add_only:
+            log.log("4b resume: cluster_formed/primary_setup_done set; skipping reinit reconnect")
+        else:
+            log.start_phase("4b – Reinit Reconnect to LOADER")
 
     _reconnect_errors = []
     _reconnect_lock = threading.Lock()
@@ -14389,7 +14498,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             if log:
                 log.log(f"[{ip}] checkpoint: reinit_loader saved")
 
-    _run_parallel(_reconnect_targets, _reconnect_worker, with_index=True)
+    if _reconnect_targets:
+        _run_parallel(_reconnect_targets, _reconnect_worker, with_index=True)
 
     if _fatal_boot_dna_event.is_set():
         _print_fatal_boot_dna_abort_message()
@@ -14407,14 +14517,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 log.log(f"4b: primary node {first_ip} reconnect failed; aborting",
                         prefix="ERROR")
             return False
-    if log:
+    if log and not _resume_mode3_add_only:
         log.end_phase()
 
     first_ch = loader_channels.get(first_ip)
     first_cl = loader_clients.get(first_ip)
     _peers_for_reinit = bmc_ips[1:] if _mode_sel == "3" else []
 
-    if first_ch is None:
+    if first_ch is None and not _resume_mode3_add_only:
         print("\n  ❌ No channel available for first node. Cannot start reinit.")
         if log:
             log.log("4b: no channel for primary reinit after reconnect", prefix="ERROR")
@@ -14424,7 +14534,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     # Reuse the unified log already opened for the primary node.
     _pnf_primary = _node_reinit_logs.get(first_ip)
 
-    if not _resume_primary_from_wizard:
+    if _resume_mode3_add_only:
+        if log:
+            log.log(f"[{first_ip}] resume add-node phase: skipping primary reinit/wizard")
+    elif not _resume_primary_from_wizard:
         if log:
             log.start_phase("4b – Boot Menu Selection")
         _first_rc_ctx = _make_reconnect_ctx(
@@ -14463,13 +14576,18 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     # ── Run primary init wizard ────────────────────────────────────────────
     # Install _NodeLogWriter on sys.stdout so all wizard/auto_complete output
     # goes to the file; only milestone lines reach the terminal.
-    _primary_nlw = _NodeLogWriter(_pnf_primary, interactive=False) if _pnf_primary else None
+    _primary_nlw = (
+        _NodeLogWriter(_pnf_primary, interactive=False)
+        if (_pnf_primary and not _resume_mode3_add_only) else None
+    )
     _prev_stdout_primary = sys.stdout
     if _primary_nlw:
         sys.stdout = _primary_nlw
 
     try:
-        if _resume_primary_from_wizard:
+        if _resume_mode3_add_only:
+            pass
+        elif _resume_primary_from_wizard:
             print(f"\n  [{first_ip}] Resuming cluster setup wizard without reset...")
             if log:
                 log.start_phase("4b – Cluster Initialization (primary resume)")
@@ -14515,6 +14633,55 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         sys.stdout = _prev_stdout_primary
 
     _run_ok = True
+
+    def _cluster_ip_from_entry(_entry):
+        if isinstance(_entry, dict):
+            return str(_entry.get("cluster_ip") or "").strip()
+        return str(_entry or "").strip()
+
+    def _probe_peer_add_node_readiness(_peer_ip):
+        """Best-effort non-destructive readiness probe for add-node resume."""
+        _nf = _node_reinit_logs.get(_peer_ip)
+        _fb = _bmc_fallback_passwords(_peer_ip, bmc_passwords)
+        _pcl, _pch, _pstate, _ = _bmc_attach_console_without_reset(
+            _peer_ip, bmc_user, bmc_passwords.get(_peer_ip, ""),
+            node_log=_nf, fallback_passwords=_fb,
+        )
+        if _pcl is None or _pch is None:
+            return None, "console attach failed"
+        try:
+            if _pstate != "cluster":
+                return None, f"console state is '{_pstate}'"
+            _rows, _, _ = _cluster_show_node_status(_pch)
+            if _rows > 1:
+                return None, "node already reports multi-node cluster show"
+            _node_mgmt_map = _get_cluster_node_mgmt_ips(_pch)
+            _node_mgmt_ip = ""
+            for _nm_ip in _node_mgmt_map.values():
+                if _is_valid_ipv4(_nm_ip):
+                    _node_mgmt_ip = _nm_ip
+                    break
+            if not _node_mgmt_ip:
+                return None, "no node-mgmt interface detected"
+            _role_rows = _get_cluster_role_ips(_pch)
+            _cluster_ip = ""
+            _node_name = ""
+            if _role_rows:
+                _cluster_ip = str(_role_rows[0].get("cluster_ip") or "").strip()
+                _node_name = str(_role_rows[0].get("node_name") or "").strip()
+            if not _is_valid_ipv4(_cluster_ip):
+                return None, "no cluster-role IP detected"
+            return {
+                "cluster_ip": _cluster_ip,
+                "node_name": _node_name,
+                "bmc": _peer_ip,
+                "node_mgmt_ip": _node_mgmt_ip,
+            }, ""
+        finally:
+            with suppress(Exception):
+                _pch.close()
+            with suppress(Exception):
+                _pcl.close()
 
     # ── Mode 3: auto-join peer nodes ───────────────────────────────────────
     if _mode_sel == "3" and _peers_for_reinit:
@@ -14590,6 +14757,34 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         _peer_replay_targets = [
             _pip for _pip in _peers_for_reinit if _pip not in _resume_ready_peer_ips
         ]
+        if _resume_mode3_add_only and _peer_replay_targets:
+            _status(
+                "\n  🔎 Resume add-node phase: probing remaining peer nodes "
+                "without reset/reinit..."
+            )
+            _probed_ready = []
+            _probed_not_ready = []
+            for _pip in list(_peer_replay_targets):
+                _ready_entry, _why = _probe_peer_add_node_readiness(_pip)
+                if _ready_entry and _is_valid_ipv4(_ready_entry.get("cluster_ip", "")):
+                    _4b_cluster_ips_out[_pip] = _ready_entry
+                    _probed_ready.append((_pip, _ready_entry.get("cluster_ip", "")))
+                else:
+                    _probed_not_ready.append((_pip, _why or "not ready for add-node"))
+            _peer_replay_targets = []
+            if _probed_ready:
+                _status("  ✅ Resume probe ready peers:")
+                for _pip, _cip in _probed_ready:
+                    _status(f"     [{_pip}] cluster IP {_cip}")
+                    if _checkpoint:
+                        with suppress(Exception):
+                            _checkpoint.mark_node_done("peer_option4_done", _pip)
+            if _probed_not_ready:
+                for _pip, _why in _probed_not_ready:
+                    _status(f"  ⚠️  [{_pip}] resume probe not add-node ready: {_why}")
+                    with _peer_lock:
+                        _peer_errors.append((_pip, _why))
+
         peer_threads = [
             threading.Thread(
                 target=_peer_reinit_worker, args=(ip, _peer_ctx), daemon=True
@@ -14609,12 +14804,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 log.log(f"4b mode 3: peer reinit issues: {_peer_errors}", prefix="ERROR")
 
         # ── Bulk cluster add via the primary node's cluster shell ──────────
-        _4b_collected_ips = _ordered_cluster_ips_for_add(
-            _4b_cluster_ips_out, preferred_bmcs=_peers_for_reinit
-        )
         _4b_pch = None
         _4b_pcl = None
-        if _4b_collected_ips:
+        _4b_filtered_ips_out = dict(_4b_cluster_ips_out)
+        if _4b_filtered_ips_out:
             # Connect to the cluster mgmt IP (or fall back to first_ch).
             _4b_mgmt_ip = _cluster_config.get("mgmt_ip")
             _4b_admin_user = (
@@ -14638,7 +14831,40 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _4b_pch = None
 
             if _4b_pch:
-                _add_ok = _cluster_add_nodes_bulk(_4b_pch, _4b_collected_ips, log=log)
+                _joined_cluster_ips = {
+                    str(_row.get("cluster_ip") or "").strip()
+                    for _row in _get_cluster_role_ips(_4b_pch)
+                    if _is_valid_ipv4(str(_row.get("cluster_ip") or "").strip())
+                }
+                _joined_node_mgmt = {
+                    str(_ip).strip()
+                    for _ip in (_get_cluster_node_mgmt_ips(_4b_pch) or {}).values()
+                    if _is_valid_ipv4(str(_ip).strip())
+                }
+                for _pip, _entry in list(_4b_filtered_ips_out.items()):
+                    _cip = _cluster_ip_from_entry(_entry)
+                    _nmip = ""
+                    if isinstance(_entry, dict):
+                        _nmip = str(_entry.get("node_mgmt_ip") or "").strip()
+                    if ((_cip and _cip in _joined_cluster_ips)
+                            or (_nmip and _nmip in _joined_node_mgmt)):
+                        _status(
+                            f"  🔖 [{_pip}] already appears in primary cluster; "
+                            "skipping add-node for this peer."
+                        )
+                        with suppress(Exception):
+                            if _checkpoint:
+                                _checkpoint.mark_node_done("peer_joined", _pip)
+                        _4b_filtered_ips_out.pop(_pip, None)
+
+                _4b_collected_ips = _ordered_cluster_ips_for_add(
+                    _4b_filtered_ips_out, preferred_bmcs=_peers_for_reinit
+                )
+                if _4b_collected_ips:
+                    _add_ok = _cluster_add_nodes_bulk(_4b_pch, _4b_collected_ips, log=log)
+                else:
+                    _status("  ℹ️  No pending peers remain for cluster add-node.")
+                    _add_ok = True
                 if not _add_ok:
                     _run_ok = False
                     if log:
@@ -14650,11 +14876,19 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     log.log("4b mode 3: cluster shell unavailable; skipping cluster add-node",
                             prefix="ERROR")
         else:
-            _status("  ⚠️  No cluster IPs collected from peers; skipping cluster add-node.")
-            _run_ok = False
-            if log:
-                log.log("4b mode 3: no cluster IPs; skipping cluster add-node",
-                        prefix="ERROR")
+            if _resume_mode3_add_only:
+                _status(
+                    "  ℹ️  No add-node candidates discovered during resume probe; "
+                    "nothing to add."
+                )
+                if log:
+                    log.log("4b mode 3 resume: no pending add-node candidates")
+            else:
+                _status("  ⚠️  No cluster IPs collected from peers; skipping cluster add-node.")
+                _run_ok = False
+                if log:
+                    log.log("4b mode 3: no cluster IPs; skipping cluster add-node",
+                            prefix="ERROR")
 
         if _4b_pch:
             _target_nodes = len(bmc_ips)
@@ -23536,6 +23770,7 @@ def main():
     global _checkpoint, _run_context
     global _auto_clear_stale_bmc
     global _diag_mode, _diag_bootargs, _physical_zeroing, _prevent_bios_fw_update
+    global _resume_from_start_menu
 
     args = parse_args()
 
@@ -23706,6 +23941,14 @@ def main():
                     _resuming = True
                     _checkpoint = _cp
                     print("\n  ✅ Resuming from checkpoint (--resume).")
+                elif _resume_from_start_menu:
+                    if _cp.load():
+                        _resuming = True
+                        _checkpoint = _cp
+                        print("\n  ✅ Resuming from checkpoint (startup menu prompt).")
+                    else:
+                        print("\n  ⚠️  Startup-selected checkpoint is no longer available; "
+                              "starting fresh.")
                 elif args.resume or (not args.resume and _cp.load()):
                     # If --resume was explicit, or a checkpoint file auto-detected,
                     # confirm with the operator before using it.
