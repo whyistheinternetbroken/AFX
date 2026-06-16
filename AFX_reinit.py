@@ -17748,17 +17748,57 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         _slog("Sent Enter at 'Press Enter to complete cluster setup'")
         channel.send("\r")
         time.sleep(0.5)
-        _wait_and_send(channel, "do you want to create a new cluster or join", "create",
-                       "Create or join cluster -> create", timeout=600)
-    else:
-        print("\n✅ Create/join prompt detected (no 'Press Enter' screen) – sending 'create'")
-        _slog("Sent 'create' at create/join prompt (Press Enter screen skipped)")
-        channel.send("create\r")
+
+    # ONTAP can occasionally echo/repaint the create/join prompt and ignore the
+    # first answer due to console timing. Keep sending "create" until the
+    # wizard advances to the yes/no confirmation.
+    print("\n⏳ Waiting for create/join prompt and selecting 'create'...")
+    _slog("Waiting for create/join prompt and confirming transition to yes/no")
+    _create_deadline = time.monotonic() + 600
+    _create_sent_attempts = 0
+    _create_ok = False
+    _yes_prompt_seen = False
+    while time.monotonic() < _create_deadline:
+        _remaining = max(1, int(_create_deadline - time.monotonic()))
+        _out_cj, _m_cj = direct_read_until_any(
+            channel,
+            [
+                "do you want to create a new cluster or join",
+                "{create, join}",
+                "{yes, no}",
+            ],
+            timeout=min(30, _remaining),
+            check_bmc_drop=True,
+        )
+        _scan_cj = (str(_out_cj or "") + "\n" + str(_m_cj or "")).lower()
+        if "{yes, no}" in _scan_cj:
+            _create_ok = True
+            _yes_prompt_seen = True
+            break
+        if ("create or join" in _scan_cj) or ("{create, join}" in _scan_cj):
+            _create_sent_attempts += 1
+            channel.send("create\r")
+            if _session_log:
+                _session_log.log_sent("create")
+            time.sleep(0.5)
+            continue
+    if not _create_ok:
+        print("\n❌ Timed out advancing past create/join prompt.")
         if _session_log:
-            _session_log.log_sent("create")
+            _session_log.log(
+                f"Wizard did not advance past create/join prompt after {_create_sent_attempts} create attempt(s)",
+                prefix="ERROR",
+            )
+            _session_log.set_outcome("FAIL", "wizard create/join transition timeout")
+        return False
+    if _yes_prompt_seen:
+        channel.send("yes\r")
+        if _session_log:
+            _session_log.log_sent("yes")
         time.sleep(0.5)
-    _wait_and_send(channel, "{yes, no}", "yes",
-                   "Yes/no confirmation after create -> yes", timeout=600)
+    else:
+        _wait_and_send(channel, "{yes, no}", "yes",
+                       "Yes/no confirmation after create -> yes", timeout=600)
     _wait_and_send(channel, "enter the cluster administrator", cc["admin_password"],
                    "Cluster administrator password", timeout=600, hide_in_log=True)
     _wait_and_send(channel, "retype the password", cc["admin_password"],
