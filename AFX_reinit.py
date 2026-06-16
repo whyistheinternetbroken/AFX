@@ -14161,13 +14161,15 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         and not _checkpoint.is_done("cluster_formed")
         and not _checkpoint.is_done("primary_setup_done")
     )
-    _resume_mode3_add_only = bool(
+    _resume_cluster_already_created = bool(
         resuming
-        and _skip_install
-        and _mode_sel == "3"
         and _checkpoint
         and (_checkpoint.is_done("cluster_formed")
              or _checkpoint.is_done("primary_setup_done"))
+    )
+    _resume_mode3_add_only = bool(
+        _resume_cluster_already_created
+        and _mode_sel == "3"
     )
     _resume_ready_peer_ips = {}
     if resuming and _skip_install and _mode_sel == "3" and _checkpoint:
@@ -14185,6 +14187,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     _reconnect_targets = list(bmc_ips)
     if _resume_mode3_add_only:
         _reconnect_targets = []
+    elif _resume_cluster_already_created and first_ip in _reconnect_targets:
+        _reconnect_targets.remove(first_ip)
     if _resume_primary_from_wizard and first_ip in _reconnect_targets:
         _reconnect_targets.remove(first_ip)
     for _peer_ip in list(_resume_ready_peer_ips):
@@ -14195,12 +14199,19 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             "\n  🔖 Resume checkpoint indicates cluster creation already completed; "
             "skipping destructive reinit and resuming add-node phase."
         )
+    elif _resume_cluster_already_created:
+        print(
+            "\n  🔖 Resume checkpoint indicates primary cluster is already created; "
+            "skipping primary reset/boot-menu replay."
+        )
     else:
         print(f"\n  ✅ Netboot/install complete on all nodes. Reconnecting to "
               f"{len(_reconnect_targets)} BMC(s) for cluster reinit (mode {_mode_sel})...")
     if log:
         if _resume_mode3_add_only:
             log.log("4b resume: cluster_formed/primary_setup_done set; skipping reinit reconnect")
+        elif _resume_cluster_already_created:
+            log.log("4b resume: primary cluster already created; skipping primary reconnect/reset")
         else:
             log.start_phase("4b – Reinit Reconnect to LOADER")
 
@@ -14517,14 +14528,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 log.log(f"4b: primary node {first_ip} reconnect failed; aborting",
                         prefix="ERROR")
             return False
-    if log and not _resume_mode3_add_only:
+    if log and not (_resume_mode3_add_only or _resume_cluster_already_created):
         log.end_phase()
 
     first_ch = loader_channels.get(first_ip)
     first_cl = loader_clients.get(first_ip)
     _peers_for_reinit = bmc_ips[1:] if _mode_sel == "3" else []
 
-    if first_ch is None and not _resume_mode3_add_only:
+    if first_ch is None and not (_resume_mode3_add_only or _resume_cluster_already_created):
         print("\n  ❌ No channel available for first node. Cannot start reinit.")
         if log:
             log.log("4b: no channel for primary reinit after reconnect", prefix="ERROR")
@@ -14537,6 +14548,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     if _resume_mode3_add_only:
         if log:
             log.log(f"[{first_ip}] resume add-node phase: skipping primary reinit/wizard")
+    elif _resume_cluster_already_created:
+        if log:
+            log.log(f"[{first_ip}] resume: primary cluster already created; skipping option 9/4 replay")
     elif not _resume_primary_from_wizard:
         if log:
             log.start_phase("4b – Boot Menu Selection")
@@ -14586,6 +14600,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
     try:
         if _resume_mode3_add_only:
+            pass
+        elif _resume_cluster_already_created:
             pass
         elif _resume_primary_from_wizard:
             print(f"\n  [{first_ip}] Resuming cluster setup wizard without reset...")
