@@ -18105,7 +18105,10 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # Watch the post-wizard console output for milestone log lines and
     # print friendly status updates before waiting for login:.
     _log_path = _session_log.log_file if _session_log else "the log file"
-    print(f"\n⏳ Configuring cluster. For details see log in a separate SSH session:\n   {_log_path}")
+    print(
+        "\n⏳ Finishing remaining cluster configuration steps. "
+        f"For details see log in a separate SSH session:\n   {_log_path}"
+    )
     _slog("Monitoring post-wizard output for cluster creation milestones")
     _saz_done = False
     _cluster_created = False
@@ -18136,7 +18139,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                     break
             _cluster_created = True
             print(f"\n✅ Cluster {_cname} has been created.")
-            print("\n⏳ Configuring cluster.")
+            print("\n⏳ Finishing remaining cluster configuration steps...")
             _slog(f"Milestone: cluster '{_cname}' has been created")
             continue
         if "login:" in _ml:
@@ -18270,12 +18273,12 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # For automated modes (2b, 3) answer yes automatically.
     if _auto_add or _operation_mode == 3:
         ans = "y"
-        print("\n✅ Cluster creation complete. Continuing to add nodes... [auto-answered]")
+        print("\n✅ Cluster configuration complete. Moving on to add nodes.")
         _slog("Continue to add nodes? y [auto-answered for automated mode]")
     else:
         print("  " + "─" * 58)
         ans = _prompt_with_timeout(
-            "\nCluster creation complete. Would you like to continue the "
+            "\nCluster configuration complete. Would you like to continue the "
             "script to add nodes? (y/N): ",
             default="n",
             timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
@@ -18298,6 +18301,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             except Exception:
                 pass
         sys.exit(0)
+    if not (_auto_add or _operation_mode == 3):
+        print("\n✅ Cluster configuration complete. Moving on to add nodes.")
 
     # Ask whether to add nodes interactively (2a) or automatically (2b).
     # Mode 3 always auto-selects 2b (no prompt needed).
