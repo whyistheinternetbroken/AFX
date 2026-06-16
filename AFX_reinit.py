@@ -5319,9 +5319,16 @@ def signal_handler(sig, frame):
     _ctrl_c_count += 1
 
     if _ctrl_c_count == 1:
-        print("\n👋 Received termination signal. Cleaning up...")
-        _slog("Received termination signal (Ctrl+C or SIGTERM)")
+        print("\n👋 Received termination signal. Exiting now...")
+        _slog("Received termination signal (Ctrl+C or SIGTERM); exiting immediately")
         _shutdown_event.set()
+        _restore_terminal()
+        if _session_log:
+            with suppress(Exception):
+                _session_log.log("Terminated by signal (first Ctrl+C / SIGTERM)")
+                _session_log.set_outcome("FAIL", "terminated by signal")
+                _session_log.close()
+        raise SystemExit(130)
     else:
         print("\n⚡ Force exit!")
         _restore_terminal()
@@ -6066,6 +6073,20 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
             channel.send("\r")
             last_nudge = time.monotonic()
         time.sleep(0.1)
+
+    if not loader_found:
+        # Final short blocking probe: some consoles emit the prompt only after a
+        # delayed repaint, so do one last focused read before deciding reset.
+        _tail_out, _tail_match = direct_read_until_any(
+            channel,
+            ["loader-", "::>", "::*>", "login:", "selection", "autoboot", ">"],
+            timeout=5,
+            node_log=node_log,
+            quiet=True,
+        )
+        _tail_lower = str((_tail_out or "") + "\n" + (_tail_match or "")).lower()
+        if _LOADER_PROMPT_RE.search(_tail_lower) or "loader-" in _tail_lower:
+            loader_found = True
 
     if loader_found:
         _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
@@ -7516,7 +7537,7 @@ class InteractiveSession:
         print("\n📺 Session is now fully interactive.")
         print("   Type your responses to any prompts (yes, no, etc.)")
         print("   ⚠️  AUTOBOOT messages are NORMAL from this point – they will NOT be interrupted.")
-        print("   Press Ctrl+C to exit. (Press twice to force exit.)\n")
+        print("   Press Ctrl+C to exit.\n")
         _slog("Entered interactive session (Phase 3 – passive mode)")
 
         reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
@@ -11319,9 +11340,15 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             return None, None, "ssh"
 
         # Check if already at LOADER before issuing system reset.
-        # Use a slightly longer probe here because some platforms take a few
-        # extra seconds to render LOADER after console attach.
-        if not _already_at_loader(ch, probe_timeout=25, label=host, node_log=node_log):
+        # Run a second, longer probe before reset to avoid unnecessary reboots
+        # when the console is slow to repaint LOADER after attach/takeover.
+        _at_loader = _already_at_loader(ch, probe_timeout=25, label=host, node_log=node_log)
+        if not _at_loader:
+            print(f"  ⏳ [{host}] LOADER not confirmed yet; re-checking before reset...")
+            _at_loader = _already_at_loader(
+                ch, probe_timeout=45, label=host, node_log=node_log
+            )
+        if not _at_loader:
             # system reset (auto-confirm if prompted).
             direct_send_and_wait(ch, "system reset", "y/n", timeout=15,
                                  auto_respond="y", node_log=node_log)
@@ -22533,11 +22560,8 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                 client, channel = reconnect_to_sp(sp_host, sp_user, sp_pass)
                 if client is None:
                     print("❌ Reconnection failed. Press Ctrl+C to exit...")
-                    try:
-                        while True:
-                            time.sleep(1)
-                    except KeyboardInterrupt:
-                        break
+                    while not _shutdown_event.is_set():
+                        time.sleep(1)
                     break
 
                 output, matched = direct_read_until_any(channel, ["y/n", ">"], timeout=15)
@@ -22657,11 +22681,8 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
         print(f"\n⚠️  Connection error during monitoring: {e}")
         _slog(f"Connection error during monitoring: {e}", prefix="ERROR")
         print("Press Ctrl+C to exit...")
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            pass
+        while not _shutdown_event.is_set():
+            time.sleep(1)
 
 
 # ---------------------------------------------------------------------------
