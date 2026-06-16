@@ -13235,7 +13235,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                     "failed to get number of nodes in cluster",
                                     "nvram changed on this node",
                                     "type yes to confirm and continue",
-                                    "use your web browser to complete cluster setup",
+                                    "complete cluster setup by accessing",
                                     "press enter to complete cluster setup"]
                 _status(f"  ⏳ [{ip}] Option 4 boot: waiting for node to boot (up to 20 min)...")
                 _print_wait_log_hint(node_log=_nf6)
@@ -13415,7 +13415,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                     pass
                                 _m3 = None
                                 _opt4_buf = ""
-                            elif any(s in _m3 for s in ["use your web browser to complete cluster setup", "press enter to complete cluster setup"]):
+                            elif ("complete cluster setup" in _m3 or 
+                                  "press enter to complete cluster setup" in _opt4_buf_lower):
                                 _status(f"  ✅ [{ip}] Cluster setup wizard prompt detected → sending Enter.")
                                 if log:
                                     log.log(f"[{ip}] cluster setup wizard prompt detected; sending Enter")
