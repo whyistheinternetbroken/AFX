@@ -600,6 +600,8 @@ _stdin_lock = threading.Lock()
 # BMC's tiny session pool may be exhausted by our own leaked clients.
 _bmc_clients_by_host: "dict[str, list]" = {}
 _bmc_clients_lock = threading.Lock()
+_known_hosts_precleaned_bmcs: set = set()
+_known_hosts_preclean_lock = threading.Lock()
 
 # Set by --auto-clear-stale-bmc at startup. When True, the banner-retry
 # helper will (a) scan for local TCP sockets to <bmc>:22 owned by other
@@ -1191,9 +1193,12 @@ def _print_banner(title: str, *, width: int = 60) -> None:
 
 def _print_autopilot_banner() -> None:
     """Print the 'no more admin interaction required' transition notice."""
-    bar = "=" * 60
+    _msg = "✅ Autopilot engaged. Check back periodically for job completion."
+    # Keep the divider at least the default banner width, but never shorter
+    # than the rendered message line.
+    bar = "=" * max(60, len(f"  {_msg}"))
     print("\n" + bar)
-    print("  ✅ Autopilot engaged. Check back periodically for job completion.")
+    print(f"  {_msg}")
     print(bar + "\n")
 
 
@@ -3669,6 +3674,31 @@ def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
         return False
 
 
+def _preclean_bmc_known_hosts(host: str, log=None, context: str = "") -> bool:
+    """Best-effort one-time known_hosts cleanup before first BMC SSH login."""
+    _host = str(host or "").strip()
+    if not _host:
+        return False
+    with _known_hosts_preclean_lock:
+        if _host in _known_hosts_precleaned_bmcs:
+            return False
+        _known_hosts_precleaned_bmcs.add(_host)
+    if context:
+        print(f"  🧹 Proactive known_hosts cleanup for {_host} ({context})...")
+    else:
+        print(f"  🧹 Proactive known_hosts cleanup for {_host}...")
+    return _remove_bmc_from_known_hosts(_host, log=log)
+
+
+def _cleanup_known_hosts_after_boot_option(host: str, option: str, log=None) -> bool:
+    """Best-effort known_hosts cleanup after boot-menu option 9/4 selections."""
+    _host = str(host or "").strip()
+    if not _host:
+        return False
+    print(f"   🧹 Proactive known_hosts cleanup after option {option} on {_host}...")
+    return _remove_bmc_from_known_hosts(_host, log=log)
+
+
 def _check_bmc_reachable(host):
     import socket as _sock
     import subprocess as _sp
@@ -4533,6 +4563,7 @@ def connect_to_sp(host, username, password):
     """
     global _active_client, _primary_bmc_host, _primary_bmc_user
     global _primary_bmc_password, _primary_bmc_reconnect_ctx
+    _preclean_bmc_known_hosts(host, log=_session_log, context="before BMC login")
     print(f"Connecting to SP at {host} with username {username}...")
     _slog(f"Connecting to SP at {host} with username {username}")
     try:
@@ -7477,6 +7508,12 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
         _session_log.log_sent(option)
 
     channel.send(option + "\r")
+    _boot_host = (
+        (reconnect_ctx.get("host") if isinstance(reconnect_ctx, dict) else "")
+        or node_label
+    )
+    if option in ("9", "4"):
+        _cleanup_known_hosts_after_boot_option(_boot_host, option, log=_session_log)
     time.sleep(2)
 
     # Check whether the menu is still sitting at "Selection (1-N)?" — if so,
@@ -9196,6 +9233,7 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
 
 
 _WIZARD_START_TRIGGERS = [
+    "use your web browser to complete cluster setup by accessing",
     "press enter to complete cluster setup",
     "do you want to create a new cluster or join",
 ]
@@ -9372,6 +9410,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                             channel.send("4\r")
                         if _session_log:
                             _session_log.log_sent("4")
+                        _cleanup_known_hosts_after_boot_option(label or "node", "4", log=_session_log)
                         time.sleep(1)
                         continue
                     _slog("Boot menu remained visible after resending option 4", prefix="WARN")
@@ -10454,6 +10493,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                     else:
                         last_reasons[_ip] = _reason_blank or last_reasons.get(_ip) or "unknown failure"
                 if _blank_recovered:
+                    print("    ✅ Fallback password succeeded.")
                     print(
                         f"    ✅ Blank-password fallback succeeded for: "
                         f"{', '.join(_blank_recovered)}"
@@ -10555,6 +10595,7 @@ def _verify_bmc_ip(ip, username, password):
     reason: str|None). `reason` is None on success, otherwise an
     operator-friendly description of why verification failed.
     """
+    _preclean_bmc_known_hosts(ip, log=_session_log, context="before BMC verification")
     try:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -10949,6 +10990,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
     Returns (client, channel, None) on success or
     (None, None, "ssh"/"loader_timeout") on failure.
     """
+    _preclean_bmc_known_hosts(host, log=_session_log, context="before BMC login")
     print(f"\n  🔁 [{host}] Connecting and moving to LOADER...")
     if node_log:
         _par_write(node_log, f"\n=== _bmc_reach_loader: {host} ===\n")
@@ -11642,6 +11684,7 @@ def _peer_reinit_worker(ip, ctx):
         if _pnf:
             _par_write(_pnf, "\n>>> sending option 4\n")
         peer_ch.send("4\r")
+        _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
         time.sleep(2)
 
         # Auto-answer disk-erase and node-mgmt prompts (same as mode 2b).
@@ -13124,6 +13167,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _par_write(_nf6, "\n>>> sending option 4\n")
                 try:
                     ch.send("4\r")
+                    _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
                 except OSError:
                     pass
                 _status(f"  ⏳ [{ip}] Option 4 sent – auto-answering disk erase prompts...")
@@ -13190,7 +13234,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 _opt4_sigs_lower = ["login:", "timed out waiting for vldb online",
                                     "failed to get number of nodes in cluster",
                                     "nvram changed on this node",
-                                    "type yes to confirm and continue"]
+                                    "type yes to confirm and continue",
+                                    "use your web browser to complete cluster setup",
+                                    "press enter to complete cluster setup"]
                 _status(f"  ⏳ [{ip}] Option 4 boot: waiting for node to boot (up to 20 min)...")
                 _print_wait_log_hint(node_log=_nf6)
                 if log:
@@ -13255,6 +13301,19 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 _m3 = "login:"
                                 _opt4_buf = _probe_out4 or "login:"
                                 break
+                            if _probe_state4 == "wizard":
+                                _status(f"  ✅ [{ip}] Cluster setup wizard prompt detected during option 4 boot wait.")
+                                if log:
+                                    log.log(f"[{ip}] wizard prompt detected during option 4 boot wait probe")
+                                with suppress(Exception):
+                                    ch.send("\r")
+                                with connect_lock:
+                                    _opt6_login_nodes.add(ip)
+                                _mark_install_done(ip)
+                                if _nf6:
+                                    with suppress(Exception):
+                                        _nf6.close()
+                                return
                             if _probe_state4 in ("cluster", "booting", "unknown", "boot_menu") and not _preempted4:
                                 if log and _probe_state4 not in ("booting",):
                                     log.log(
@@ -13326,6 +13385,19 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                         f"[{ip}] option 4 node-mgmt auto-answer failed: {_e_opt4_mgmt}",
                                         prefix="WARN",
                                     )
+                        if _output_contains_wizard_start(_opt4_buf):
+                            _status(f"  ✅ [{ip}] Cluster setup wizard prompt detected after option 4.")
+                            if log:
+                                log.log(f"[{ip}] wizard prompt detected after option 4; sending Enter and continuing")
+                            with suppress(Exception):
+                                ch.send("\r")
+                            with connect_lock:
+                                _opt6_login_nodes.add(ip)
+                            _mark_install_done(ip)
+                            if _nf6:
+                                with suppress(Exception):
+                                    _nf6.close()
+                            return
                         for _s4 in _opt4_sigs_lower:
                             if _s4 in _opt4_buf_lower:
                                 _m3 = _s4
@@ -13343,6 +13415,23 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                     pass
                                 _m3 = None
                                 _opt4_buf = ""
+                            elif any(s in _m3 for s in ["use your web browser to complete cluster setup", "press enter to complete cluster setup"]):
+                                _status(f"  ✅ [{ip}] Cluster setup wizard prompt detected → sending Enter.")
+                                if log:
+                                    log.log(f"[{ip}] cluster setup wizard prompt detected; sending Enter")
+                                if _nf6:
+                                    _par_write(_nf6, "\n>>> Enter (cluster setup wizard prompt)\n")
+                                try:
+                                    ch.send("\r")
+                                except OSError:
+                                    pass
+                                with connect_lock:
+                                    _opt6_login_nodes.add(ip)
+                                _mark_install_done(ip)
+                                if _nf6:
+                                    with suppress(Exception):
+                                        _nf6.close()
+                                return
                             elif "nvram changed on this node" in _m3:
                                 _status(f"  ⚠️  [{ip}] NVRAM sysid mismatch detected during option 4 boot – proceeding to reinitialization.")
                                 if log:
@@ -15575,6 +15664,7 @@ def _run_ontap_upgrade(log):
             if log:
                 log.start_phase("BMC Connection")
             print(f"\n  \U0001f50c Connecting to BMC {bmc_host}...")
+            _preclean_bmc_known_hosts(bmc_host, log=log, context="before BMC login")
             try:
                 client_41, bmc_user, bmc_pass = _ssh_connect_with_retry(
                     bmc_host, bmc_user, bmc_pass,
@@ -18962,6 +19052,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
     ch = None
     try:
         try:
+            _preclean_bmc_known_hosts(peer_bmc, log=_session_log, context="before BMC login")
             _fb_init = _bmc_fallback_passwords(peer_bmc, {peer_bmc: peer_password})
             client, peer_user, peer_password = _ssh_connect_with_retry(
                 peer_bmc, peer_user, peer_password,
@@ -19444,6 +19535,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             print(f"   ⚠️  [{label}] boot menu not detected; aborting.")
             return False
         ch.send("4\r"); time.sleep(2)
+        _cleanup_known_hosts_after_boot_option(peer_bmc, "4", log=_session_log)
         _t_option4_sent = time.monotonic()
         print(f"   ⏱️  [{label}] Option 4 sent at +{_t_option4_sent - _t_thread_start:.1f}s")
 
@@ -21121,6 +21213,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         _session_log.log("2nd boot menu detected; auto-selecting option 4")
         _session_log.log_sent("4")
     channel.send("4\r")
+    _cleanup_known_hosts_after_boot_option(bmc_host or "primary", "4", log=_session_log)
     time.sleep(2)
 
     # 3) Yes confirmations.
