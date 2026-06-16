@@ -6012,6 +6012,12 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
         _tprint(f"  ℹ️  {pfx}Not at BMC prompt; skipping system console probe.")
         return False
     _at_bmc = ("bmc" in _probe.lower()) or _probe.rstrip().endswith(">")
+    if (not _at_bmc) and (not _probe.strip()):
+        # Console can occasionally be silent even after a valid BMC prompt was
+        # reached. Treat empty probe output as "likely BMC" and continue with
+        # a non-destructive system-console LOADER probe before deciding reset.
+        _tprint(f"  ℹ️  {pfx}No prompt text after probe; assuming BMC and checking console state.")
+        _at_bmc = True
     if not _at_bmc:
         _tprint(f"  ℹ️  {pfx}Prompt not recognized as BMC; skipping system console probe.")
         return False
@@ -18202,6 +18208,26 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     _create_sent_attempts = 1
     _create_ok = False
     _yes_prompt_seen = False
+    _create_prompt_tokens = (
+        "do you want to create a new cluster or join",
+        "{create, join}",
+        "create or join",
+    )
+    _create_history = str(initial_buf or "").lower()
+    _create_prompt_seen_history = any(_tok in _create_history for _tok in _create_prompt_tokens)
+    if (not _create_prompt_seen_history) and isinstance(sys.stdout, _NodeLogWriter):
+        # Resume runs can start with the create/join prompt already present in
+        # the per-node log before this helper is entered.
+        try:
+            _hist_path = getattr(getattr(sys.stdout, "_nf", None), "name", "")
+            if _hist_path and os.path.exists(_hist_path):
+                with open(_hist_path, "r", encoding="utf-8", errors="replace") as _hf:
+                    _create_history = _hf.read().lower()
+                _create_prompt_seen_history = any(
+                    _tok in _create_history for _tok in _create_prompt_tokens
+                )
+        except Exception:
+            pass
     # Prime the wizard once immediately after Enter so resume paths that already
     # printed create/join in buffered console output still advance.
     channel.send("create\r")
@@ -18223,6 +18249,10 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         if _shutdown_event.is_set():
             break
         _scan_cj = (str(_out_cj or "") + "\n" + str(_m_cj or "")).lower()
+        if _scan_cj.strip():
+            _create_history += "\n" + _scan_cj
+        if any(_tok in _scan_cj for _tok in _create_prompt_tokens):
+            _create_prompt_seen_history = True
         if "{yes, no}" in _scan_cj:
             _create_ok = True
             _yes_prompt_seen = True
@@ -18236,6 +18266,19 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                 _session_log.log_sent("create")
             time.sleep(0.5)
             continue
+        # No create/join/yes-no match in this read window. If we have never seen
+        # the prompt signature in the accumulated history, nudge with Enter so
+        # ONTAP reprints it; otherwise resend create to advance.
+        if not _create_prompt_seen_history:
+            channel.send("\r")
+            if _session_log:
+                _session_log.log_sent("<Enter> (nudge create/join prompt)")
+            time.sleep(0.3)
+        _create_sent_attempts += 1
+        channel.send("create\r")
+        if _session_log:
+            _session_log.log_sent("create")
+        time.sleep(0.5)
     if _shutdown_event.is_set():
         print("\n👋 Interrupted while waiting for create/join; exiting wizard.")
         if _session_log:
@@ -25068,6 +25111,12 @@ def main():
                             _creds47[_ip47] = (_u47, _p47)
 
                 _ensure_creds47(_bmc_ips47)
+                _blank_fallback47 = _prompt(
+                    "  Do you want to include fallback blank password in this test? [y/N]: ",
+                    "n",
+                ).strip().lower() in ("y", "yes")
+                if _blank_fallback47:
+                    print("  ℹ️  Blank-password fallback is enabled for this 5d test run.")
                 print("")
 
                 while True:
@@ -25084,84 +25133,115 @@ def main():
                         client47 = None
                         ch47 = None
                         _ip_user47, _ip_pass47 = _creds47.get(ip, ("admin", ""))
+                        _blank_attempted47 = False
+                        _blank_used47 = False
                         try:
-                            client47 = paramiko.SSHClient()
-                            client47.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                            client47.connect(
-                                hostname=ip, username=_ip_user47, password=_ip_pass47,
-                                timeout=20, banner_timeout=30, auth_timeout=20,
-                                disabled_algorithms={"pubkeys": ["ssh-dss"]},
-                            )
-                            configure_transport(client47)
-                            ch47 = _open_shell(client47)
+                            _pass_attempts47 = [("configured", _ip_pass47)]
+                            if _blank_fallback47 and _ip_pass47 != "":
+                                _pass_attempts47.append(("fallback-blank", ""))
+                            _auth_fail_detail47 = ""
 
-                            # Wait for BMC prompt
-                            _buf47 = ""
-                            _t47 = time.monotonic()
-                            while time.monotonic() - _t47 < 15:
-                                if ch47.recv_ready():
-                                    _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
-                                    if ">" in _buf47:
-                                        break
-                                time.sleep(0.1)
+                            for _attempt_label47, _attempt_pass47 in _pass_attempts47:
+                                if _attempt_label47 == "fallback-blank":
+                                    _blank_attempted47 = True
+                                client47 = paramiko.SSHClient()
+                                client47.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                                try:
+                                    client47.connect(
+                                        hostname=ip, username=_ip_user47, password=_attempt_pass47,
+                                        timeout=20, banner_timeout=30, auth_timeout=20,
+                                        disabled_algorithms={"pubkeys": ["ssh-dss"]},
+                                    )
+                                    configure_transport(client47)
+                                    ch47 = _open_shell(client47)
 
-                            # Handle takeover prompt silently
-                            if "y/n" in _buf47.lower():
-                                ch47.send("y\r")
-                                _buf47 = ""
-                                _t47 = time.monotonic()
-                                while time.monotonic() - _t47 < 10:
-                                    if ch47.recv_ready():
-                                        _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
-                                        if ">" in _buf47:
+                                    # Wait for BMC prompt
+                                    _buf47 = ""
+                                    _t47 = time.monotonic()
+                                    while time.monotonic() - _t47 < 15:
+                                        if ch47.recv_ready():
+                                            _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
+                                            if ">" in _buf47:
+                                                break
+                                        time.sleep(0.1)
+
+                                    # Handle takeover prompt silently
+                                    if "y/n" in _buf47.lower():
+                                        ch47.send("y\r")
+                                        _buf47 = ""
+                                        _t47 = time.monotonic()
+                                        while time.monotonic() - _t47 < 10:
+                                            if ch47.recv_ready():
+                                                _buf47 += ch47.recv(4096).decode("utf-8", errors="replace")
+                                                if ">" in _buf47:
+                                                    break
+                                            time.sleep(0.1)
+
+                                    # Run 'bmc status'
+                                    ch47.send("bmc status\r")
+                                    _out47 = ""
+                                    _t47 = time.monotonic()
+                                    while time.monotonic() - _t47 < 15:
+                                        if ch47.recv_ready():
+                                            chunk = ch47.recv(4096).decode("utf-8", errors="replace")
+                                            _out47 += chunk
+                                            if ">" in _out47[_out47.find("bmc status"):] if "bmc status" in _out47 else ">" in _out47:
+                                                break
+                                        time.sleep(0.1)
+
+                                    # Parse IP from 'bmc status' output.
+                                    # Look for lines like "  IP Address: 10.192.160.29"
+                                    _found_ip47 = None
+                                    for _ln47 in _out47.splitlines():
+                                        _m47 = re.search(
+                                            r'(?:ip\s*address|bmc\s*ip|address)\s*[:\s]+(\d{1,3}(?:\.\d{1,3}){3})',
+                                            _ln47, re.IGNORECASE,
+                                        )
+                                        if _m47:
+                                            _found_ip47 = _m47.group(1)
                                             break
-                                    time.sleep(0.1)
 
-                            # Run 'bmc status'
-                            ch47.send("bmc status\r")
-                            _out47 = ""
-                            _t47 = time.monotonic()
-                            while time.monotonic() - _t47 < 15:
-                                if ch47.recv_ready():
-                                    chunk = ch47.recv(4096).decode("utf-8", errors="replace")
-                                    _out47 += chunk
-                                    if ">" in _out47[_out47.find("bmc status"):] if "bmc status" in _out47 else ">" in _out47:
-                                        break
-                                time.sleep(0.1)
+                                    if _found_ip47 is None:
+                                        # Fallback: any IPv4 in the output that isn't 0.0.0.0
+                                        for _m47 in re.finditer(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b', _out47):
+                                            _cand47 = _m47.group(1)
+                                            if _cand47 != "0.0.0.0":
+                                                _found_ip47 = _cand47
+                                                break
 
-                            # Parse IP from 'bmc status' output.
-                            # Look for lines like "  IP Address: 10.192.160.29"
-                            _found_ip47 = None
-                            for _ln47 in _out47.splitlines():
-                                _m47 = re.search(
-                                    r'(?:ip\s*address|bmc\s*ip|address)\s*[:\s]+(\d{1,3}(?:\.\d{1,3}){3})',
-                                    _ln47, re.IGNORECASE,
-                                )
-                                if _m47:
-                                    _found_ip47 = _m47.group(1)
+                                    if _found_ip47 and _found_ip47 == ip:
+                                        status = "PASS"
+                                        detail = f"bmc status IP matched ({_found_ip47})"
+                                    elif _found_ip47:
+                                        status = "FAIL"
+                                        detail = f"IP mismatch: expected {ip}, got {_found_ip47}"
+                                    else:
+                                        status = "FAIL"
+                                        detail = "could not parse IP from 'bmc status' output"
+
+                                    if _attempt_label47 == "fallback-blank":
+                                        _blank_used47 = (status == "PASS")
                                     break
-
-                            if _found_ip47 is None:
-                                # Fallback: any IPv4 in the output that isn't 0.0.0.0
-                                for _m47 in re.finditer(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b', _out47):
-                                    _cand47 = _m47.group(1)
-                                    if _cand47 != "0.0.0.0":
-                                        _found_ip47 = _cand47
+                                except paramiko.AuthenticationException as _ex47a:
+                                    _auth_fail_detail47 = _classify_auth_failure(_ex47a)
+                                    status = "FAIL"
+                                    detail = _auth_fail_detail47
+                                    if _attempt_label47 == "fallback-blank":
                                         break
+                                finally:
+                                    try:
+                                        if ch47:
+                                            ch47.close()
+                                        if client47:
+                                            client47.close()
+                                    except Exception:
+                                        pass
+                                    ch47 = None
+                                    client47 = None
 
-                            if _found_ip47 and _found_ip47 == ip:
-                                status = "PASS"
-                                detail = f"bmc status IP matched ({_found_ip47})"
-                            elif _found_ip47:
-                                status = "FAIL"
-                                detail = f"IP mismatch: expected {ip}, got {_found_ip47}"
-                            else:
-                                status = "FAIL"
-                                detail = "could not parse IP from 'bmc status' output"
+                            if status == "FAIL" and _auth_fail_detail47 and not detail:
+                                detail = _auth_fail_detail47
 
-                        except paramiko.AuthenticationException as _ex47a:
-                            status = "FAIL"
-                            detail = _classify_auth_failure(_ex47a)
                         except Exception as _ex47:
                             status = "FAIL"
                             detail = _classify_auth_failure(_ex47)
@@ -25173,6 +25253,11 @@ def main():
                                     client47.close()
                             except Exception:
                                 pass
+
+                        if _blank_used47:
+                            detail = f"{detail} [used fallback blank password]"
+                        elif _blank_attempted47:
+                            detail = f"{detail} [blank fallback attempted]"
 
                         with _results_lock47:
                             _results47[ip] = {"status": status, "detail": detail}
