@@ -2132,6 +2132,28 @@ class SessionLogger:
         with self._lock:
             self._final_outcome = (status, note)
 
+    def _infer_failure_stage(self) -> str:
+        """Best-effort phase label for where a failed run stopped."""
+        # 1) Explicitly failed phase outcome, preferring the latest phase order.
+        _failed = {
+            _p for _p, (_st, _note) in self._phase_outcomes.items()
+            if str(_st).upper() == "FAIL"
+        }
+        if _failed:
+            for _phase in reversed(list(self._phase_times.keys())):
+                if _phase in _failed:
+                    return _phase
+            return next(iter(_failed), "")
+
+        # 2) If a phase was active when the run ended unexpectedly.
+        if self._current_phase:
+            return self._current_phase
+
+        # 3) Fallback to the latest recorded phase (best effort).
+        if self._phase_times:
+            return next(reversed(self._phase_times.keys()))
+        return ""
+
     def record_completion(self, normal_exit: bool = True):
         """Convenience wrapper: sets outcome based on error/warn counters and
         calls close(). Intended to be the single call at the normal exit path
@@ -2232,6 +2254,7 @@ class SessionLogger:
             else:
                 outcome_status = "PASS"
                 outcome_note = ""
+            failure_stage = self._infer_failure_stage() if outcome_status == "FAIL" else ""
 
             self._file.write(f"\n{'=' * 70}\n")
             self._file.write(f"Session ended: {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -2247,6 +2270,8 @@ class SessionLogger:
             self._file.write(f"  {'Overall Result':<25} {_status_icon} {outcome_status}\n")
             if outcome_note:
                 self._file.write(f"  {'Detail':<25} {outcome_note}\n")
+            if failure_stage:
+                self._file.write(f"  {'Failure stage':<25} {failure_stage}\n")
             self._file.write(f"  {'Errors logged':<25} {self._error_count}\n")
             self._file.write(f"  {'Warnings logged':<25} {self._warn_count}\n")
             self._file.write(f"  {'Started':<25} {self._start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -2323,7 +2348,7 @@ class SessionLogger:
             # Write a compact summary-only file alongside the full log.
             self._write_summary_file(
                 now, total_elapsed,
-                outcome_status, outcome_note,
+                outcome_status, outcome_note, failure_stage,
             )
 
         # Restore the real stdout and close the screen output log.
@@ -2340,16 +2365,16 @@ class SessionLogger:
         except Exception:
             pass
 
-    def _write_summary_file(self, now, total_elapsed, outcome_status, outcome_note):
+    def _write_summary_file(self, now, total_elapsed, outcome_status, outcome_note,
+                            failure_stage: str = ""):
         """Write a human-readable summary file next to the full session log.
 
         Contains only the result, phase timings, and step timings — none of
         the raw console output — so it is fast to read after a run.
         """
-        summary_path = _build_numbered_log_path(
+        summary_path = os.path.join(
             self.log_dir,
             f"summary_{now.strftime('%Y%m%d_%H%M%S')}.log",
-            scope_dir=self.log_dir,
         )
         _status_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(outcome_status, "❓")
         try:
@@ -2373,6 +2398,8 @@ class SessionLogger:
                 sf.write(f"  {'Overall Result':<25} {_status_icon} {outcome_status}\n")
                 if outcome_note:
                     sf.write(f"  {'Detail':<25} {outcome_note}\n")
+                if failure_stage:
+                    sf.write(f"  {'Failure stage':<25} {failure_stage}\n")
                 sf.write(f"  {'Errors logged':<25} {self._error_count}\n")
                 sf.write(f"  {'Warnings logged':<25} {self._warn_count}\n")
                 sf.write(f"  {'Started':<25} {self._start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
