@@ -49,6 +49,13 @@ try:
 except Exception:
     _DEFAULT_INTERACTIVE_TIMEOUT = 300
 
+try:
+    _DEFAULT_PARALLEL_JOIN_TIMEOUT = max(
+        0, int(os.environ.get("AFX_PARALLEL_JOIN_TIMEOUT", "7200"))
+    )
+except Exception:
+    _DEFAULT_PARALLEL_JOIN_TIMEOUT = 7200
+
 # Keep a handle to the original getpass prompt function so we can provide a
 # confirmed-password wrapper without recursion.
 _RAW_GETPASS = getpass.getpass
@@ -943,6 +950,48 @@ def _checkpoint_test_mode_name(operation_mode: int) -> str:
     }.get(operation_mode, str(operation_mode))
 
 
+def _describe_4b_resume_stage(cp) -> str:
+    """Return a human-readable resume stage summary for a 4b checkpoint."""
+    if not cp:
+        return "Start of 4b workflow (no checkpoint context)."
+
+    _bmc_ips = list(getattr(cp, "bmc_ips", []) or [])
+    _install_done = set(cp.nodes_done_for("install_done"))
+    _opt6_done = set(cp.nodes_done_for("option6_done"))
+    _install_equiv = _install_done | _opt6_done
+    _reinit_loader = set(cp.nodes_done_for("reinit_loader"))
+    _peer_opt4_done = set(cp.nodes_done_for("peer_option4_done"))
+    _peer_joined = set(cp.nodes_done_for("peer_joined"))
+    _remaining_install = [ip for ip in _bmc_ips if ip not in _install_equiv]
+
+    if cp.is_done("cluster_formed") or cp.is_done("option3_complete"):
+        return "Cluster setup already completed in prior run."
+
+    if cp.is_done("primary_node_mgmt_done") and not cp.is_done("primary_setup_done"):
+        return "Primary cluster setup wizard (resume without install replay)."
+
+    if cp.is_done("primary_bootmenu_done") and not cp.is_done("primary_node_mgmt_done"):
+        return "Primary node-management prompts in cluster setup wizard."
+
+    if _bmc_ips and not _remaining_install:
+        if _peer_opt4_done and len(_peer_joined) < len(_peer_opt4_done):
+            return "Peer add-node completion in mode 3 (some peers already prepared)."
+        if _reinit_loader:
+            return "Reinit boot-menu / cluster initialization stage."
+        return "Reinit reconnect stage (install steps already complete for all nodes)."
+
+    if _remaining_install and len(_remaining_install) < len(_bmc_ips):
+        return (
+            "Netboot/install continuation for remaining node(s): "
+            + ", ".join(_remaining_install)
+        )
+
+    if _reinit_loader:
+        return "Reinit reconnect continuation to LOADER on remaining nodes."
+
+    return "Netboot install phase (pre-option-6 completion)."
+
+
 def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> None:
     """When ``--test`` is enabled, let the operator choose a checkpoint to fail at."""
     global _checkpoint_test_enabled, _checkpoint_test_target, _checkpoint_test_mode_label
@@ -1431,6 +1480,46 @@ def _run_parallel(items, target, *, with_index=False, join_timeout=None):
         t.join(timeout=join_timeout) if join_timeout is not None else t.join()
     _raise_pending_checkpoint_failure()
     return threads
+
+
+def _join_threads_with_deadline(threads, label="", timeout_seconds=None, log=None):
+    """Join ``threads`` with an optional global deadline.
+
+    Returns ``True`` when all threads exited, else ``False`` after deadline.
+    """
+    if timeout_seconds is None:
+        timeout_seconds = _DEFAULT_PARALLEL_JOIN_TIMEOUT
+    if timeout_seconds <= 0:
+        for _t in threads:
+            _t.join()
+        return True
+
+    _deadline = time.monotonic() + float(timeout_seconds)
+    while True:
+        _alive = [t for t in threads if t.is_alive()]
+        if not _alive:
+            return True
+        _remaining = _deadline - time.monotonic()
+        if _remaining <= 0:
+            _names = [t.name for t in _alive if t.name]
+            _suffix = f" for {label}" if label else ""
+            print(
+                f"\n  ❌ Timed out waiting for {len(_alive)} worker thread(s){_suffix} "
+                f"after {int(timeout_seconds)}s."
+            )
+            if _names:
+                print(f"  Still running: {', '.join(_names)}")
+            if log:
+                log.log(
+                    f"thread join timeout{_suffix}: alive={_names or len(_alive)}",
+                    prefix="ERROR",
+                )
+            return False
+        _sleep_for = min(2.0, max(0.1, _remaining))
+        for _t in _alive:
+            _t.join(timeout=min(0.2, _sleep_for))
+        if any(t.is_alive() for t in threads):
+            time.sleep(_sleep_for)
 
 
 def _bmc_fallback_passwords(ip, bmc_passwords):
@@ -7186,8 +7275,12 @@ class _InteractivePromptBroker:
     output from other running threads.
     """
 
-    def __init__(self):
+    def __init__(self, timeout_seconds=None):
         self._lock = threading.Lock()
+        self._timeout_seconds = (
+            _DEFAULT_INTERACTIVE_TIMEOUT
+            if timeout_seconds is None else max(0, int(timeout_seconds))
+        )
 
     def ask(self, node_label, prompt_text, default=None, secret=False):
         """Block until the lock is free, then prompt the operator.
@@ -7201,7 +7294,11 @@ class _InteractivePromptBroker:
                 if secret:
                     val = getpass.getpass("  Response: ")
                 else:
-                    val = input("  Response: ").strip()
+                    val = _prompt_with_timeout(
+                        "  Response: ",
+                        default=(default or ""),
+                        timeout=self._timeout_seconds,
+                    ).strip()
             except (EOFError, KeyboardInterrupt):
                 val = ""
             return val if val else (default or "")
@@ -12205,6 +12302,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         _opt4_done_ips    = _checkpoint.nodes_done_for("peer_option4_done")
         _joined_ips       = _checkpoint.nodes_done_for("peer_joined")
         print("\n  🔖 Resume status from checkpoint:")
+        print(f"     resume_stage         : {_describe_4b_resume_stage(_checkpoint)}")
         for _ip in bmc_ips:
             _flags = []
             if _ip in _install_done_ips:
@@ -12563,8 +12661,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _real_stdout.write(f"    [{_ip}] {_log_path}\n")
         _real_stdout.flush()
 
-        for t in threads:
-            t.join()
+        if not _join_threads_with_deadline(
+            threads, label="parallel install workers", log=log
+        ):
+            return False
         _raise_pending_checkpoint_failure()
 
         if httpd:
@@ -14067,7 +14167,36 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         _reach_interval = 60  # seconds between attempts
         cl = ch = None
         _fail_reason = "ssh"  # default; updated by each _bmc_reach_loader call
+        # Resume hardening: when install was already completed from checkpoint,
+        # probe the current console state first and skip reset if this node is
+        # already sitting at LOADER.
+        if resuming and _skip_install:
+            _status(f"  🔍 [{ip}] Checkpoint resume: probing console state before reset...")
+            _pcl, _pch, _pstate, _ = _bmc_attach_console_without_reset(
+                ip, bmc_user, bmc_passwords.get(ip, ""),
+                node_log=_rl_nf, fallback_passwords=_fb,
+            )
+            if _pcl is not None and _pch is not None and _pstate == "loader":
+                cl, ch, _fail_reason = _pcl, _pch, None
+                _status(
+                    f"  ✅ [{ip}] Checkpoint resume: node already at LOADER; "
+                    "skipping system reset."
+                )
+                if log:
+                    log.log(
+                        f"[{ip}] checkpoint resume detected LOADER state; "
+                        "system reset skipped"
+                    )
+            else:
+                with suppress(Exception):
+                    if _pch is not None:
+                        _pch.close()
+                with suppress(Exception):
+                    if _pcl is not None:
+                        _pcl.close()
         for _attempt in range(1, _reach_max + 1):
+            if cl is not None and ch is not None:
+                break
             if _shutdown_event.is_set():
                 break
             if _attempt > 1:
@@ -18473,9 +18602,11 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
             if _cfg_pass is None:
                 _cfg_pass = sp_pass
             try:
-                _real_stdout.write(f"\n  Use BMC '{_cfg_bmc}' from config? [Y/n]: ")
-                _real_stdout.flush()
-                _use_ans = sys.stdin.readline().strip().lower()
+                _use_ans = _prompt_with_timeout(
+                    f"\n  Use BMC '{_cfg_bmc}' from config? [Y/n]: ",
+                    default="y",
+                    timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                ).strip().lower()
             except (EOFError, KeyboardInterrupt):
                 _use_ans = "y"
             if _session_log:
@@ -18494,9 +18625,11 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         if next_host is None:
             # No config node accepted – fall back to manual entry.
             try:
-                _real_stdout.write("  Next BMC IP/hostname: ")
-                _real_stdout.flush()
-                next_host = sys.stdin.readline().strip()
+                next_host = _prompt_with_timeout(
+                    "  Next BMC IP/hostname: ",
+                    default="",
+                    timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                ).strip()
             except (EOFError, KeyboardInterrupt):
                 next_host = ""
             if not next_host:
@@ -18504,9 +18637,11 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
                 _real_stdout.flush()
                 continue
             try:
-                _real_stdout.write(f"  BMC username [{sp_user}]: ")
-                _real_stdout.flush()
-                _u_in = sys.stdin.readline().strip()
+                _u_in = _prompt_with_timeout(
+                    f"  BMC username [{sp_user}]: ",
+                    default=sp_user,
+                    timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                ).strip()
                 next_user = _u_in or sp_user
             except (EOFError, KeyboardInterrupt):
                 next_user = sp_user
@@ -20212,8 +20347,10 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     log.log(f"2b parallel: cluster mgmt auth failed for {_cm_user}@{mgmt_ip}",
                             prefix="WARN")
                 try:
-                    _cm_user = input(
-                        f"    Cluster mgmt username [{_cm_user}]: "
+                    _cm_user = _prompt_with_timeout(
+                        f"    Cluster mgmt username [{_cm_user}]: ",
+                        default=_cm_user,
+                        timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
                     ).strip() or _cm_user
                     _cm_pass = getpass.getpass(
                         f"    Cluster mgmt password for {_cm_user}@{mgmt_ip}: "
@@ -20322,8 +20459,8 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
         print(f"\n  ⏳ Waiting for {_n} node(s) to complete "
               f"(parallel LOADER/format/node-mgmt, then bulk cluster join)...")
-        for t in threads:
-            t.join()
+        if not _join_threads_with_deadline(threads, label="mode 2b", log=log):
+            return False
         _raise_pending_checkpoint_failure()
 
         if _fatal_boot_dna_event.is_set():
@@ -20600,8 +20737,8 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             print(f"  ▶️  [{addr}] Thread started.")
 
         print(f"\n  ⏳ Nodes running in parallel. Answer prompts above when asked...")
-        for t in threads:
-            t.join()
+        if not _join_threads_with_deadline(threads, label="mode 2a", log=log):
+            return False
         _raise_pending_checkpoint_failure()
 
         if _fatal_boot_dna_event.is_set():
@@ -20735,9 +20872,11 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
             print("      To finish adding the remaining peer(s) without")
             print("      re-resetting the primary, exit now and run option 2c")
             print("      (Resume node additions) instead.")
-            ans = _prompt(
-                "\n  Proceed with full option 3 (destroys cluster) [y/N]: "
-            , "n").lower()
+            ans = _prompt_with_timeout(
+                "\n  Proceed with full option 3 (destroys cluster) [y/N]: ",
+                default="n",
+                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+            ).lower()
             if ans != "y":
                 print("  ↩️  Aborting option 3. Run option 2c to resume node additions.")
                 if session_log:
@@ -20820,7 +20959,11 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
             print("\n  ⚠️  The cluster was already created in a prior run!")
             print("  Running option 1 again will DESTROY THE CLUSTER and lose all data.")
             print("  The cluster is likely still running.\n")
-            ans = _prompt("Continue anyway? [y/N]: ").strip().lower()
+            ans = _prompt_with_timeout(
+                "Continue anyway? [y/N]: ",
+                default="n",
+                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+            ).strip().lower()
             if ans not in ("y", "yes"):
                 print("  Exiting without changes.")
                 sys.exit(0)
@@ -20887,7 +21030,11 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
         if prior_joined and not prior_complete:
             print("\n  ⚠️  The node was already added to the cluster in a prior run!")
             print("  Running option 2 again may cause duplicate node entries.\n")
-            ans = _prompt("Continue anyway? [y/N]: ").strip().lower()
+            ans = _prompt_with_timeout(
+                "Continue anyway? [y/N]: ",
+                default="n",
+                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+            ).strip().lower()
             if ans not in ("y", "yes"):
                 print("  Exiting without changes.")
                 sys.exit(0)
@@ -21187,8 +21334,11 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
             t.start()
             threads.append(t)
 
-        for t in threads:
-            t.join()
+        if not _join_threads_with_deadline(
+            threads, label="mode 3 peer add", log=_session_log
+        ):
+            _mode3_ok = False
+            break
         _raise_pending_checkpoint_failure()
 
         if _fatal_boot_dna_event.is_set():
@@ -23052,7 +23202,11 @@ def _run_2c_resume():
             )
             try:
                 cluster_admin_user = (
-                    input(f"    Username [{cluster_admin_user}]: ").strip()
+                    _prompt_with_timeout(
+                        f"    Username [{cluster_admin_user}]: ",
+                        default=cluster_admin_user,
+                        timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                    ).strip()
                     or cluster_admin_user
                 )
                 cluster_admin_password = getpass.getpass(
@@ -23294,8 +23448,8 @@ def _run_2c_resume():
 
     if _n2c:
         print(f"\n  ⏳ Waiting for {_n2c} node(s) to complete...")
-        for _t in threads:
-            _t.join()
+        if not _join_threads_with_deadline(threads, label="mode 2c", log=_session_log):
+            return False
         _raise_pending_checkpoint_failure()
     else:
         print("\n  ✅ No nodes need option 4 replay; using checkpointed cluster IPs directly.")
@@ -23556,6 +23710,7 @@ def main():
                         print(f"     Mode    : {_cp.mode}")
                         print(f"     BMC IPs : {', '.join(_cp.bmc_ips)}")
                         print(f"     Log dir : {_cp.log_dir}")
+                        print(f"     Next stage: {_describe_4b_resume_stage(_cp)}")
                         if _install_done_ips:
                             print(f"     install_done          : {', '.join(_install_done_ips)}")
                         if _reinit_done_ips:
