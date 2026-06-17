@@ -24205,8 +24205,9 @@ def main():
         # list here so _diag_bootargs is always defined.
         _diag_bootargs = []
 
-    # Enable path tab completion in interactive mode
-    if not _bg_mode:
+    # Enable path tab completion for interactive TTY sessions (including screen).
+    # --screen forwards --bg, but users still expect readline completion there.
+    if sys.stdin and sys.stdin.isatty():
         _setup_path_completion()
 
     signal.signal(signal.SIGTERM, signal_handler)
