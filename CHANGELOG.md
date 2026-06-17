@@ -9,6 +9,13 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Checkpoint creation now displayed on screen with resume instructions.**
+  When a checkpoint is created (at the start of 4b/4c/4b+reinit workflows),
+  a message is printed to the console and logged showing:
+    - "🔖 Checkpoint created: [filename]"
+    - Hint to run `python AFX_reinit.py --checkpoint` to view or resume
+  This makes it clear to operators that a checkpoint has been saved and
+  provides the command to use it if the job is interrupted.
 - **Resume runs now track elapsed time excluding the gap between previous exit and restart.**
   When a checkpoint is loaded for resume (4b and Mode 4b+reinit), the session logger
   registers when the previous run ended and when the resume was initiated, then displays

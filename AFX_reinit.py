@@ -321,6 +321,11 @@ class CheckpointManager:
             os.remove(self._path)
         self._data = {}
 
+    @property
+    def path(self) -> str:
+        """Return the checkpoint file path."""
+        return self._path
+
     # ── Phase helpers ───────────────────────────────────────────────────────
 
     def mark_done(self, phase: str) -> None:
@@ -12997,6 +13002,16 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             log_dir=_log_dir,
             config_path=getattr(log, "log_file", "") or "",
         )
+        # Print checkpoint creation message to screen and log
+        _cp_filename = os.path.basename(_checkpoint.path)
+        _msg_cp = f"\n🔖 Checkpoint created: {_cp_filename}"
+        _msg_cp_hint = f"   Run 'python AFX_reinit.py --checkpoint' to view or resume from checkpoint."
+        print(_msg_cp)
+        print(_msg_cp_hint)
+        if log:
+            log.log(_msg_cp, prefix="INFO")
+            log.log(_msg_cp_hint, prefix="INFO")
+        
         # Persist run params so a future --resume can skip these prompts.
         _checkpoint.set_param("netboot_src_type",  src_type)
         _checkpoint.set_param("netboot_src_value", src_value)
