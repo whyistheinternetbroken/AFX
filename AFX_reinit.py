@@ -369,7 +369,9 @@ class CheckpointManager:
 
         lines = []
         lines.append(f"Checkpoint file : {self._path}")
-        lines.append(f"Mode            : {self._data.get('mode', '?')}")
+        lines.append(
+            f"Mode            : {_format_checkpoint_mode(self._data.get('mode', '?'))}"
+        )
         lines.append(f"Created         : {self._data.get('created', '?')}")
         lines.append(f"Updated         : {self._data.get('updated', '?')}")
         try:
@@ -470,6 +472,50 @@ class CheckpointManager:
             os.replace(tmp, self._path)
         except Exception:
             pass
+
+
+def _format_checkpoint_mode(mode: str) -> str:
+    """Return a human-friendly checkpoint mode label for status/summary logs."""
+    raw = str(mode or "").strip()
+    if not raw:
+        return "?"
+
+    display = raw
+    desc = ""
+
+    if raw.startswith("4b-"):
+        suffix = raw.split("-", 1)[1]
+        if suffix == "3":
+            display = "4b+3"
+            desc = "Netboot install + automated cluster reinit"
+        elif suffix == "1":
+            display = "4b+1"
+            desc = "Netboot install + interactive first-node reinit"
+        elif suffix == "no-reinit":
+            display = "4b"
+            desc = "Netboot install only (no reinit)"
+        else:
+            display = f"4b+{suffix}"
+            desc = "Netboot install + reinit"
+    elif raw.startswith("4c-"):
+        suffix = raw.split("-", 1)[1]
+        if suffix == "no-reinit":
+            display = "4c"
+            desc = "Netboot install image only (no reinit)"
+        else:
+            display = f"4c+{suffix}"
+            desc = "Netboot install image path"
+    else:
+        desc = {
+            "1": "Initialize first node",
+            "2": "Add node to existing cluster",
+            "3": "End-to-end auto initialize",
+            "4a": "ONTAP upgrade",
+            "4b": "Netboot install",
+            "4c": "Netboot install image only",
+        }.get(raw, "")
+
+    return f"{display} ({desc})" if desc else display
 
 
 # Module-level checkpoint instance (initialised by _run_4b_standalone on each
@@ -2844,7 +2890,7 @@ def select_operation_mode():
                 print("=" * 60)
                 print(f"  🔖 Existing checkpoint found{_cp_age} (EXPERIMENTAL)")
                 print(f"     Last menu option : {_menu_opt}")
-                print(f"     Checkpoint mode  : {_cp_mode}")
+                print(f"     Checkpoint mode  : {_format_checkpoint_mode(_cp_mode)}")
                 print(f"     Resume stage     : {_stage}")
                 print("=" * 60)
                 _resume_now = _prompt_with_timeout(
@@ -11971,7 +12017,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     _whole_dl_t0 = time.monotonic()
     for _nb_attempt in range(1, _NETBOOT_MAX_ATTEMPTS + 1):
         if _nb_attempt == 1:
-            _status_ts(f"\n  [{node_label}] Starting netboot: {pkg_url}")            if log:                log.log(f"[{node_label}] netboot {pkg_url}")
+            _status_ts(f"\n  [{node_label}] Starting netboot: {pkg_url}")
+            if log:                log.log(f"[{node_label}] netboot {pkg_url}")
         else:
             _status_ts(
                 f"\n  [{node_label}] Retrying netboot "
@@ -21649,7 +21696,7 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
         prior_cluster = prior.is_done("cluster_formed")
         prior_opt4 = prior.nodes_done_for("peer_option4_done")
         _print_banner("🔖 Prior option-3 checkpoint found")
-        print(f"     Mode          : {prior.mode}")
+        print(f"     Mode          : {_format_checkpoint_mode(prior.mode)}")
         print(f"     BMC IPs       : {', '.join(prior.bmc_ips)}")
         if prior_bootmenu:
             print("     primary_bootmenu_done : ✅ (primary cleared boot menu)")
@@ -21742,7 +21789,7 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
         prior_complete = prior.is_done("option1_complete")
         _print_banner("🔖 Prior option-1 checkpoint found")
         print(f"     BMC IP                : {sp_host}")
-        print(f"     Mode                  : {prior.mode}")
+        print(f"     Mode                  : {_format_checkpoint_mode(prior.mode)}")
         if prior_bootmenu:
             print("     primary_bootmenu_done : ✅ (boot menu cleared)")
         if prior_install:
@@ -21816,7 +21863,7 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
         prior_complete = prior.is_done("option2_complete")
         _print_banner("🔖 Prior option-2 checkpoint found")
         print(f"     BMC IP                : {secondary_bmc}")
-        print(f"     Mode                  : {prior.mode}")
+        print(f"     Mode                  : {_format_checkpoint_mode(prior.mode)}")
         if prior_install:
             print("     node_install_done     : ✅ (ONTAP image installed)")
         if prior_format:
@@ -24792,7 +24839,7 @@ def main():
                         _joined_ips       = _cp.nodes_done_for("peer_joined")
                         print("\n" + "=" * 60)
                         print("  🔖 Checkpoint found" + _cp_age + " (EXPERIMENTAL)")
-                        print(f"     Mode    : {_cp.mode}")
+                        print(f"     Mode    : {_format_checkpoint_mode(_cp.mode)}")
                         print(f"     BMC IPs : {', '.join(_cp.bmc_ips)}")
                         print(f"     Log dir : {_cp.log_dir}")
                         print(f"     Next stage: {_describe_4b_resume_stage(_cp)}")
