@@ -2130,6 +2130,14 @@ class SessionLogger:
         # Per-phase outcomes: phase_name -> (status, note)
         # Phases that call end_phase() without set_phase_outcome() get PASS.
         self._phase_outcomes: "dict[str, tuple[str, str]]" = {}
+        # Optional ONTAP version snapshots captured by workflows that can
+        # query cluster version (for summary "before vs after" visibility).
+        self._ontap_version_before: str = ""
+        self._ontap_version_after: str = ""
+        self._ontap_version_before_source: str = ""
+        self._ontap_version_after_source: str = ""
+        self._ontap_before_by_node: "dict[str, str]" = {}
+        self._ontap_after_by_node: "dict[str, str]" = {}
         # Optional indented sub-timing rows attached under a parent phase
         # in the summary tables. phase_name -> list[(label, elapsed_seconds)].
         self._phase_subtimings: "dict[str, list[tuple[str, float]]]" = {}
@@ -2380,6 +2388,93 @@ class SessionLogger:
         with self._lock:
             self._final_outcome = (status, note)
 
+    def set_ontap_versions(self, before: str = "", after: str = "",
+                           source: str = "",
+                           before_by_node: "dict[str, str] | None" = None,
+                           after_by_node: "dict[str, str] | None" = None) -> None:
+        """Record ONTAP version snapshots for summary reporting."""
+        with self._lock:
+            _before = str(before or "").strip()
+            _after = str(after or "").strip()
+            _src = str(source or "").strip()
+            _before_map = {
+                str(k).strip(): str(v).strip()
+                for k, v in (before_by_node or {}).items()
+                if str(k).strip() and str(v).strip()
+            }
+            _after_map = {
+                str(k).strip(): str(v).strip()
+                for k, v in (after_by_node or {}).items()
+                if str(k).strip() and str(v).strip()
+            }
+            if _before:
+                self._ontap_version_before = _before
+                if _src:
+                    self._ontap_version_before_source = _src
+            if _after:
+                self._ontap_version_after = _after
+                if _src:
+                    self._ontap_version_after_source = _src
+            if _before_map:
+                self._ontap_before_by_node.update(_before_map)
+                if _src:
+                    self._ontap_version_before_source = _src
+            if _after_map:
+                self._ontap_after_by_node.update(_after_map)
+                if _src:
+                    self._ontap_version_after_source = _src
+            _msg_parts = []
+            if _before:
+                _msg_parts.append(f"before={_before}")
+            if _after:
+                _msg_parts.append(f"after={_after}")
+            if _before_map:
+                _msg_parts.append(f"before_nodes={len(_before_map)}")
+            if _after_map:
+                _msg_parts.append(f"after_nodes={len(_after_map)}")
+            if _msg_parts:
+                if _src:
+                    _msg_parts.append(f"source={_src}")
+                self._file.write(
+                    f"[{self._ts_with_elapsed()}] [INFO] ONTAP version snapshot: "
+                    f"{', '.join(_msg_parts)}\n"
+                )
+            now = datetime.now()
+            self._write_summary_file(
+                now, (now - self._start_time).total_seconds(),
+                "IN PROGRESS", "Run is active; phases may still be incomplete.",
+                failure_stage="", final=False,
+            )
+
+    def _write_ontap_version_lines(self, out_fh) -> None:
+        """Render ONTAP version summary rows into the provided file handle."""
+        if self._ontap_version_before:
+            _before_lbl = self._ontap_version_before
+            if self._ontap_version_before_source:
+                _before_lbl = (
+                    f"{_before_lbl} ({self._ontap_version_before_source})"
+                )
+            out_fh.write(f"  {'ONTAP before run':<25} {_before_lbl}\n")
+        if self._ontap_before_by_node:
+            out_fh.write(f"  {'ONTAP before run (nodes)':<25}\n")
+            for _node in sorted(self._ontap_before_by_node):
+                out_fh.write(
+                    f"    - {_node:<21} {self._ontap_before_by_node[_node]}\n"
+                )
+        if self._ontap_version_after:
+            _after_lbl = self._ontap_version_after
+            if self._ontap_version_after_source:
+                _after_lbl = (
+                    f"{_after_lbl} ({self._ontap_version_after_source})"
+                )
+            out_fh.write(f"  {'ONTAP after run':<25} {_after_lbl}\n")
+        if self._ontap_after_by_node:
+            out_fh.write(f"  {'ONTAP after run (nodes)':<25}\n")
+            for _node in sorted(self._ontap_after_by_node):
+                out_fh.write(
+                    f"    - {_node:<21} {self._ontap_after_by_node[_node]}\n"
+                )
+
     def _infer_failure_stage(self) -> str:
         """Best-effort phase label for where a failed run stopped."""
         # 1) Explicitly failed phase outcome, preferring the latest phase order.
@@ -2522,6 +2617,7 @@ class SessionLogger:
                 self._file.write(f"  {'Failure stage':<25} {failure_stage}\n")
             self._file.write(f"  {'Errors logged':<25} {self._error_count}\n")
             self._file.write(f"  {'Warnings logged':<25} {self._warn_count}\n")
+            self._write_ontap_version_lines(self._file)
             self._file.write(f"  {'Started':<25} {self._start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             self._file.write(f"  {'Ended':<25} {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
@@ -2664,6 +2760,7 @@ class SessionLogger:
                     sf.write(f"  {'Failure stage':<25} {failure_stage}\n")
                 sf.write(f"  {'Errors logged':<25} {self._error_count}\n")
                 sf.write(f"  {'Warnings logged':<25} {self._warn_count}\n")
+                self._write_ontap_version_lines(sf)
                 sf.write(f"  {'Started':<25} {self._start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 sf.write(f"  {'Ended':<25} {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 sf.write(f"  {'Total runtime':<25} {total_elapsed:.1f}s ({total_elapsed/60:.1f}m)\n")
@@ -17469,6 +17566,24 @@ def _run_ontap_upgrade(log):
                 timeout=60,
             )
         _img_ver_data = _parse_image_versions(_out_vchk)
+        _pre_versions = sorted({
+            str(_e.get("version") or "").strip()
+            for _rows in _img_ver_data.values()
+            for _e in _rows
+            if _e.get("iscurrent") and str(_e.get("version") or "").strip()
+        })
+        _pre_versions_by_node = {}
+        for _vn, _vimgs in _img_ver_data.items():
+            _cur_ver = next((e["version"] for e in _vimgs if e.get("iscurrent")), None)
+            if _cur_ver:
+                _pre_versions_by_node[str(_vn)] = str(_cur_ver).strip()
+        if log and _pre_versions:
+            _pre_label = _pre_versions[0] if len(_pre_versions) == 1 else ", ".join(_pre_versions)
+            log.set_ontap_versions(
+                before=_pre_label,
+                source="pre-upgrade",
+                before_by_node=_pre_versions_by_node,
+            )
         _downgrade_nodes = []
         for _vn, _vimgs in _img_ver_data.items():
             _cur_ver = next((e["version"] for e in _vimgs if e["iscurrent"]), None)
@@ -18438,6 +18553,12 @@ def _run_ontap_upgrade(log):
                 _cluster_versions and any(v not in running_ver and running_ver not in v
                                           for v in _cluster_versions)
             )
+            if log and _active_versions:
+                log.set_ontap_versions(
+                    after=running_ver or "",
+                    source="post-upgrade",
+                    after_by_node=_active_versions,
+                )
 
             if _node_issues or len(_cluster_versions) > 1 or _running_mismatch:
                 print(f"\n  \u26a0\ufe0f  Version mismatch detected. The upgrade may not have "
@@ -26704,6 +26825,23 @@ def main():
                         print(f"    {_il49}")
 
                 _session_log.log(f"5g: running version={_running49}")
+                if _running49:
+                    _img49_data = _parse_image_versions(_img49_out)
+                    _per_node_49 = {}
+                    for _n49, _rows49 in _img49_data.items():
+                        _cur49 = next(
+                            (e["version"] for e in _rows49 if e.get("iscurrent")),
+                            None,
+                        )
+                        if _cur49:
+                            _per_node_49[str(_n49)] = str(_cur49).strip()
+                    _session_log.set_ontap_versions(
+                        before=_running49,
+                        after=_running49,
+                        source="cluster health check",
+                        before_by_node=_per_node_49,
+                        after_by_node=_per_node_49,
+                    )
 
                 # ── Cleanup & exit ───────────────────────────────────────────────
                 try:

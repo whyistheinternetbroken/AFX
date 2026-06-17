@@ -9,6 +9,12 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Run summary now includes ONTAP version before/after snapshots.**
+  Summary output now records ONTAP version state when available and prints
+  it in the Result section as "ONTAP before run" and "ONTAP after run",
+  including per-node version lines for each snapshot. Upgrade flow (4a)
+  records pre-upgrade and post-upgrade node versions; 5g health checks
+  record current per-node versions for both fields.
 - **Checkpoint status now reports current phase.**
   The checkpoint JSON now stores a live `current_phase` field (phase name,
   state, timestamp, optional node), updated during phase transitions.

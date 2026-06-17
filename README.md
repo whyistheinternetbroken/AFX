@@ -809,6 +809,7 @@ The `logs/` directory is created in the same folder as the script.
 The summary file contains (and is updated during the run):
 
 - **Result:** `IN PROGRESS` while active, then PASS, PASS (with warnings), or FAIL at completion
+- **ONTAP version before/after run:** when the workflow can query cluster version, the summary includes cluster-level snapshots and **per-node version rows** so you can verify each node is on the expected release.
 - **Phase Timing:** duration of each named phase (e.g., "BMC Connect", "LOADER", "Wizard", "Auto Join"). Active or incomplete phases are explicitly labeled as not yet completed. Includes:
   - **Indented sub-rows** for phases that support per-node breakdown (e.g., `[node] image download` and `[node] image install` under the netboot install phase).
   - **`Pause wait (xN)` row** showing aggregate operator-pause time (total seconds held, pause count, and a `longest single pause` sub-line with context label) when the run was paused at least once.
