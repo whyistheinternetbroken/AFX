@@ -24416,6 +24416,7 @@ def main():
     global _checkpoint, _run_context
     global _auto_clear_stale_bmc
     global _diag_mode, _diag_bootargs, _physical_zeroing, _prevent_bios_fw_update
+    global _loader_env_stage_enabled
     global _resume_from_start_menu
 
     args = parse_args()
