@@ -9,6 +9,11 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Checkpoint status now reports current phase.**
+  The checkpoint JSON now stores a live `current_phase` field (phase name,
+  state, timestamp, optional node), updated during phase transitions.
+  `--checkpoint-status` now prints this so operators can see where a job is
+  currently running.
 - **Live run summary now exists from startup and updates per phase.**
   The session summary file is now created when a run starts (not only at
   shutdown) and refreshed as phases start/end/record outcomes. In-progress

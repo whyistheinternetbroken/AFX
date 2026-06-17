@@ -275,6 +275,12 @@ class CheckpointManager:
             "log_dir": log_dir,
             "config_path": config_path,
             "bmc_ips": list(bmc_ips),
+            "current_phase": {
+                "name": "Run initialization",
+                "state": "in_progress",
+                "node_ip": "",
+                "ts": now,
+            },
             "phases": {},        # phase_name -> {"done": bool, "ts": str}
             "node_phases": {},   # phase_name -> {ip -> {"done": bool, "ts": str}}
         }
@@ -355,6 +361,21 @@ class CheckpointManager:
             if v.get("done")
         ]
 
+    def set_current_phase(self, phase: str, state: str = "in_progress",
+                          node_ip: str = "") -> None:
+        """Record the run's current phase in the checkpoint file.
+
+        Used by live status helpers so --checkpoint-status can show where
+        a running job currently is.
+        """
+        self._data["current_phase"] = {
+            "name": str(phase or "").strip(),
+            "state": str(state or "").strip() or "in_progress",
+            "node_ip": str(node_ip or "").strip(),
+            "ts": datetime.now().isoformat(),
+        }
+        self._save()
+
     def summary(self) -> str:
         """Return a human-readable description of the loaded checkpoint.
 
@@ -387,6 +408,20 @@ class CheckpointManager:
         bmc_ips = self._data.get("bmc_ips") or []
         if bmc_ips:
             lines.append(f"BMC IPs         : {', '.join(bmc_ips)}")
+        _cur = self._data.get("current_phase") or {}
+        if _cur:
+            _cur_name = str(_cur.get("name") or "").strip() or "(unknown)"
+            _cur_state = str(_cur.get("state") or "").strip() or "in_progress"
+            _cur_node = str(_cur.get("node_ip") or "").strip()
+            _cur_ts = str(_cur.get("ts") or "").strip()
+            _cur_parts = [f"{_cur_name} [{_cur_state}]"]
+            if _cur_node:
+                _cur_parts.append(f"node={_cur_node}")
+            if _cur_ts:
+                _cur_parts.append(f"as of {_cur_ts}")
+            lines.append(f"Current phase   : {', '.join(_cur_parts)}")
+        else:
+            lines.append("Current phase   : (not recorded)")
 
         phases = self._data.get("phases") or {}
         lines.append("")
@@ -459,6 +494,12 @@ class CheckpointManager:
         self._data["mode"] = mode
         if log_dir:
             self._data["log_dir"] = log_dir
+        self._data["current_phase"] = {
+            "name": "Resume initialization",
+            "state": "in_progress",
+            "node_ip": "",
+            "ts": datetime.now().isoformat(),
+        }
         self._save()
 
     # ── Internal ────────────────────────────────────────────────────────────
@@ -2245,6 +2286,9 @@ class SessionLogger:
                 f"\n[{self._ts_with_elapsed(now)}] [PHASE] ▶ Started: {phase_name}\n"
             )
             self._ensure_heartbeat_locked()
+            if _checkpoint:
+                with suppress(Exception):
+                    _checkpoint.set_current_phase(phase_name, state="in_progress")
             self._write_summary_file(
                 now, (now - self._start_time).total_seconds(),
                 "IN PROGRESS", "Run is active; phases may still be incomplete.",
@@ -2269,8 +2313,12 @@ class SessionLogger:
                     f"{self._current_phase} ({elapsed:.1f}s) "
                     f"[{self._phase_outcomes[self._current_phase][0]}]\n\n"
                 )
+                _ended_phase = self._current_phase
                 self._current_phase = None
                 self._current_phase_start = None
+                if _checkpoint:
+                    with suppress(Exception):
+                        _checkpoint.set_current_phase(_ended_phase, state="completed")
                 self._write_summary_file(
                     now, (now - self._start_time).total_seconds(),
                     "IN PROGRESS", "Run is active; phases may still be incomplete.",
@@ -2305,6 +2353,9 @@ class SessionLogger:
                 f"[{self._ts_with_elapsed()}] [PHASE] ⏹ Recorded: "
                 f"{phase_name} ({elapsed:.1f}s) [{outcome}]\n"
             )
+            if _checkpoint:
+                with suppress(Exception):
+                    _checkpoint.set_current_phase(phase_name, state="completed")
             now = datetime.now()
             self._write_summary_file(
                 now, (now - self._start_time).total_seconds(),
@@ -5700,7 +5751,7 @@ OPTIONS
     --checkpoint-status
         EXPERIMENTAL. Print a summary of the saved checkpoint (checkpoints/afx_checkpoint.json)
         and exit.  Shows the absolute file path, run mode, created /
-        updated timestamps, age in minutes, log directory, config
+        updated timestamps, current phase, age in minutes, log directory, config
         path, BMC IPs, every completed global phase, and every per-node
         phase keyed by BMC IP.  Does not modify the checkpoint file.
 
@@ -5921,7 +5972,7 @@ def parse_args():
                              "from scratch after a failure.")
     parser.add_argument("--checkpoint-status", action="store_true", default=False,
                         help="EXPERIMENTAL: Print a summary of the saved checkpoint "
-                             "(checkpoints/afx_checkpoint.json) showing exactly where the "
+                             "(checkpoints/afx_checkpoint.json) showing current phase and where the "
                              "last run left off, then exit. Does not modify "
                              "the checkpoint file.")
     parser.add_argument("--last-status", action="store_true", default=False,

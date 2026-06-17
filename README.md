@@ -357,7 +357,7 @@ checkpoint file so an interrupted run — Ctrl+C, network blip, BMC
 banner stall, power loss on the jump host — can be resumed without
 re-running destructive steps.
 
-> **Tip:** Run `python3 AFX_reinit.py --checkpoint-status` at any time to inspect the saved checkpoint — file path, run mode, age, BMC IPs, and completed phases — without modifying or resuming it.
+> **Tip:** Run `python3 AFX_reinit.py --checkpoint-status` at any time to inspect the saved checkpoint — including file path, run mode, current phase, age, BMC IPs, and completed phases — without modifying or resuming it.
 > **Note:** Checkpointing is experimental and still a work in progress.
 
 ### Where the checkpoint lives
@@ -375,9 +375,9 @@ python3 AFX_reinit.py --checkpoint-status
 ```
 
 This prints the absolute checkpoint path, the run mode (e.g. `4b-3`),
-created/updated timestamps, age in minutes, log directory, config path,
-BMC IPs, every completed global phase, and every per-node phase keyed by
-BMC IP — then exits without modifying the file.
+the current phase, created/updated timestamps, age in minutes, log
+directory, config path, BMC IPs, every completed global phase, and every
+per-node phase keyed by BMC IP — then exits without modifying the file.
 
 The same summary is also printed automatically at startup whenever a
 valid checkpoint is found, immediately before the resume / discard
@@ -585,7 +585,7 @@ python3 AFX_reinit.py [OPTIONS]
 | `--bg` | | Background mode: handle SIGHUP so the log is closed cleanly when the terminal closes. Use with `nohup` or `screen`. |
 | `--screen` | | Re-launch the script inside a detached GNU screen session. Keeps the run alive if your SSH connection drops or times out. Implies `--bg`. Use `screen -r afx-reinit` to reattach. No-op if already running inside screen. |
 | `--resume` | | Mode 4b only. Resume the previous 4b run from its saved checkpoint (`afx_checkpoint.json`). Skips phases already completed so you do not have to restart from scratch after a failure or Ctrl+C. See **Checkpoint & Resume** below. |
-| `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, age, BMC IPs, completed global phases, completed per-node phases — then exit. Does not modify the checkpoint file. |
+| `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, current phase, age, BMC IPs, completed global phases, completed per-node phases — then exit. Does not modify the checkpoint file. |
 | `--last-status` | | Read and display the summary file from the most recent AFX_reinit run, then exit. The summary file is created at run start and updated as phases progress, so this flag can show live in-progress status (including phases not yet completed). |
 | `--auto-clear-stale-bmc` | | On banner-timeout retries, scan for `ESTABLISHED` TCP sockets to each BMC's port 22 owned by other Python processes on this host and `SIGTERM` them. The "always-on" cleanup (close own SSH clients + `ipmitool sol deactivate`) runs regardless of this flag. See [BMC SSH Stale Session Diagnostics](#bmc-ssh-stale-session-diagnostics). |
 | `--diag` | | Enable diagnostic bootarg injection. Loads `bootargs.txt` or `bootargs` from `configs/` or the script directory (one `option_name value` entry per line; lines starting with `#` are comments) or prompts interactively. After loading, all entries are printed and must be confirmed before proceeding. Bootargs are set via `setenv` after `set-defaults` and before `saveenv` at the LOADER stage on all nodes. See [Diagnostic Bootargs (`--diag`)](#diagnostic-bootargs---diag). |
