@@ -6226,13 +6226,23 @@ def _display_last_status():
     session_dirs.sort(reverse=True)
     most_recent_dir = session_dirs[0][1]
     
-    # Find the summary file in the most recent session directory
+    # Find the summary file in the most recent session directory.
+    # Log files are creation-numbered (e.g. "1-summary_..."), so match
+    # by substring rather than strict prefix.
     summary_file = None
     try:
+       candidates = []
        for entry in os.listdir(most_recent_dir):
-           if entry.startswith("summary_") and entry.endswith(".log"):
-               summary_file = os.path.join(most_recent_dir, entry)
-               break
+           if entry.endswith(".log") and "summary_" in entry:
+               _path = os.path.join(most_recent_dir, entry)
+               try:
+                   _mtime = os.path.getmtime(_path)
+               except OSError:
+                   _mtime = 0
+               candidates.append((_mtime, _path))
+       if candidates:
+           candidates.sort(key=lambda item: item[0], reverse=True)
+           summary_file = candidates[0][1]
     except OSError as e:
        print(f"❌  Error reading session directory: {e}")
        sys.exit(1)
