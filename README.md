@@ -1,8 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/17/2026  
-**Previous version:** `Archive/AFX-reinit.py` (original v1 script)
+**Updated:** 6/17/2026
 
 ---
 
@@ -14,7 +13,7 @@
 
 Reinitalizing an ONTAP AFX cluster involves many sequential and parallel steps — including wait times between operations — that benefit greatly from automation to reduce human error and minimize hands-on time.
 
-`AFX_reinit.py` is an automated console management script that assists NetApp field engineers and storage administrators with reinitializing NetApp AFX cluster nodes via the BMC (Baseboard Management Controller) / Service Processor (SP) console. It is the second-generation rewrite of the original v1 script, which is preserved under `Archive/AFX-reinit.py`.
+`AFX_reinit.py` is an automated console management script that assists NetApp field engineers and storage administrators with reinitializing NetApp AFX cluster nodes via the BMC (Baseboard Management Controller) / Service Processor (SP) console.
 
 The script automates the following core tasks:
 
@@ -35,83 +34,6 @@ The script automates the following core tasks:
 - Lists and cleans up stale BMC SSH sessions interactively
 
 All session activity is captured in a timestamped log directory with a human-readable summary report and a full screen-output transcript.
-Failed-run artifacts are preserved under `script_failures/YYYYMMDD_HHMMSS/` for troubleshooting and are ignored by git.
-
----
-
-## What's New in v2
-
-| Feature | Description |
-|---|---|
-| **Boot-menu stall recovery (`Waiting for BMC`)** | During option 2b/3 boot-menu waits, if console output reports `Waiting for BMC` and then stalls, the script now visibly retries BMC SSH + `system console` and continues on the refreshed session. |
-| **Boot-menu keepalive (5-minute CR)** | While waiting for long boot transitions, the script now sends a carriage return every 5 minutes to reduce BMC console session timeout risk. |
-| **Boot DNA capture via `printenv`** | DNA verification now runs `printenv` and saves raw LOADER environment output to `configs/loader_printenv_<timestamp>.txt` before parsing `bootarg.init.dna`. |
-| **LOADER env review safety stop** | After showing the pre/post `set-defaults` env diff during reinit, the script prompts whether to abort the run before any further boot-step changes proceed. |
-| **LOADER env utilities (`5i`/`5j`)** | New standalone env tools are available in option 5: `5i` backup LOADER env and `5j` compare env vs defaults. Both are currently marked **(experimental)** in the menu. |
-| JSON Config File | Cluster and node credentials can be pre-supplied in a JSON config file, eliminating repeated prompts across multi-node operations. |
-| Full Automation Modes | Modes 1b, 2b, and 3 drive the ONTAP cluster setup and node-join wizards without operator interaction. |
-| Parallel Node Operations | Mode 2b and Mode 3 run peer node additions in parallel threads, significantly reducing multi-node reinit time. |
-| End-to-End Mode (3) | Combines 1b (primary init) + 2b (peer adds) into a single unattended run. |
-| **Bulk cluster join (`cluster add-node`)** | Peer nodes now join via ONTAP's native bulk command rather than the per-node interactive wizard. All nodes complete Option 4 / disk erase / node-mgmt in parallel; a single `cluster add-node -cluster-ips` command adds them all at once. Progress is polled every 2 minutes until all nodes show success (up to 15 min). See [End-to-End Reinit Time Estimates](#end-to-end-reinit-time-estimates) for a full comparison — at 64 nodes the new approach saves ~10h vs the old serial join method. |
-| **Per-node milestone timing** | The session summary now emits five timestamped milestones per peer node (LOADER, Option 4, disk erase, node-mgmt, cluster IP) plus per-node `cluster add-node` success time. |
-| ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence using structured `-fields` polling. Connects directly to the cluster management LIF via SSH (from `reinit-config.json` or a prompted IP) for all ONTAP CLI operations; BMC console is used only as a fallback when direct SSH is unavailable. SSH reconnects automatically if the channel drops mid-upgrade. Post-upgrade version verification and cluster health checks also use the direct SSH channel for reliable, noise-free output. |
-| Netboot Install (4b) | Automated ONTAP netboot/software install with optional post-install reinit. |
-| Netboot Install Only (4c) | Runs netboot/software install only and stops before reinit or node-add workflows. |
-| Install License (5a) | Connects via BMC console and applies a pre-staged license file without running any reinit steps. |
-| SSH Key Setup (5b) | Configures passwordless SSH from the script host to cluster management. |
-| Config Backup (5c) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. After gather/build paths that connect to an existing cluster, the script also writes `configs/cluster_IP.json` (first cluster-role IP per node, in command-output order) alongside `reinit-config.json`. The retained configuration summary displays Cluster LIFs and Management LIFs in separate tables. |
-| BMC Auth Verify (5d) | Batch-tests BMC SSH credentials for loaded BMCs. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. |
-| Reset to LOADER (5z) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
-| **Cluster Health Check (5g)** | Connects to the cluster management LIF via SSH and runs `cluster show`, `storage failover show`, `network port show -ipspace Cluster`, and `system image show` to confirm all nodes are healthy and report the running ONTAP version. Cluster-port validation fails the check if any cluster port is not `Link=up` or `Health=healthy`, with detailed per-port warnings. Auto-loads connection details from `reinit-config.json`; if no config is present it offers to run 5c (config gather) first, then returns to the health check automatically. If the cluster shell is not reached or node discovery fails, the check now reports **not healthy** (no false healthy pass). |
-| **Stale BMC Session Cleanup (5h)** | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. For SSH diagnostics, **one-IP** selection now shows a numbered list of IPs from config (BMC, cluster management, and node management) with labels, and supports entering a custom IP/hostname. Includes explicit actions for `ipmitool sol deactivate` and **Remove BMC from known hosts** (`ssh-keygen -R <BMC IP>`), plus full cleanup (known_hosts reset + drop in-process clients + ipmitool + optional stale-PID SIGTERM). Returns to main menu when done. |
-| **Cluster IP manifest builder (5l)** | Adds utility mode **5l** to query cluster-role interfaces (`-role cluster`) from cluster shell and write `configs/cluster_IP.json`. The manifest keeps the first cluster IP per node in command-output order and is used by node-add workflows for deterministic `cluster add-node -cluster-ips` ordering. |
-| **2b upfront cluster-auth decision** | Mode 2b now asks before node-add work begins whether to use current BMC credentials for cluster-network IP lookup, so join automation does not stop later for a mid-run credential prompt. |
-| **2b “Add another node” timeout** | The post-join `Add another node to the cluster? [Y/N]` prompt now times out after 5 minutes and defaults to **No**. |
-| **Password groups for per-node BMC credentials** | In per-node credential flows, choosing **not** to use the same password now offers `Use password groups? (y/n)`. You can define reusable password groups, assign nodes by numbered list, review a manifest, and restart grouping before proceeding. |
-| **2a/2b/3 BMC auth now inherits 4b fallback behavior** | Node-add and end-to-end connect/reconnect paths now silently try fallback credentials (including blank password) before prompting again, reducing manual retries when nodes differ between blank/non-blank passwords. |
-| **Blank-password retry handling (1a/1b/2a/2b/3 + utilities)** | Credential retry paths now treat a blank password as an intentional value to try (instead of aborting or silently replacing it with fallback credentials). To skip a retry explicitly, enter `SKIP` where prompted. |
-| **Result-screen pause before menu return (5d/5g)** | After BMC auth verify (5d) and cluster health check (5g), the script now waits for **Enter** before returning to the menu so operators can review output without it scrolling away. |
-| **2a/2b selective node omission + auto-skip joined nodes** | Modes 2a and 2b now show numbered secondary-node lists and allow comma-separated omission by number before add starts. During add, the script queries `network interface show -role node-mgmt` and automatically omits nodes already present in the cluster. |
-| **5b known_hosts opt-in auto-accept** | In manual SSH key setup (5b), the operator can choose to auto-accept known_hosts addition; when enabled, acceptance is performed at the end of the workflow before final SSH verification. |
-| Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
-| **Screen output log** | Every line printed to the terminal during a run is captured to `screen_output_<timestamp>.log` in the session log directory. ANSI codes are stripped for clean plain-text reading. |
-| Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |
-| Screen Mode | `--screen` flag: automatically re-launches the script inside a detached GNU screen session. Protects against SSH disconnections and terminal timeouts. Implies `--bg`. |
-| Node add resume | Resumes interrupted node add processes. |
-| Physical disk zeroing | Adds option to physically zero disks rather than fast zero (which helps ensure performance consistency). |
-| BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 5d offers interactive remediation when BMC verification fails, including known_hosts reset (`ssh-keygen -R <BMC IP>`). Use option 5h for standalone diagnostics/cleanup with the same known_hosts remediation action. |
-| Diagnostic bootarg injection (`--diag`) | Injects custom LOADER `setenv` bootargs (from a `bootargs.txt` or `bootargs` file in `configs/` or the script directory, or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Accepts any `option_name value` format (not just `bootarg.` prefix). All entries printed and confirmed before proceeding. Validates format, detects LOADER errors on apply, and checkpoints the bootarg list for resume. |
-
----
-
-## End-to-End Reinit Time Estimates
-
-The table below compares estimated total wall-clock time for a full end-to-end cluster reinit (primary + N−1 peer nodes) between the **old** wizard-based node-join and the **new** `cluster add-node` bulk-join, based on an observed 4-node benchmark (3094s / 51.6m total).
-
-**Phase breakdown (observed, 4 nodes):**
-
-| Phase | Time | Scales with nodes? |
-|---|---|---|
-| Early setup (SSH, LOADER, boot menu) | ~3.5m | No — constant |
-| Primary node 1b (cluster init + wizard) | ~21.3m | No — constant |
-| Peer parallel prep (Option 4 → cluster IP) | ~10.5m | No — all peers run simultaneously |
-| Old: serial join wizard per peer | ~12m avg / peer (15m max) | Yes — ×(N−1) |
-| New: `cluster add-node` bulk join | ~14m for 3 peers + ~2m per additional | Near-constant |
-
-**Formulas:**
-- **Old total:** ~35m fixed + (N−1) × ~12m serial joins
-- **New total:** ~35m fixed + ~14m bulk join + ~2m per peer beyond the first 3
-
-| Cluster Size | **Old Total** | **New Total** | **Savings** |
-|---|---|---|---|
-| 4 nodes (observed) | **~71m** | **~52m** | ~19m |
-| 8 nodes* | **~119m (2h)** | **~57m** | ~62m |
-| 16 nodes* | **~215m (3.6h)** | **~69m** | ~2.4h |
-| 64 nodes* | **~791m (13.2h)** | **~175m (2.9h)** | ~10.3h |
-
-> Based on observed 4-node run (3094s total): fixed overhead ~1496s (~25m), peer parallel prep ~630s (~10.5m), bulk join last success ~846s + ~120s health poll. Old serial join ~720s avg per peer. Observed new 4-node total was 51.6m; table shows ~52m.
->
-> \* Extrapolated from 4-node observed data; not tested.
 
 ---
 
@@ -132,9 +54,8 @@ The BMC/SP must be configured and accessible over the network before running thi
 - [Manage SP/BMC](https://docs.netapp.com/us-en/ontap/system-admin/manage-sp-bmc-concept.html)
 - [Configure SP/BMC network](https://docs.netapp.com/us-en/ontap/system-admin/configure-sp-bmc-network-concept.html)
 
----
-
-## Supported Operating Systems
+<details>
+<summary>Supported Operating Systems</summary>
 
 The script has been tested on CentOS 7.x, Red Hat 9.x, and Ubuntu 22.04. It should work on any system that supports Python 3.6+.
 
@@ -150,11 +71,12 @@ The script has been tested on CentOS 7.x, Red Hat 9.x, and Ubuntu 22.04. It shou
 
 The script automatically detects the operating system and uses the appropriate package manager (`apt`, `dnf`, or `yum`) for installing system-level dependencies. On macOS and Windows, `pip` is used exclusively.
 
----
+</details>
 
-## Required Packages and Modules
+<details>
+<summary>Required Packages and Modules</summary>
 
-### Python Modules
+**Python Modules**
 
 | Module | Purpose | Install Method |
 |---|---|---|
@@ -175,22 +97,23 @@ sudo yum install python3-paramiko
 pip install paramiko
 ```
 
-### Standard Library Modules (no install required)
+**Standard Library Modules (no install required)**
 
 `subprocess`, `sys`, `os`, `time`, `re`, `getpass`, `logging`, `threading`, `signal`, `argparse`, `platform`, `socket`, `warnings`, `datetime`, `json`, `atexit`
 
----
+</details>
 
-## Network Requirements
+<details>
+<summary>Network Requirements</summary>
 
-### Port Requirements
+**Port Requirements**
 
 | Port | Protocol | Direction | Purpose |
 |---|---|---|---|
 | 22 | TCP | Client → BMC/SP | SSH connection to each node's BMC or Service Processor |
 | 22 | TCP | Client → Cluster Mgmt IP | SSH connection to ONTAP cluster management (modes 4a–5g) |
 
-### Firewall Configuration
+**Firewall Configuration**
 
 Ensure that port 22 (SSH) is open outbound from the client machine to all BMC/SP addresses and to the cluster management IP.
 
@@ -231,7 +154,7 @@ sudo setenforce 1
 
 > Do not permanently disable SELinux on production systems.
 
-### Connectivity Test
+**Connectivity Test**
 
 Before running the script, verify that you can reach each BMC:
 
@@ -242,6 +165,39 @@ ssh admin@<bmc-address>
 # Test port connectivity
 nc -zv <bmc-address> 22
 ```
+
+</details>
+
+---
+
+## End-to-End Reinit Time Estimates
+
+The table below compares estimated total wall-clock time for a full end-to-end cluster reinit (primary + N−1 peer nodes) between the **old** wizard-based node-join and the **new** `cluster add-node` bulk-join, based on an observed 4-node benchmark (3094s / 51.6m total).
+
+**Phase breakdown (observed, 4 nodes):**
+
+| Phase | Time | Scales with nodes? |
+|---|---|---|
+| Early setup (SSH, LOADER, boot menu) | ~3.5m | No — constant |
+| Primary node 1b (cluster init + wizard) | ~21.3m | No — constant |
+| Peer parallel prep (Option 4 → cluster IP) | ~10.5m | No — all peers run simultaneously |
+| Old: serial join wizard per peer | ~12m avg / peer (15m max) | Yes — ×(N−1) |
+| New: `cluster add-node` bulk join | ~14m for 3 peers + ~2m per additional | Near-constant |
+
+**Formulas:**
+- **Old total:** ~35m fixed + (N−1) × ~12m serial joins
+- **New total:** ~35m fixed + ~14m bulk join + ~2m per peer beyond the first 3
+
+| Cluster Size | **Old Total** | **New Total** | **Savings** |
+|---|---|---|---|
+| 4 nodes (observed) | **~71m** | **~52m** | ~19m |
+| 8 nodes* | **~119m (2h)** | **~57m** | ~62m |
+| 16 nodes* | **~215m (3.6h)** | **~69m** | ~2.4h |
+| 64 nodes* | **~791m (13.2h)** | **~175m (2.9h)** | ~10.3h |
+
+> Based on observed 4-node run (3094s total): fixed overhead ~1496s (~25m), peer parallel prep ~630s (~10.5m), bulk join last success ~846s + ~120s health poll. Old serial join ~720s avg per peer. Observed new 4-node total was 51.6m; table shows ~52m.
+>
+> \* Extrapolated from 4-node observed data; not tested.
 
 ---
 
@@ -331,10 +287,10 @@ The script presents a menu at startup. Enter the number corresponding to the des
 |---|---|---|
 | **1a** | Initialize First Node (interactive) | Boots to LOADER, sets `destroy-all-storage-pods` flag, selects boot menu option 9 (Clean System Configuration). Prompts the operator for all cluster setup wizard inputs. |
 | **1b** | Initialize First Node (automated) | Same as 1a, but drives the full ONTAP cluster setup wizard automatically using values from config file or prompts. |
-| **2a** | Add Node to Cluster (interactive) | Boots to LOADER, selects boot menu option 4 (Initialize and configure system). Operator completes the node-join wizard. In multi-node runs, supports numbered omit selection and auto-skips nodes already in cluster. Per-node credential collection can use experimental password groups, and BMC auth attempts include silent fallback (including blank password). |
-| **2b** | Add Node to Cluster (automated) | Same as 2a, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel, numbered omit selection, and auto-skips nodes already in cluster. In this flow, "primary BMC" is used as the default credential context (use `PRIMARY` to reuse that password; blank means an actual blank password), not as a unique controller after parallel add starts. Per-node credential collection can use experimental password groups, and BMC auth attempts include silent fallback (including blank password). |
-| **2c** | Resume Node Additions | Resumes interrupted node-join operations from the last successful checkpoint. Use when a previous mode 2b or mode 3 run was interrupted before all secondary nodes completed. |
-| **3** | End-to-End Auto Reinit | Runs mode 1b on the primary node, then runs mode 2b on all secondary nodes in parallel. Fully unattended with a config file. Peer-credential collection supports experimental password groups, and peer BMC connect/reconnect paths use silent fallback credentials (including blank password). **Option 3 is reinit-only and assumes ONTAP is already at the target version; use 4b or 4c for image installs.** |
+| **2a** | Add Node to Cluster (interactive) | Boots to LOADER, selects boot menu option 4 (Initialize and configure system). Operator completes the node-join wizard. In multi-node runs, supports numbered omit selection and auto-skips nodes already in cluster. Per-node credential collection can use password groups, and BMC auth attempts include silent fallback (including blank password). |
+| **2b** | Add Node to Cluster (automated) | Same as 2a, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel, numbered omit selection, and auto-skips nodes already in cluster. In this flow, "primary BMC" is used as the default credential context (use `PRIMARY` to reuse that password; blank means an actual blank password), not as a unique controller after parallel add starts. Per-node credential collection can use password groups, and BMC auth attempts include silent fallback (including blank password). |
+| **2c** | Resume Node Additions | Resumes interrupted node-join operations from the last successful checkpoint. Use when a previous mode 2b or mode 3 run was interrupted before all secondary nodes completed. Run `--checkpoint-status` to inspect the checkpoint state before resuming. |
+| **3** | End-to-End Auto Reinit | Runs mode 1b on the primary node, then runs mode 2b on all secondary nodes in parallel. Fully unattended with a config file. Peer-credential collection supports password groups, and peer BMC connect/reconnect paths use silent fallback credentials (including blank password). **Option 3 is reinit-only and assumes ONTAP is already at the target version; use 4b or 4c for image installs.** |
 | **4a** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. See [Why 4a uses the BMC](#why-4a-uses-the-bmc). |
 | **4b** | Netboot Install + Optional Reinit | Runs netboot image install, then can continue into reinit flow (1a/1b/3) when selected. |
 | **4c** | Netboot Install Only | Runs the same netboot image install path as 4b, then stops before reinit, cluster create, or node add steps. |
@@ -400,6 +356,9 @@ and the standalone end-to-end mode **3** persist progress to a
 checkpoint file so an interrupted run — Ctrl+C, network blip, BMC
 banner stall, power loss on the jump host — can be resumed without
 re-running destructive steps.
+
+> **Tip:** Run `python3 AFX_reinit.py --checkpoint-status` at any time to inspect the saved checkpoint — file path, run mode, age, BMC IPs, and completed phases — without modifying or resuming it.
+> **Note:** Checkpointing is experimental and still a work in progress.
 
 ### Where the checkpoint lives
 
@@ -844,8 +803,6 @@ The `logs/` directory is created in the same folder as the script.
 **`screen_output_*.log`** captures everything that would appear on the operator's terminal — menus, prompts, status lines, and milestone messages — in clean plain text (ANSI escape codes stripped). It is the easiest file to review after a run to see exactly what happened from a user's perspective.
 
 **`bmc_session_*.log`** contains the raw BMC/ONTAP console I/O and all structured log entries with timestamps.
-
-**`script_failures/YYYYMMDD_HHMMSS/`** keeps preserved logs from failed runs for postmortem troubleshooting, including screen output, BMC session logs, SSH traces, and env snapshots.
 
 ### Summary File Format
 
@@ -1305,6 +1262,54 @@ current `[Unreleased]` working set.
 | v2b | Apr 7, 2026 | Parallel peer node operations; end-to-end mode (3); ONTAP upgrade (4a); netboot install (4b); license install (5a); SSH key setup (5b); config backup (5c); BMC auth verify (5d); JSON config file support; background mode; session log with phase/step timing, warnings, and errors inventory. |
 | v2a | Apr 7, 2026 | Session logging with timing and summary; warning/error collection in summary; `_recv_loop` + thin wrapper architecture; module-level `_peer_reinit_worker`. |
 | v1 | Apr 7, 2026 | Initial release. Modes 1a and 2a. |
+
+---
+
+<details>
+<summary><strong>What's New in v2</strong></summary>
+
+| Feature | Description |
+|---|---|
+| **Boot-menu stall recovery (`Waiting for BMC`)** | During option 2b/3 boot-menu waits, if console output reports `Waiting for BMC` and then stalls, the script now visibly retries BMC SSH + `system console` and continues on the refreshed session. |
+| **Boot-menu keepalive (5-minute CR)** | While waiting for long boot transitions, the script now sends a carriage return every 5 minutes to reduce BMC console session timeout risk. |
+| **Boot DNA capture via `printenv`** | DNA verification now runs `printenv` and saves raw LOADER environment output to `configs/loader_printenv_<timestamp>.txt` before parsing `bootarg.init.dna`. |
+| **LOADER env review safety stop** | After showing the pre/post `set-defaults` env diff during reinit, the script prompts whether to abort the run before any further boot-step changes proceed. |
+| **LOADER env utilities (`5i`/`5j`)** | New standalone env tools are available in option 5: `5i` backup LOADER env and `5j` compare env vs defaults. Both are currently marked **(experimental)** in the menu. |
+| JSON Config File | Cluster and node credentials can be pre-supplied in a JSON config file, eliminating repeated prompts across multi-node operations. |
+| Full Automation Modes | Modes 1b, 2b, and 3 drive the ONTAP cluster setup and node-join wizards without operator interaction. |
+| Parallel Node Operations | Mode 2b and Mode 3 run peer node additions in parallel threads, significantly reducing multi-node reinit time. |
+| End-to-End Mode (3) | Combines 1b (primary init) + 2b (peer adds) into a single unattended run. |
+| **Bulk cluster join (`cluster add-node`)** | Peer nodes now join via ONTAP's native bulk command rather than the per-node interactive wizard. All nodes complete Option 4 / disk erase / node-mgmt in parallel; a single `cluster add-node -cluster-ips` command adds them all at once. Progress is polled every 2 minutes until all nodes show success (up to 15 min). See [End-to-End Reinit Time Estimates](#end-to-end-reinit-time-estimates) for a full comparison — at 64 nodes the new approach saves ~10h vs the old serial join method. |
+| **Per-node milestone timing** | The session summary now emits five timestamped milestones per peer node (LOADER, Option 4, disk erase, node-mgmt, cluster IP) plus per-node `cluster add-node` success time. |
+| ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence using structured `-fields` polling. Connects directly to the cluster management LIF via SSH (from `reinit-config.json` or a prompted IP) for all ONTAP CLI operations; BMC console is used only as a fallback when direct SSH is unavailable. SSH reconnects automatically if the channel drops mid-upgrade. Post-upgrade version verification and cluster health checks also use the direct SSH channel for reliable, noise-free output. |
+| Netboot Install (4b) | Automated ONTAP netboot/software install with optional post-install reinit. |
+| Netboot Install Only (4c) | Runs netboot/software install only and stops before reinit or node-add workflows. |
+| Install License (5a) | Connects via BMC console and applies a pre-staged license file without running any reinit steps. |
+| SSH Key Setup (5b) | Configures passwordless SSH from the script host to cluster management. |
+| Config Backup (5c) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. After gather/build paths that connect to an existing cluster, the script also writes `configs/cluster_IP.json` (first cluster-role IP per node, in command-output order) alongside `reinit-config.json`. The retained configuration summary displays Cluster LIFs and Management LIFs in separate tables. |
+| BMC Auth Verify (5d) | Batch-tests BMC SSH credentials for loaded BMCs. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. |
+| Reset to LOADER (5z) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
+| **Cluster Health Check (5g)** | Connects to the cluster management LIF via SSH and runs `cluster show`, `storage failover show`, `network port show -ipspace Cluster`, and `system image show` to confirm all nodes are healthy and report the running ONTAP version. Cluster-port validation fails the check if any cluster port is not `Link=up` or `Health=healthy`, with detailed per-port warnings. Auto-loads connection details from `reinit-config.json`; if no config is present it offers to run 5c (config gather) first, then returns to the health check automatically. If the cluster shell is not reached or node discovery fails, the check now reports **not healthy** (no false healthy pass). |
+| **Stale BMC Session Cleanup (5h)** | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. For SSH diagnostics, **one-IP** selection now shows a numbered list of IPs from config (BMC, cluster management, and node management) with labels, and supports entering a custom IP/hostname. Includes explicit actions for `ipmitool sol deactivate` and **Remove BMC from known hosts** (`ssh-keygen -R <BMC IP>`), plus full cleanup (known_hosts reset + drop in-process clients + ipmitool + optional stale-PID SIGTERM). Returns to main menu when done. |
+| **Cluster IP manifest builder (5l)** | Adds utility mode **5l** to query cluster-role interfaces (`-role cluster`) from cluster shell and write `configs/cluster_IP.json`. The manifest keeps the first cluster IP per node in command-output order and is used by node-add workflows for deterministic `cluster add-node -cluster-ips` ordering. |
+| **2b upfront cluster-auth decision** | Mode 2b now asks before node-add work begins whether to use current BMC credentials for cluster-network IP lookup, so join automation does not stop later for a mid-run credential prompt. |
+| **2b "Add another node" timeout** | The post-join `Add another node to the cluster? [Y/N]` prompt now times out after 5 minutes and defaults to **No**. |
+| **Password groups for per-node BMC credentials** | In per-node credential flows, choosing **not** to use the same password now offers `Use password groups? (y/n)`. You can define reusable password groups, assign nodes by numbered list, review a manifest, and restart grouping before proceeding. |
+| **2a/2b/3 BMC auth now inherits 4b fallback behavior** | Node-add and end-to-end connect/reconnect paths now silently try fallback credentials (including blank password) before prompting again, reducing manual retries when nodes differ between blank/non-blank passwords. |
+| **Blank-password retry handling (1a/1b/2a/2b/3 + utilities)** | Credential retry paths now treat a blank password as an intentional value to try (instead of aborting or silently replacing it with fallback credentials). To skip a retry explicitly, enter `SKIP` where prompted. |
+| **Result-screen pause before menu return (5d/5g)** | After BMC auth verify (5d) and cluster health check (5g), the script now waits for **Enter** before returning to the menu so operators can review output without it scrolling away. |
+| **2a/2b selective node omission + auto-skip joined nodes** | Modes 2a and 2b now show numbered secondary-node lists and allow comma-separated omission by number before add starts. During add, the script queries `network interface show -role node-mgmt` and automatically omits nodes already present in the cluster. |
+| **5b known_hosts opt-in auto-accept** | In manual SSH key setup (5b), the operator can choose to auto-accept known_hosts addition; when enabled, acceptance is performed at the end of the workflow before final SSH verification. |
+| Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
+| **Screen output log** | Every line printed to the terminal during a run is captured to `screen_output_<timestamp>.log` in the session log directory. ANSI codes are stripped for clean plain-text reading. |
+| Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |
+| Screen Mode | `--screen` flag: automatically re-launches the script inside a detached GNU screen session. Protects against SSH disconnections and terminal timeouts. Implies `--bg`. |
+| Node add resume | Resumes interrupted node add processes. |
+| Physical disk zeroing | Adds option to physically zero disks rather than fast zero (which helps ensure performance consistency). |
+| BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 5d offers interactive remediation when BMC verification fails, including known_hosts reset (`ssh-keygen -R <BMC IP>`). Use option 5h for standalone diagnostics/cleanup with the same known_hosts remediation action. |
+| Diagnostic bootarg injection (`--diag`) | Injects custom LOADER `setenv` bootargs (from a `bootargs.txt` or `bootargs` file in `configs/` or the script directory, or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Accepts any `option_name value` format (not just `bootarg.` prefix). All entries printed and confirmed before proceeding. Validates format, detects LOADER errors on apply, and checkpoints the bootarg list for resume. |
+
+</details>
 
 ---
 

@@ -44,9 +44,9 @@ revision labels rather than strict [SemVer](https://semver.org/).
   when it is `false`, asks once whether to force `AUTOBOOT=true` after
   `set-defaults`. If approved, `setenv AUTOBOOT true` is injected with the
   post-default LOADER bootarg commands.
-- **Experimental password groups added for per-node credential collection.**
+- **Password groups added for per-node credential collection.**
   In same-password prompts across node/BMC workflows, choosing per-node
-  passwords now offers an experimental password-group mode that lets operators
+  passwords now offers a password-group mode that lets operators
   assign one password to numbered subsets of nodes, review a manifest, and
   restart grouping before continuing.
 - **2a/2b/3 now include the same blank-password fallback used by 4b.**
