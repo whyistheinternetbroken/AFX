@@ -4726,6 +4726,10 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                     )
                 _bnr_done = False
                 for _b in range(1, _bnr_max + 1):
+                    print(
+                        f"   ⏳ [{label}] waiting {_bnr_interval}s before "
+                        f"banner retry {_b}/{_bnr_max}..."
+                    )
                     # Before each retry sleep, try to free up a BMC SSH
                     # session slot: close any in-process clients we still
                     # hold to this host, run 'ipmitool sol deactivate'
@@ -4743,6 +4747,10 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                             raise last_exc
                         time.sleep(1)
                         _waited += 1
+                    print(
+                        f"   🔁 [{label}] banner retry window elapsed; "
+                        f"attempting reconnect {_b}/{_bnr_max} now..."
+                    )
                     try:
                         client = paramiko.SSHClient()
                         client.set_missing_host_key_policy(
@@ -28374,6 +28382,8 @@ def main():
                               " auto-added in parallel after primary cluster is up:")
                         print(f"     {', '.join(other_sps)}")
                         _session_log.log(f"Mode 3 peer add list: {other_sps}")
+                        if _netboot_before_reinit:
+                            _print_autopilot_banner()
 
                 # Holds the result of the primary-node LOADER probe when it runs in
                 # parallel with the peer resets (mode 3 only).
