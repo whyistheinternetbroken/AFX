@@ -633,6 +633,8 @@ python3 AFX_reinit.py [OPTIONS]
 | `--help` / `-h` | | Show a short man page about the script's options. |
 | `--version` | | Print script version and last update timestamp, then exit. |
 
+**Startup command completion:** If `argcomplete` is installed and your shell is configured for it, Tab can complete the startup flags above (for example `--reinit`, `--config`, `--screen`) before the script starts. See the `argcomplete` docs for the shell hook setup.
+
 ### Mode Shortcut Flags
 
 These flags bypass the interactive menu and launch directly into the specified mode. They can be combined with `--config`, `--debug`, `--screen`, and other flags.
@@ -850,25 +852,35 @@ The `logs/` directory is created in the same folder as the script.
 The summary file contains:
 
 - **Result:** PASS, PASS (with warnings), or FAIL
-- **Phase Timing:** duration of each named phase (e.g., "BMC Connect", "LOADER", "Wizard")
+- **Phase Timing:** duration of each named phase (e.g., "BMC Connect", "LOADER", "Wizard", "Auto Join"). Includes:
+  - **Indented sub-rows** for phases that support per-node breakdown (e.g., `[node] image download` and `[node] image install` under the netboot install phase).
+  - **`Pause wait (xN)` row** showing aggregate operator-pause time (total seconds held, pause count, and a `longest single pause` sub-line with context label) when the run was paused at least once.
 - **Step Timing:** duration of individual steps within each phase
-- **Warnings (N):** timestamp and message for each warning logged during the run
+- **Warnings (N):** grouped by source log file; each block starts with the log file path, followed by timestamped warning messages
 - **Errors (N):** timestamp and message for each error logged during the run
 
 Example summary:
 
 ```
 ==================================================
-SESSION SUMMARY — Mode 1b: Initialize First Node (automated)
-Result : PASS (1 warning)
+SESSION SUMMARY — Mode 3: End-to-End Reinit (automated)
+Result : PASS
 ==================================================
 
 Phase Timing
-  BMC Connect    :   3.2s
-  System Reset   :  12.4s
-  LOADER         :  18.1s
-  Wizard         : 142.7s
-  Total          : 176.4s
+  BMC Connect             :   3.2s
+  System Reset            :  12.4s
+  LOADER                  :  18.1s
+  4b – Netboot Install    : 412.3s
+    [node-01] image download :  85.1s
+    [node-01] image install  : 201.4s
+    [node-02] image download :  83.7s
+    [node-02] image install  : 198.6s
+  Wizard                  : 142.7s
+  Auto Join               : 814.5s
+  Pause wait (x2)         : 120.0s
+     - longest single pause: 90.0s (1.5m) context: boot menu wait
+  Total                   : 1523.2s
 
 Step Timing
   wait_bmc_prompt     :   3.2s
@@ -876,8 +888,8 @@ Step Timing
   wait_autoboot       :  12.3s
   ...
 
-Warnings (1)
-  2026-04-07 14:23:01  Existing BMC session detected — auto-disconnected
+Warnings (0)
+  (none)
 
 Errors (0)
   (none)
@@ -1272,6 +1284,7 @@ current `[Unreleased]` working set.
 
 | Version | Date | Description |
 |---|---|---|
+| v2 (unreleased) | Jun 17, 2026 | **Richer run-summary timing.** The session summary now includes a dedicated **Pause wait** row (aggregate pause-hold time, count, and longest-pause context), per-node **image download** and **image install** subtimings under the netboot install phase, and a named **Auto Join** phase so cluster-join wait time is attributed rather than appearing as unaccounted time. |
 | v2 (unreleased) | Jun 13, 2026 | **Runtime pause and checkpoint controls.** Added live pause/resume control for active runs (`.afx_pause`, `SIGUSR1` toggle, `SIGUSR2` resume) that suppresses auto-reconnect while paused, plus manual checkpoint snapshots during runtime (`.afx_checkpoint_now`, `SIGURG`) written as `checkpoints/afx_checkpoint_manual_YYYYMMDD_HHMMSS.json`. |
 | v2 (unreleased) | Jun 13, 2026 | **Safer credential prompts.** Config-loaded BMC username prompt now shows `BMC username [admin]:`, and 4b pre-collected cluster admin passwords now require confirmation (`Confirm cluster admin password`) with mismatch retry. |
 | v2 (unreleased) | Jun 1, 2026 | **Incremental node join timing.** Per-node sub-rows under `Node join total` now show incremental elapsed time (`+Xm`) for the 2nd and later nodes, making it easy to see how long each individual node join took. First node and `Join → all nodes healthy` retain cumulative totals. |

@@ -214,6 +214,10 @@ revision labels rather than strict [SemVer](https://semver.org/).
   the corruption.
 
 ### Added
+- **Startup CLI flag completion support.**
+  The parser now integrates with `argcomplete`, so startup flags like
+  `--reinit`, `--config`, and `--screen` can be Tab-completed when the shell
+  completion hook is enabled.
 - **Runtime pause/resume control built into live runs.**
   Added operator-controlled runtime pause that can be triggered by sentinel
   file (`.afx_pause`) or Unix signals (`SIGUSR1` toggle, `SIGUSR2` resume).
@@ -385,6 +389,21 @@ revision labels rather than strict [SemVer](https://semver.org/).
   to catch any entry that resolves to the primary IP before threads are spawned.
 
 ### Added
+- **Pause wait row in run summary.** When a run is paused at least once (via
+  `.afx_pause` file or `SIGUSR1`/`SIGUSR2` signals), the Phase Timing section
+  of the session summary now includes a dedicated `Pause wait (xN)` row showing
+  the total time held in pause and the number of pause events. A `longest single
+  pause` sub-line records the duration and the context label (e.g., "boot menu
+  wait") of the longest individual pause.
+- **Per-node netboot download/install subtimings.** Under the netboot install
+  phase (`4b – Netboot Install`, `Peer Netboot Install`, `Netboot ONTAP
+  Install`), each node now contributes indented `[<node>] image download` and
+  `[<node>] image install` sub-rows in the Phase Timing report. This makes it
+  easy to identify slow nodes or transfer bottlenecks across multi-node installs.
+- **`Auto Join` phase for cluster-join attribution.** The peer cluster-join
+  wizard (mode 2b / mode 3) is now recorded as a named `Auto Join` phase. Long
+  cluster-join waits that previously appeared as unaccounted time in the phase
+  summary are now attributed to this phase.
 - **Menu option 4g: Reset all nodes to LOADER prompt.**Connects to all BMC
   addresses (from config file or manual entry) in parallel, issues a system
   reset on each node, enters the system console, and sends Ctrl+C to interrupt

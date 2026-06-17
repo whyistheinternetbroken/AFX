@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
 
 # OPT (phase 2): PEP 563 deferred evaluation of annotations. Lets us add
 # type hints freely without paying runtime cost, and without worrying about
@@ -46,6 +47,13 @@ try:
     HAS_READLINE = True
 except ImportError:
     HAS_READLINE = False
+
+# Optional: argcomplete for startup CLI flag completion (requires shell hook).
+try:
+    import argcomplete
+    HAS_ARGCOMPLETE = True
+except ImportError:
+    HAS_ARGCOMPLETE = False
 
 SCRIPT_VERSION = "1.1.1"
 
@@ -2412,11 +2420,12 @@ class SessionLogger:
                     )
             self._file.write(f"  {'─' * 55}\n")
             self._file.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
-            # Operator idle time at interactive prompts plus the
-            # unaccounted gap (anything not covered by tracked phases or
-            # prompt waits) so the wall-clock vs. phase-sum discrepancy
-            # is visible at a glance.
+            # Operator idle time at interactive prompts plus deliberate
+            # pause-wait time plus the unaccounted gap (anything not covered
+            # by tracked phases, prompt waits, or pause waits) so the
+            # wall-clock vs. phase-sum discrepancy is visible at a glance.
             _pw = float(_prompt_wait_seconds)
+            _paw = float(_pause_wait_seconds)
             _phase_sum = sum(self._phase_times.values()) if self._phase_times else 0.0
             _unaccounted = max(0.0, total_elapsed - _phase_sum - _pw)
             self._file.write(
@@ -2433,6 +2442,16 @@ class SessionLogger:
                 self._file.write(
                     f"     - extended wait {_ext_sec:>6.1f}s "
                     f"({_ext_sec/60:.1f}m) at: {_ext_lbl or '(no label)'}\n"
+                )
+            self._file.write(
+                f"  {'Pause wait (x' + str(_pause_wait_count) + ')':<45} "
+                f"{_paw:>7.1f}s ({_paw/60:.1f}m)\n"
+            )
+            if _pause_wait_max > 0:
+                _plbl = _pause_wait_max_label or "(no label)"
+                self._file.write(
+                    f"     - longest single pause: {_pause_wait_max:.1f}s "
+                    f"({_pause_wait_max/60:.1f}m) context: {_plbl}\n"
                 )
             self._file.write(
                 f"  {'Unaccounted time':<45} {_unaccounted:>7.1f}s ({_unaccounted/60:.1f}m)\n"
@@ -2541,6 +2560,7 @@ class SessionLogger:
                     sf.write(f"  {'─' * 55}\n")
                     sf.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
                     _pw = float(_prompt_wait_seconds)
+                    _paw = float(_pause_wait_seconds)
                     _phase_sum = sum(self._phase_times.values()) if self._phase_times else 0.0
                     _unaccounted = max(0.0, total_elapsed - _phase_sum - _pw)
                     sf.write(
@@ -2557,6 +2577,16 @@ class SessionLogger:
                         sf.write(
                             f"     - extended wait {_ext_sec:>6.1f}s "
                             f"({_ext_sec/60:.1f}m) at: {_ext_lbl or '(no label)'}\n"
+                        )
+                    sf.write(
+                        f"  {'Pause wait (x' + str(_pause_wait_count) + ')':<45} "
+                        f"{_paw:>7.1f}s ({_paw/60:.1f}m)\n"
+                    )
+                    if _pause_wait_max > 0:
+                        _plbl = _pause_wait_max_label or "(no label)"
+                        sf.write(
+                            f"     - longest single pause: {_pause_wait_max:.1f}s "
+                            f"({_pause_wait_max/60:.1f}m) context: {_plbl}\n"
                         )
                     sf.write(
                         f"  {'Unaccounted time':<45} {_unaccounted:>7.1f}s ({_unaccounted/60:.1f}m)\n"
@@ -2578,8 +2608,35 @@ class SessionLogger:
                     sf.write("\n" + "─" * 70 + "\n")
                     sf.write(f"Warnings ({len(self._warnings)})\n")
                     sf.write("─" * 70 + "\n")
+                    _warn_groups = []
+                    _current_group = []
+                    _prev_warn_dt = None
                     for ts, msg in self._warnings:
-                        sf.write(f"  [{ts}] {msg}\n")
+                        try:
+                            _warn_dt = datetime.strptime(ts, "%H:%M:%S")
+                            _warn_dt = _warn_dt.replace(
+                                year=self._start_time.year,
+                                month=self._start_time.month,
+                                day=self._start_time.day,
+                            )
+                        except Exception:
+                            _warn_dt = None
+                        if (_prev_warn_dt is not None and _warn_dt is not None
+                                and (_warn_dt - _prev_warn_dt).total_seconds() > 30
+                                and _current_group):
+                            _warn_groups.append(_current_group)
+                            _current_group = []
+                        _current_group.append((ts, msg))
+                        if _warn_dt is not None:
+                            _prev_warn_dt = _warn_dt
+                    if _current_group:
+                        _warn_groups.append(_current_group)
+                    for _idx, _group in enumerate(_warn_groups):
+                        if _idx > 0:
+                            sf.write("\n")
+                        sf.write(f"  Log file: {self.log_file}\n")
+                        for ts, msg in _group:
+                            sf.write(f"    [{ts}] {msg}\n")
 
                 # ---- Errors ----
                 if self._errors:
@@ -3577,6 +3634,16 @@ except Exception:
     _PAUSE_AUTO_CLEAR_SECONDS = 7200
 _pause_state_lock = threading.Lock()
 _pause_announced = False
+
+# ── Pause wait-time tracker ──────────────────────────────────────────────────
+# Mirrors the prompt-wait tracker above.  Accumulated inside _wait_if_paused()
+# so that deliberate operator-initiated pauses are visible in the run summary
+# and subtracted from the unaccounted-time gap alongside prompt waits.
+_pause_wait_seconds = 0.0
+_pause_wait_count = 0
+_pause_wait_lock = threading.Lock()
+_pause_wait_max = 0.0
+_pause_wait_max_label = ""
 _runtime_cmd_lock = threading.Lock()
 _manual_checkpoint_signal_event = threading.Event()
 
@@ -3662,12 +3729,15 @@ def _wait_if_paused(context: str = "automation") -> None:
     Operators can pause/resume a live run by creating/removing the sentinel
     file returned by _pause_sentinel_path().
     """
-    global _pause_announced
+    global _pause_announced, _pause_wait_seconds, _pause_wait_count
+    global _pause_wait_max, _pause_wait_max_label
     _process_runtime_requests(context)
     _path = _pause_sentinel_path()
     _pause_started = time.monotonic()
     _next_reminder = _pause_started + 300
+    _pause_was_active = False
     while not _shutdown_event.is_set() and _pause_requested():
+        _pause_was_active = True
         _process_runtime_requests(context)
         with _pause_state_lock:
             if not _pause_announced:
@@ -3704,6 +3774,14 @@ def _wait_if_paused(context: str = "automation") -> None:
             _pause_announced = False
             _ts_print("▶️  Pause cleared. Resuming automation.")
             _slog("Pause cleared; resuming automation")
+    if _pause_was_active:
+        _pause_elapsed = time.monotonic() - _pause_started
+        with _pause_wait_lock:
+            _pause_wait_seconds += _pause_elapsed
+            _pause_wait_count += 1
+            if _pause_elapsed > _pause_wait_max:
+                _pause_wait_max = _pause_elapsed
+                _pause_wait_max_label = context
 
 
 def _pause_allows_reconnect(context: str = "reconnect") -> bool:
@@ -5404,7 +5482,6 @@ DESCRIPTION
            (supports password groups + blank-password fallback retries)
       2b   Add node to existing cluster — automated (parallel multi-node)
            (supports password groups + blank-password fallback retries)
-      2c   Resume node additions (EXPERIMENTAL)
        3   End-to-end reinit: mode 1b on primary + mode 2b on all peers
            (same credential-grouping/fallback behavior as 2b; reinit-only)
            ONTAP installs are handled by 4b/4c before running mode 3
@@ -5541,6 +5618,10 @@ OPTIONS
         Enable diagnostic bootarg injection at LOADER. Bootargs are loaded
         from bootargs.txt / bootargs (or prompted interactively), then
         applied after set-defaults and before saveenv.
+
+    Startup flag completion
+        Startup CLI flags can be Tab-completed when argcomplete is installed
+        and your shell has its completion hook enabled.
 
     Mode shortcut flags (bypass interactive menu):
         --first-node      Run mode 1b directly
@@ -5769,9 +5850,6 @@ def parse_args():
     parser.add_argument("--add-nodes", action="store_true", default=False,
                         help="Skip the menu and run mode 2b: add node(s) to "
                              "an existing cluster automatically.")
-    parser.add_argument("--resume-nodes", action="store_true", default=False,
-                        help="Skip the menu and run mode 2c: resume node "
-                             "additions from a previous 2a/2b run (EXPERIMENTAL).")
     parser.add_argument("--reinit", action="store_true", default=False,
                         help="Skip the menu and run mode 3: end-to-end "
                              "automated reinit (1b on primary + parallel "
@@ -5794,10 +5872,11 @@ def parse_args():
     parser.add_argument("--loader", action="store_true", default=False,
                         help="Skip the menu and run mode 5z: reset all nodes "
                              "to the LOADER prompt in parallel.")
-    # (Internal use only: for automated checkpoint resume failure testing)
     parser.add_argument("--test", action="store_true", default=False,
                         help="Interactive checkpoint failure injection for "
                              "resume testing in modes 1-4.")
+    if HAS_ARGCOMPLETE:
+        argcomplete.autocomplete(parser)
     args = parser.parse_args()
     if args.help:
         _print_man_page()
@@ -6280,7 +6359,7 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
         _tail_out, _tail_match = direct_read_until_any(
             channel,
             ["loader-", "::>", "::*>", "login:", "selection", "autoboot", ">"],
-            timeout=5,
+            timeout=15,
             node_log=node_log,
             quiet=True,
         )
@@ -11787,7 +11866,7 @@ def _node_log_open(ip, log_dir, prefix="node", previous_log=None):
 def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                                   log=None, boot_menu_timeout=900,
                                   node_file=None, status_cb=None,
-                                  static_ifconfig=None):
+                                  static_ifconfig=None, phase_name=""):
     """Run the netboot install sequence on a channel already at LOADER prompt.
 
     *static_ifconfig* — when supplied, a dict with keys ``port``, ``ip``,
@@ -11888,11 +11967,11 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     else:
         direct_send_and_wait(channel, "setenv nvram_discard 1", "LOADER-", timeout=15)
 
+    # Capture the full download span across all retry attempts.
+    _whole_dl_t0 = time.monotonic()
     for _nb_attempt in range(1, _NETBOOT_MAX_ATTEMPTS + 1):
         if _nb_attempt == 1:
-            _status_ts(f"\n  [{node_label}] Starting netboot: {pkg_url}")
-            if log:
-                log.log(f"[{node_label}] netboot {pkg_url}")
+            _status_ts(f"\n  [{node_label}] Starting netboot: {pkg_url}")            if log:                log.log(f"[{node_label}] netboot {pkg_url}")
         else:
             _status_ts(
                 f"\n  [{node_label}] Retrying netboot "
@@ -12007,6 +12086,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         return False
 
     time.sleep(1)  # let the selection prompt fully render
+    _whole_dl_elapsed = time.monotonic() - _whole_dl_t0  # GAP-2: download span
+    _inst_t0 = time.monotonic()                          # GAP-3: install span start
     _status_ts(f"\n  ✅ [{node_label}] Download complete — boot menu detected.")
     _status_ts(f"  [{node_label}] 💿 Installing ONTAP image (selecting option 7)...")
     if log:
@@ -12060,6 +12141,10 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         """
         if _progress_stop[0] is not None:
             _progress_stop[0].set()
+        if log and phase_name:
+            _inst_e = time.monotonic() - _inst_t0
+            log.add_phase_subtiming(phase_name, f"  [{node_label}] image download", _whole_dl_elapsed)
+            log.add_phase_subtiming(phase_name, f"  [{node_label}] image install", _inst_e)
         _send_raw("y")
         _status_ts(f"\n  ✅ [{node_label}] Image installed — 🔄 node rebooting...")
         if log:
@@ -12104,6 +12189,9 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         _status_ts(f"  ✅ [{node_label}] Install complete.")
         if log:
             log.log(f"[{node_label}] install complete (reboot prompt not seen)")
+        if log and phase_name:
+            log.add_phase_subtiming(phase_name, f"  [{node_label}] image download", _whole_dl_elapsed)
+            log.add_phase_subtiming(phase_name, f"  [{node_label}] image install", time.monotonic() - _inst_t0)
         return True
 
     # Prompt 4: "Do you want to restore the backup configuration now? {y|n}"
@@ -12133,6 +12221,9 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     _status_ts(f"  ✅ [{node_label}] Install complete.")
     if log:
         log.log(f"[{node_label}] install complete (reboot prompt not seen)")
+    if log and phase_name:
+        log.add_phase_subtiming(phase_name, f"  [{node_label}] image download", _whole_dl_elapsed)
+        log.add_phase_subtiming(phase_name, f"  [{node_label}] image install", time.monotonic() - _inst_t0)
     return True
 
 
@@ -12975,6 +13066,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     ch, pkg_url, node_label=ip, log=log,
                     boot_menu_timeout=900, node_file=nf, status_cb=_scb,
                     static_ifconfig=_static,
+                    phase_name="4b \u2013 Netboot Install",
                 )
             except _InjectedCheckpointFailure:
                 with connect_lock:
@@ -13717,9 +13809,24 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     log.log(f"[{ip}] boot menu seen after option 6; sending option 4", prefix="WARN")
                 if _nf6:
                     _par_write(_nf6, "\n>>> boot menu appeared – draining to selection prompt\n")
+                _opt4_progress_sigs = [
+                    "please choose one of the following",
+                    "starting autoboot",
+                    "starting system memory",
+                    "loading device drivers",
+                    "configuring devices",
+                    "boot loader version",
+                    "power outage protection flash de-staging",
+                    "starting netapp_loadnvram",
+                    "unsetting bootarg",
+                    "fetching boot device recovery values",
+                ]
                 # Drain until the numbered selection prompt is fully rendered.
                 if not any(s in (_m3 or "").lower() for s in ["selection (1-", "(1-9)?", "(1-11)?"]):
-                    _drain(60, ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"])
+                    _drain(
+                        60,
+                        ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"] + _opt4_progress_sigs,
+                    )
                 time.sleep(1)
                 if _nf6:
                     _par_write(_nf6, "\n>>> sending option 4\n")
@@ -13749,7 +13856,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _remaining = [p for p in _opt4_prompts if p[2] not in _answered]
                     if not _remaining:
                         break
-                    _triggers_left = [p[0] for p in _remaining] + ["login:"]
+                    _triggers_left = [p[0] for p in _remaining] + ["login:"] + _opt4_progress_sigs
                     _ma = _drain(30, _triggers_left)
                     if not _ma:
                         continue
@@ -19087,7 +19194,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     global _add_another_node_request
     print("\n🤖 Mode 2b: automated node-add in progress...")
     if _session_log:
-        _session_log.start_phase("Auto Join (2b)")
+        _session_log.start_phase("Auto Join")
         _session_log.log("Mode 2b automated join starting after option 4 sent")
     _join_reconnect_ctx = _make_reconnect_ctx(
         sp_host, sp_user, sp_pass,
@@ -22831,7 +22938,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     # Send a bare CR to provoke a fresh LOADER prompt echo; the calling loop
     # already confirmed LOADER is active, so this should respond instantly.
     channel.send("\r")
-    output = direct_read_until(channel, "LOADER-", timeout=5)
+    output = direct_read_until(channel, "LOADER-", timeout=15)
     if "loader-" not in output.lower():
         print("⚠️  No LOADER prompt seen, attempting commands anyway...")
 
@@ -22983,6 +23090,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             channel, _nb_pkg_url, node_label=_nb_label, log=_session_log,
             status_cb=_nb_screen,
             static_ifconfig=_nb_static,
+            phase_name="Netboot ONTAP Install",
         )
         if _peer_nb_thread is not None:
             _peer_nb_thread.join(timeout=3600)
