@@ -5404,6 +5404,7 @@ DESCRIPTION
            (supports password groups + blank-password fallback retries)
       2b   Add node to existing cluster — automated (parallel multi-node)
            (supports password groups + blank-password fallback retries)
+      2c   Resume node additions (EXPERIMENTAL)
        3   End-to-end reinit: mode 1b on primary + mode 2b on all peers
            (same credential-grouping/fallback behavior as 2b; reinit-only)
            ONTAP installs are handled by 4b/4c before running mode 3
@@ -5768,6 +5769,9 @@ def parse_args():
     parser.add_argument("--add-nodes", action="store_true", default=False,
                         help="Skip the menu and run mode 2b: add node(s) to "
                              "an existing cluster automatically.")
+    parser.add_argument("--resume-nodes", action="store_true", default=False,
+                        help="Skip the menu and run mode 2c: resume node "
+                             "additions from a previous 2a/2b run (EXPERIMENTAL).")
     parser.add_argument("--reinit", action="store_true", default=False,
                         help="Skip the menu and run mode 3: end-to-end "
                              "automated reinit (1b on primary + parallel "
@@ -5790,6 +5794,7 @@ def parse_args():
     parser.add_argument("--loader", action="store_true", default=False,
                         help="Skip the menu and run mode 5z: reset all nodes "
                              "to the LOADER prompt in parallel.")
+    # (Internal use only: for automated checkpoint resume failure testing)
     parser.add_argument("--test", action="store_true", default=False,
                         help="Interactive checkpoint failure injection for "
                              "resume testing in modes 1-4.")

@@ -120,13 +120,15 @@ The table below compares estimated total wall-clock time for a full end-to-end c
 Before running this script, ensure the following are in place:
 
 - Python 3.6 or later installed on the client machine
-- SSH access to all BMC/Service Processor addresses
-- BMC/SP credentials are known (username and password)
-- BMC/SP addresses are reachable from the client (port 22/TCP)
+- SSH access to all BMC (Baseboard Management Controller) addresses
+- BMC credentials are known (username and password); SP (Service Processor) on older systems uses the same credentials
+- BMC addresses are reachable from the client (port 22/TCP)
 - Cluster management IP and credentials are known (for modes that interact with ONTAP)
 - For config-file-driven runs: a valid `reinit-config.json` is prepared (see [Configuration File](#configuration-file))
 
-The BMC/Service Processor must be configured and accessible over the network before running this script. Refer to the official NetApp documentation:
+**Terminology note:** Throughout this documentation, "BMC" (Baseboard Management Controller) refers to the out-of-band management interface. On older NetApp systems (prior to ONTAP 9.x), this component is called the "SP" (Service Processor). The terms are interchangeable — they refer to the same out-of-band console access path. When connecting via SSH or `system console`, you are connecting to the BMC/SP.
+
+The BMC/SP must be configured and accessible over the network before running this script. Refer to the official NetApp documentation:
 - [Manage SP/BMC](https://docs.netapp.com/us-en/ontap/system-admin/manage-sp-bmc-concept.html)
 - [Configure SP/BMC network](https://docs.netapp.com/us-en/ontap/system-admin/configure-sp-bmc-network-concept.html)
 
@@ -343,6 +345,8 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **5f** | Check Node Status | Connects to each BMC and reports whether nodes are at LOADER, ONTAP shell, login prompt, boot menu, or unknown state. |
 | **5g** | Cluster Health Check | Connects to the cluster management LIF via SSH and checks health/version. |
 | **5h** | Stale BMC Session Cleanup | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. SSH diagnostics one-IP targeting uses a numbered, labeled config-IP picker (BMC/cluster mgmt/node mgmt) with a custom-IP option. Includes a dedicated known_hosts reset action (`ssh-keygen -R <BMC IP>`). |
+| **5i** | Backup LOADER Environment Variables | Backs up current LOADER bootenv variables to a timestamped JSON file (e.g., `loader_env_backup_YYYYMMDD_HHMMSS.json`) for comparison and troubleshooting. Part of LOADER environment utilities (experimental). |
+| **5j** | Compare LOADER Environment | Compares current LOADER bootenv variables against NetApp defaults and displays a diff showing customizations and deviations. Helps identify bootenv changes and troubleshoot configuration issues (experimental). |
 | **5k** | Check Boot DNA | Loads target IPs from JSON config and shows a numbered selector: **1)** all discovered BMC IPs, **2)** cluster management IP, **3)** custom IP. It evaluates each target's runtime state (**At LOADER** or **At cluster shell**), runs the matching DNA command path, and reports `bootarg.init.dna` with a per-target state/value summary when multiple nodes are checked. |
 | **5l** | Build Cluster IP Manifest | Connects to cluster management and runs cluster-role interface queries to write `configs/cluster_IP.json`. Stores one cluster IP per node (the first seen per node), preserving file order so 2a/2b/3/4b can reuse this manifest for ordered `cluster add-node -cluster-ips` arguments. |
 | **5z** | Reset to LOADER | Connects to configured BMC addresses in parallel, issues a system reset on each selected node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. The script exits when every selected node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging nodes before a manual reinit or netboot run. |
@@ -556,6 +560,48 @@ When the pause file is removed (or `USR2` sent) the script immediately resumes:
 
 ---
 
+## Runtime Control Signals (Advanced)
+
+While AFX_reinit.py is running, you can control execution using standard Unix signals (Linux/macOS only) or by sending SIGINT (Ctrl+C on all platforms). These are useful for long-running cluster initialization workflows that may need graceful shutdown, temporary pause, or manual checkpointing.
+
+| Signal | Purpose | Command | Use Case |
+|--------|---------|---------|----------|
+| SIGHUP | Graceful shutdown | `kill -HUP <pid>` | Terminal disconnected; log is flushed cleanly and the run pauses without losing progress. Useful with `nohup` or detached terminals. |
+| SIGUSR1 | Toggle pause mode | `kill -USR1 <pid>` | Suspend automation; inspect system state. Send again to resume. Automation freezes at the next safe yield point. |
+| SIGUSR2 | Force resume | `kill -USR2 <pid>` | Resume from pause without waiting. Clears any active pause immediately. |
+| SIGURG | Manual checkpoint | `kill -URG <pid>` | Force an immediate checkpoint snapshot (timestamped copy) without stopping the script. Useful before a risky phase. |
+| SIGINT | Graceful exit | `Ctrl+C` | Exit automation cleanly with full cleanup; preserves logs and checkpoint state. On Windows, `Ctrl+C` is the only signal-like control available. |
+
+**Example: long-running mode 3 (end-to-end reinit) with supervision:**
+
+```bash
+# Start in background (or inside screen for terminal persistence)
+python3 AFX_reinit.py --reinit --config configs/reinit-config.json --bg &
+SCRIPT_PID=$!
+
+# Discover the PID if needed
+ps aux | grep AFX_reinit | grep -v grep
+
+# Pause after 30 minutes to inspect cluster state (automation freezes at safe point)
+kill -USR1 $SCRIPT_PID
+
+# Inspect the cluster manually, then resume
+kill -USR2 $SCRIPT_PID
+
+# Or create a checkpoint snapshot before a risky phase
+kill -URG $SCRIPT_PID
+
+# Exit cleanly if needed (Ctrl+C also works)
+kill -TERM $SCRIPT_PID
+```
+
+**Note:** 
+- On Windows, signals are not supported. Use `Ctrl+C` to exit cleanly or the pause file method (`.afx_pause`) documented in **Pause & Resume** above.
+- The script prints signal commands at startup for easy reference.
+- `SIGHUP` is automatically triggered when running with `--bg` flag and the SSH session closes.
+
+---
+
 ## LOADER Commands Reference
 
 | Mode | LOADER Commands |
@@ -629,6 +675,8 @@ python3 AFX_reinit.py --last-status
 ```
 
 ### Interactive Features
+
+> ✨ **Tip:** On Linux/macOS/Unix, press **Tab** when entering file paths to auto-complete file and directory names. Start typing a path like `/scripts/ONTAP/` and press Tab to see matching options. This can save significant time when selecting large ONTAP images or config files. See details below.
 
 **Path Tab Completion:** When the script prompts for a file path or URL (e.g., `Path or URL: /scripts/ONTAP`), you can press **Tab** to auto-complete matching paths from the filesystem. This feature is available on Linux, macOS, and Unix systems that have Python's `readline` module. On each Tab press:
 - The script lists matching files and directories in the current directory
