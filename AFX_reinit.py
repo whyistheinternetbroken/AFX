@@ -2860,7 +2860,7 @@ def select_operation_mode():
         print("    5i. Backup LOADER environment variables (experimental)")
         print("    5j. Compare LOADER env to defaults (diff) (experimental)")
         print("    5k. Check boot DNA (cluster shell or LOADER)")
-        print("    5l. Build cluster_IP manifest for node-add ordering")
+        print("    5l. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
         print("")
         print("    !!Disruptive commands!!")
         print("      5z. Reset all nodes to LOADER prompt")
@@ -3248,7 +3248,7 @@ def select_operation_mode():
                 print("  5i. Backup LOADER environment variables (experimental)")
                 print("  5j. Compare LOADER env to defaults (diff) (experimental)")
                 print("  5k. Check boot DNA (cluster shell or LOADER)")
-                print("  5l. Build cluster_IP manifest for node-add ordering")
+                print("  5l. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
                 print("")
                 print("  !!Disruptive commands!!")
                 print("    5z. Reset all nodes to LOADER prompt")
@@ -3438,7 +3438,7 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
             if choice == "5l":
-                _print_banner("🧭 5l: Build cluster_IP manifest")
+                _print_banner("🧭 5l: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)")
                 print("")
                 print("  Connects to the cluster management shell and collects")
                 print("  all cluster-role interface IP addresses in command output")
@@ -3448,7 +3448,7 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  ✅ Confirmed. 5l: Build cluster_IP manifest\n")
+                    print("\n  ✅ Confirmed. 5l: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)\n")
                     return 55, False, False
                 print("\n  ↩️  Returning to menu...\n")
             continue
@@ -23923,7 +23923,7 @@ def _get_cluster_role_ips(channel):
 
 def _run_cluster_ip_manifest_mode():
     """Mode 5l: fetch cluster-role IPs from cluster shell and write manifest."""
-    _print_banner("🧭 5l: Build cluster IP manifest")
+    _print_banner("🧭 5l: Build cluster IP manifest (EXPERIMENTAL/IN PROGRESS)")
     _make_session_log("Mode 5l: cluster IP manifest")
 
     _cluster_cfg = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
