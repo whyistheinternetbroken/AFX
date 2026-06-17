@@ -5919,6 +5919,7 @@ def _setup_path_completion():
 
 # ---------------------------------------------------------------------------
 
+def _relaunch_in_screen():
     """Re-exec this script inside a detached GNU screen session.
 
     Call this when ``--screen`` is requested.  Returns ``True`` if the
