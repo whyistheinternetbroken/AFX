@@ -15901,6 +15901,41 @@ def _parse_sfo_fields(out, node):
     }
 
 
+def _run_with_lif_reconnect_retry(operation, *, log=None, context="cluster poll"):
+    """Run *operation* with 3 reconnect-style retries, 60s apart.
+
+    Mirrors the option 4a poll-channel hardening behavior for places that
+    operate on an existing cluster shell channel and should tolerate brief
+    cluster LIF migration windows.
+    """
+    _last_error = None
+    for _r in range(3):
+        if _r > 0:
+            print(f"  ⏳ Waiting 60s for cluster LIF migration to complete and "
+                  f"then retrying (round {_r + 1}/3)...")
+            if log:
+                log.log(
+                    f"{context} reconnect round {_r + 1}/3; waiting 60s for cluster LIF migration",
+                    prefix="WARN",
+                )
+            time.sleep(60)
+        try:
+            return operation()
+        except Exception as _e:
+            _last_error = _e
+            print(f"  ⚠️  {context} error ({_e} - Cluster LIF migrating); "
+                  "attempting reconnect...")
+            if log:
+                log.log(
+                    f"{context} error: {_e} - Cluster LIF migrating; reconnecting",
+                    prefix="WARN",
+                )
+    if log:
+        log.log(f"{context} reconnect failed after 3 rounds; giving up",
+                prefix="ERROR")
+    raise _last_error
+
+
 def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
                              poll_interval=60, log=None, phase_label=None,
                              exclude_substrs=None, also_accept=None):
@@ -15926,12 +15961,24 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
         if elapsed >= total_timeout:
             break
         remaining = total_timeout - elapsed
-        with _suppress_console():
-            out = _run_cluster_command(
-                channel,
-                "set advanced -c off; storage failover show -fields node,state-description",
-                timeout=30,
-            )
+        try:
+            with _suppress_console():
+                out = _run_with_lif_reconnect_retry(
+                    lambda: _run_cluster_command(
+                        channel,
+                        "set advanced -c off; storage failover show -fields node,state-description",
+                        timeout=30,
+                    ),
+                    log=log,
+                    context=f"Failover state poll for {node}",
+                )
+        except Exception as _e:
+            if log:
+                log.log(f"Failover state poll failed for {node}: {_e}",
+                        prefix="WARN")
+            print(f"  ⚠️  Failover state poll failed for {node}: {_e}")
+            _time.sleep(min(poll_interval, max(1, remaining)))
+            continue
         # ONTAP wraps long node names and state descriptions across multiple
         # lines. Collect ALL lines belonging to this node's block by reading
         # until the next non-indented line (which starts the next node entry)
@@ -16007,14 +16054,30 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
             break
         remaining = total_timeout - elapsed
 
-        with _suppress_console():
-            out_fo  = _run_cluster_command(
-                channel, "set -rows 0; storage failover show", timeout=30)
-            out_gb  = _run_cluster_command(
-                channel,
-                "set diag -c off; storage failover show-giveback",
-                timeout=30,
-            )
+        try:
+            with _suppress_console():
+                out_fo = _run_with_lif_reconnect_retry(
+                    lambda: _run_cluster_command(
+                        channel, "set -rows 0; storage failover show", timeout=30
+                    ),
+                    log=log,
+                    context="Cluster health poll (storage failover show)",
+                )
+                out_gb = _run_with_lif_reconnect_retry(
+                    lambda: _run_cluster_command(
+                        channel,
+                        "set diag -c off; storage failover show-giveback",
+                        timeout=30,
+                    ),
+                    log=log,
+                    context="Cluster health poll (show-giveback)",
+                )
+        except Exception as _e:
+            if log:
+                log.log(f"Cluster health poll failed: {_e}", prefix="WARN")
+            print(f"  ⚠️  Cluster health poll failed: {_e}")
+            _time.sleep(min(poll_interval, max(1, remaining)))
+            continue
 
         # Strip ANSI/VT100 escape codes injected by the BMC PTY — without this
         # line[0] may be \x1b, causing node-name detection to fail or embed
@@ -18038,23 +18101,49 @@ def _run_ontap_upgrade(log):
         print("  Image show output:\n    " + "\n    ".join(img_ver_lines[-10:]))
 
         if running_ver:
-            # Check that every non-blank version token in image show contains
-            # the running version (or vice-versa).
-            mismatches = []
-            for line in img_ver_lines:
-                tokens = line.split()
-                for tok in tokens:
-                    if re.match(r"^\d+\.\d+", tok) and running_ver not in tok and tok not in running_ver:
-                        mismatches.append(f"{tok} (line: {line})")
-            if mismatches:
+            # Validate only active images per node:
+            # - each node must have both iscurrent=true and isdefault=true rows
+            # - those two versions must match on that node
+            # - all nodes' active versions must match each other
+            _img_ver_data = _parse_image_versions(out_img2)
+            _node_issues = []
+            _active_versions = {}
+            for _vn, _vimgs in _img_ver_data.items():
+                _cur_ver = next((e["version"] for e in _vimgs if e["iscurrent"]), None)
+                _def_ver = next((e["version"] for e in _vimgs if e["isdefault"]), None)
+                if not _cur_ver or not _def_ver:
+                    _node_issues.append(
+                        f"{_vn}: missing current/default image row "
+                        f"(current={_cur_ver!r}, default={_def_ver!r})"
+                    )
+                    continue
+                if _cur_ver != _def_ver:
+                    _node_issues.append(
+                        f"{_vn}: current version {_cur_ver} != default version {_def_ver}"
+                    )
+                    continue
+                _active_versions[_vn] = _cur_ver
+
+            _cluster_versions = sorted(set(_active_versions.values()))
+            _running_mismatch = (
+                _cluster_versions and any(v not in running_ver and running_ver not in v
+                                          for v in _cluster_versions)
+            )
+
+            if _node_issues or len(_cluster_versions) > 1 or _running_mismatch:
                 print(f"\n  \u26a0\ufe0f  Version mismatch detected. The upgrade may not have "
                       f"completed correctly.\n"
                       f"     Running : {running_ver}\n"
-                      f"     Packages: {mismatches[:5]}\n"
+                      f"     Active-by-node: {_active_versions or '(none parsed)'}\n"
+                      f"     Issues : {_node_issues[:5]}\n"
                       f"  Please verify manually or re-run the upgrade.")
                 if log:
-                    log.log(f"Version mismatch: running={running_ver}, "
-                            f"pkg_versions={mismatches[:5]}", prefix="WARN")
+                    log.log(
+                        f"Version mismatch: running={running_ver}, "
+                        f"active_by_node={_active_versions}, "
+                        f"issues={_node_issues[:5]}",
+                        prefix="WARN",
+                    )
             else:
                 print(f"\n  \u2705 Version verified: {running_ver}")
                 if log:
@@ -19740,7 +19829,11 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
             return False
         attempt += 1
         try:
-            count, all_true, has_warning = _cluster_show_node_status(channel)
+            count, all_true, has_warning = _run_with_lif_reconnect_retry(
+                lambda: _cluster_show_node_status(channel),
+                log=_session_log,
+                context=f"{prefix}cluster show poll",
+            )
         except Exception as e:
             if _session_log:
                 _session_log.log(
