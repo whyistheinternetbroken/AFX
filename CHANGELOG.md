@@ -9,6 +9,14 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Node-add manifest files now archived to run log directory on success.**
+  After successful completion of mode 2b (parallel add), mode 3 (end-to-end),
+  or mode 4b with reinit enabled, node-add manifest files from `configs/`
+  (`node_add_manifest_<ts>.json` and `last_node_add_manifest.json`) are moved
+  into the run's timestamped log directory (`logs/<timestamp>/`). This ensures
+  manifests used for resume are preserved alongside that run's logs.
+  The `last_node_add_manifest.json` pointer is updated to reference the new
+  archived location so resume workflows remain functional.
 - **Run summary now includes ONTAP version before/after snapshots.**
   Summary output now records ONTAP version state when available and prints
   it in the Result section as "ONTAP before run" and "ONTAP after run",

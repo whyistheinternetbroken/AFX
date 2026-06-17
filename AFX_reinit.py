@@ -22260,6 +22260,12 @@ def _option3_finalize(ctx, cluster_mgmt_ip):
         session_log.log("Mode 3 end-to-end completed successfully")
         session_log.log(f"SSH to {mgmt_ip} or https://{mgmt_ip}")
         session_log.set_outcome("PASS", "end-to-end auto initialize complete")
+        
+        # Archive node-add manifests to this run's log directory on success
+        if hasattr(session_log, "log_dir"):
+            _archive_node_add_manifests_to_log_dir(
+                session_log.log_dir, reason="mode 3: end-to-end complete"
+            )
 
     _prompt_and_run_post_script(session_log=session_log)
 
@@ -23764,6 +23770,61 @@ def _write_node_add_manifest(nodes, cluster_mgmt_ip="",
     return session_path
 
 
+def _archive_node_add_manifests_to_log_dir(log_dir: str, reason: str = ""):
+    """Move current node-add manifest files from configs/ into *log_dir*.
+
+    Called after successful node-add / cluster-reinit completion so manifests
+    used for resume are preserved with that run's logs.
+    """
+    global _last_node_add_manifest
+    _log_dir = str(log_dir or "").strip()
+    if not _log_dir:
+        return []
+    try:
+        os.makedirs(_log_dir, exist_ok=True)
+    except Exception:
+        return []
+
+    try:
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        _script_dir = os.getcwd()
+    _cfg_dir = os.path.join(_script_dir, "configs")
+    _pointer_path = os.path.join(_cfg_dir, "last_node_add_manifest.json")
+
+    _candidates = []
+    _last = str(_last_node_add_manifest or "").strip()
+    if _last and os.path.isfile(_last):
+        _candidates.append(_last)
+    if os.path.isfile(_pointer_path) and _pointer_path not in _candidates:
+        _candidates.append(_pointer_path)
+
+    if not _candidates:
+        return []
+
+    _moved = []
+    for _src in _candidates:
+        try:
+            _base = os.path.basename(_src)
+            _dst = os.path.join(_log_dir, _base)
+            if os.path.exists(_dst):
+                _root, _ext = os.path.splitext(_base)
+                _dst = os.path.join(
+                    _log_dir,
+                    f"{_root}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{_ext}",
+                )
+            shutil.move(_src, _dst)
+            _moved.append(_dst)
+            if _src == _last:
+                _last_node_add_manifest = _dst
+        except Exception as _e:
+            _slog(f"Could not archive node-add manifest {_src}: {_e}", prefix="WARN")
+    if _moved:
+        _why = f" ({reason})" if reason else ""
+        _slog(f"Archived node-add manifest(s){_why}: {', '.join(_moved)}")
+    return _moved
+
+
 def _update_node_add_manifest_node(bmc, *, cluster_ip="", node_name=""):
     """Best-effort in-place update of saved node-add manifests for one BMC.
 
@@ -25111,6 +25172,10 @@ def main():
                 _session_log.record_completion(normal_exit=ok)
                 if ok:
                     _checkpoint.clear()
+                    if _session_log and hasattr(_session_log, "log_dir"):
+                        _archive_node_add_manifests_to_log_dir(
+                            _session_log.log_dir, reason="4b: reinit/add success"
+                        )
                     if _4b_did_reinit:
                         _prompt_and_run_post_script(session_log=_session_log)
                 print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
@@ -29018,6 +29083,10 @@ def main():
                          for ip in _2b_all_peers},
                         _session_log,
                     )
+                    if ok and _session_log and hasattr(_session_log, "log_dir"):
+                        _archive_node_add_manifests_to_log_dir(
+                            _session_log.log_dir, reason="2b: parallel add success"
+                        )
                     _session_log.record_completion(normal_exit=ok)
                     print(f"\n📝 Session log: {_session_log.log_file}")
                     sys.exit(0 if ok else 1)
