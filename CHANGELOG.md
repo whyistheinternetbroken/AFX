@@ -9,6 +9,11 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Live run summary now exists from startup and updates per phase.**
+  The session summary file is now created when a run starts (not only at
+  shutdown) and refreshed as phases start/end/record outcomes. In-progress
+  or incomplete phases are explicitly labeled as not yet completed, so
+  `--last-status` can show meaningful status while a job is still running.
 - **Option 3 is now reinit-only (no install-first path).**
   Choosing ONTAP image install from option 3 now prints guidance to use the
   install menu options and returns to the main menu. ONTAP install workflows

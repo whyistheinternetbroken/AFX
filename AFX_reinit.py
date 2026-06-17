@@ -2029,6 +2029,9 @@ class SessionLogger:
         self.log_file = _build_numbered_log_path(
             self.log_dir, f"bmc_session_{timestamp}.log", scope_dir=self.log_dir
         )
+        self.summary_file = _build_numbered_log_path(
+            self.log_dir, f"summary_{timestamp}.log", scope_dir=self.log_dir
+        )
         self._lock = threading.Lock()
         # buffering=1 = line-buffered; auto-flushes on every \n so the file is
         # safe to read even while the script is still running (or backgrounded).
@@ -2092,6 +2095,7 @@ class SessionLogger:
         self._closed = False
 
         self._write_header()
+        self.refresh_summary()
         print(f"📝 Session log: {self.log_file}")
 
     # OPT: context-manager support so the file handle is always closed cleanly
@@ -2218,6 +2222,17 @@ class SessionLogger:
         self._file.write(f"Python: {sys.version}\n")
         self._file.write("=" * 70 + "\n\n")
 
+    def refresh_summary(self):
+        """Write/refresh the live summary snapshot for this active run."""
+        with self._lock:
+            now = datetime.now()
+            total_elapsed = (now - self._start_time).total_seconds()
+            self._write_summary_file(
+                now, total_elapsed,
+                "IN PROGRESS", "Run is active; phases may still be incomplete.",
+                failure_stage="", final=False,
+            )
+
     def start_phase(self, phase_name):
         with self._lock:
             now = datetime.now()
@@ -2230,6 +2245,11 @@ class SessionLogger:
                 f"\n[{self._ts_with_elapsed(now)}] [PHASE] ▶ Started: {phase_name}\n"
             )
             self._ensure_heartbeat_locked()
+            self._write_summary_file(
+                now, (now - self._start_time).total_seconds(),
+                "IN PROGRESS", "Run is active; phases may still be incomplete.",
+                failure_stage="", final=False,
+            )
 
     def end_phase(self, outcome: str = "PASS", note: str = ""):
         """End the current phase.  *outcome* is written into the phase
@@ -2251,6 +2271,11 @@ class SessionLogger:
                 )
                 self._current_phase = None
                 self._current_phase_start = None
+                self._write_summary_file(
+                    now, (now - self._start_time).total_seconds(),
+                    "IN PROGRESS", "Run is active; phases may still be incomplete.",
+                    failure_stage="", final=False,
+                )
 
     def set_phase_outcome(self, phase_name: str, status: str, note: str = ""):
         """Explicitly record the outcome of a named phase. Call this before
@@ -2258,6 +2283,12 @@ class SessionLogger:
         """
         with self._lock:
             self._phase_outcomes[phase_name] = (status, note)
+            now = datetime.now()
+            self._write_summary_file(
+                now, (now - self._start_time).total_seconds(),
+                "IN PROGRESS", "Run is active; phases may still be incomplete.",
+                failure_stage="", final=False,
+            )
 
     def record_phase(self, phase_name: str, elapsed: float,
                      outcome: str = "PASS", note: str = ""):
@@ -2273,6 +2304,12 @@ class SessionLogger:
             self._file.write(
                 f"[{self._ts_with_elapsed()}] [PHASE] ⏹ Recorded: "
                 f"{phase_name} ({elapsed:.1f}s) [{outcome}]\n"
+            )
+            now = datetime.now()
+            self._write_summary_file(
+                now, (now - self._start_time).total_seconds(),
+                "IN PROGRESS", "Run is active; phases may still be incomplete.",
+                failure_stage="", final=False,
             )
 
     def add_phase_subtiming(self, phase_name: str, label: str, elapsed: float):
@@ -2520,6 +2557,7 @@ class SessionLogger:
             self._write_summary_file(
                 now, total_elapsed,
                 outcome_status, outcome_note, failure_stage,
+                final=True,
             )
 
         # Restore the real stdout and close the screen output log.
@@ -2537,21 +2575,23 @@ class SessionLogger:
             pass
 
     def _write_summary_file(self, now, total_elapsed, outcome_status, outcome_note,
-                            failure_stage: str = ""):
+                            failure_stage: str = "", final: bool = False):
         """Write a human-readable summary file next to the full session log.
 
         Contains only the result, phase timings, and step timings — none of
         the raw console output — so it is fast to read after a run.
         """
-        summary_path = os.path.join(
-            self.log_dir,
-            f"summary_{now.strftime('%Y%m%d_%H%M%S')}.log",
-        )
+        summary_path = self.summary_file
         _status_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(outcome_status, "❓")
+        if not final:
+            _status_icon = "⏳"
         try:
             with open(summary_path, "w", encoding="utf-8") as sf:
                 sf.write("=" * 70 + "\n")
-                sf.write("Run Summary\n")
+                if final:
+                    sf.write("Run Summary\n")
+                else:
+                    sf.write("Run Summary (LIVE - IN PROGRESS)\n")
                 sf.write(f"Full log: {self.log_file}\n")
                 sf.write("=" * 70 + "\n\n")
 
@@ -2578,15 +2618,30 @@ class SessionLogger:
                 sf.write(f"  {'Total runtime':<25} {total_elapsed:.1f}s ({total_elapsed/60:.1f}m)\n")
 
                 # ---- Phase Timing ----
-                if self._phase_times:
-                    sf.write("\n" + "─" * 70 + "\n")
-                    sf.write("Phase Timing\n")
-                    sf.write("─" * 70 + "\n")
-                    for phase, elapsed in self._phase_times.items():
+                sf.write("\n" + "─" * 70 + "\n")
+                sf.write("Phase Timing\n")
+                sf.write("─" * 70 + "\n")
+                _phase_order = list(self._phase_times.keys())
+                if self._current_phase and self._current_phase not in _phase_order:
+                    _phase_order.append(self._current_phase)
+                _phase_total_for_accounting = 0.0
+                if _phase_order:
+                    for phase in _phase_order:
+                        if phase == self._current_phase and self._current_phase_start:
+                            elapsed = max(
+                                0.0, (now - self._current_phase_start).total_seconds()
+                            )
+                            ph_status = "IN PROGRESS (not yet completed)"
+                            ph_icon = "⏳"
+                        else:
+                            elapsed = float(self._phase_times.get(phase, 0.0))
+                            ph_status, _ = self._phase_outcomes.get(phase, ("", ""))
+                            if not ph_status:
+                                ph_status = "NOT YET COMPLETED"
+                            ph_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(ph_status, "⏳")
+                        _phase_total_for_accounting += elapsed
                         minutes = elapsed / 60
-                        ph_status, _ = self._phase_outcomes.get(phase, ("", ""))
-                        ph_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(ph_status, "  ")
-                        ph_col = f"  {ph_icon} {ph_status}" if ph_status else ""
+                        ph_col = f"  {ph_icon} {ph_status}"
                         sf.write(f"  {phase:<45} {elapsed:>7.1f}s ({minutes:.1f}m){ph_col}\n")
                         _prev_node_elapsed = None
                         for sub_label, sub_elapsed in self._phase_subtimings.get(phase, []):
@@ -2603,40 +2658,41 @@ class SessionLogger:
                                 f"     - {sub_label:<41} {sub_elapsed:>7.1f}s "
                                 f"{_time_str}\n"
                             )
-                    sf.write(f"  {'─' * 55}\n")
-                    sf.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
-                    _pw = float(_prompt_wait_seconds)
-                    _paw = float(_pause_wait_seconds)
-                    _phase_sum = sum(self._phase_times.values()) if self._phase_times else 0.0
-                    _unaccounted = max(0.0, total_elapsed - _phase_sum - _pw)
+                else:
+                    sf.write("  (No phases started yet — all phases not yet completed.)\n")
+                sf.write(f"  {'─' * 55}\n")
+                sf.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
+                _pw = float(_prompt_wait_seconds)
+                _paw = float(_pause_wait_seconds)
+                _unaccounted = max(0.0, total_elapsed - _phase_total_for_accounting - _pw)
+                sf.write(
+                    f"  {'Time waiting for prompts (x' + str(_prompt_wait_count) + ')':<45} "
+                    f"{_pw:>7.1f}s ({_pw/60:.1f}m)\n"
+                )
+                if _prompt_wait_max > 0:
+                    _lbl = _prompt_wait_max_label or "(no label)"
                     sf.write(
-                        f"  {'Time waiting for prompts (x' + str(_prompt_wait_count) + ')':<45} "
-                        f"{_pw:>7.1f}s ({_pw/60:.1f}m)\n"
+                        f"     - longest single wait: {_prompt_wait_max:.1f}s "
+                        f"({_prompt_wait_max/60:.1f}m) at: {_lbl}\n"
                     )
-                    if _prompt_wait_max > 0:
-                        _lbl = _prompt_wait_max_label or "(no label)"
-                        sf.write(
-                            f"     - longest single wait: {_prompt_wait_max:.1f}s "
-                            f"({_prompt_wait_max/60:.1f}m) at: {_lbl}\n"
-                        )
-                    for _ext_lbl, _ext_sec in _prompt_wait_extended:
-                        sf.write(
-                            f"     - extended wait {_ext_sec:>6.1f}s "
-                            f"({_ext_sec/60:.1f}m) at: {_ext_lbl or '(no label)'}\n"
-                        )
+                for _ext_lbl, _ext_sec in _prompt_wait_extended:
                     sf.write(
-                        f"  {'Pause wait (x' + str(_pause_wait_count) + ')':<45} "
-                        f"{_paw:>7.1f}s ({_paw/60:.1f}m)\n"
+                        f"     - extended wait {_ext_sec:>6.1f}s "
+                        f"({_ext_sec/60:.1f}m) at: {_ext_lbl or '(no label)'}\n"
                     )
-                    if _pause_wait_max > 0:
-                        _plbl = _pause_wait_max_label or "(no label)"
-                        sf.write(
-                            f"     - longest single pause: {_pause_wait_max:.1f}s "
-                            f"({_pause_wait_max/60:.1f}m) context: {_plbl}\n"
-                        )
+                sf.write(
+                    f"  {'Pause wait (x' + str(_pause_wait_count) + ')':<45} "
+                    f"{_paw:>7.1f}s ({_paw/60:.1f}m)\n"
+                )
+                if _pause_wait_max > 0:
+                    _plbl = _pause_wait_max_label or "(no label)"
                     sf.write(
-                        f"  {'Unaccounted time':<45} {_unaccounted:>7.1f}s ({_unaccounted/60:.1f}m)\n"
+                        f"     - longest single pause: {_pause_wait_max:.1f}s "
+                        f"({_pause_wait_max/60:.1f}m) context: {_plbl}\n"
                     )
+                sf.write(
+                    f"  {'Unaccounted time':<45} {_unaccounted:>7.1f}s ({_unaccounted/60:.1f}m)\n"
+                )
 
                 # ---- Step Timing ----
                 if self._step_times:
@@ -2694,7 +2750,8 @@ class SessionLogger:
 
                 sf.write("\n" + "=" * 70 + "\n")
 
-            print(f"📋 Summary log: {summary_path}")
+            if final:
+                print(f"📋 Summary log: {summary_path}")
         except OSError as e:
             # Non-fatal — full log is still written.
             print(f"  ⚠️  Could not write summary log: {e}")
@@ -5649,10 +5706,11 @@ OPTIONS
 
     --last-status
         Read and display the summary file from the most recent AFX_reinit
-        run, then exit.  Useful for quickly checking the result of a
-        previous job without scrolling through the full log file.  The
-        summary shows overall result (PASS/FAIL/WARN), phase timing,
-        step timing, error/warning count, and runtime duration.
+        run, then exit. The summary file is created at run start and
+        refreshed as phases progress, so this can show live in-progress
+        status (including phases not yet completed). The summary shows
+        overall result, phase timing, step timing, error/warning count,
+        and runtime duration.
 
     --auto-clear-stale-bmc
         On BMC SSH banner-timeout retries, scan for ESTABLISHED sockets to
@@ -23465,6 +23523,7 @@ def _make_session_log(label: str) -> "SessionLogger":
     if label:
         _session_log._operation_label = label
         _session_log.log(label)
+        _session_log.refresh_summary()
     _session_log.log(f"Script version: {_banner}")
     try:
         _ssh_path = _resolve_ssh_log_file()
