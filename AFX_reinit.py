@@ -1257,12 +1257,10 @@ def _print_banner(title: str, *, width: int = 60) -> None:
 def _print_autopilot_banner() -> None:
     """Print the 'no more admin interaction required' transition notice."""
     _msg = "✅ Autopilot engaged. Check back periodically for job completion."
-    # Keep the divider at least the default banner width, but never shorter
-    # than the rendered message line.
-    bar = "=" * max(60, len(f"  {_msg}"))
-    print("\n" + bar)
-    print(f"  {_msg}")
-    print(bar + "\n")
+    bar = "=" * max(60, len(_msg) + 4)
+    _ts_print(bar)
+    _ts_print(_msg)
+    _ts_print(bar)
 
 
 def _print_wrapped_warning(message: str, *, indent: str = "  ", max_width: int = 100) -> None:
@@ -2724,7 +2722,8 @@ def select_operation_mode():
       6  -> Script help and instructions
       7  -> Exit.
     """
-    global _setup_passwordless_ssh, _netboot_before_reinit, _physical_zeroing
+    global _setup_passwordless_ssh, _netboot_before_reinit, _netboot_pkg_preselected, _physical_zeroing
+    global _loader_env_stage_enabled
     global _diag_bootargs, _netboot_static_ip
     global _resume_from_start_menu
     _startup_checkpoint_prompt_done = False
@@ -3041,6 +3040,27 @@ def select_operation_mode():
                             break
                         print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
+                    _nb_src_type, _nb_src_value = _find_upgrade_package()
+                    if _nb_src_type is None:
+                        print("  ❌ No package selected. Returning to menu.")
+                        _netboot_before_reinit = False
+                        _netboot_pkg_preselected = None
+                        continue
+                    _netboot_pkg_preselected = (_nb_src_type, _nb_src_value)
+                    if _nb_src_type == "file":
+                        print(f"  📦 Selected package: {_nb_src_value}")
+                    else:
+                        print(f"  🌐 Selected package URL: {_nb_src_value}")
+                else:
+                    _netboot_pkg_preselected = None
+                while True:
+                    _m3_skip_env = input(
+                        "  Skip LOADER backup/printenv capture for option 3 nodes? [Y/n]: "
+                    ).strip().lower()
+                    if _m3_skip_env in ("", "y", "yes", "n", "no"):
+                        break
+                    print("  Please enter y or N.")
+                _loader_env_stage_enabled = (_m3_skip_env in ("n", "no"))
                 print("\n  ✅ Confirmed. 3: End-to-end auto initialize\n")
                 return 3, True, True
             print("\n  ↩️  Returning to menu...\n")
@@ -3517,6 +3537,7 @@ logging.getLogger("paramiko.transport").setLevel(logging.CRITICAL)
 # When True (set by 1a/1b "install specific ONTAP?" prompt), netboot-install
 # is performed at LOADER before the normal boot-menu/reinit flow continues.
 _netboot_before_reinit = False
+_netboot_pkg_preselected = None  # tuple(src_type, src_value) captured at menu-time
 
 # When True (set by 1a/1b/3 prompt), adds 'setenv raid.use-physical-zeroing? true'
 # to the primary node's LOADER commands so disks are physically zeroed.
@@ -5913,6 +5934,14 @@ def _setup_path_completion():
     
     # Install the completer and enable tab completion
     readline.set_completer(path_completer)
+    # Keep '/' and '\' inside the completion token so absolute paths
+    # like /scripts/ONTAP continue completing segment-by-segment.
+    try:
+        _delims = readline.get_completer_delims()
+        _delims = _delims.replace("/", "").replace("\\", "")
+        readline.set_completer_delims(_delims)
+    except Exception:
+        pass
     # Bind Tab to complete; some systems use "complete" instead of "tab: complete"
     readline.parse_and_bind("tab: complete")
 
@@ -15216,6 +15245,9 @@ def _find_upgrade_package():
       2. Interactive prompt: path to a .tgz file OR a web URL.
     Returns (None, None) if the operator enters blank (exit).
     """
+    if sys.stdin and sys.stdin.isatty():
+        _setup_path_completion()
+
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
     except NameError:
@@ -22551,6 +22583,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
 def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     global _reinit_label, _bootarg_check_enabled, _loader_env_stage_enabled
+    global _netboot_pkg_preselected
     _reinit_label = sp_host or _reinit_label
     _pfx = _node_pfx()
     print(f"\n⏳ {_pfx}Setting LOADER boot options...{_elapsed_str()}")
@@ -22653,13 +22686,20 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         if _session_log:
             _session_log.end_phase()  # End LOADER Commands
             _session_log.start_phase("Netboot ONTAP Install")
-        # Temporarily restore real stdout so _find_upgrade_package() prompts
-        # appear on screen (sys.stdout may be a _NodeLogWriter at this point).
-        _prev_stdout_nb = sys.stdout
-        sys.stdout = _real_stdout
-        print("\n  🌐 Netboot-before-reinit: selecting ONTAP package...")
-        src_type, src_value = _find_upgrade_package()
-        sys.stdout = _prev_stdout_nb
+        src_type = None
+        src_value = None
+        if _netboot_pkg_preselected is not None:
+            src_type, src_value = _netboot_pkg_preselected
+            print("\n  🌐 Netboot-before-reinit: using package selected at menu time.")
+        else:
+            # Temporarily restore real stdout so _find_upgrade_package() prompts
+            # appear on screen (sys.stdout may be a _NodeLogWriter at this point).
+            _prev_stdout_nb = sys.stdout
+            sys.stdout = _real_stdout
+            print("\n  🌐 Netboot-before-reinit: selecting ONTAP package...")
+            src_type, src_value = _find_upgrade_package()
+            sys.stdout = _prev_stdout_nb
+        _netboot_pkg_preselected = None
         if src_type is None:
             print("  ❌ No package selected. Aborting.")
             if _session_log:
@@ -28366,6 +28406,16 @@ def main():
                 _auto_setup and _netboot_before_reinit
             ):
                 _print_autopilot_banner()
+
+            if _operation_mode == 3 and _loader_env_stage_enabled is None:
+                while True:
+                    _m3_skip_env = input(
+                        "  Skip LOADER backup/printenv capture for option 3 nodes? [Y/n]: "
+                    ).strip().lower()
+                    if _m3_skip_env in ("", "y", "yes", "n", "no"):
+                        break
+                    print("  Please enter y or N.")
+                _loader_env_stage_enabled = (_m3_skip_env in ("n", "no"))
 
             # Phase: System Reset (skipped if already at LOADER)
             _session_log.start_phase("System Reset")
