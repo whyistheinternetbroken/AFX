@@ -3030,16 +3030,7 @@ def select_operation_mode():
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER on the primary node before cluster reinit.")
-                    while True:
-                        while True:
-                            _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
-                            if _sip_ans in ("y", "n", ""):
-                                break
-                            print("  Please enter y or N.")
-                        if _sip_ans in ("y", "n", ""):
-                            break
-                        print("  Please enter y or N.")
-                    _netboot_static_ip = (_sip_ans == "y")
+                    print("  📦 Select the ONTAP package location to use for all nodes.")
                     _nb_src_type, _nb_src_value = _find_upgrade_package()
                     if _nb_src_type is None:
                         print("  ❌ No package selected. Returning to menu.")
@@ -3051,6 +3042,16 @@ def select_operation_mode():
                         print(f"  📦 Selected package: {_nb_src_value}")
                     else:
                         print(f"  🌐 Selected package URL: {_nb_src_value}")
+                    while True:
+                        while True:
+                            _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                            if _sip_ans in ("y", "n", ""):
+                                break
+                            print("  Please enter y or N.")
+                        if _sip_ans in ("y", "n", ""):
+                            break
+                        print("  Please enter y or N.")
+                    _netboot_static_ip = (_sip_ans == "y")
                 else:
                     _netboot_pkg_preselected = None
                 while True:
@@ -9524,39 +9525,51 @@ def collect_cluster_config():
             admin_password = None
         print(f"\n  \u2139\uFE0F  {pw_rule_msg}")
         bmc_pw_available = bool(_primary_bmc_password)
-        if bmc_pw_available:
-            if _password_ok(_primary_bmc_password):
+        if bmc_pw_available and _password_ok(_primary_bmc_password):
+            _reuse_bmc_pw = _prompt(
+                "  Reuse the BMC login password as the cluster admin password? [Y/n]: ",
+                "y",
+            ).strip().lower()
+            if _reuse_bmc_pw not in ("n", "no"):
+                admin_password = _primary_bmc_password
+                print("    \u2705 Reusing BMC login password as cluster admin password (hidden).")
+                if _session_log:
+                    _session_log.log(
+                        "Operator reused BMC login password as cluster admin password"
+                    )
+        elif bmc_pw_available:
+            print("  \u2139\uFE0F  The BMC login password you already entered "
+                  "does not meet the ONTAP rule above, so it cannot be "
+                  "reused here.")
+        if not (admin_password and _password_ok(admin_password)):
+            if bmc_pw_available and _password_ok(_primary_bmc_password):
                 print("  \U0001F4A1 Type 'bmc' to reuse the BMC login password "
                       "you already entered.")
-            else:
-                print("  \u2139\uFE0F  The BMC login password you already entered "
-                      "does not meet the ONTAP rule above, so it cannot be "
-                      "reused here.")
-        while True:
-            admin_password = getpass.getpass("  Admin password to use for cluster: ")
-            if not admin_password:
-                print("    \u26A0\uFE0F  Password cannot be empty.")
-                continue
-            if (bmc_pw_available
-                    and admin_password.strip().lower() == "bmc"):
-                if _password_ok(_primary_bmc_password):
-                    admin_password = _primary_bmc_password
-                    print("    \u2705 Reusing BMC login password as cluster admin "
-                          "password (hidden).")
-                    if _session_log:
-                        _session_log.log(
-                            "Operator reused BMC login password as cluster "
-                            "admin password"
-                        )
-                    break
-                print("    \u26A0\uFE0F  BMC password does not meet the ONTAP "
-                      "requirement; please enter a new password.")
-                continue
-            if not _password_ok(admin_password):
-                print(f"    \u26A0\uFE0F  Password does not meet requirements. "
-                      f"{pw_rule_msg}")
-                continue
-            break
+            while True:
+                admin_password = getpass.getpass("  Admin password to use for cluster: ")
+                if not admin_password:
+                    print("    \u26A0\uFE0F  Password cannot be empty.")
+                    continue
+                if (bmc_pw_available
+                        and admin_password.strip().lower() == "bmc"):
+                    if _password_ok(_primary_bmc_password):
+                        admin_password = _primary_bmc_password
+                        print("    \u2705 Reusing BMC login password as cluster admin "
+                              "password (hidden).")
+                        if _session_log:
+                            _session_log.log(
+                                "Operator reused BMC login password as cluster "
+                                "admin password"
+                            )
+                        break
+                    print("    \u26A0\uFE0F  BMC password does not meet the ONTAP "
+                          "requirement; please enter a new password.")
+                    continue
+                if not _password_ok(admin_password):
+                    print(f"    \u26A0\uFE0F  Password does not meet requirements. "
+                          f"{pw_rule_msg}")
+                    continue
+                break
 
     admin_user = cc_cfg.get("user") or "admin"
     if cc_cfg.get("user"):
@@ -9601,25 +9614,13 @@ def collect_cluster_config():
     dns_servers = _from_cfg_or_prompt(
         "dns_servers", "DNS servers (comma separated)", None)
 
-    # NTP servers: if already configured (from config file or just populated
-    # by the retain-capture path), show the value and only re-prompt if the
-    # operator explicitly wants to change it.  If nothing is configured yet,
-    # open the full picker.
-    ntp_servers_raw = cc_cfg.get("ntp_servers")
+    # NTP servers: if already configured (config or previously collected in this
+    # run), keep that value and do not prompt again. If nothing is configured
+    # yet, open the picker.
+    ntp_servers_raw = cc_cfg.get("ntp_servers") or _cluster_config.get("ntp_servers")
     if ntp_servers_raw:
         print(f"\n  📄 NTP servers (from config): {ntp_servers_raw}")
-        _ntp_change = _prompt(
-            "  Change NTP servers? [y/N]: ", "n"
-        ).strip().lower()
-        if _ntp_change == "y":
-            _ntp_entries = _prompt_ntp_servers()
-            if _ntp_entries:
-                ntp_servers = ",".join(_ntp_entries)
-                print(f"  ✅ NTP servers configured: {ntp_servers}")
-            else:
-                ntp_servers = ntp_servers_raw
-        else:
-            ntp_servers = ntp_servers_raw
+        ntp_servers = ntp_servers_raw
     else:
         print("\n  ℹ️   NTP servers (optional). Select from the list or add custom.")
         _ntp_entries = _prompt_ntp_servers()
@@ -28163,8 +28164,10 @@ def main():
                 # though it won't be auto-applied.
                 collect_node_mgmt_per_bmc(sp_host, other_sps)
 
-                # Mode 1b also needs the cluster-level setup wizard answers up-front.
-                if _auto_setup:
+                # Mode 1b needs the cluster-level setup wizard answers up-front.
+                # For mode 3, defer until after peer credential prompts so the
+                # cluster-admin password reuse question appears in the requested order.
+                if _auto_setup and _operation_mode == 1:
                     collect_cluster_config()
 
                 if other_sps and _operation_mode != 1:
@@ -28284,6 +28287,12 @@ def main():
                     if _same_creds_all:
                         print(f"  ✅ Using primary credentials (user={sp_user}) for all"
                               f" {len(other_sps)} peer node(s).")
+
+                # Mode 3: collect cluster setup answers after peer-credential handling
+                # so the cluster admin password reuse prompt appears immediately after
+                # the peer credential summary.
+                if _auto_setup and _operation_mode == 3:
+                    collect_cluster_config()
 
                 if _operation_mode == 3:
                     # Mode 3: peers will be auto-added in parallel AFTER the primary's
