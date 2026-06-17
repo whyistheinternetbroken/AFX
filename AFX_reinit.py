@@ -5510,6 +5510,13 @@ OPTIONS
         path, BMC IPs, every completed global phase, and every per-node
         phase keyed by BMC IP.  Does not modify the checkpoint file.
 
+    --last-status
+        Read and display the summary file from the most recent AFX_reinit
+        run, then exit.  Useful for quickly checking the result of a
+        previous job without scrolling through the full log file.  The
+        summary shows overall result (PASS/FAIL/WARN), phase timing,
+        step timing, error/warning count, and runtime duration.
+
     --auto-clear-stale-bmc
         On BMC SSH banner-timeout retries, scan for ESTABLISHED sockets to
         <bmc>:22 owned by other local python processes and SIGTERM them.
@@ -5531,6 +5538,34 @@ OPTIONS
         --backup          Run mode 5c directly
         --verify          Run mode 5d directly
         --loader          Run mode 5z directly
+
+INTERACTIVE FEATURES
+
+    Path Tab Completion
+
+        When the script prompts for a file path or URL (e.g., "Path or URL: /scripts/ONTAP"),
+        you can press Tab to auto-complete matching paths from the filesystem.  This feature
+        is available on Linux, macOS, and Unix systems with Python's readline module.
+
+        On each Tab press:
+          • The script lists matching files and directories
+          • Directory names are suffixed with "/" to indicate you can continue
+          • Partial names are completed to the longest unambiguous match
+
+        Works for:
+          • Config file paths (--config or interactive prompts)
+          • ONTAP image paths (mode 4b netboot)
+          • Bootargs files (--diag)
+          • License file paths (mode 5a)
+          • Any other file/URL input
+
+        Example:
+            Path or URL: /scr[TAB]
+            → /scripts/
+            Path or URL: /scripts/O[TAB]
+            → /scripts/ONTAP/
+            Path or URL: /scripts/ONTAP/ONTAP[TAB]
+            → /scripts/ONTAP/ONTAP-9.15.1.img
 
 EXAMPLES
     Interactive run (prompts for all values):
@@ -5560,6 +5595,9 @@ EXAMPLES
 
     Resume an interrupted 4b run (EXPERIMENTAL):
         python3 AFX_reinit.py --resume --config configs/reinit-config.json
+
+    Check the result of the most recent run:
+        python3 AFX_reinit.py --last-status
 
     Print script version metadata:
         python3 AFX_reinit.py --version

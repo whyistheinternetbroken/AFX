@@ -581,6 +581,7 @@ python3 AFX_reinit.py [OPTIONS]
 | `--screen` | | Re-launch the script inside a detached GNU screen session. Keeps the run alive if your SSH connection drops or times out. Implies `--bg`. Use `screen -r afx-reinit` to reattach. No-op if already running inside screen. |
 | `--resume` | | Mode 4b only. Resume the previous 4b run from its saved checkpoint (`afx_checkpoint.json`). Skips phases already completed so you do not have to restart from scratch after a failure or Ctrl+C. See **Checkpoint & Resume** below. |
 | `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, age, BMC IPs, completed global phases, completed per-node phases — then exit. Does not modify the checkpoint file. |
+| `--last-status` | | Read and display the summary file from the most recent AFX_reinit run, then exit. Useful for quickly checking the result of a previous job without scrolling through the full log file. |
 | `--auto-clear-stale-bmc` | | On banner-timeout retries, scan for `ESTABLISHED` TCP sockets to each BMC's port 22 owned by other Python processes on this host and `SIGTERM` them. The "always-on" cleanup (close own SSH clients + `ipmitool sol deactivate`) runs regardless of this flag. See [BMC SSH Stale Session Diagnostics](#bmc-ssh-stale-session-diagnostics). |
 | `--diag` | | Enable diagnostic bootarg injection. Loads `bootargs.txt` or `bootargs` from `configs/` or the script directory (one `option_name value` entry per line; lines starting with `#` are comments) or prompts interactively. After loading, all entries are printed and must be confirmed before proceeding. Bootargs are set via `setenv` after `set-defaults` and before `saveenv` at the LOADER stage on all nodes. See [Diagnostic Bootargs (`--diag`)](#diagnostic-bootargs---diag). |
 | `--help` / `-h` | | Show a short man page about the script's options. |
@@ -622,6 +623,33 @@ python3 AFX_reinit.py --loader --config configs/reinit-config.json
 
 # Add a license without running a reinit
 python3 AFX_reinit.py --add-lic --config configs/reinit-config.json
+
+# Check the result of the most recent run
+python3 AFX_reinit.py --last-status
+```
+
+### Interactive Features
+
+**Path Tab Completion:** When the script prompts for a file path or URL (e.g., `Path or URL: /scripts/ONTAP`), you can press **Tab** to auto-complete matching paths from the filesystem. This feature is available on Linux, macOS, and Unix systems that have Python's `readline` module. On each Tab press:
+- The script lists matching files and directories in the current directory
+- Directory names are suffixed with `/` to indicate you can continue typing
+- Partial names are completed to the longest unambiguous match
+
+This works for:
+- Config file paths (`--config` or interactive prompts)
+- ONTAP image paths (mode 4b netboot)
+- Bootargs files (when using `--diag`)
+- License file paths (mode 5a)
+- Any other file/URL input
+
+Example:
+```bash
+Path or URL: /scr[TAB]
+→ /scripts/
+Path or URL: /scripts/O[TAB]
+→ /scripts/ONTAP/
+Path or URL: /scripts/ONTAP/ONTAP[TAB]
+→ /scripts/ONTAP/ONTAP-9.15.1.img
 ```
 
 ---
