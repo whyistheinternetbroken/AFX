@@ -9,6 +9,13 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Resume runs now track elapsed time excluding the gap between previous exit and restart.**
+  When a checkpoint is loaded for resume (4b and Mode 4b+reinit), the session logger
+  registers when the previous run ended and when the resume was initiated, then displays
+  this gap ("Previous run ended", "Resume gap") in the summary. Total runtime is calculated
+  excluding the gap so wall-clock time between start and now is decomposed as:
+  (total actual work time) + (gap time). This makes it clear whether a job was briefly
+  interrupted or paused for hours.
 - **Node-add manifest files now archived to run log directory on success.**
   After successful completion of mode 2b (parallel add), mode 3 (end-to-end),
   or mode 4b with reinit enabled, node-add manifest files from `configs/`

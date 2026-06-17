@@ -809,6 +809,7 @@ The `logs/` directory is created in the same folder as the script.
 The summary file contains (and is updated during the run):
 
 - **Result:** `IN PROGRESS` while active, then PASS, PASS (with warnings), or FAIL at completion
+- **Resume tracking:** when resuming from a checkpoint, the summary includes the previous run's end time and the gap (idle time) between previous exit and resume start. Total runtime is reported excluding this gap so you can see work time vs idle time separately.
 - **ONTAP version before/after run:** when the workflow can query cluster version, the summary includes cluster-level snapshots and **per-node version rows** so you can verify each node is on the expected release.
 - **Phase Timing:** duration of each named phase (e.g., "BMC Connect", "LOADER", "Wizard", "Auto Join"). Active or incomplete phases are explicitly labeled as not yet completed. Includes:
   - **Indented sub-rows** for phases that support per-node breakdown (e.g., `[node] image download` and `[node] image install` under the netboot install phase).
@@ -853,6 +854,41 @@ Errors (0)
   (none)
 ==================================================
 ```
+
+Example summary for a resumed run:
+
+```
+==================================================
+SESSION SUMMARY — Mode 42: netboot and install ONTAP (4b) [RESUMED]
+Result : PASS
+==================================================
+
+Phase Timing
+  4b – Netboot Install    : 312.5s
+    [node-01] image download :  83.1s
+    [node-01] image install  : 199.4s
+  Wizard                  : 142.7s
+  Auto Join               : 514.5s
+  Total                   : 969.7s
+  Previous run ended      : 2026-06-17 14:23:10
+  Resume gap              : 1847.2s (30.8m)
+
+Step Timing
+  [previous steps from prior run excluded for brevity]
+  ...
+
+Warnings (0)
+  (none)
+
+Errors (0)
+  (none)
+==================================================
+```
+
+In a resumed run, the "Previous run ended" and "Resume gap" lines show:
+- When the prior run was halted (time of last checkpoint update)
+- How long the system was idle between the prior exit and the resume start
+- The "Total" time does NOT include the gap, so you can distinguish work time from idle time
 
 ---
 

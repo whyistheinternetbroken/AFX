@@ -2090,6 +2090,11 @@ class SessionLogger:
         sys.stdout = _TeeStdout(self._orig_stdout, self._screen_log)
         self._bg_mode = bg_mode
         self._start_time = datetime.now()
+        # Resume tracking: when a checkpoint is loaded, previous_run_end_time
+        # is set to the checkpoint's last-updated time; we then calculate
+        # resume_gap_seconds as (start_time - previous_run_end_time).
+        self._previous_run_end_time: "datetime | None" = None
+        self._resume_gap_seconds: "float | None" = None
         self._phase_times = {}
         self._current_phase = None
         self._current_phase_start = None
@@ -2275,12 +2280,36 @@ class SessionLogger:
         """Write/refresh the live summary snapshot for this active run."""
         with self._lock:
             now = datetime.now()
+            # Calculate total elapsed excluding resume gap
             total_elapsed = (now - self._start_time).total_seconds()
+            if self._resume_gap_seconds is not None:
+                total_elapsed -= self._resume_gap_seconds
             self._write_summary_file(
                 now, total_elapsed,
                 "IN PROGRESS", "Run is active; phases may still be incomplete.",
                 failure_stage="", final=False,
             )
+
+    def set_resume_context(self, previous_end_time: "str | datetime") -> None:
+        """Register a resume event with the timestamp when the previous run exited.
+        
+        Call this after loading a checkpoint to track the gap between runs.
+        previous_end_time can be an ISO format string (from checkpoint['updated'])
+        or a datetime object.
+        """
+        try:
+            if isinstance(previous_end_time, str):
+                _prev = datetime.fromisoformat(previous_end_time)
+            else:
+                _prev = previous_end_time
+            self._previous_run_end_time = _prev
+            self._resume_gap_seconds = max(
+                0.0, (self._start_time - _prev).total_seconds()
+            )
+            _slog(f"Resume: previous run ended at {_prev.isoformat()}, "
+                  f"gap={self._resume_gap_seconds:.1f}s")
+        except Exception as e:
+            _slog(f"Could not parse resume time: {e}", prefix="WARN")
 
     def start_phase(self, phase_name):
         with self._lock:
@@ -2297,8 +2326,11 @@ class SessionLogger:
             if _checkpoint:
                 with suppress(Exception):
                     _checkpoint.set_current_phase(phase_name, state="in_progress")
+            _total = (now - self._start_time).total_seconds()
+            if self._resume_gap_seconds is not None:
+                _total -= self._resume_gap_seconds
             self._write_summary_file(
-                now, (now - self._start_time).total_seconds(),
+                now, _total,
                 "IN PROGRESS", "Run is active; phases may still be incomplete.",
                 failure_stage="", final=False,
             )
@@ -2327,8 +2359,11 @@ class SessionLogger:
                 if _checkpoint:
                     with suppress(Exception):
                         _checkpoint.set_current_phase(_ended_phase, state="completed")
+                _total = (now - self._start_time).total_seconds()
+                if self._resume_gap_seconds is not None:
+                    _total -= self._resume_gap_seconds
                 self._write_summary_file(
-                    now, (now - self._start_time).total_seconds(),
+                    now, _total,
                     "IN PROGRESS", "Run is active; phases may still be incomplete.",
                     failure_stage="", final=False,
                 )
@@ -2340,8 +2375,11 @@ class SessionLogger:
         with self._lock:
             self._phase_outcomes[phase_name] = (status, note)
             now = datetime.now()
+            _total = (now - self._start_time).total_seconds()
+            if self._resume_gap_seconds is not None:
+                _total -= self._resume_gap_seconds
             self._write_summary_file(
-                now, (now - self._start_time).total_seconds(),
+                now, _total,
                 "IN PROGRESS", "Run is active; phases may still be incomplete.",
                 failure_stage="", final=False,
             )
@@ -2763,6 +2801,10 @@ class SessionLogger:
                 self._write_ontap_version_lines(sf)
                 sf.write(f"  {'Started':<25} {self._start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 sf.write(f"  {'Ended':<25} {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                if self._previous_run_end_time and self._resume_gap_seconds is not None:
+                    sf.write(f"  {'Previous run ended':<25} {self._previous_run_end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    gap_min = self._resume_gap_seconds / 60
+                    sf.write(f"  {'Resume gap':<25} {self._resume_gap_seconds:.1f}s ({gap_min:.1f}m)\n")
                 sf.write(f"  {'Total runtime':<25} {total_elapsed:.1f}s ({total_elapsed/60:.1f}m)\n")
 
                 # ---- Phase Timing ----
@@ -25168,6 +25210,11 @@ def main():
                     _checkpoint = CheckpointManager()
 
                 _make_session_log("Mode 42: netboot and install ONTAP (4b)")
+                # If resuming, register the gap between previous run exit and now
+                if _resuming and _checkpoint and _session_log:
+                    _prev_updated = _checkpoint.get_param("updated")
+                    if _prev_updated:
+                        _session_log.set_resume_context(_prev_updated)
                 ok = _run_4b_standalone(_session_log, resuming=_resuming)
                 _session_log.record_completion(normal_exit=ok)
                 if ok:
