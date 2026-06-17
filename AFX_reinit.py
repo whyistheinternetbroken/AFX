@@ -5680,6 +5680,10 @@ def parse_args():
                              "(checkpoints/afx_checkpoint.json) showing exactly where the "
                              "last run left off, then exit. Does not modify "
                              "the checkpoint file.")
+    parser.add_argument("--last-status", action="store_true", default=False,
+                        help="Read and display the summary file from the most recent "
+                             "AFX_reinit run, then exit. Useful for checking the "
+                             "result of a previous job without scrolling through logs.")
     parser.add_argument("--auto-clear-stale-bmc", action="store_true",
                         default=False,
                         help="When a BMC SSH banner timeout is hit, scan for "
@@ -5742,7 +5746,71 @@ def parse_args():
 
 
 # ---------------------------------------------------------------------------
-# Screen session launcher
+# Last status display
+# ---------------------------------------------------------------------------
+
+def _display_last_status():
+    """Find and display the most recent summary file from the logs directory.
+    
+    Searches under the script's logs/ directory for the most recently created
+    summary file and prints it to stdout. Exits after displaying.
+    """
+    try:
+       _script_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+       _script_dir = os.getcwd()
+    
+    logs_dir = os.path.join(_script_dir, "logs")
+    
+    if not os.path.isdir(logs_dir):
+       print(f"❌  No logs directory found at: {logs_dir}")
+       sys.exit(1)
+    
+    # Find all session directories (format: YYYYMMDD_HHMMSS)
+    session_dirs = []
+    try:
+       for entry in os.listdir(logs_dir):
+           entry_path = os.path.join(logs_dir, entry)
+           if os.path.isdir(entry_path):
+               session_dirs.append((entry, entry_path))
+    except OSError as e:
+       print(f"❌  Error reading logs directory: {e}")
+       sys.exit(1)
+    
+    if not session_dirs:
+       print(f"ℹ️   No previous runs found in: {logs_dir}")
+       sys.exit(0)
+    
+    # Sort by name (YYYYMMDD_HHMMSS format sorts chronologically)
+    session_dirs.sort(reverse=True)
+    most_recent_dir = session_dirs[0][1]
+    
+    # Find the summary file in the most recent session directory
+    summary_file = None
+    try:
+       for entry in os.listdir(most_recent_dir):
+           if entry.startswith("summary_") and entry.endswith(".log"):
+               summary_file = os.path.join(most_recent_dir, entry)
+               break
+    except OSError as e:
+       print(f"❌  Error reading session directory: {e}")
+       sys.exit(1)
+    
+    if not summary_file:
+       print(f"ℹ️   No summary file found in: {most_recent_dir}")
+       sys.exit(0)
+    
+    # Read and display the summary file
+    try:
+       with open(summary_file, "r", encoding="utf-8") as f:
+           print(f.read())
+    except OSError as e:
+       print(f"❌  Error reading summary file: {e}")
+       sys.exit(1)
+    
+    sys.exit(0)
+
+
 # ---------------------------------------------------------------------------
 
 def _relaunch_in_screen():
@@ -23901,6 +23969,10 @@ def main():
     # --screen: re-exec inside a GNU screen session for connection resilience.
     if args.screen and _relaunch_in_screen():
         sys.exit(0)
+
+    # --last-status: display the most recent run summary and exit
+    if args.last_status:
+        _display_last_status()
 
     setup_logging(args.debug)
     _debug_console = args.debug
