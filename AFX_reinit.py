@@ -3539,6 +3539,7 @@ logging.getLogger("paramiko.transport").setLevel(logging.CRITICAL)
 # is performed at LOADER before the normal boot-menu/reinit flow continues.
 _netboot_before_reinit = False
 _netboot_pkg_preselected = None  # tuple(src_type, src_value) captured at menu-time
+_mode3_peer_netboot_done = False  # True when mode-3 peer netboot/install ran with primary
 
 # When True (set by 1a/1b/3 prompt), adds 'setenv raid.use-physical-zeroing? true'
 # to the primary node's LOADER commands so disks are physically zeroed.
@@ -18899,6 +18900,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         )
         if _mode3_ok:
             _option3_finalize(_run_context, cc.get("mgmt_ip"))
+            return
         print("\n❌ Mode 3 did not complete: one or more peer nodes failed to add.")
         if _session_log:
             _session_log.log(
@@ -21917,138 +21919,157 @@ def _extract_version_from_package_path(pkg_path: str) -> str:
 
 
 def _netboot_peers_parallel(peer_bmcs, pkg_url, version, log=None):
-    """Netboot all peer nodes in parallel to the same package URL.
-    
-    Returns True if all peers successfully netboot, False if any failed.
-    Records each peer's version in the session log for summary reporting.
+    """Netboot-install (option 7) all peer nodes in parallel.
+
+    This mirrors the mode-4b install path: each peer reaches LOADER, runs
+    netboot, selects option 7, installs the image, and reboots.
     """
     if not peer_bmcs or not pkg_url:
         return True
-    
+
     _results = {}
+    _timings = {}
     _threads = []
-    
+    _lock = threading.Lock()
+
     def _netboot_one_peer(bmc_addr):
-        """Netboot a single peer node and log the result."""
+        _t0 = time.monotonic()
+        _label = f"peer/{bmc_addr}"
+        _node_log = None
+        client = None
+        ch = None
         try:
-            client, user, password = _ssh_connect_with_retry(
-                bmc_addr, "admin", "",
-                label=f"peer/{bmc_addr} netboot",
-                max_attempts=3,
+            _creds = _peer_bmc_creds.get(bmc_addr) or {}
+            _user = _creds.get("user") or "admin"
+            _password = _creds.get("password")
+            if _password is None:
+                _password = ""
+            _fallbacks = _bmc_fallback_passwords(bmc_addr, {bmc_addr: _password})
+            client, _user, _password = _ssh_connect_with_retry(
+                bmc_addr, _user, _password,
+                label=f"{_label} netboot",
+                max_attempts=max(3, len(_fallbacks) + 1),
                 interactive=False,
+                fallback_passwords=_fallbacks,
             )
+            _peer_bmc_creds[bmc_addr] = {"user": _user, "password": _password}
             ch = _open_shell(client)
-            
-            # Reach BMC prompt
-            if not _reach_bmc_prompt(ch, label=f"peer/{bmc_addr}"):
-                if log:
-                    log.log(f"[peer/{bmc_addr}] Could not reach BMC prompt", prefix="WARN")
-                _results[bmc_addr] = False
-                try:
-                    ch.close()
-                    client.close()
-                except Exception:
-                    pass
-                return
-            
-            # Go to system console and boot to LOADER
-            ch.send("system console\r")
-            direct_read_until_any(ch, ["y/n", "ctrl-d"], timeout=10)
-            ch.send("y\r")
-            time.sleep(1)
-            
-            # Wait for LOADER
-            loader_found = False
-            _start = time.monotonic()
-            while time.monotonic() - _start < 300:
-                if _shutdown_event.is_set():
-                    break
-                out, matched = direct_read_until_any(
-                    ch, ["LOADER-", "loader-", "autoboot"],
-                    timeout=10
-                )
-                if "loader-" in out.lower():
-                    loader_found = True
-                    break
-                if "starting autoboot" in out.lower():
-                    for _ in range(5):
-                        ch.send("\x03")
-                        time.sleep(0.2)
-            
-            if not loader_found:
-                if log:
-                    log.log(f"[peer/{bmc_addr}] LOADER not found during netboot prep",
-                           prefix="WARN")
-                _results[bmc_addr] = False
-                try:
-                    ch.close()
-                    client.close()
-                except Exception:
-                    pass
-                return
-            
-            # ifconfig for network
-            ch.send("ifconfig e0M -auto\r")
-            direct_read_until(ch, "LOADER-", timeout=30)
-            
-            # Netboot
-            ch.send(f"netboot {pkg_url}\r")
-            
-            # Wait for boot menu (indicates successful download)
-            _menu_found = False
-            _start = time.monotonic()
-            while time.monotonic() - _start < 600:
-                if _shutdown_event.is_set():
-                    break
-                out, matched = direct_read_until_any(
-                    ch, ["selection (1-", "boot menu", "login:"],
-                    timeout=30
-                )
-                if "selection" in out.lower() or "boot menu" in matched.lower():
-                    _menu_found = True
-                    break
-                if "login:" in out.lower():
-                    _menu_found = True  # Already booted
-                    break
-            
-            if not _menu_found:
-                if log:
-                    log.log(f"[peer/{bmc_addr}] Boot menu not found after netboot",
-                           prefix="WARN")
-                _results[bmc_addr] = False
-            else:
-                if log:
-                    log.log(f"[peer/{bmc_addr}] Netboot successful: {version}")
-                    _session_log.add_phase_subtiming("Peer Netboot Install",
-                                                    f"peer/{bmc_addr} ({version})",
-                                                    0.1)  # Placeholder timing
-                _results[bmc_addr] = True
-            
+
             try:
-                ch.close()
-                client.close()
+                _node_log = _node_log_open(
+                    bmc_addr,
+                    _session_log.log_dir if _session_log and hasattr(_session_log, "log_dir") else os.getcwd(),
+                    prefix="mode3_peer_netboot",
+                )
             except Exception:
-                pass
+                _node_log = None
+
+            if not _reach_bmc_prompt(ch, label=_label, node_log=_node_log):
+                if log:
+                    log.log(f"[{_label}] Could not reach BMC prompt", prefix="WARN")
+                with _lock:
+                    _results[bmc_addr] = False
+                return
+
+            _already_loader = _already_at_loader(ch, label=_label, node_log=_node_log)
+            if not _already_loader:
+                _par_send(ch, _node_log, "system reset")
+                out, matched = _par_recv_until(ch, _node_log, ["y/n", ">"], timeout=15)
+                if matched and "y/n" in matched.lower():
+                    _par_send(ch, _node_log, "y")
+                _par_recv_until(ch, _node_log, [">"], timeout=20)
+                _par_send(ch, _node_log, "system console")
+                out, matched = _par_recv_until(
+                    ch, _node_log,
+                    ["y/n", "ctrl-d", "serial console", "loader-", "autoboot"],
+                    timeout=20,
+                )
+                if matched and "y/n" in matched.lower():
+                    _par_send(ch, _node_log, "y")
+                    time.sleep(1)
+
+            _loader_seen = _already_loader
+            _start = time.monotonic()
+            _buf = ""
+            while not _loader_seen and (time.monotonic() - _start < 600):
+                if _shutdown_event.is_set():
+                    break
+                if ch.recv_ready():
+                    chunk = ch.recv(4096).decode("utf-8", errors="replace")
+                    _buf += chunk
+                    if _node_log:
+                        _par_write(_node_log, chunk)
+                    _lbuf = _buf.lower()
+                    if "starting autoboot press ctrl-c to abort" in _lbuf:
+                        for _ in range(6):
+                            ch.send("\x03")
+                            time.sleep(0.2)
+                        _buf = ""
+                        continue
+                    if _LOADER_PROMPT_RE.search(_buf) or "loader-" in _lbuf:
+                        _loader_seen = True
+                        break
+                    if len(_buf) > 8192:
+                        _buf = _buf[-4096:]
+                else:
+                    time.sleep(0.1)
+
+            if not _loader_seen:
+                if log:
+                    log.log(f"[{_label}] LOADER not found during netboot prep", prefix="WARN")
+                with _lock:
+                    _results[bmc_addr] = False
+                return
+
+            _static = _node_mgmt_by_bmc.get(bmc_addr) if _netboot_static_ip else None
+            _ok = _run_netboot_install_sequence(
+                ch, pkg_url, node_label=_label, log=log,
+                boot_menu_timeout=900, node_file=_node_log,
+                static_ifconfig=_static,
+            )
+            _elapsed = max(0.0, time.monotonic() - _t0)
+            with _lock:
+                _results[bmc_addr] = bool(_ok)
+                _timings[bmc_addr] = _elapsed
+            if log:
+                if _ok:
+                    log.log(f"[{_label}] Netboot install successful: {version}")
+                    log.add_phase_subtiming(
+                        "Netboot ONTAP Install",
+                        f"  {_label} ({version})",
+                        _elapsed,
+                    )
+                else:
+                    log.log(f"[{_label}] Netboot install failed", prefix="WARN")
         except Exception as _e:
             if log:
-                log.log(f"[peer/{bmc_addr}] Netboot error: {_e}", prefix="WARN")
-            _results[bmc_addr] = False
-    
-    # Spawn threads for all peers
+                log.log(f"[{_label}] Netboot error: {_e}", prefix="WARN")
+            with _lock:
+                _results[bmc_addr] = False
+        finally:
+            if _node_log:
+                with suppress(Exception):
+                    _node_log.close()
+            if ch:
+                with suppress(Exception):
+                    ch.close()
+            if client:
+                with suppress(Exception):
+                    client.close()
+
     for bmc in peer_bmcs:
         _t = threading.Thread(target=_netboot_one_peer, args=(bmc,), daemon=True)
         _t.start()
         _threads.append(_t)
-    
-    # Wait for all threads
+
     for _t in _threads:
-        _t.join(timeout=900)
-    
-    # Check results
+        _t.join(timeout=2400)
+
     _all_ok = all(_results.get(bmc, False) for bmc in peer_bmcs)
     if log:
-        log.log(f"Peer netboot complete: {sum(1 for v in _results.values() if v)}/{len(peer_bmcs)} succeeded")
-    
+        _ok_n = sum(1 for _v in _results.values() if _v)
+        log.log(f"Peer netboot install complete: {_ok_n}/{len(peer_bmcs)} succeeded")
+
     return _all_ok
 
 
@@ -22139,12 +22160,13 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     else:
         _slog("Primary cluster shell ready for cluster add-node")
 
-    # Mode 3: If a netboot package was pre-selected, netboot all peer nodes to
-    # the same version before running option 4. This ensures version compatibility.
-    global _netboot_pkg_preselected
+    # Mode 3: If a netboot package was pre-selected and peers were not already
+    # netboot-installed in parallel with the primary, do it now before option 4.
+    global _netboot_pkg_preselected, _mode3_peer_netboot_done
     _peer_nb_pkg_url = None
     _peer_nb_version = "unknown"
-    if _netboot_pkg_preselected is not None:
+    if _netboot_pkg_preselected is not None and not _mode3_peer_netboot_done:
+        _nb_httpd = None
         _nb_src_type, _nb_src_value = _netboot_pkg_preselected
         if _nb_src_type == "file":
             _nb_t, _peer_nb_pkg_url, _nb_httpd = _start_http_server(_nb_src_value)
@@ -22173,6 +22195,9 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                 if _session_log:
                     _session_log.log("Peer netboot incomplete but continuing to option 4",
                                     prefix="WARN")
+            if _nb_httpd:
+                with suppress(Exception):
+                    _nb_httpd.shutdown()
 
     # Write node-add manifest so option 2c can resume if this run is interrupted.
     _write_node_add_manifest(
@@ -22797,7 +22822,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
 def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     global _reinit_label, _bootarg_check_enabled, _loader_env_stage_enabled
-    global _netboot_pkg_preselected
+    global _netboot_pkg_preselected, _mode3_peer_netboot_done
     _reinit_label = sp_host or _reinit_label
     _pfx = _node_pfx()
     print(f"\n⏳ {_pfx}Setting LOADER boot options...{_elapsed_str()}")
@@ -22933,6 +22958,28 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             _real_stdout.write(msg + "\n")
             _real_stdout.flush()
 
+        _mode3_peer_netboot_done = False
+        _peer_nb_thread = None
+        _peer_nb_result = {"ok": True}
+
+        # Mode 3 + image install: run peer netboot-install in parallel with the
+        # primary so all nodes install the selected ONTAP image before reinit.
+        if _operation_mode == 3 and _peer_bmc_list:
+            _peer_nb_version = _extract_version_from_package_path(src_value or _nb_pkg_url)
+            _peer_list = list(_peer_bmc_list)
+            print(f"  🔄 Starting parallel peer netboot-install for {len(_peer_list)} node(s)...")
+
+            def _run_peer_netboot():
+                _ok = _netboot_peers_parallel(_peer_list, _nb_pkg_url, _peer_nb_version, _session_log)
+                _peer_nb_result["ok"] = bool(_ok)
+
+            _peer_nb_thread = threading.Thread(
+                target=_run_peer_netboot,
+                daemon=True,
+                name="mode3-peer-netboot",
+            )
+            _peer_nb_thread.start()
+
         _nb_static = _node_mgmt_by_bmc.get(sp_host) if _netboot_static_ip else None
         _nb_label = _display_node_label(sp_host, mode=_operation_mode)
         if _session_log:
@@ -22942,6 +22989,24 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             status_cb=_nb_screen,
             static_ifconfig=_nb_static,
         )
+        if _peer_nb_thread is not None:
+            _peer_nb_thread.join(timeout=3600)
+            if _peer_nb_thread.is_alive():
+                _peer_ok = False
+                if _session_log:
+                    _session_log.log(
+                        "mode3 peer netboot-install thread timed out",
+                        prefix="ERROR",
+                    )
+            else:
+                _peer_ok = bool(_peer_nb_result.get("ok", False))
+            _mode3_peer_netboot_done = _peer_ok
+            if not _peer_ok:
+                print("  ❌ Peer netboot-install failed on one or more nodes.")
+                if _session_log:
+                    _session_log.set_outcome("FAIL", "peer netboot-install failed")
+                    _session_log.close()
+                sys.exit(1)
         if _nb_httpd:
             try:
                 _nb_httpd.shutdown()
@@ -22954,8 +23019,9 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
                 _session_log.set_outcome("FAIL", "netboot install failed")
                 _session_log.close()
             sys.exit(1)
-        if _session_log:
+        if _session_log and _peer_nb_thread is None:
             _session_log.end_phase()
+        _netboot_pkg_preselected = None
         # Node is now rebooting with new ONTAP; fall through to boot menu wait.
 
     if _session_log and not _netboot_before_reinit:
