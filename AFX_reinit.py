@@ -40,6 +40,13 @@ from datetime import datetime
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 
+# Optional: readline for tab completion (gracefully degrades if unavailable)
+try:
+    import readline
+    HAS_READLINE = True
+except ImportError:
+    HAS_READLINE = False
+
 SCRIPT_VERSION = "1.1.1"
 
 try:
@@ -5807,13 +5814,73 @@ def _display_last_status():
     except OSError as e:
        print(f"❌  Error reading summary file: {e}")
        sys.exit(1)
-    
+     
     sys.exit(0)
 
 
 # ---------------------------------------------------------------------------
+# Path tab completion
+# ---------------------------------------------------------------------------
 
-def _relaunch_in_screen():
+def _setup_path_completion():
+    """Register readline path completion for interactive input.
+    
+    Only activates if readline is available (Unix/Linux/Mac).
+    On Windows without pyreadline, silently degrades.
+    """
+    if not HAS_READLINE:
+       return
+    
+    def path_completer(text, state):
+       """Generate matching path completions."""
+       # On first call, generate all matches
+       if state == 0:
+           path_completer.matches = []
+            
+           # Empty input — suggest current dir
+           if not text:
+               text = "."
+            
+           # Split into directory and partial basename
+           dirname = os.path.dirname(text) or "."
+           basename = os.path.basename(text)
+            
+           # Directory must exist to list entries
+           if not os.path.isdir(dirname):
+               return None
+            
+           # Read directory contents
+           try:
+               entries = os.listdir(dirname)
+           except OSError:
+               return None
+            
+           # Filter entries matching the partial basename
+           matches = [e for e in entries if e.startswith(basename)]
+           matches.sort()
+            
+           # Build full paths; append "/" for directories to signal continuation
+           path_completer.matches = []
+           for match in matches:
+               full_path = os.path.join(dirname, match)
+               if os.path.isdir(full_path):
+                   path_completer.matches.append(full_path + os.sep)
+               else:
+                   path_completer.matches.append(full_path)
+        
+       # Return matches one at a time
+       if state < len(path_completer.matches):
+           return path_completer.matches[state]
+       return None
+    
+    # Install the completer and enable tab completion
+    readline.set_completer(path_completer)
+    # Bind Tab to complete; some systems use "complete" instead of "tab: complete"
+    readline.parse_and_bind("tab: complete")
+
+
+# ---------------------------------------------------------------------------
+
     """Re-exec this script inside a detached GNU screen session.
 
     Call this when ``--screen`` is requested.  Returns ``True`` if the
@@ -24005,6 +24072,10 @@ def main():
         # happens in the 4b upfront config phase. We just initialise the
         # list here so _diag_bootargs is always defined.
         _diag_bootargs = []
+
+    # Enable path tab completion in interactive mode
+    if not _bg_mode:
+        _setup_path_completion()
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
