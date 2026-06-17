@@ -6707,6 +6707,7 @@ def _run_cluster_command(channel, cmd, timeout=60):
 
     Uses the cluster prompt regex anchored to the tail of the buffer so that
     the echoed command/prompt fragments mid-output don't falsely terminate.
+    Handles pager prompts by sending 'q' to clear them.
     """
     drain_channel(channel, seconds=0.3)
     if _session_log:
@@ -6715,6 +6716,12 @@ def _run_cluster_command(channel, cmd, timeout=60):
 
     output = ""
     start_time = time.monotonic()
+    _pager_prompt_re = re.compile(
+        r"(?:Press|press) <space> to page (?:down|skip|continue)|"
+        r"<return> for next line|'q' to quit",
+        re.IGNORECASE
+    )
+    
     while time.monotonic() - start_time < timeout:
         if _shutdown_event.is_set():
             break
@@ -6726,6 +6733,15 @@ def _run_cluster_command(channel, cmd, timeout=60):
                 sys.stdout.flush()
             if _session_log:
                 _session_log.log_console(chunk)
+            
+            # Check for pager prompt and send 'q' to quit pagination
+            if _pager_prompt_re.search(output[-500:]):
+                channel.send("q")
+                if _session_log:
+                    _session_log.log_sent("q")
+                time.sleep(0.2)
+                continue
+            
             if _CLUSTER_PROMPT_RE.search(output[-200:]):
                 # Brief drain in case more output is still arriving.
                 time.sleep(0.3)
@@ -21873,6 +21889,168 @@ def _option3_finalize(ctx, cluster_mgmt_ip):
     sys.exit(0)
 
 
+def _extract_version_from_package_path(pkg_path: str) -> str:
+    """Extract ONTAP version string from a package path or URL.
+    
+    Examples:
+      /path/to/9.19.1RC1/ontap.tgz -> 9.19.1RC1
+      http://server/builds/9.18.1P2.tgz -> 9.18.1P2
+      /mnt/ontap-9.19.1-release.tgz -> 9.19.1
+    
+    Returns the extracted version or the last path component if extraction fails.
+    """
+    if not pkg_path:
+        return "unknown"
+    
+    import re as _re
+    # Try to find version pattern in path (X.Y.Z, X.Y.Z.RC#, X.Y.Z.P#)
+    _match = _re.search(r'(\d+\.\d+(?:\.\d+)?(?:RC|P)\d+|\d+\.\d+(?:\.\d+)?)', pkg_path)
+    if _match:
+        return _match.group(1)
+    
+    # Fallback: return filename without extension
+    _basename = os.path.basename(pkg_path.rstrip('/'))
+    if _basename.endswith(('.tgz', '.tar.gz')):
+        return _basename.rsplit('.', 2 if _basename.endswith('.tar.gz') else 1)[0]
+    return _basename or "unknown"
+
+
+def _netboot_peers_parallel(peer_bmcs, pkg_url, version, log=None):
+    """Netboot all peer nodes in parallel to the same package URL.
+    
+    Returns True if all peers successfully netboot, False if any failed.
+    Records each peer's version in the session log for summary reporting.
+    """
+    if not peer_bmcs or not pkg_url:
+        return True
+    
+    _results = {}
+    _threads = []
+    
+    def _netboot_one_peer(bmc_addr):
+        """Netboot a single peer node and log the result."""
+        try:
+            client, user, password = _ssh_connect_with_retry(
+                bmc_addr, "admin", "",
+                label=f"peer/{bmc_addr} netboot",
+                max_attempts=3,
+                interactive=False,
+            )
+            ch = _open_shell(client)
+            
+            # Reach BMC prompt
+            if not _reach_bmc_prompt(ch, label=f"peer/{bmc_addr}"):
+                if log:
+                    log.log(f"[peer/{bmc_addr}] Could not reach BMC prompt", prefix="WARN")
+                _results[bmc_addr] = False
+                try:
+                    ch.close()
+                    client.close()
+                except Exception:
+                    pass
+                return
+            
+            # Go to system console and boot to LOADER
+            ch.send("system console\r")
+            direct_read_until_any(ch, ["y/n", "ctrl-d"], timeout=10)
+            ch.send("y\r")
+            time.sleep(1)
+            
+            # Wait for LOADER
+            loader_found = False
+            _start = time.monotonic()
+            while time.monotonic() - _start < 300:
+                if _shutdown_event.is_set():
+                    break
+                out, matched = direct_read_until_any(
+                    ch, ["LOADER-", "loader-", "autoboot"],
+                    timeout=10
+                )
+                if "loader-" in out.lower():
+                    loader_found = True
+                    break
+                if "starting autoboot" in out.lower():
+                    for _ in range(5):
+                        ch.send("\x03")
+                        time.sleep(0.2)
+            
+            if not loader_found:
+                if log:
+                    log.log(f"[peer/{bmc_addr}] LOADER not found during netboot prep",
+                           prefix="WARN")
+                _results[bmc_addr] = False
+                try:
+                    ch.close()
+                    client.close()
+                except Exception:
+                    pass
+                return
+            
+            # ifconfig for network
+            ch.send("ifconfig e0M -auto\r")
+            direct_read_until(ch, "LOADER-", timeout=30)
+            
+            # Netboot
+            ch.send(f"netboot {pkg_url}\r")
+            
+            # Wait for boot menu (indicates successful download)
+            _menu_found = False
+            _start = time.monotonic()
+            while time.monotonic() - _start < 600:
+                if _shutdown_event.is_set():
+                    break
+                out, matched = direct_read_until_any(
+                    ch, ["selection (1-", "boot menu", "login:"],
+                    timeout=30
+                )
+                if "selection" in out.lower() or "boot menu" in matched.lower():
+                    _menu_found = True
+                    break
+                if "login:" in out.lower():
+                    _menu_found = True  # Already booted
+                    break
+            
+            if not _menu_found:
+                if log:
+                    log.log(f"[peer/{bmc_addr}] Boot menu not found after netboot",
+                           prefix="WARN")
+                _results[bmc_addr] = False
+            else:
+                if log:
+                    log.log(f"[peer/{bmc_addr}] Netboot successful: {version}")
+                    _session_log.add_phase_subtiming("Peer Netboot Install",
+                                                    f"peer/{bmc_addr} ({version})",
+                                                    0.1)  # Placeholder timing
+                _results[bmc_addr] = True
+            
+            try:
+                ch.close()
+                client.close()
+            except Exception:
+                pass
+        except Exception as _e:
+            if log:
+                log.log(f"[peer/{bmc_addr}] Netboot error: {_e}", prefix="WARN")
+            _results[bmc_addr] = False
+    
+    # Spawn threads for all peers
+    for bmc in peer_bmcs:
+        _t = threading.Thread(target=_netboot_one_peer, args=(bmc,), daemon=True)
+        _t.start()
+        _threads.append(_t)
+    
+    # Wait for all threads
+    for _t in _threads:
+        _t.join(timeout=900)
+    
+    # Check results
+    _all_ok = all(_results.get(bmc, False) for bmc in peer_bmcs)
+    if log:
+        log.log(f"Peer netboot complete: {sum(1 for v in _results.values() if v)}/{len(peer_bmcs)} succeeded")
+    
+    return _all_ok
+
+
 def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                             primary_bmc=None):
     """Spawn one thread per peer BMC, all running the auto-add flow in
@@ -21959,6 +22137,41 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                              prefix="WARN")
     else:
         _slog("Primary cluster shell ready for cluster add-node")
+
+    # Mode 3: If a netboot package was pre-selected, netboot all peer nodes to
+    # the same version before running option 4. This ensures version compatibility.
+    global _netboot_pkg_preselected
+    _peer_nb_pkg_url = None
+    _peer_nb_version = "unknown"
+    if _netboot_pkg_preselected is not None:
+        _nb_src_type, _nb_src_value = _netboot_pkg_preselected
+        if _nb_src_type == "file":
+            _nb_t, _peer_nb_pkg_url, _nb_httpd = _start_http_server(_nb_src_value)
+            print(f"\n  🌐 Peer netboot server: {_peer_nb_pkg_url}")
+            _peer_nb_version = _extract_version_from_package_path(_nb_src_value)
+        else:
+            _peer_nb_pkg_url = _nb_src_value
+            _peer_nb_version = _extract_version_from_package_path(_nb_src_value)
+        
+        if _peer_nb_pkg_url:
+            print(f"\n  🔄 Netbooting {len(peer_bmcs)} peer node(s) to version {_peer_nb_version}...")
+            if _session_log:
+                _session_log.start_phase("Peer Netboot Install")
+            
+            _peer_nb_ok = _netboot_peers_parallel(
+                peer_bmcs, _peer_nb_pkg_url, _peer_nb_version, _session_log
+            )
+            
+            if _session_log:
+                _session_log.end_phase(outcome="PASS" if _peer_nb_ok else "FAIL",
+                                      note=("netboot complete" if _peer_nb_ok 
+                                            else "one or more peers failed netboot"))
+            
+            if not _peer_nb_ok:
+                print("  ⚠️  One or more peers failed netboot; attempting option 4 anyway...")
+                if _session_log:
+                    _session_log.log("Peer netboot incomplete but continuing to option 4",
+                                    prefix="WARN")
 
     # Write node-add manifest so option 2c can resume if this run is interrupted.
     _write_node_add_manifest(
@@ -22721,6 +22934,8 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
 
         _nb_static = _node_mgmt_by_bmc.get(sp_host) if _netboot_static_ip else None
         _nb_label = _display_node_label(sp_host, mode=_operation_mode)
+        if _session_log:
+            _session_log.log(f"Selected ONTAP package: {_nb_pkg_url}")
         ok = _run_netboot_install_sequence(
             channel, _nb_pkg_url, node_label=_nb_label, log=_session_log,
             status_cb=_nb_screen,
