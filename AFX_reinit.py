@@ -27526,7 +27526,19 @@ def main():
                     _run_context.config_data = _config_data
                     _run_context.apply_to_globals()
 
-            if not config_path and _operation_mode in (1, 3):
+            # ── Mode 3 checkpoint resume detection: skip pre-reset if at finalization stage
+            # If resuming at "Cluster create complete; peer add finalization", we've
+            # already created the cluster and just need to add nodes (no reset phase).
+            _mode3_skip_presets = False
+            if _operation_mode == 3:
+                _cp_check = CheckpointManager()
+                if _cp_check.load():
+                    if _cp_check.is_done("option3_complete") or _cp_check.is_done("cluster_formed"):
+                        _mode3_skip_presets = True
+                        print("\n  🔖 Resuming mode 3 at peer-add finalization stage.")
+                        print("     Skipping pre-reset prompts (already completed).")
+
+            if not config_path and _operation_mode in (1, 3) and not _mode3_skip_presets:
                 _print_banner("💾 No config file in use — reuse existing cluster config?")
                 print("\n  If this BMC's node is part of a running cluster, the script")
                 print("  can pull the existing cluster name and management/network IPs")
@@ -27557,18 +27569,26 @@ def main():
                     print("     then build the runtime config from them.")
                 else:
                     print("\n  ↩️  Will not retain any existing cluster configuration.")
+            elif _mode3_skip_presets:
+                # Mode 3 finalization resume: skip retain capture, use defaults
+                retain_name = False
+                retain_network = False
+                retain_creds = False
+                _run_context.retain_preselected = (False, False, False)
+                _run_context.apply_to_globals()
 
             # ── Pre-reinit prompts: physical zeroing, diagnostic bootargs, and
             #    firmware auto-update behavior ───────────────────────────────────
             # Asked here — right after config/retain selection, before any BMC
             # connection — so all up-front questions are grouped together.
-            if _operation_mode in (1, 3):
+            # Skip if resuming mode 3 at peer-add finalization stage (cluster already created).
+            if _operation_mode in (1, 3) and not _mode3_skip_presets:
                 print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
                 try:
                     while True:
                         _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
                         if _pz_ans in ("y", "n", ""):
-                            break
+                           break
                         print("  Please enter y or N.")
                 except (EOFError, KeyboardInterrupt):
                     _pz_ans = ""
@@ -27580,7 +27600,7 @@ def main():
             elif _operation_mode == 2 and _diag_mode:
                 _diag_bootargs = _load_diag_bootargs()
 
-            if _operation_mode in (1, 2, 3):
+            if _operation_mode in (1, 2, 3) and not _mode3_skip_presets:
                 _fw_ans = _prompt(
                     "  Do you want to prevent BIOS firmware from updating? [Y/n]: ",
                     "y",
@@ -28055,6 +28075,11 @@ def main():
                         ignored_list = ", ".join(other_sps)
                         print(f"\n  ℹ️  Secondary nodes [{ignored_list}] ignored")
                     _session_log.log(f"Mode 1 — initial node count set to 1; peers ignored: {other_sps}")
+                elif _mode3_skip_presets:
+                    # Mode 3 resume at finalization: we already know the nodes, no need to re-confirm.
+                    _initial_node_count = 1 + len(other_sps)
+                    print(f"\n  ✅ Confirmed {_initial_node_count} nodes from prior run (no re-confirm needed).")
+                    _session_log.log(f"Mode 3 finalization resume: node count pre-set to {_initial_node_count}")
                 else:
                   while True:
                     _print_banner("📋 Cluster node summary")
@@ -28281,7 +28306,8 @@ def main():
                 # Reset every peer BMC to LOADER up-front (mode 3 needs peers parked at
                 # LOADER before the parallel auto-add kicks in). Mode 1 (1a/1b) only
                 # operates on the first node — skip peer resets entirely.
-                if other_sps and _operation_mode == 3:
+                # Mode 3 at peer-add finalization: peers were already reset in prior run.
+                if other_sps and _operation_mode == 3 and not _mode3_skip_presets:
                     _print_banner(f"🔁 Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
                     print(f"  Peer BMCs: {', '.join(other_sps)}")
                     _session_log.start_phase("Peer Node Reset to LOADER")
