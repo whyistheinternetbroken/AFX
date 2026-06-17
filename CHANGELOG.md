@@ -9,6 +9,11 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Option 3 is now reinit-only (no install-first path).**
+  Choosing ONTAP image install from option 3 now prints guidance to use the
+  install menu options and returns to the main menu. ONTAP install workflows
+  remain in 4b/4c, while option 3 assumes the desired ONTAP version is already
+  installed.
 - **SSH remediation now includes known_hosts reset (`ssh-keygen -R`).**
   Added a dedicated "Remove BMC from known hosts" action in mode 5h and
   integrated the same step into post-failure SSH remediation used by modes

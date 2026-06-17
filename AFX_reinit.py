@@ -3027,33 +3027,14 @@ def select_operation_mode():
                     if _nb_ans in ("y", "n", ""):
                         break
                     print("  Please enter y or N.")
-                _netboot_before_reinit = (_nb_ans == "y")
-                if _netboot_before_reinit:
-                    print("  ℹ️   Netboot-install will run at LOADER on the primary node before cluster reinit.")
-                    print("  📦 Select the ONTAP package location to use for all nodes.")
-                    _nb_src_type, _nb_src_value = _find_upgrade_package()
-                    if _nb_src_type is None:
-                        print("  ❌ No package selected. Returning to menu.")
-                        _netboot_before_reinit = False
-                        _netboot_pkg_preselected = None
-                        continue
-                    _netboot_pkg_preselected = (_nb_src_type, _nb_src_value)
-                    if _nb_src_type == "file":
-                        print(f"  📦 Selected package: {_nb_src_value}")
-                    else:
-                        print(f"  🌐 Selected package URL: {_nb_src_value}")
-                    while True:
-                        while True:
-                            _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
-                            if _sip_ans in ("y", "n", ""):
-                                break
-                            print("  Please enter y or N.")
-                        if _sip_ans in ("y", "n", ""):
-                            break
-                        print("  Please enter y or N.")
-                    _netboot_static_ip = (_sip_ans == "y")
-                else:
+                if _nb_ans == "y":
+                    _netboot_before_reinit = False
                     _netboot_pkg_preselected = None
+                    input("\n  Use the install options in the menu to install a new version of ONTAP. Hit enter to return to menu.")
+                    print("\n  ↩️  Returning to menu...\n")
+                    continue
+                _netboot_before_reinit = False
+                _netboot_pkg_preselected = None
                 while True:
                     _m3_skip_env = input(
                         "  Skip LOADER backup/printenv capture for option 3 nodes? [Y/n]: "
@@ -5424,7 +5405,8 @@ DESCRIPTION
       2b   Add node to existing cluster — automated (parallel multi-node)
            (supports password groups + blank-password fallback retries)
        3   End-to-end reinit: mode 1b on primary + mode 2b on all peers
-           (same credential-grouping/fallback behavior as 2b)
+           (same credential-grouping/fallback behavior as 2b; reinit-only)
+           ONTAP installs are handled by 4b/4c before running mode 3
       4a   ONTAP rolling upgrade (takeover / software update / giveback)
       4b   Netboot and install ONTAP image
       4c   Netboot and install ONTAP image only (no reinit)
@@ -22173,7 +22155,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     global _netboot_pkg_preselected, _mode3_peer_netboot_done
     _peer_nb_pkg_url = None
     _peer_nb_version = "unknown"
-    if _netboot_pkg_preselected is not None and not _mode3_peer_netboot_done:
+    if _netboot_before_reinit and _netboot_pkg_preselected is not None and not _mode3_peer_netboot_done:
         _nb_httpd = None
         _nb_src_type, _nb_src_value = _netboot_pkg_preselected
         if _nb_src_type == "file":
@@ -22895,7 +22877,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             continue
         # When netboot-before-reinit is active, skip boot_ontap menu – the
         # node will boot into the menu naturally after the netboot install.
-        if command == "boot_ontap menu" and _netboot_before_reinit:
+        if command == "boot_ontap menu" and _netboot_before_reinit and _operation_mode != 3:
             _slog("Skipping 'boot_ontap menu' – netboot will handle boot")
             print("\n  ℹ️  Skipping 'boot_ontap menu' (netboot-install requested).")
             continue
@@ -22929,7 +22911,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     # boot_ontap menu and instead do ifconfig + netboot on the primary node.
     # After the install completes and the node reboots, the normal boot-menu
     # selection below will pick up the new ONTAP boot menu (option 9 → init).
-    if _netboot_before_reinit:
+    if _netboot_before_reinit and _operation_mode != 3:
         if _session_log:
             _session_log.end_phase()  # End LOADER Commands
             _session_log.start_phase("Netboot ONTAP Install")
@@ -27607,6 +27589,10 @@ def main():
             # already created the cluster and just need to add nodes (no reset phase).
             _mode3_skip_presets = False
             if _operation_mode == 3:
+                # Option 3 no longer runs ONTAP image installs; always disable any
+                # carried-over netboot-install state from prior runs/checkpoints.
+                _netboot_before_reinit = False
+                _netboot_pkg_preselected = None
                 _cp_check = CheckpointManager()
                 if _cp_check.load():
                     if _cp_check.is_done("option3_complete") or _cp_check.is_done("cluster_formed"):

@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/14/2026  
+**Updated:** 6/17/2026  
 **Previous version:** `Archive/AFX-reinit.py` (original v1 script)
 
 ---
@@ -332,7 +332,7 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **2a** | Add Node to Cluster (interactive) | Boots to LOADER, selects boot menu option 4 (Initialize and configure system). Operator completes the node-join wizard. In multi-node runs, supports numbered omit selection and auto-skips nodes already in cluster. Per-node credential collection can use experimental password groups, and BMC auth attempts include silent fallback (including blank password). |
 | **2b** | Add Node to Cluster (automated) | Same as 2a, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel, numbered omit selection, and auto-skips nodes already in cluster. In this flow, "primary BMC" is used as the default credential context (use `PRIMARY` to reuse that password; blank means an actual blank password), not as a unique controller after parallel add starts. Per-node credential collection can use experimental password groups, and BMC auth attempts include silent fallback (including blank password). |
 | **2c** | Resume Node Additions | Resumes interrupted node-join operations from the last successful checkpoint. Use when a previous mode 2b or mode 3 run was interrupted before all secondary nodes completed. |
-| **3** | End-to-End Auto Reinit | Runs mode 1b on the primary node, then runs mode 2b on all secondary nodes in parallel. Fully unattended with a config file. Peer-credential collection supports experimental password groups, and peer BMC connect/reconnect paths use silent fallback credentials (including blank password). |
+| **3** | End-to-End Auto Reinit | Runs mode 1b on the primary node, then runs mode 2b on all secondary nodes in parallel. Fully unattended with a config file. Peer-credential collection supports experimental password groups, and peer BMC connect/reconnect paths use silent fallback credentials (including blank password). **Option 3 is reinit-only and assumes ONTAP is already at the target version; use 4b or 4c for image installs.** |
 | **4a** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. See [Why 4a uses the BMC](#why-4a-uses-the-bmc). |
 | **4b** | Netboot Install + Optional Reinit | Runs netboot image install, then can continue into reinit flow (1a/1b/3) when selected. |
 | **4c** | Netboot Install Only | Runs the same netboot image install path as 4b, then stops before reinit, cluster create, or node add steps. |
@@ -595,7 +595,7 @@ These flags bypass the interactive menu and launch directly into the specified m
 |---|---|---|
 | `--first-node` | 1b | Initialize the first node and set up the cluster automatically. |
 | `--add-nodes` | 2b | Add node(s) to an existing cluster automatically. |
-| `--reinit` | 3 | End-to-end automated reinit: 1b on primary + parallel node adds. |
+| `--reinit` | 3 | End-to-end automated reinit: 1b on primary + parallel node adds. Assumes ONTAP is already at the desired version (install via 4b/4c separately). |
 | `--netboot-install` | 4b | Netboot and install ONTAP. |
 | `--add-lic` | 5a | Install license file only. |
 | `--passwordless` | 5b | Configure passwordless SSH to cluster management. |
@@ -764,7 +764,7 @@ Once the LOADER prompt appears, the script:
 Depending on the mode:
 
 - **1a (interactive):** The script provides a live terminal passthrough. The operator answers wizard questions manually.
-- **1b / 2b / 3 (automated):** The script drives the wizard using config file values or pre-supplied prompts. For 1b netboot-before-reinit flows, the autopilot banner is shown after package selection (right before HTTP server/start of unattended phases).
+- **1b / 2b / 3 (automated):** The script drives the wizard using config file values or pre-supplied prompts. For 1b netboot-before-reinit flows, the autopilot banner is shown after package selection (right before HTTP server/start of unattended phases). Option 3 does not run install-first flows; run 4b/4c for ONTAP installs.
 
 ### Step 10: Multi-Node Parallel Operations (modes 2b and 3)
 
@@ -1232,16 +1232,16 @@ current `[Unreleased]` working set.
 | v2 (unreleased) | Jun 1, 2026 | **Raw BMC console output suppressed.** BIOS banners, copyright lines, and memory-init text no longer appear in the terminal between "System console connected" and "Now monitoring boot output". Console data still goes to the session log. |
 | v2 (unreleased) | Jun 1, 2026 | **Mode 1/3: "same credentials for all peers" prompt.**Before collecting per-peer BMC credentials, the script asks whether to reuse the primary node's username and password for all peers. Answering Y (default) skips all per-node prompts. |
 | v2 (unreleased) | Jun 1, 2026 | **Mode 3 crash fix.** `apply_to_globals()` at the peer-list stash step was overwriting `_session_log` with `None` because the `RunContext` snapshot predated `_make_session_log()`. Fixed with `refresh_from_globals()` before the write-back. |
-| v2 (unreleased) | Jun 1, 2026 | **4e config gather — complete `reinit-config.json` output.** `primary_node` and `secondary_nodes` blocks are now written correctly. Fixes: ANSI escape codes stripping in PTY output; `(DEPRECATED)-Role` label incorrectly filtered; `IPspace of LIF` label missing from key map; prefix-length (`/16`) netmask support added; all label lookups changed to exact-match. |
-| v2 (unreleased) | Jun 1, 2026 | **4e config gather — LIF summary tables.** Retained configuration summary now shows Cluster LIFs and Management LIFs in separate fixed-width tables (with a `role` column in the management table). Dash separators are sized to match actual column widths. |
-| v2 (unreleased) | Jun 1, 2026 | **4e config gather — BMC prompt consumed by probe fix.** When connecting via a BMC IP, the initial probe was consuming the BMC `>` prompt before `wait_for_bmc_prompt` ran, causing an immediate timeout. Fixed by checking probe output before deciding whether to wait again. |
-| v2 (unreleased) | Jun 1, 2026 | **Default BMC username `admin`.** Options 3 and 4d prompts now show `BMC username [admin]:` and fall back to `admin` on Enter. |
+| v2 (unreleased) | Jun 1, 2026 | **5c config gather — complete `reinit-config.json` output.** `primary_node` and `secondary_nodes` blocks are now written correctly. Fixes: ANSI escape codes stripping in PTY output; `(DEPRECATED)-Role` label incorrectly filtered; `IPspace of LIF` label missing from key map; prefix-length (`/16`) netmask support added; all label lookups changed to exact-match. |
+| v2 (unreleased) | Jun 1, 2026 | **5c config gather — LIF summary tables.** Retained configuration summary now shows Cluster LIFs and Management LIFs in separate fixed-width tables (with a `role` column in the management table). Dash separators are sized to match actual column widths. |
+| v2 (unreleased) | Jun 1, 2026 | **5c config gather — BMC prompt consumed by probe fix.** When connecting via a BMC IP, the initial probe was consuming the BMC `>` prompt before `wait_for_bmc_prompt` ran, causing an immediate timeout. Fixed by checking probe output before deciding whether to wait again. |
+| v2 (unreleased) | Jun 1, 2026 | **Default BMC username `admin`.** Options 3 and 5d prompts now show `BMC username [admin]:` and fall back to `admin` on Enter. |
 | v2 (unreleased) | Jun 1, 2026 | `--diag` flag: inject custom LOADER bootargs (from `bootargs.txt` / `bootargs` file in `configs/` or script dir, or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Accepts any `option_name value` format. All entries printed and confirmed before proceeding. Invalid entries (missing value, `setenv` prefix) are a hard exit. Validates format, detects LOADER errors on apply, checkpoints list for resume. |
 | v2 (unreleased) | Jun 1, 2026 | Cluster node-healthy wait increased to 15 minutes (was 10), polling every 5 minutes (was 2). |
 | v2 (unreleased) | May 29, 2026 | BMC SSH stale session diagnostics: automatic diagnosis + `ipmitool sol deactivate` on every banner-retry; `--auto-clear-stale-bmc` flag SIGTERMs other-Python PIDs holding sockets to the BMC; interactive cleanup offer added to mode 5d when BMC verification fails. |
 | v2 (unreleased) | May 28, 2026 | 4a ONTAP upgrade overhaul: BMC picker from existing reinit config / `BMC_IP.json`; cluster login reuses BMC credentials; parallel image install fans out across per-node management IPs (round-robin) with TCP/22 + SSH-auth pre-flight validation; raw cluster command echo suppressed from console (still in log); failover wait polls every 3 min for up to 30 min with live elapsed / remaining status. Interactive prompt-wait telemetry added to session summary (count, total, longest, ≥60 s extended waits, and `Unaccounted time` line). 4b reinit-type-3 now prompts for physical-disk zeroing. |
 | v2 | May 15, 2026 | Added `--screen` flag: auto-launches the script inside a detached GNU screen session to protect against SSH disconnections and terminal timeouts. Implies `--bg`. Detects existing screen sessions via `STY` env var to prevent recursion. |
-| v2b | Apr 7, 2026 | Parallel peer node operations; end-to-end mode (3); ONTAP upgrade (4a); netboot install (4b); license install (4c); SSH key setup (4d); config backup (4e); BMC auth verify (4f); JSON config file support; background mode; session log with phase/step timing, warnings, and errors inventory. |
+| v2b | Apr 7, 2026 | Parallel peer node operations; end-to-end mode (3); ONTAP upgrade (4a); netboot install (4b); license install (5a); SSH key setup (5b); config backup (5c); BMC auth verify (5d); JSON config file support; background mode; session log with phase/step timing, warnings, and errors inventory. |
 | v2a | Apr 7, 2026 | Session logging with timing and summary; warning/error collection in summary; `_recv_loop` + thin wrapper architecture; module-level `_peer_reinit_worker`. |
 | v1 | Apr 7, 2026 | Initial release. Modes 1a and 2a. |
 
