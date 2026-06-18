@@ -17,15 +17,14 @@ def test_phase_prediction():
         ("4b – Package Selection", "complete", "4b", "Collect Node Mgmt"),
         ("4b – Netboot Install", "complete", "4b", "Reinit Reconnect"),
         ("4b – Reinit Reconnect to LOADER", "complete", "4b", "Boot Menu Selection"),
-        ("4b – Boot Menu Selection", "complete", "4b", "Cluster Initialization"),
-        ("4b – Cluster Initialization (primary)", "complete", "4b", "Auto Cluster Init"),
-        ("Auto Cluster Init (1b)", "complete", "4b", "Cluster Setup Wizard"),
-        ("Cluster Setup Wizard (1b)", "complete", "4b", "NTP Configuration"),
+        ("4b – Boot Menu Selection", "complete", "4b", "Parallel Option 4"),
+        ("4b – Parallel Option 4 (primary init + peers wait)", "complete", "4b", "Peer Cluster Join"),
+        ("4b – Peer Cluster Join", "complete", "4b", "NTP Configuration"),
         ("NTP Configuration", "complete", "4b", "final phase"),
         
         # In-progress phases
-        ("4b – Cluster Initialization (primary)", "in_progress", "4b", "in progress"),
-        ("Cluster Setup Wizard (1b)", "in_progress", "4b", "interactive"),
+        ("4b – Parallel Option 4 (primary init + peers wait)", "in_progress", "4b", "in progress"),
+        ("4b – Peer Cluster Join", "in_progress", "4b", "in progress"),
         ("Collect Cluster Setup Config", "in_progress", "4b", "interactive"),
         
         # Blocked phases
@@ -52,7 +51,7 @@ def test_time_estimation():
         ("4b – Package Selection", 10, "4b"),
         ("4b – Netboot Install", 600, "4b"),
         ("4b – Boot Menu Selection", 800, "4b"),
-        ("Cluster Setup Wizard (1b)", 1200, "4b"),
+        ("4b – Parallel Option 4 (primary init + peers wait)", 1200, "4b"),
     ]
     
     for current_phase, elapsed, mode in test_cases:

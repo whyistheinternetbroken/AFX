@@ -778,9 +778,8 @@ _PHASE_SEQUENCES = {
         "4b – Netboot Install",
         "4b – Reinit Reconnect to LOADER",
         "4b – Boot Menu Selection",
-        "4b – Cluster Initialization (primary)",
-        "Auto Cluster Init (1b)",
-        "Cluster Setup Wizard (1b)",
+        "4b – Parallel Option 4 (primary init + peers wait)",
+        "4b – Peer Cluster Join",
         "NTP Configuration",
     ],
     "1b": [
@@ -841,18 +840,13 @@ _PHASE_METADATA = {
         "typical_duration": 120,
         "interactive": False,
     },
-    "4b – Cluster Initialization (primary)": {
-        "typical_duration": 30,
+    "4b – Parallel Option 4 (primary init + peers wait)": {
+        "typical_duration": 1800,
         "interactive": False,
     },
-    "Auto Cluster Init (1b)": {
-        "typical_duration": 900,
+    "4b – Peer Cluster Join": {
+        "typical_duration": 300,
         "interactive": False,
-    },
-    "Cluster Setup Wizard (1b)": {
-        "typical_duration": 600,
-        "interactive": True,
-        "prompt": "Cluster name, admin password, create/join cluster...",
     },
     "NTP Configuration": {
         "typical_duration": 10,
@@ -4397,6 +4391,8 @@ logging.getLogger("paramiko.transport").setLevel(logging.CRITICAL)
 _netboot_before_reinit = False
 _netboot_pkg_preselected = None  # tuple(src_type, src_value) captured at menu-time
 _mode3_peer_netboot_done = False  # True when mode-3 peer netboot/install ran with primary
+_mode3_peer_parallel_thread = None  # Background mode-3 peer option4/add-node worker
+_mode3_peer_parallel_result = {"ok": True}
 
 # When True (set by 1a/1b/3 prompt), adds 'setenv raid.use-physical-zeroing? true'
 # to the primary node's LOADER commands so disks are physically zeroed.
@@ -16136,7 +16132,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         elif _auto_setup:
             print(f"\n  [{first_ip}] Starting automatic cluster initialization...")
             if log:
-                log.start_phase("4b – Cluster Initialization (primary)")
+                log.start_phase("4b – Parallel Option 4 (primary init + peers wait)")
             _auto_init_rc = _make_reconnect_ctx(
                 first_ip,
                 bmc_user,
@@ -20230,10 +20226,29 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
 
     # Mode 3: launch parallel auto-add for every peer BMC.
     if _operation_mode == 3 and _peer_bmc_list:
-        _mode3_ok = add_peer_nodes_parallel(
-            channel, _peer_bmc_list, cc.get("admin_password"),
-            primary_bmc=primary_bmc,
-        )
+        if _mode3_peer_parallel_thread is None:
+            _mode3_ok = add_peer_nodes_parallel(
+                channel, _peer_bmc_list, cc.get("admin_password"),
+                primary_bmc=primary_bmc,
+            )
+            if _mode3_ok:
+                _option3_finalize(_run_context, cc.get("mgmt_ip"))
+                return
+            print("\n❌ Mode 3 did not complete: one or more peer nodes failed to add.")
+            if _session_log:
+                _session_log.log(
+                    "Mode 3 aborted before finalize: peer add did not complete",
+                    prefix="ERROR",
+                )
+                _session_log.set_outcome("FAIL", "peer add did not complete")
+                try:
+                    _session_log.close()
+                except Exception:
+                    pass
+            sys.exit(1)
+        if _mode3_peer_parallel_thread.is_alive():
+            _mode3_peer_parallel_thread.join(timeout=7200)
+        _mode3_ok = bool(_mode3_peer_parallel_result.get("ok", False))
         if _mode3_ok:
             _option3_finalize(_run_context, cc.get("mgmt_ip"))
             return
@@ -23533,17 +23548,6 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     if _session_log:
         _session_log.log(f"Spawning auto-add threads for: {peer_bmcs}")
 
-    # Login to primary cluster shell so we can run cluster add-node later.
-    if not _login_primary_cluster_shell(primary_channel, admin_password):
-        print("⚠️  Could not log in to primary cluster shell; "
-              "cluster add-node will be skipped.")
-        if _session_log:
-            _session_log.log("Primary cluster shell login failed; "
-                             "cluster add-node will be skipped",
-                             prefix="WARN")
-    else:
-        _slog("Primary cluster shell ready for cluster add-node")
-
     # Mode 3: If a netboot package was pre-selected and peers were not already
     # netboot-installed in parallel with the primary, do it now before option 4.
     global _netboot_pkg_preselected, _mode3_peer_netboot_done
@@ -23609,6 +23613,32 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     _m3_pending = list(peer_bmcs)
 
     _mode3_ok = True
+    if _checkpoint and not _checkpoint.is_done("cluster_formed"):
+        print("\n  ⏳ Waiting for primary cluster creation before peer add-node...")
+        _wait_started = time.monotonic()
+        while not _shutdown_event.is_set():
+            if _checkpoint.is_done("cluster_formed"):
+                break
+            if time.monotonic() - _wait_started >= 7200:
+                print("  ❌ Timed out waiting for primary cluster creation.")
+                if _session_log:
+                    _session_log.log(
+                        "mode 3: timed out waiting for cluster_formed before peer add",
+                        prefix="ERROR",
+                    )
+                return False
+            time.sleep(5)
+
+    if not _login_primary_cluster_shell(primary_channel, admin_password):
+        print("⚠️  Could not log in to primary cluster shell; "
+              "cluster add-node will be skipped.")
+        if _session_log:
+            _session_log.log("Primary cluster shell login failed; "
+                             "cluster add-node will be skipped",
+                             prefix="WARN")
+        return False
+    _slog("Primary cluster shell ready for cluster add-node")
+
     while _m3_pending:
         _n3 = len(_m3_pending)
         _m3_results = [None] * _n3
@@ -24517,12 +24547,58 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             pass
 
     if _auto_setup:
+        global _mode3_peer_parallel_thread, _mode3_peer_parallel_result
+        if (_operation_mode == 3 and _peer_bmc_list
+                and _mode3_peer_parallel_thread is None):
+            _mode3_peer_parallel_result = {"ok": True}
+
+            def _run_mode3_peer_parallel():
+                try:
+                    _mode3_peer_parallel_result["ok"] = bool(
+                        add_peer_nodes_parallel(
+                            channel, _peer_bmc_list, cc.get("admin_password"),
+                            primary_bmc=sp_host,
+                        )
+                    )
+                except Exception as _e:
+                    _mode3_peer_parallel_result["ok"] = False
+                    if _session_log:
+                        _session_log.log(
+                            f"mode 3 peer parallel worker failed: {_e}",
+                            prefix="ERROR",
+                        )
+
+            _mode3_peer_parallel_thread = threading.Thread(
+                target=_run_mode3_peer_parallel,
+                daemon=True,
+                name="mode3-peer-parallel",
+            )
+            _mode3_peer_parallel_thread.start()
         # Mode 1b / 3: auto_complete_initialization drives the full cluster
-        # setup wizard (and, for mode 3, parallel peer auto-add) internally.
+        # setup wizard. Mode 3 peer add may already be running in parallel.
         # Nothing remains for an interactive session, so return without
         # entering InteractiveSession (which would print the misleading
         # "Session is now fully interactive" banner mid-boot).
         auto_complete_initialization(channel, bmc_host=sp_host)
+        if _mode3_peer_parallel_thread is not None:
+            _mode3_peer_parallel_thread.join(timeout=7200)
+            if _mode3_peer_parallel_thread.is_alive():
+                if _session_log:
+                    _session_log.log(
+                        "mode 3 peer parallel worker timed out",
+                        prefix="ERROR",
+                    )
+                _shutdown_event.set()
+                sys.exit(1)
+            if not _mode3_peer_parallel_result.get("ok", False):
+                if _session_log:
+                    _session_log.log(
+                        "mode 3 peer parallel worker failed",
+                        prefix="ERROR",
+                    )
+                _shutdown_event.set()
+                sys.exit(1)
+            _mode3_peer_parallel_thread = None
         return
     elif _auto_add:
         auto_complete_join(channel, client, sp_host, sp_user, sp_pass,
