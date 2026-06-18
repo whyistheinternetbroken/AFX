@@ -591,8 +591,21 @@ class CheckpointManager:
                             node_current = "(complete)"
                             node_next = "(none)"
                     else:
-                        node_current = "(complete)"
-                        node_next = "(none)"
+                        # Peer node is complete on known phases; check if waiting on primary
+                        _primary_only_phases = {
+                            p for p in phases.keys()
+                            if "primary" in p.lower() and not p.endswith("_done")
+                        }
+                        _primary_done_extra = [
+                            p for p in _primary_only_phases
+                            if phases.get(p, {}).get("done")
+                        ]
+                        if _primary_done_extra:
+                            node_current = "(waiting on primary to create cluster)"
+                            node_next = "(none)"
+                        else:
+                            node_current = "(complete)"
+                            node_next = "(none)"
                 elif _synthetic_done_by_ip.get(ip):
                     node_current = "(complete)"
                     node_next = "(none)"
