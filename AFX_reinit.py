@@ -2119,6 +2119,9 @@ class SessionLogger:
         self._phase_times = {}
         self._current_phase = None
         self._current_phase_start = None
+        # Runtime spent outside any explicit start_phase/end_phase window.
+        self._non_phase_seconds = 0.0
+        self._non_phase_anchor = self._start_time
 
         # Per-step timing. Steps are nested-allowed lightweight measurements
         # driven through `step()` (context manager) or start_step/end_step.
@@ -2338,6 +2341,10 @@ class SessionLogger:
             if self._current_phase and self._current_phase_start:
                 elapsed = (now - self._current_phase_start).total_seconds()
                 self._phase_times[self._current_phase] = elapsed
+            else:
+                self._non_phase_seconds += max(
+                    0.0, (now - self._non_phase_anchor).total_seconds()
+                )
             self._current_phase = phase_name
             self._current_phase_start = now
             self._file.write(
@@ -2377,6 +2384,7 @@ class SessionLogger:
                 _ended_phase = self._current_phase
                 self._current_phase = None
                 self._current_phase_start = None
+                self._non_phase_anchor = now
                 if _checkpoint:
                     with suppress(Exception):
                         _checkpoint.set_current_phase(_ended_phase, state="completed")
@@ -2556,6 +2564,14 @@ class SessionLogger:
             return next(reversed(self._phase_times.keys()))
         return ""
 
+    def _non_phase_elapsed(self, now: "datetime | None" = None) -> float:
+        """Return wall time spent outside tracked phase windows."""
+        _now = now or datetime.now()
+        _total = float(self._non_phase_seconds)
+        if self._current_phase is None:
+            _total += max(0.0, (_now - self._non_phase_anchor).total_seconds())
+        return max(0.0, _total)
+
     def record_completion(self, normal_exit: bool = True):
         """Convenience wrapper: sets outcome based on error/warn counters and
         calls close(). Intended to be the single call at the normal exit path
@@ -2717,6 +2733,7 @@ class SessionLogger:
             _paw = float(_pause_wait_seconds)
             _phase_sum = sum(self._phase_times.values()) if self._phase_times else 0.0
             _unaccounted = max(0.0, total_elapsed - _phase_sum - _pw)
+            _non_phase = self._non_phase_elapsed(now)
             self._file.write(
                 f"  {'Time waiting for prompts (x' + str(_prompt_wait_count) + ')':<45} "
                 f"{_pw:>7.1f}s ({_pw/60:.1f}m)\n"
@@ -2744,6 +2761,13 @@ class SessionLogger:
                 )
             self._file.write(
                 f"  {'Unaccounted time':<45} {_unaccounted:>7.1f}s ({_unaccounted/60:.1f}m)\n"
+            )
+            self._file.write(
+                f"     - {'outside tracked phases':<39} {_non_phase:>7.1f}s ({_non_phase/60:.1f}m)\n"
+            )
+            _residual = max(0.0, _unaccounted - _non_phase)
+            self._file.write(
+                f"     - {'residual instrumentation gap':<39} {_residual:>7.1f}s ({_residual/60:.1f}m)\n"
             )
             if self._step_times:
                 self._file.write(f"\n{'─' * 70}\n")
@@ -2876,6 +2900,7 @@ class SessionLogger:
                 _pw = float(_prompt_wait_seconds)
                 _paw = float(_pause_wait_seconds)
                 _unaccounted = max(0.0, total_elapsed - _phase_total_for_accounting - _pw)
+                _non_phase = self._non_phase_elapsed(now)
                 sf.write(
                     f"  {'Time waiting for prompts (x' + str(_prompt_wait_count) + ')':<45} "
                     f"{_pw:>7.1f}s ({_pw/60:.1f}m)\n"
@@ -2903,6 +2928,13 @@ class SessionLogger:
                     )
                 sf.write(
                     f"  {'Unaccounted time':<45} {_unaccounted:>7.1f}s ({_unaccounted/60:.1f}m)\n"
+                )
+                sf.write(
+                    f"     - {'outside tracked phases':<39} {_non_phase:>7.1f}s ({_non_phase/60:.1f}m)\n"
+                )
+                _residual = max(0.0, _unaccounted - _non_phase)
+                sf.write(
+                    f"     - {'residual instrumentation gap':<39} {_residual:>7.1f}s ({_residual/60:.1f}m)\n"
                 )
 
                 # ---- Step Timing ----
