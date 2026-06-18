@@ -470,6 +470,20 @@ class CheckpointManager:
                 ip for per_ip in node_phases.values() for ip in per_ip.keys()
             } | set(bmc_ips))
             phase_names = list(node_phases.keys())
+            _phase_done_counts = {
+                _phase: sum(
+                    1 for _ip in all_ips
+                    if node_phases.get(_phase, {}).get(_ip, {}).get("done")
+                )
+                for _phase in phase_names
+            }
+            _phase_done_ips = {
+                _phase: [
+                    _ip for _ip in all_ips
+                    if node_phases.get(_phase, {}).get(_ip, {}).get("done")
+                ]
+                for _phase in phase_names
+            }
             for ip in all_ips:
                 completed = [
                     p for p in phase_names
@@ -477,8 +491,24 @@ class CheckpointManager:
                 ]
                 pending = [p for p in phase_names if p not in completed]
                 if pending:
-                    node_current = pending[0]
-                    node_next = pending[1] if len(pending) > 1 else "(none)"
+                    _pending_phase = pending[0]
+                    _peer_progress_on_pending = _phase_done_counts.get(_pending_phase, 0) > 0
+                    if not completed and _peer_progress_on_pending:
+                        _done_peers = [
+                            _peer for _peer in _phase_done_ips.get(_pending_phase, [])
+                            if _peer != ip
+                        ]
+                        if _done_peers:
+                            node_current = (
+                                f"(waiting on other nodes for {_pending_phase}: "
+                                f"{', '.join(_done_peers)})"
+                            )
+                        else:
+                            node_current = f"(waiting on other nodes for {_pending_phase})"
+                        node_next = _pending_phase
+                    else:
+                        node_current = _pending_phase
+                        node_next = pending[1] if len(pending) > 1 else "(none)"
                 elif completed:
                     node_current = "(complete)"
                     node_next = "(none)"
