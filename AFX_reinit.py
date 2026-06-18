@@ -466,13 +466,26 @@ class CheckpointManager:
         node_phases = self._data.get("node_phases") or {}
         lines.append("")
         lines.append("Per-node phases:")
-        if not node_phases:
+        _all_ips = sorted({
+            ip for per_ip in node_phases.values() for ip in per_ip.keys()
+        } | set(bmc_ips))
+        _synthetic_done_by_ip = {}
+        if bmc_ips:
+            _primary_done = []
+            for _phase_name in (
+                "primary_bootmenu_done",
+                "primary_node_mgmt_done",
+                "primary_setup_done",
+            ):
+                if phases.get(_phase_name, {}).get("done"):
+                    _primary_done.append(_phase_name)
+            if _primary_done:
+                _synthetic_done_by_ip[bmc_ips[0]] = _primary_done
+        if not _all_ips and not _synthetic_done_by_ip:
             lines.append("  (none recorded)")
         else:
             # Build a phase x ip matrix so each node's progress is easy to scan.
-            all_ips = sorted({
-                ip for per_ip in node_phases.values() for ip in per_ip.keys()
-            } | set(bmc_ips))
+            all_ips = _all_ips or list(bmc_ips)
             phase_names = list(node_phases.keys())
             _phase_done_counts = {
                 _phase: sum(
@@ -505,6 +518,10 @@ class CheckpointManager:
                     p for p in phase_names
                     if node_phases.get(p, {}).get(ip, {}).get("done")
                 ]
+                display_done = completed + [
+                    _p for _p in _synthetic_done_by_ip.get(ip, [])
+                    if _p not in completed
+                ]
                 pending = [p for p in phase_names if p not in completed]
                 _all_known_node_phases_done = bool(phase_names) and not pending
                 if (_wizard_waiting_mode3 and _all_known_node_phases_done
@@ -536,13 +553,22 @@ class CheckpointManager:
                 elif completed:
                     node_current = "(complete)"
                     node_next = "(none)"
+                elif _synthetic_done_by_ip.get(ip):
+                    node_current = "(complete)"
+                    node_next = "(none)"
                 else:
                     node_current = "(not started)"
                     node_next = phase_names[0] if phase_names else "(none)"
-                lines.append(f"  [{ip}]")
+                if ip == _primary_ip:
+                    _role_label = "primary"
+                elif ip in bmc_ips:
+                    _role_label = f"secondary-{bmc_ips.index(ip):02d}"
+                else:
+                    _role_label = "node"
+                lines.append(f"  [{_role_label} | {ip}]")
                 lines.append(f"      current : {node_current}")
                 lines.append(f"      next    : {node_next}")
-                lines.append(f"      done    : {', '.join(completed) or '(none)'}")
+                lines.append(f"      done    : {', '.join(display_done) or '(none)'}")
                 if pending:
                     lines.append(f"      pending : {', '.join(pending)}")
 
