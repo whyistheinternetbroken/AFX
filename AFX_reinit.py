@@ -5368,6 +5368,78 @@ def _clear_stale_bmc_sessions(host: str, username: str, password: str,
             _kill_stale_local_pids_for(host, log=log)
 
 
+def _capture_ontap_version_from_cluster_shell(
+    mgmt_ip: str,
+    username: str = "admin",
+    password: str = "",
+    label: str = "Cluster"
+) -> "tuple[str, str] | tuple[None, None]":
+    """Attempt to capture ONTAP version from cluster shell via SSH.
+    
+    Returns (version_string, source_label) or (None, None) on failure.
+    """
+    try:
+        client, _user, _pass = _ssh_connect_with_retry(
+            mgmt_ip, username, password,
+            label=label, max_attempts=2, interactive=False
+        )
+        stdin, stdout, stderr = client.exec_command("version")
+        output = stdout.read().decode("utf-8", errors="ignore").strip()
+        client.close()
+        
+        if output:
+            # Extract just the version line (typically first line with ONTAP version)
+            lines = output.split("\n")
+            for line in lines:
+                if "ONTAP" in line or "Data ONTAP" in line or "9." in line or "10." in line:
+                    return line.strip(), "cluster shell"
+            # If no version line found, return the first non-empty line
+            for line in lines:
+                if line.strip():
+                    return line.strip(), "cluster shell"
+        return None, None
+    except Exception as e:
+        _slog(f"Could not capture ONTAP version from {mgmt_ip}: {e}", prefix="DEBUG")
+        return None, None
+
+
+def _capture_ontap_version_from_loader(channel) -> "tuple[str, str] | tuple[None, None]":
+    """Attempt to capture ONTAP version from LOADER prompt.
+    
+    Runs 'printenv last-OS-booted-ver' and returns (version_string, source_label) or (None, None).
+    """
+    try:
+        if not channel:
+            return None, None
+        
+        # Send the printenv command to the LOADER prompt
+        channel.send("printenv last-OS-booted-ver\r")
+        time.sleep(1)
+        
+        # Read output
+        output = ""
+        while True:
+            try:
+                chunk = channel.recv(1024)
+                if not chunk:
+                    break
+                output += chunk.decode("utf-8", errors="ignore")
+            except:
+                break
+        
+        # Parse output - look for the version (usually a line like "9.11.1" or "10.0.1")
+        lines = output.split("\n")
+        for line in lines:
+            line = line.strip()
+            if line and re.match(r"^\d+\.\d+\.\d+", line):
+                return line, "LOADER (last-OS-booted-ver)"
+        
+        return None, None
+    except Exception as e:
+        _slog(f"Could not capture ONTAP version from LOADER: {e}", prefix="DEBUG")
+        return None, None
+
+
 def _ssh_connect_with_retry(host: str, username: str, password: str,
                             label: str = "BMC",
                             max_attempts: int = 5,
@@ -14098,6 +14170,46 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
         if log:
             log.end_phase()
+
+        # ── Attempt to capture ONTAP version from primary LOADER prompt ──────
+        if primary_bmc in loader_channels and _checkpoint:
+            _loader_ch_primary = loader_channels[primary_bmc]
+            try:
+                # Send blank line to ensure prompt is visible
+                _loader_ch_primary.send("\r")
+                time.sleep(0.5)
+                # Run printenv last-OS-booted-ver to get the ONTAP version
+                _loader_ch_primary.send("printenv last-OS-booted-ver\r")
+                time.sleep(1)
+                
+                # Read output until we get the LOADER prompt back
+                _ver_output = ""
+                _v_start = time.monotonic()
+                while time.monotonic() - _v_start < 5:
+                    if _loader_ch_primary.recv_ready():
+                        _chunk = _loader_ch_primary.recv(1024).decode("utf-8", errors="ignore")
+                        _ver_output += _chunk
+                        if _LOADER_PROMPT_RE.search(_ver_output):
+                            break
+                    time.sleep(0.1)
+                
+                # Extract version string (typically like "9.11.1" or "10.0.1")
+                _ver_lines = _ver_output.split("\n")
+                for _line in _ver_lines:
+                    _line = _line.strip()
+                    if _line and re.match(r"^\d+\.\d+\.\d+", _line):
+                        _checkpoint.record_ontap_version(
+                            before=_line, source="LOADER (last-OS-booted-ver)"
+                        )
+                        if log:
+                            log.log(f"Captured ONTAP version from primary LOADER: {_line}")
+                        break
+            except Exception as _ver_exc:
+                if log:
+                    log.log(
+                        f"Could not capture ONTAP version from LOADER: {_ver_exc}",
+                        prefix="WARN"
+                    )
 
         # ── Step 4: Start HTTP server if serving a local file ─────────────────
         if log:
