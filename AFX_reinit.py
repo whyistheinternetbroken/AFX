@@ -471,7 +471,18 @@ class CheckpointManager:
                     if node_phases.get(p, {}).get(ip, {}).get("done")
                 ]
                 pending = [p for p in phase_names if p not in completed]
+                if pending:
+                    node_current = pending[0]
+                    node_next = pending[1] if len(pending) > 1 else "(none)"
+                elif completed:
+                    node_current = "(complete)"
+                    node_next = "(none)"
+                else:
+                    node_current = "(not started)"
+                    node_next = phase_names[0] if phase_names else "(none)"
                 lines.append(f"  [{ip}]")
+                lines.append(f"      current : {node_current}")
+                lines.append(f"      next    : {node_next}")
                 lines.append(f"      done    : {', '.join(completed) or '(none)'}")
                 if pending:
                     lines.append(f"      pending : {', '.join(pending)}")
@@ -6236,8 +6247,45 @@ def parse_args():
     parser.add_argument("--test", action="store_true", default=False,
                         help="Interactive checkpoint failure injection for "
                              "resume testing in modes 1-4.")
+
+    def _resolve_option_dest(raw_token: str) -> "str | None":
+        """Best-effort map from a raw CLI option token to its argparse dest."""
+        if not raw_token or not raw_token.startswith("-"):
+            return None
+        _token = raw_token.split("=", 1)[0]
+        _act = parser._option_string_actions.get(_token)
+        if _act is not None:
+            return getattr(_act, "dest", None)
+        # Accept unique long-option abbreviations (argparse default behavior).
+        if _token.startswith("--"):
+            _long = [
+                _opt for _opt in parser._option_string_actions.keys()
+                if _opt.startswith("--")
+            ]
+            _matches = [_opt for _opt in _long if _opt.startswith(_token)]
+            if len(_matches) == 1:
+                _act2 = parser._option_string_actions.get(_matches[0])
+                if _act2 is not None:
+                    return getattr(_act2, "dest", None)
+        return None
+
     if HAS_ARGCOMPLETE:
-        argcomplete.autocomplete(parser)
+        argcomplete.autocomplete(parser, always_complete_options=True)
+
+    # Skip duplicate enforcement during argcomplete completion probes.
+    if "_ARGCOMPLETE" not in os.environ:
+        _seen_dest = {}
+        for _raw in sys.argv[1:]:
+            _dest = _resolve_option_dest(_raw)
+            if not _dest:
+                continue
+            _seen_dest[_dest] = _seen_dest.get(_dest, 0) + 1
+        _dups = sorted([_d for _d, _n in _seen_dest.items() if _n > 1])
+        if _dups:
+            parser.error(
+                "Duplicate command option(s) are not allowed: "
+                + ", ".join(_dups)
+            )
     args = parser.parse_args()
     if args.help:
         _print_man_page()
@@ -6252,12 +6300,17 @@ def parse_args():
 # Last status display
 # ---------------------------------------------------------------------------
 
-def _display_last_status():
+def _display_last_status(exit_when_done=True):
     """Find and display the most recent summary file from the logs directory.
     
     Searches under the script's logs/ directory for the most recently created
-    summary file and prints it to stdout. Exits after displaying.
+    summary file and prints it to stdout.
     """
+    def _finish(_code):
+        if exit_when_done:
+            sys.exit(_code)
+        return _code
+
     try:
        _script_dir = os.path.dirname(os.path.abspath(__file__))
     except NameError:
@@ -6267,7 +6320,7 @@ def _display_last_status():
     
     if not os.path.isdir(logs_dir):
        print(f"❌  No logs directory found at: {logs_dir}")
-       sys.exit(1)
+       return _finish(1)
     
     # Find all session directories (format: YYYYMMDD_HHMMSS)
     session_dirs = []
@@ -6278,11 +6331,11 @@ def _display_last_status():
                session_dirs.append((entry, entry_path))
     except OSError as e:
        print(f"❌  Error reading logs directory: {e}")
-       sys.exit(1)
+       return _finish(1)
     
     if not session_dirs:
        print(f"ℹ️   No previous runs found in: {logs_dir}")
-       sys.exit(0)
+       return _finish(0)
     
     # Sort by name (YYYYMMDD_HHMMSS format sorts chronologically)
     session_dirs.sort(reverse=True)
@@ -6307,11 +6360,11 @@ def _display_last_status():
            summary_file = candidates[0][1]
     except OSError as e:
        print(f"❌  Error reading session directory: {e}")
-       sys.exit(1)
+       return _finish(1)
     
     if not summary_file:
        print(f"ℹ️   No summary file found in: {most_recent_dir}")
-       sys.exit(0)
+       return _finish(0)
     
     # Read and display the summary file
     try:
@@ -6319,9 +6372,9 @@ def _display_last_status():
            print(f.read())
     except OSError as e:
        print(f"❌  Error reading summary file: {e}")
-       sys.exit(1)
+       return _finish(1)
      
-    sys.exit(0)
+    return _finish(0)
 
 
 # ---------------------------------------------------------------------------
@@ -19613,6 +19666,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         f"\n  \u2705 Confirmed. {node_choice.upper()}: "
         f"{'Automatic' if _auto_add else 'Interactive'} node add.\n"
     )
+    if _checkpoint:
+        with suppress(Exception):
+            _checkpoint.set_current_phase(
+                "2b – Parallel Node Add" if _auto_add else "2a – Interactive Parallel Node Add",
+                state="in_progress",
+                next_phase="Node join finalization",
+            )
     if _peer_log_paths:
         print("  Console log for node at:\n")
         for _wn_idx, (_wn_ip, _wn_path) in enumerate(_peer_log_paths.items(), 1):
@@ -25233,10 +25293,6 @@ def main():
     if args.screen and _relaunch_in_screen():
         sys.exit(0)
 
-    # --last-status: display the most recent run summary and exit
-    if args.last_status:
-        _display_last_status()
-
     setup_logging(args.debug)
     _debug_console = args.debug
     if _debug_console:
@@ -25246,13 +25302,25 @@ def main():
         print(_CONFIG_FILE_EXAMPLE)
         sys.exit(0)
 
-    if args.checkpoint_status:
-        _cp = CheckpointManager()
-        if not _cp.load():
-            print(f"No valid checkpoint found at {_cp._path}.")
-            sys.exit(1)
-        print(_cp.summary())
-        sys.exit(0)
+    _status_mode = args.checkpoint_status or args.last_status
+    if _status_mode:
+        _status_rc = 0
+        _printed_any = False
+        if args.checkpoint_status:
+            _cp = CheckpointManager()
+            if not _cp.load():
+                print(f"No valid checkpoint found at {_cp._path}.")
+                _status_rc = 1
+            else:
+                print(_cp.summary())
+                _printed_any = True
+        if args.last_status:
+            if _printed_any:
+                print()
+            _last_rc = _display_last_status(exit_when_done=False)
+            _status_rc = max(_status_rc, _last_rc)
+            _printed_any = True
+        sys.exit(_status_rc)
 
     _bg_mode = args.bg
     _auto_clear_stale_bmc = args.auto_clear_stale_bmc
