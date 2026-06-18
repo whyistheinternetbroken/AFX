@@ -14433,6 +14433,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             ]
             _sel_sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
             _all_sigs = _early_sigs + _sel_sigs + ["login:"]
+            _loader_sigs = ["loader-"]
+            _boot_menu_cmd_issued = False
             _reconnect_notice_state6 = {
                 "reconnect_notice_limit": _BMC_RECONNECT_NOTICE_LIMIT,
                 "reconnect_notice_streak": 0,
@@ -14444,7 +14446,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             # re-establishes the connection and re-enters system console so the
             # boot-menu wait can continue on the same `ch` binding.
             def _reenter_console():
-                nonlocal ch
+                nonlocal ch, _boot_menu_cmd_issued
                 def _log_notice6(_msg, _prefix):
                     if log:
                         log.log(_msg, prefix=_prefix)
@@ -14503,6 +14505,15 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                     "ctrl-d", "type exit", "selection", "login:", "loader-", "autoboot")):
                                 break
                         time.sleep(0.1)
+                    if "loader-" in _rc_l:
+                        _boot_menu_cmd_issued = False
+                        try:
+                            if _nf6:
+                                _par_write(_nf6, "\n>>> [reconnect] boot_ontap menu\n")
+                            _new_ch.send("boot_ontap menu\r")
+                            _boot_menu_cmd_issued = True
+                        except Exception:
+                            pass
                     ch = _new_ch
                     loader_channels[ip] = _new_ch
                     loader_clients[ip]  = _new_cl
@@ -14566,6 +14577,22 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     # noticing any short line that ends with "> " and contains
                     # "bmc" (covers hostnames like "node-bmc-01> ").
                     _chunk_l = chunk.lower()
+                    if (not _boot_menu_cmd_issued) and any(_ls in _chunk_l for _ls in _loader_sigs):
+                        _status(f"  [{ip}] LOADER prompt detected - sending boot_ontap menu...")
+                        if log:
+                            log.log(f"[{ip}] LOADER prompt detected; sending boot_ontap menu")
+                        try:
+                            if _nf6:
+                                _par_write(_nf6, "\n>>> boot_ontap menu\n")
+                            ch.send("boot_ontap menu\r")
+                            _boot_menu_cmd_issued = True
+                            buf_lower = ""
+                            time.sleep(0.1)
+                            continue
+                        except OSError as _boot_menu_exc:
+                            _status(f"  [{ip}] Could not send boot_ontap menu: {_boot_menu_exc}")
+                            if log:
+                                log.log(f"[{ip}] boot_ontap menu send failed: {_boot_menu_exc}", prefix="WARN")
                     _looks_like_bmc = _looks_like_bmc_drop(chunk)
                     if _looks_like_bmc and not any(s in _chunk_l for s in _all_sigs):
                         if not _pause_allows_reconnect(f"[{ip}] boot-menu BMC drop"):
