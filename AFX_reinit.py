@@ -278,6 +278,7 @@ class CheckpointManager:
             "current_phase": {
                 "name": "Run initialization",
                 "state": "in_progress",
+                "next_phase": "Run initialization",
                 "node_ip": "",
                 "ts": now,
             },
@@ -367,15 +368,24 @@ class CheckpointManager:
         ]
 
     def set_current_phase(self, phase: str, state: str = "in_progress",
-                          node_ip: str = "") -> None:
+                          node_ip: str = "", next_phase: str = "") -> None:
         """Record the run's current phase in the checkpoint file.
 
         Used by live status helpers so --checkpoint-status can show where
         a running job currently is.
         """
+        _state = str(state or "").strip() or "in_progress"
+        _name = str(phase or "").strip()
+        _next = str(next_phase or "").strip()
+        if not _next:
+            if _state == "in_progress":
+                _next = _name
+            else:
+                _next = "(pending)"
         self._data["current_phase"] = {
-            "name": str(phase or "").strip(),
-            "state": str(state or "").strip() or "in_progress",
+            "name": _name,
+            "state": _state,
+            "next_phase": _next,
             "node_ip": str(node_ip or "").strip(),
             "ts": datetime.now().isoformat(),
         }
@@ -417,6 +427,7 @@ class CheckpointManager:
         if _cur:
             _cur_name = str(_cur.get("name") or "").strip() or "(unknown)"
             _cur_state = str(_cur.get("state") or "").strip() or "in_progress"
+            _next_phase = str(_cur.get("next_phase") or "").strip() or "(not recorded)"
             _cur_node = str(_cur.get("node_ip") or "").strip()
             _cur_ts = str(_cur.get("ts") or "").strip()
             _cur_parts = [f"{_cur_name} [{_cur_state}]"]
@@ -425,8 +436,10 @@ class CheckpointManager:
             if _cur_ts:
                 _cur_parts.append(f"as of {_cur_ts}")
             lines.append(f"Current phase   : {', '.join(_cur_parts)}")
+            lines.append(f"Next phase      : {_next_phase}")
         else:
             lines.append("Current phase   : (not recorded)")
+            lines.append("Next phase      : (not recorded)")
 
         phases = self._data.get("phases") or {}
         lines.append("")
@@ -502,6 +515,7 @@ class CheckpointManager:
         self._data["current_phase"] = {
             "name": "Resume initialization",
             "state": "in_progress",
+            "next_phase": "Resume initialization",
             "node_ip": "",
             "ts": datetime.now().isoformat(),
         }
