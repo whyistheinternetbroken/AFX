@@ -2964,35 +2964,23 @@ class SessionLogger:
                     sf.write("\n" + "─" * 70 + "\n")
                     sf.write(f"Warnings ({len(self._warnings)})\n")
                     sf.write("─" * 70 + "\n")
-                    _warn_groups = []
-                    _current_group = []
-                    _prev_warn_dt = None
+                    # Group identical warning text together so repeated timeout
+                    # messages don't produce multiple scattered "Log file"
+                    # sections in the summary.
+                    _warn_groups = {}
+                    _warn_order = []
                     for ts, msg in self._warnings:
-                        try:
-                            _warn_dt = datetime.strptime(ts, "%H:%M:%S")
-                            _warn_dt = _warn_dt.replace(
-                                year=self._start_time.year,
-                                month=self._start_time.month,
-                                day=self._start_time.day,
-                            )
-                        except Exception:
-                            _warn_dt = None
-                        if (_prev_warn_dt is not None and _warn_dt is not None
-                                and (_warn_dt - _prev_warn_dt).total_seconds() > 30
-                                and _current_group):
-                            _warn_groups.append(_current_group)
-                            _current_group = []
-                        _current_group.append((ts, msg))
-                        if _warn_dt is not None:
-                            _prev_warn_dt = _warn_dt
-                    if _current_group:
-                        _warn_groups.append(_current_group)
-                    for _idx, _group in enumerate(_warn_groups):
+                        _msg_key = str(msg)
+                        if _msg_key not in _warn_groups:
+                            _warn_groups[_msg_key] = []
+                            _warn_order.append(_msg_key)
+                        _warn_groups[_msg_key].append(ts)
+                    sf.write(f"  Log file: {self.log_file}\n")
+                    for _idx, _msg_key in enumerate(_warn_order):
                         if _idx > 0:
                             sf.write("\n")
-                        sf.write(f"  Log file: {self.log_file}\n")
-                        for ts, msg in _group:
-                            sf.write(f"    [{ts}] {msg}\n")
+                        for _ts in _warn_groups.get(_msg_key, []):
+                            sf.write(f"    [{_ts}] {_msg_key}\n")
 
                 # ---- Errors ----
                 if self._errors:
@@ -20259,6 +20247,9 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
         return True
 
     ips_str = ",".join(cluster_ips)
+    print("\n  Fetching cluster network IP")
+    print("  Running add-node command")
+    print(f"     cluster add-node -cluster-ips {ips_str}")
     print(f"\n  ➕ Adding {len(cluster_ips)} node(s) to cluster...")
     if log:
         log.log(f"cluster add-node -cluster-ips {ips_str}")
@@ -24410,7 +24401,8 @@ def _get_cluster_node_mgmt_ips(channel, cluster_name=None):
     result = {}
     # ── 1. Get node names from cluster show ──────────────────────────────
     with _primary_shell_lock:
-        cs_out = _run_cluster_command(channel, "cluster show", timeout=30)
+        with _suppress_console():
+            cs_out = _run_cluster_command(channel, "cluster show", timeout=30)
     dashes_seen = False
     table_done = False
     node_names = []
@@ -24456,7 +24448,8 @@ def _get_cluster_node_mgmt_ips(channel, cluster_name=None):
     for cmd in _cmds:
         try:
             with _primary_shell_lock:
-                ni_out = _run_cluster_command(channel, cmd, timeout=30)
+                with _suppress_console():
+                    ni_out = _run_cluster_command(channel, cmd, timeout=30)
         except Exception as _ni_e:
             _slog(f"{cmd} failed: {_ni_e}", prefix="WARN")
             continue
@@ -24518,7 +24511,8 @@ def _get_cluster_role_ips(channel):
     for _cmd in _cmds:
         try:
             with _primary_shell_lock:
-                _out = _run_cluster_command(channel, _cmd, timeout=30)
+                with _suppress_console():
+                    _out = _run_cluster_command(channel, _cmd, timeout=30)
         except Exception as _e:
             _slog(f"{_cmd} failed: {_e}", prefix="WARN")
             continue
