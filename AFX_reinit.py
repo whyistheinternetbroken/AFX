@@ -278,7 +278,7 @@ class CheckpointManager:
             "current_phase": {
                 "name": "Run initialization",
                 "state": "in_progress",
-                "next_phase": "Run initialization",
+                "next_phase": "(pending completion of current phase)",
                 "node_ip": "",
                 "ts": now,
             },
@@ -379,9 +379,11 @@ class CheckpointManager:
         _next = str(next_phase or "").strip()
         if not _next:
             if _state == "in_progress":
-                _next = _name
+                _next = "(pending completion of current phase)"
             else:
                 _next = "(pending)"
+        if _name and _next == _name:
+            _next = "(pending completion of current phase)"
         self._data["current_phase"] = {
             "name": _name,
             "state": _state,
@@ -515,7 +517,7 @@ class CheckpointManager:
         self._data["current_phase"] = {
             "name": "Resume initialization",
             "state": "in_progress",
-            "next_phase": "Resume initialization",
+            "next_phase": "(pending completion of current phase)",
             "node_ip": "",
             "ts": datetime.now().isoformat(),
         }
