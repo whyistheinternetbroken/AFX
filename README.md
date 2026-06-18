@@ -820,6 +820,13 @@ When the script completes, it prints the path to the log directory and a brief s
 
 ---
 
+
+## Key Repository Folders
+
+- `ONTAP/` — folder where ONTAP images and licenses should be stored.
+- `logs/` — folder where the script stores run logs.
+- `configs/` — folder where config JSON files are stored.
+
 ## Session Logging
 
 All output is captured in a timestamped log directory:
