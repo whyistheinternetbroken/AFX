@@ -533,7 +533,7 @@ class CheckpointManager:
                 and bool(phases.get("primary_node_mgmt_done", {}).get("done"))
                 and not bool(phases.get("cluster_formed", {}).get("done"))
             )
-            for ip in all_ips:
+            for i, ip in enumerate(all_ips):
                 completed = [
                     p for p in phase_names
                     if node_phases.get(p, {}).get(ip, {}).get("done")
@@ -591,6 +591,8 @@ class CheckpointManager:
                 lines.append(f"      done    : {', '.join(display_done) or '(none)'}")
                 if pending:
                     lines.append(f"      pending : {', '.join(pending)}")
+                if i < len(all_ips) - 1:  # Add blank line between nodes, not after last
+                    lines.append("")
 
         return "\n".join(lines)
 
