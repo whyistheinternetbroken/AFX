@@ -14172,8 +14172,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             log.end_phase()
 
         # ── Attempt to capture ONTAP version from primary LOADER prompt ──────
-        if primary_bmc in loader_channels and _checkpoint:
-            _loader_ch_primary = loader_channels[primary_bmc]
+        if bmc_ips and bmc_ips[0] in loader_channels and _checkpoint:
+            _loader_ch_primary = loader_channels[bmc_ips[0]]
             try:
                 # Send blank line to ensure prompt is visible
                 _loader_ch_primary.send("\r")
