@@ -93,7 +93,7 @@ def _prompt_password_with_confirmation(prompt: str = "Password: ", stream=None):
         _pw_confirm = _RAW_GETPASS(_confirm_prompt, stream=stream)
         if _pw == _pw_confirm:
             return _pw
-        print("  ⚠️  Passwords do not match. Please re-enter.")
+        print("  âš ï¸  Passwords do not match. Please re-enter.")
 
 
 # Enforce confirmation for all subsequent getpass.getpass(...) calls in this script.
@@ -110,7 +110,7 @@ _CLUSTER_PROMPT_RE = re.compile(r'\S+::\*?>\s*$')
 # regex is compiled once instead of on every helper invocation.
 _SHELL_PROMPT_RE = re.compile(r"::\*?>")
 
-# ANSI/VT100 escape sequence stripper — PTY and system-console sessions inject
+# ANSI/VT100 escape sequence stripper â€” PTY and system-console sessions inject
 # these codes for colour / cursor movement; strip before text parsing.
 _ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 _BRACKETED_IPV4_RE = re.compile(
@@ -196,39 +196,39 @@ class CheckpointManager:
     completed phase rather than starting over from scratch.
 
     Phases tracked (per-node unless noted):
-      ``bmc_connected``       — BMC SSH shell established
-      ``at_loader``           — Node reached LOADER prompt
-      ``install_done``        — Netboot + option 6 complete; node at ONTAP login
-      ``option6_done``        — Boot menu option 6 confirmation accepted.
+      ``bmc_connected``       â€” BMC SSH shell established
+      ``at_loader``           â€” Node reached LOADER prompt
+      ``install_done``        â€” Netboot + option 6 complete; node at ONTAP login
+      ``option6_done``        â€” Boot menu option 6 confirmation accepted.
                                 Marked as soon as the 'y' confirmation
                                 is sent so that failures during the
                                 post-option-6 boot wait (where most
                                 runs die) do not force a re-install on
                                 resume. Treated as install-equivalent
                                 by the resume skip logic.
-      ``reinit_loader``       — Reconnected to BMC for reinit; back at LOADER
-      ``primary_node_mgmt_done`` — (global) primary node-management prompts
+      ``reinit_loader``       â€” Reconnected to BMC for reinit; back at LOADER
+      ``primary_node_mgmt_done`` â€” (global) primary node-management prompts
                                 were answered and the cluster-setup wizard is
                                 about to begin. Used by 4b resume so the
                                 primary does not get reset again after node
                                 configuration is already complete.
-      ``primary_bootmenu_done`` — (global) primary node has cleared the
+      ``primary_bootmenu_done`` â€” (global) primary node has cleared the
                                   ONTAP boot menu (option 9 for mode 1b/3,
                                   option 4 for mode 2). Cluster setup
                                   wizard is about to begin.
-      ``cluster_formed``      — (global) ``cluster create`` succeeded;
+      ``cluster_formed``      â€” (global) ``cluster create`` succeeded;
                                 cluster shell ``::>`` reachable.
-      ``primary_setup_done``  — (global) primary cluster-setup wizard
+      ``primary_setup_done``  â€” (global) primary cluster-setup wizard
                                 returned successfully (license / SSH
                                 post-steps may still be pending).
-      ``peer_option4_done``   — (per-peer, mode 3) peer cleared boot
+      ``peer_option4_done``   â€” (per-peer, mode 3) peer cleared boot
                                 menu option 4, finished format, and
                                 reached the join barrier. Format work
                                 does not need to be re-run on resume.
-      ``peer_joined``         — (per-peer, mode 3) peer joined the
+      ``peer_joined``         â€” (per-peer, mode 3) peer joined the
                                 cluster and ``cluster show`` confirmed
                                 membership.
-      ``option3_complete``    — (global) mode 3 finalize banner printed;
+      ``option3_complete``    â€” (global) mode 3 finalize banner printed;
                                 the checkpoint file is then deleted.
 
     Passwords are intentionally NOT saved; the operator will be asked to
@@ -264,7 +264,7 @@ class CheckpointManager:
         self._path = path or os.path.join(_cp_dir, self.CHECKPOINT_FILE)
         self._data: "dict" = {}
 
-    # ── Public API ─────────────────────────────────────────────────────────
+    # â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def init_run(self, mode: str, bmc_ips: "list[str]",
                  log_dir: str = "", config_path: str = "") -> None:
@@ -318,7 +318,7 @@ class CheckpointManager:
         return True
 
     def save(self) -> None:
-        """Public wrapper — call after modifying state externally."""
+        """Public wrapper â€” call after modifying state externally."""
         self._save()
 
     def clear(self) -> None:
@@ -332,7 +332,7 @@ class CheckpointManager:
         """Return the checkpoint file path."""
         return self._path
 
-    # ── Phase helpers ───────────────────────────────────────────────────────
+    # â”€â”€ Phase helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def mark_done(self, phase: str) -> None:
         """Mark a global (non-per-node) phase as complete."""
@@ -465,7 +465,7 @@ class CheckpointManager:
                         _opt_secs, _pess_secs = _estimate
                         _opt_min = int(_opt_secs / 60)
                         _pess_min = int(_pess_secs / 60)
-                        lines.append(f"Est. time remaining: {_opt_min}–{_pess_min} min")
+                        lines.append(f"Est. time remaining: {_opt_min}â€“{_pess_min} min")
                 except Exception:
                     pass
         else:
@@ -479,7 +479,7 @@ class CheckpointManager:
             lines.append("  (none recorded)")
         else:
             for name, meta in phases.items():
-                mark = "✅" if meta.get("done") else "  "
+                mark = "âœ…" if meta.get("done") else "  "
                 ts = meta.get("ts", "")
                 lines.append(f"  {mark} {name}  {ts}")
 
@@ -527,8 +527,8 @@ class CheckpointManager:
                 and _cur_state == "in_progress"
                 and _cur_name in {
                     "Cluster Setup Wizard (1b)",
-                    "4b – Cluster Initialization (primary)",
-                    "4b – Cluster Initialization (primary resume)",
+                    "4b â€“ Cluster Initialization (primary)",
+                    "4b â€“ Cluster Initialization (primary resume)",
                 }
                 and bool(phases.get("primary_node_mgmt_done", {}).get("done"))
                 and not bool(phases.get("cluster_formed", {}).get("done"))
@@ -550,7 +550,7 @@ class CheckpointManager:
                         node_current = _cur_name
                     else:
                         node_current = "(waiting on primary cluster setup)"
-                    node_next = _next_phase or "2b – Parallel Node Add"
+                    node_next = _next_phase or "2b â€“ Parallel Node Add"
                 elif pending:
                     _pending_phase = pending[0]
                     _peer_progress_on_pending = _phase_done_counts.get(_pending_phase, 0) > 0
@@ -629,7 +629,7 @@ class CheckpointManager:
 
         return "\n".join(lines)
 
-    # ── Accessors ───────────────────────────────────────────────────────────
+    # â”€â”€ Accessors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @property
     def mode(self) -> str:
@@ -674,7 +674,7 @@ class CheckpointManager:
         }
         self._save()
 
-    # ── Internal ────────────────────────────────────────────────────────────
+    # â”€â”€ Internal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _save(self) -> None:
         self._data["updated"] = datetime.now().isoformat()
@@ -755,7 +755,7 @@ _BMC_PREEMPTED_SIG = "this cli session is being preempted"
 # Regex that matches any bare BMC/SP shell prompt on its own line.
 # Covers: "bmc>", "localhost>", "node-bmc>", "rtp-afx1k-c01-01>", etc.
 # Pattern: optional whitespace, then one or more word/hyphen/dot chars, then ">",
-# then optional whitespace/CR/LF — and nothing else meaningful on that line.
+# then optional whitespace/CR/LF â€” and nothing else meaningful on that line.
 _BMC_PROMPT_RE = re.compile(
     r'(?:^|\r|\n)\s*[\w][\w\-\.]*>\s*(?:\r|\n|$)',
     re.MULTILINE,
@@ -769,31 +769,31 @@ _BMC_PROMPT_RE = re.compile(
 # Define phase sequences for each operation mode
 _PHASE_SEQUENCES = {
     "4b": [
-        "4b – Package Selection",
+        "4b â€“ Package Selection",
         "Collect Node Mgmt per BMC",
         "Collect Cluster Setup Config",
-        "4b – BMC SSH Connections",
-        "4b – Reset to LOADER",
-        "4b – HTTP Server",
-        "4b – Netboot Install",
-        "4b – Reinit Reconnect to LOADER",
-        "4b – Boot Menu Selection",
-        "4b – Parallel Option 4 (primary init + peers wait)",
-        "4b – Peer Cluster Join",
+        "4b â€“ BMC SSH Connections",
+        "4b â€“ Reset to LOADER",
+        "4b â€“ HTTP Server",
+        "4b â€“ Netboot Install",
+        "4b â€“ Reinit Reconnect to LOADER",
+        "4b â€“ Boot Menu Selection",
+        "4b â€“ Parallel Option 4 (primary init + peers wait)",
+        "4b â€“ Peer Cluster Join",
         "NTP Configuration",
     ],
     "1b": [
         "Collect Node Mgmt per BMC",
         "Collect Cluster Setup Config",
-        "4b – BMC SSH Connections",
-        "4b – Reset to LOADER",
-        "4b – Boot Menu Selection",
+        "4b â€“ BMC SSH Connections",
+        "4b â€“ Reset to LOADER",
+        "4b â€“ Boot Menu Selection",
         "Auto Cluster Init (1b)",
         "Cluster Setup Wizard (1b)",
         "NTP Configuration",
     ],
     "1a": [
-        "4b – Package Selection",
+        "4b â€“ Package Selection",
         "Collect Cluster Setup Config",
         "Auto Cluster Init (1b)",
         "Cluster Setup Wizard (1b)",
@@ -803,7 +803,7 @@ _PHASE_SEQUENCES = {
 
 # Phase metadata: typical duration (seconds), whether interactive, etc.
 _PHASE_METADATA = {
-    "4b – Package Selection": {
+    "4b â€“ Package Selection": {
         "typical_duration": 10,
         "interactive": False,
     },
@@ -816,35 +816,35 @@ _PHASE_METADATA = {
         "interactive": True,
         "prompt": "Cluster name, admin password, management IP...",
     },
-    "4b – BMC SSH Connections": {
+    "4b â€“ BMC SSH Connections": {
         "typical_duration": 5,
         "interactive": False,
     },
-    "4b – Reset to LOADER": {
+    "4b â€“ Reset to LOADER": {
         "typical_duration": 120,
         "interactive": False,
     },
-    "4b – HTTP Server": {
+    "4b â€“ HTTP Server": {
         "typical_duration": 5,
         "interactive": False,
     },
-    "4b – Netboot Install": {
+    "4b â€“ Netboot Install": {
         "typical_duration": 600,
         "interactive": False,
     },
-    "4b – Reinit Reconnect to LOADER": {
+    "4b â€“ Reinit Reconnect to LOADER": {
         "typical_duration": 300,
         "interactive": False,
     },
-    "4b – Boot Menu Selection": {
+    "4b â€“ Boot Menu Selection": {
         "typical_duration": 120,
         "interactive": False,
     },
-    "4b – Parallel Option 4 (primary init + peers wait)": {
+    "4b â€“ Parallel Option 4 (primary init + peers wait)": {
         "typical_duration": 1800,
         "interactive": False,
     },
-    "4b – Peer Cluster Join": {
+    "4b â€“ Peer Cluster Join": {
         "typical_duration": 300,
         "interactive": False,
     },
@@ -894,7 +894,7 @@ def _predict_next_phase(current_phase_name: str, current_state: str,
                 break
     
     if idx == -1:
-        return "(unknown phase – not in sequence)"
+        return "(unknown phase â€“ not in sequence)"
     
     # Current state determines next phase
     if current_state in ("complete", "done", "passed"):
@@ -903,7 +903,7 @@ def _predict_next_phase(current_phase_name: str, current_state: str,
             next_phase = sequence[idx + 1]
             meta = _PHASE_METADATA.get(next_phase, {})
             if meta.get("interactive"):
-                return f"{next_phase} (interactive – awaiting input)"
+                return f"{next_phase} (interactive â€“ awaiting input)"
             return next_phase
         else:
             return "(final phase complete)"
@@ -913,7 +913,7 @@ def _predict_next_phase(current_phase_name: str, current_state: str,
         meta = _PHASE_METADATA.get(current_phase_name, {})
         if meta.get("interactive"):
             prompt = meta.get("prompt", "operator input")
-            return f"{current_phase_name} (interactive – waiting for {prompt})"
+            return f"{current_phase_name} (interactive â€“ waiting for {prompt})"
         return f"{current_phase_name} (in progress)"
     
     elif current_state == "blocked":
@@ -967,7 +967,7 @@ def _estimate_remaining_time(current_phase: str, elapsed_seconds: float,
 
 def _looks_like_bmc_drop(chunk: str) -> bool:
     """Return True if *chunk* contains what appears to be a bare BMC/SP shell
-    prompt or a session-preemption notice — indicating that system console has
+    prompt or a session-preemption notice â€” indicating that system console has
     exited and the channel has dropped back to the BMC CLI, or that the SP has
     forcibly ended our session.
 
@@ -975,13 +975,13 @@ def _looks_like_bmc_drop(chunk: str) -> bool:
       - Any token ending in ``>`` that contains ``bmc`` (e.g. ``node-bmc>``)
       - ``localhost>``
       - Any short token matching ``word[-word]*>`` on its own line (e.g.
-        ``rtp-afx1k-c01-01>``) — the regex guards against false positives from
+        ``rtp-afx1k-c01-01>``) â€” the regex guards against false positives from
         ONTAP CLI output (``::>``, ``*>``, ``(X)>`` etc.) by requiring the line
         to contain only the prompt token.
       - "This CLI session is being preempted by another user/session"
     """
     cl = chunk.lower()
-    # Session preemption notice — SP is kicking us out
+    # Session preemption notice â€” SP is kicking us out
     if _BMC_PREEMPTED_SIG in cl:
         return True
     # Fast path: explicit "bmc" substring
@@ -996,12 +996,12 @@ def _looks_like_bmc_drop(chunk: str) -> bool:
 # Retained-from-existing-cluster state (mode 1, optional reuse after reinit)
 _retained_cluster_name = None
 _retained_net_config = None  # list[dict] of LIF rows
-_retained_default_gateway = None  # str (IPv4) — first 0.0.0.0/0 route gateway
-_retained_cluster_contact = None  # str — from `cluster identity show`
-_retained_cluster_location = None  # str — from `cluster identity show`
-_retained_dns_domains = None       # str — comma-separated, from `dns show`
-_retained_dns_servers = None       # str — comma-separated, from `dns show`
-_retained_ntp_servers = None       # list[str] — from `ntp server show`
+_retained_default_gateway = None  # str (IPv4) â€” first 0.0.0.0/0 route gateway
+_retained_cluster_contact = None  # str â€” from `cluster identity show`
+_retained_cluster_location = None  # str â€” from `cluster identity show`
+_retained_dns_domains = None       # str â€” comma-separated, from `dns show`
+_retained_dns_servers = None       # str â€” comma-separated, from `dns show`
+_retained_ntp_servers = None       # list[str] â€” from `ntp server show`
 
 # Mapping captured during retain phase to correlate per-node data:
 #   _retained_sp_to_node : {sp_address(str) -> ontap_node_name(str)}
@@ -1042,7 +1042,7 @@ _2b_processed_bmcs: set = set()
 
 # Total node count of the cluster BEFORE this reinit run (1 = primary only).
 # Set once in main() after the operator confirms the node list. Used to gate
-# `cluster ha modify` — that command only applies to 2-node clusters.
+# `cluster ha modify` â€” that command only applies to 2-node clusters.
 _initial_node_count = 0
 
 # True when the operator chooses static LOADER ifconfig instead of -auto.
@@ -1084,7 +1084,7 @@ _primary_shell_lock = threading.Lock()
 # don't compete for stdin when multiple BMCs auth-fail concurrently.
 _stdin_lock = threading.Lock()
 
-# ── Stale BMC SSH session tracking ───────────────────────────────────────
+# â”€â”€ Stale BMC SSH session tracking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Registry of every paramiko SSHClient we have opened to a BMC, keyed by
 # host. Populated by _register_bmc_client() on successful connect; drained
 # by _drop_bmc_clients_for() when we hit a banner timeout and suspect the
@@ -1178,7 +1178,7 @@ accepted for backward compatibility.
 '''
 
 
-# ── RunContext ──────────────────────────────────────────────────────────────
+# â”€â”€ RunContext â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # A single bag of configuration/state that is currently scattered across
 # ~30 module-level globals. Introducing this dataclass is the first
 # foundation step toward extracting the shared 1/2/3 inline flow out of
@@ -1186,14 +1186,14 @@ accepted for backward compatibility.
 #
 # Phase 1 (this commit): define the dataclass and provide round-trip
 # helpers (``from_globals()`` / ``apply_to_globals()``). No call sites are
-# migrated yet — globals remain the source of truth. The class lets future
+# migrated yet â€” globals remain the source of truth. The class lets future
 # extractions accept a single ``ctx: RunContext`` parameter instead of
 # touching the globals directly.
 #
 # Phase 2 (later commits): instantiate ``_run_context`` once in ``main()``
 # after CLI/config parsing and migrate helpers one at a time to read/write
 # through it. Concurrency primitives (locks, events) intentionally stay as
-# module globals — they are process-wide singletons, not run state.
+# module globals â€” they are process-wide singletons, not run state.
 
 # Mapping of RunContext field -> module global name. Kept here so the
 # round-trip helpers stay in sync as fields are added/removed.
@@ -1302,7 +1302,7 @@ class RunContext:
         """Snapshot the current module globals into a fresh RunContext.
 
         For container fields (dict/list) the global value is referenced
-        directly, not copied — so in-place mutations on the global remain
+        directly, not copied â€” so in-place mutations on the global remain
         visible through the context (and vice-versa) until call sites are
         fully migrated. Scalars are simple value copies.
         """
@@ -1479,10 +1479,10 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
     _options = list(_CHECKPOINT_TEST_OPTIONS.get(operation_mode) or [])
     _mode_name = _checkpoint_test_mode_name(operation_mode)
     if not _options:
-        print(f"\n🧪 --test: no checkpoint failure injection points are available for mode {_mode_name}.")
+        print(f"\nðŸ§ª --test: no checkpoint failure injection points are available for mode {_mode_name}.")
         return
 
-    _print_banner(f"🧪 Test failure injection ({_mode_name})")
+    _print_banner(f"ðŸ§ª Test failure injection ({_mode_name})")
     print("\n  Select a checkpoint to fail immediately after it is saved.")
     print("  This is intended to validate resume/checkpoint pickup on the next run.")
     print("")
@@ -1495,11 +1495,11 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
         if _sel == "":
             _sel = "0"
         if not _sel.isdigit():
-            print("  ⚠️  Enter a number from the list.")
+            print("  âš ï¸  Enter a number from the list.")
             continue
         _idx = int(_sel)
         if _idx == 0:
-            print("  ✅ Checkpoint failure injection disabled for this run.")
+            print("  âœ… Checkpoint failure injection disabled for this run.")
             return
         if 1 <= _idx <= len(_options):
             _phase, _label = _options[_idx - 1]
@@ -1507,9 +1507,9 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
             _checkpoint_test_target = _phase
             _checkpoint_test_mode_label = _mode_name
             _slog(f"--test armed for mode {_mode_name}: checkpoint '{_phase}' ({_label})")
-            print(f"  ✅ Will fail after checkpoint '{_phase}' is saved.")
+            print(f"  âœ… Will fail after checkpoint '{_phase}' is saved.")
             return
-        print("  ⚠️  Out of range.")
+        print("  âš ï¸  Out of range.")
 
 
 def _raise_pending_checkpoint_failure() -> None:
@@ -1540,7 +1540,7 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
             _msg += f" for {_node_id}"
         _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_msg)
 
-    print(f"\n🧪 {_msg}")
+    print(f"\nðŸ§ª {_msg}")
     _slog(_msg, prefix="FATAL")
     if _session_log:
         with suppress(Exception):
@@ -1561,7 +1561,7 @@ def _prompt(prompt: str, default: str = "") -> str:
     try:
         val = input(prompt).strip()
         if val.lower() == "menu":
-            print("  ↩️  Returning to main menu...")
+            print("  â†©ï¸  Returning to main menu...")
             try:
                 input("  Press Enter to return to the main menu...")
             except (EOFError, KeyboardInterrupt):
@@ -1592,7 +1592,7 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
             ready, _, _ = select.select([sys.stdin], [], [], timeout)
             if not ready:
                 print("")
-                print(f"  ⏱️  No response in {timeout}s; defaulting to '{default or ''}'.")
+                print(f"  â±ï¸  No response in {timeout}s; defaulting to '{default or ''}'.")
                 return default
             val = sys.stdin.readline()
             if val == "":
@@ -1622,19 +1622,19 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
                     time.sleep(0.05)
             else:
                 print("")
-                print(f"  ⏱️  No response in {timeout}s; defaulting to '{default or ''}'.")
+                print(f"  â±ï¸  No response in {timeout}s; defaulting to '{default or ''}'.")
                 return default
             val = "".join(buf).strip()
 
         if val.lower() == "menu":
-            print("  ↩️  Returning to main menu...")
+            print("  â†©ï¸  Returning to main menu...")
             raise _ReturnToMenu
         return val
     except (EOFError, KeyboardInterrupt):
         return default
 
 
-# ── Interactive-prompt wait-time tracker ────────────────────────────────────
+# â”€â”€ Interactive-prompt wait-time tracker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Wraps the builtin ``input`` once at import time so every blocking prompt
 # (whether it goes through ``_prompt`` or calls ``input`` directly) is
 # measured. The accumulated wait time is surfaced in the run summary so that
@@ -1699,10 +1699,10 @@ def _tracked_input(prompt=""):
 _builtins.input = _tracked_input
 
 
-# ── Console echo suppression ────────────────────────────────────────────────
+# â”€â”€ Console echo suppression â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # When True, _recv_loop / drain_channel skip writing raw BMC/cluster console
 # chunks to stdout. They still forward chunks to the session log file via
-# _session_log.log_console, so nothing is lost — just hidden from the
+# _session_log.log_console, so nothing is lost â€” just hidden from the
 # operator's terminal during noisy stages (e.g. system console hand-off and
 # cluster login probing).
 _console_quiet = False
@@ -1735,7 +1735,7 @@ def _print_banner(title: str, *, width: int = 60) -> None:
 
 def _print_autopilot_banner() -> None:
     """Print the 'no more admin interaction required' transition notice."""
-    _msg = "✅ Autopilot engaged. Check back periodically for job completion."
+    _msg = "âœ… Autopilot engaged. Check back periodically for job completion."
     bar = "=" * max(60, len(_msg) + 4)
     _ts_print(bar)
     _ts_print(_msg)
@@ -1748,7 +1748,7 @@ def _print_wrapped_warning(message: str, *, indent: str = "  ", max_width: int =
     wrapped = textwrap.fill(
         message,
         width=max(cols, 40),
-        initial_indent=f"{indent}⚠️  WARNING: ",
+        initial_indent=f"{indent}âš ï¸  WARNING: ",
         subsequent_indent=indent,
     )
     print(f"\n{wrapped}")
@@ -1801,7 +1801,7 @@ def load_config_file(path: str) -> dict:
     return data
 
 
-# ── Config file discovery helpers ───────────────────────────────────────────
+# â”€â”€ Config file discovery helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Multiple code paths (modes 1/3 startup, mode 44 license-only, mode 46
 # gather/add, mode 47 BMC list, the 4b reinit re-prompt) all need to locate a
 # reinit-style JSON config. Previously the same search loop was copy-pasted in
@@ -1902,7 +1902,7 @@ def _find_config_files(candidate_names=None, search_dirs=None,
     return found
 
 
-def _select_config_path_interactive(detected, indent="  ", header_emoji="📄"):
+def _select_config_path_interactive(detected, indent="  ", header_emoji="ðŸ“„"):
     """Given a list of detected config paths, prompt the operator to pick
     one. Returns the chosen path, or ``None`` if the operator declines.
 
@@ -1921,7 +1921,7 @@ def _select_config_path_interactive(detected, indent="  ", header_emoji="📄"):
     print(f"\n{pad}{header_emoji} Found multiple config files:")
     for i, p in enumerate(detected, 1):
         print(f"{pad}   {i}. {p}")
-    print(f"{pad}   0. None — continue without a config file")
+    print(f"{pad}   0. None â€” continue without a config file")
     while True:
         sel = _prompt(
             f"{pad}Select [0-{len(detected)}, default 1]: "
@@ -1929,14 +1929,14 @@ def _select_config_path_interactive(detected, indent="  ", header_emoji="📄"):
         if sel == "":
             sel = "1"
         if not sel.isdigit():
-            print(f"{pad}  ⚠️  Enter a number.")
+            print(f"{pad}  âš ï¸  Enter a number.")
             continue
         idx = int(sel)
         if idx == 0:
             return None
         if 1 <= idx <= len(detected):
             return detected[idx - 1]
-        print(f"{pad}  ⚠️  Out of range.")
+        print(f"{pad}  âš ï¸  Out of range.")
 
 
 def _run_parallel(items, target, *, with_index=False, join_timeout=None):
@@ -1988,7 +1988,7 @@ def _join_threads_with_deadline(threads, label="", timeout_seconds=None, log=Non
             _names = [t.name for t in _alive if t.name]
             _suffix = f" for {label}" if label else ""
             print(
-                f"\n  ❌ Timed out waiting for {len(_alive)} worker thread(s){_suffix} "
+                f"\n  âŒ Timed out waiting for {len(_alive)} worker thread(s){_suffix} "
                 f"after {int(timeout_seconds)}s."
             )
             if _names:
@@ -2006,7 +2006,7 @@ def _join_threads_with_deadline(threads, label="", timeout_seconds=None, log=Non
             time.sleep(_sleep_for)
 
 
-_bmc_fallback_cache = {}  # {(ip, bmc_pw): [fallbacks]} — cached fallback lists
+_bmc_fallback_cache = {}  # {(ip, bmc_pw): [fallbacks]} â€” cached fallback lists
 
 
 def _bmc_fallback_passwords(ip, bmc_passwords):
@@ -2061,7 +2061,7 @@ def _discover_and_prompt_config(ctx):
     config_path = _select_config_path_interactive(detected_configs)
 
     if not detected_configs and not config_path:
-        print("\n  ℹ️  No config file auto-detected.")
+        print("\n  â„¹ï¸  No config file auto-detected.")
         ans = _prompt("  Enter path to a JSON config file, or blank to skip: ")
         if ans:
             if len(ans) >= 2 and ans[0] == ans[-1] and ans[0] in ("'", '"'):
@@ -2070,15 +2070,15 @@ def _discover_and_prompt_config(ctx):
             if os.path.isfile(expanded):
                 config_path = expanded
             else:
-                print(f"  ⚠️  File not found: {expanded}; continuing without config.")
+                print(f"  âš ï¸  File not found: {expanded}; continuing without config.")
 
     if config_path:
         try:
             ctx.config_data = load_config_file(config_path)
-            print(f"  📄 Loaded config: {config_path}")
+            print(f"  ðŸ“„ Loaded config: {config_path}")
             ctx.retain_preselected = (False, False, False)
         except ValueError as e:
-            print(f"  ⚠️  {e}")
+            print(f"  âš ï¸  {e}")
             print("  Continuing without a config file (manual prompts).")
             ctx.config_data = {}
             config_path = None
@@ -2090,8 +2090,8 @@ def _discover_and_prompt_config(ctx):
 def _cd(ctx=None) -> dict:
     """Resolve the active config-data dict.
 
-    Preference order: explicit ``ctx`` argument → module-level
-    ``_run_context`` → legacy ``_config_data`` global. Returns ``{}`` if all
+    Preference order: explicit ``ctx`` argument â†’ module-level
+    ``_run_context`` â†’ legacy ``_config_data`` global. Returns ``{}`` if all
     three are absent. Keeps callers decoupled from the global as helpers
     migrate toward ctx-style parameters.
     """
@@ -2188,7 +2188,7 @@ def _display_ontap_node_label(nodename: str, node_mgmt_by_name: dict | None = No
     return _name or "node"
 
 # ---------------------------------------------------------------------------
-# Per-node log writer – redirects sys.stdout during automated phases
+# Per-node log writer â€“ redirects sys.stdout during automated phases
 # ---------------------------------------------------------------------------
 
 # Saved reference to the real terminal stdout; set once at startup so it
@@ -2197,9 +2197,9 @@ def _inject_ip_timestamp_line(line: str) -> str:
     """Add a timestamp to lines that contain a bracketed IPv4 address.
 
     Example:
-      "  ✅ [10.0.0.1] Connected"
+      "  âœ… [10.0.0.1] Connected"
     becomes:
-      "  ✅ [10.0.0.1] | 2026-06-12 22:21:25 | Connected"
+      "  âœ… [10.0.0.1] | 2026-06-12 22:21:25 | Connected"
     """
     if not line or not _BRACKETED_IPV4_RE.search(line):
         return line
@@ -2333,7 +2333,7 @@ class _NodeLogWriter:
     In *filtering* mode (``interactive=False``, the default for automated
     phases) only milestone lines (those that begin with one of the emoji /
     keyword prefixes defined below) are forwarded to the real terminal.  All
-    other output – raw console chunks, verbose status lines – goes to the log
+    other output â€“ raw console chunks, verbose status lines â€“ goes to the log
     file only.
 
     In *pass-through* mode (``interactive=True``, set around
@@ -2343,8 +2343,8 @@ class _NodeLogWriter:
     """
 
     _MILESTONE_STARTS = (
-        "✅", "❌", "⚠️", "🤖", "🔄", "📋", "🔢", "🔒",
-        "📡", "📝", "🌐", "🧩", "🔁", "🛑", "⏳", "↻",
+        "âœ…", "âŒ", "âš ï¸", "ðŸ¤–", "ðŸ”„", "ðŸ“‹", "ðŸ”¢", "ðŸ”’",
+        "ðŸ“¡", "ðŸ“", "ðŸŒ", "ðŸ§©", "ðŸ”", "ðŸ›‘", "â³", "â†»",
         "Now monitoring boot output",
         "Mode 1b", "Mode 2b", "Auto-init", "Auto-join",
         "Monitoring for AUTOBOOT", "Detected LOADER prompt",
@@ -2385,7 +2385,7 @@ class _NodeLogWriter:
                     count=1,
                 )
                 if _ts_injected == line:
-                    # No bracket group found – prepend timestamp.
+                    # No bracket group found â€“ prepend timestamp.
                     _ts_injected = f"[{ts}] " + line.lstrip()
                 _real_stdout.write(_ts_injected + "\n")
                 _real_stdout.flush()
@@ -2532,10 +2532,10 @@ class SessionLogger:
         # summary file can list them without requiring a full log scan.
         self._warnings: "list[tuple[str, str]]" = []   # (HH:MM:SS, message)
         self._errors:   "list[tuple[str, str]]" = []   # (HH:MM:SS, message)
-        # Explicit overall outcome – set via set_outcome() before close().
+        # Explicit overall outcome â€“ set via set_outcome() before close().
         # None means "not yet set; derive at close() time".
         self._final_outcome: "tuple[str, str] | None" = None
-        # Operation label set by _make_session_log (e.g. "Mode 2c: resume…").
+        # Operation label set by _make_session_log (e.g. "Mode 2c: resumeâ€¦").
         self._operation_label: str = ""
         # Per-phase outcomes: phase_name -> (status, note)
         # Phases that call end_phase() without set_phase_outcome() get PASS.
@@ -2555,7 +2555,7 @@ class SessionLogger:
 
         self._write_header()
         self.refresh_summary()
-        print(f"📝 Session log: {self.log_file}")
+        print(f"ðŸ“ Session log: {self.log_file}")
 
     # OPT: context-manager support so the file handle is always closed cleanly
     def __enter__(self):
@@ -2564,18 +2564,18 @@ class SessionLogger:
     def __exit__(self, *_):
         self.close()
 
-    # OPT: centralise timestamp formatting – was duplicated in 5 methods
+    # OPT: centralise timestamp formatting â€“ was duplicated in 5 methods
     def _ts_with_elapsed(self, now=None):
         """Return a timestamp prefix that also includes total elapsed time
         since session start and the delta since the previous log entry. Looks
-        like: ``HH:MM:SS.mmm +123.4s Δ0.7s``. Caller must hold the lock.
+        like: ``HH:MM:SS.mmm +123.4s Î”0.7s``. Caller must hold the lock.
         """
         now = now or datetime.now()
         total = (now - self._start_time).total_seconds()
         delta = (now - self._last_log_time).total_seconds()
         self._last_log_time = now
         ts = now.strftime("%H:%M:%S.%f")[:-3]
-        return f"{ts} +{total:7.1f}s Δ{delta:5.1f}s"
+        return f"{ts} +{total:7.1f}s Î”{delta:5.1f}s"
 
     # ---- Step timing ----------------------------------------------------
 
@@ -2590,7 +2590,7 @@ class SessionLogger:
             self._step_stack.append({"name": name, "start": now})
             indent = "  " * (len(self._step_stack) - 1)
             self._file.write(
-                f"[{self._ts_with_elapsed(now)}] [STEP ▶] {indent}{name}\n"
+                f"[{self._ts_with_elapsed(now)}] [STEP â–¶] {indent}{name}\n"
             )
             self._ensure_heartbeat_locked()
             return len(self._step_stack)
@@ -2623,7 +2623,7 @@ class SessionLogger:
             )
             indent = "  " * len(self._step_stack)
             self._file.write(
-                f"[{self._ts_with_elapsed()}] [STEP ⏹] {indent}{entry['name']} "
+                f"[{self._ts_with_elapsed()}] [STEP â¹] {indent}{entry['name']} "
                 f"({elapsed:.1f}s)\n"
             )
 
@@ -2669,7 +2669,7 @@ class SessionLogger:
                 running = (now - entry["start"]).total_seconds()
                 indent = "  " * (len(self._step_stack) - 1)
                 self._file.write(
-                    f"[{self._ts_with_elapsed(now)}] [STEP ⏱] {indent}"
+                    f"[{self._ts_with_elapsed(now)}] [STEP â±] {indent}"
                     f"{entry['name']} still running ({running:.1f}s)\n"
                 )
 
@@ -2727,7 +2727,7 @@ class SessionLogger:
             self._current_phase = phase_name
             self._current_phase_start = now
             self._file.write(
-                f"\n[{self._ts_with_elapsed(now)}] [PHASE] ▶ Started: {phase_name}\n"
+                f"\n[{self._ts_with_elapsed(now)}] [PHASE] â–¶ Started: {phase_name}\n"
             )
             self._ensure_heartbeat_locked()
             if _checkpoint:
@@ -2756,7 +2756,7 @@ class SessionLogger:
                 if self._current_phase not in self._phase_outcomes:
                     self._phase_outcomes[self._current_phase] = (outcome, note)
                 self._file.write(
-                    f"[{self._ts_with_elapsed(now)}] [PHASE] ⏹ Ended: "
+                    f"[{self._ts_with_elapsed(now)}] [PHASE] â¹ Ended: "
                     f"{self._current_phase} ({elapsed:.1f}s) "
                     f"[{self._phase_outcomes[self._current_phase][0]}]\n\n"
                 )
@@ -2805,7 +2805,7 @@ class SessionLogger:
             self._phase_times[phase_name] = float(elapsed)
             self._phase_outcomes[phase_name] = (outcome, note)
             self._file.write(
-                f"[{self._ts_with_elapsed()}] [PHASE] ⏹ Recorded: "
+                f"[{self._ts_with_elapsed()}] [PHASE] â¹ Recorded: "
                 f"{phase_name} ({elapsed:.1f}s) [{outcome}]\n"
             )
             if _checkpoint:
@@ -2901,9 +2901,9 @@ class SessionLogger:
                 _before_lbl = (
                     f"{_before_lbl} ({self._ontap_version_before_source})"
                 )
-            out_fh.write(f"  {'ONTAP before run':<25} {_before_lbl}\n")
+            out_fh.write(f"  {'Previous ONTAP version':<25} {_before_lbl}\n")
         if self._ontap_before_by_node:
-            out_fh.write(f"  {'ONTAP before run (nodes)':<25}\n")
+            out_fh.write(f"  {'Previous ONTAP version (nodes)':<25}\n")
             for _node in sorted(self._ontap_before_by_node):
                 out_fh.write(
                     f"    - {_node:<21} {self._ontap_before_by_node[_node]}\n"
@@ -3108,7 +3108,7 @@ class SessionLogger:
                     self._step_counts.get(entry["name"], 0) + 1
                 )
                 self._file.write(
-                    f"[{self._ts_with_elapsed(now)}] [STEP ⏹] {entry['name']} "
+                    f"[{self._ts_with_elapsed(now)}] [STEP â¹] {entry['name']} "
                     f"({elapsed:.1f}s, closed at session end)\n"
                 )
 
@@ -3133,12 +3133,12 @@ class SessionLogger:
             self._file.write(f"Total runtime: {total_elapsed:.1f}s ({total_elapsed/60:.1f} minutes)\n")
 
             # ---- Result Summary ----
-            self._file.write(f"\n{'─' * 70}\n")
+            self._file.write(f"\n{'â”€' * 70}\n")
             self._file.write("Result Summary\n")
-            self._file.write(f"{'─' * 70}\n")
+            self._file.write(f"{'â”€' * 70}\n")
             if self._operation_label:
                 self._file.write(f"  {'Operation':<25} {self._operation_label}\n")
-            _status_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(outcome_status, "❓")
+            _status_icon = {"PASS": "âœ…", "FAIL": "âŒ", "PASSED (WITH ERRORS)": "âš ï¸"}.get(outcome_status, "â“")
             self._file.write(f"  {'Overall Result':<25} {_status_icon} {outcome_status}\n")
             if outcome_note:
                 self._file.write(f"  {'Detail':<25} {outcome_note}\n")
@@ -3151,13 +3151,13 @@ class SessionLogger:
             self._file.write(f"  {'Ended':<25} {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
             # ---- Phase Timing Summary ----
-            self._file.write(f"\n{'─' * 70}\n")
+            self._file.write(f"\n{'â”€' * 70}\n")
             self._file.write("Phase Timing Summary\n")
-            self._file.write(f"{'─' * 70}\n")
+            self._file.write(f"{'â”€' * 70}\n")
             for phase, elapsed in self._phase_times.items():
                 minutes = elapsed / 60
                 ph_status, ph_note = self._phase_outcomes.get(phase, ("", ""))
-                ph_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(ph_status, "  ")
+                ph_icon = {"PASS": "âœ…", "FAIL": "âŒ", "PASSED (WITH ERRORS)": "âš ï¸"}.get(ph_status, "  ")
                 ph_col = f"  {ph_icon} {ph_status}" if ph_status else ""
                 self._file.write(
                     f"  {phase:<45} {elapsed:>7.1f}s ({minutes:.1f}m){ph_col}\n"
@@ -3177,7 +3177,7 @@ class SessionLogger:
                         f"     - {sub_label:<41} {sub_elapsed:>7.1f}s "
                         f"{_time_str}\n"
                     )
-            self._file.write(f"  {'─' * 55}\n")
+            self._file.write(f"  {'â”€' * 55}\n")
             self._file.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
             # Prompt/pause totals are informational. True "unaccounted" time is
             # only the residual after tracked phases plus reason-coded
@@ -3228,9 +3228,9 @@ class SessionLogger:
                 f"     - {'residual instrumentation gap':<39} {_residual:>7.1f}s ({_residual/60:.1f}m)\n"
             )
             if self._step_times:
-                self._file.write(f"\n{'─' * 70}\n")
+                self._file.write(f"\n{'â”€' * 70}\n")
                 self._file.write("Step Timing Summary\n")
-                self._file.write(f"{'─' * 70}\n")
+                self._file.write(f"{'â”€' * 70}\n")
                 for name, elapsed in self._step_times.items():
                     count = self._step_counts.get(name, 1)
                     avg = elapsed / count if count else elapsed
@@ -3266,13 +3266,13 @@ class SessionLogger:
                             failure_stage: str = "", final: bool = False):
         """Write a human-readable summary file next to the full session log.
 
-        Contains only the result, phase timings, and step timings — none of
-        the raw console output — so it is fast to read after a run.
+        Contains only the result, phase timings, and step timings â€” none of
+        the raw console output â€” so it is fast to read after a run.
         """
         summary_path = self.summary_file
-        _status_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(outcome_status, "❓")
+        _status_icon = {"PASS": "âœ…", "FAIL": "âŒ", "PASSED (WITH ERRORS)": "âš ï¸"}.get(outcome_status, "â“")
         if not final:
-            _status_icon = "⏳"
+            _status_icon = "â³"
         try:
             with open(summary_path, "w", encoding="utf-8") as sf:
                 sf.write("=" * 70 + "\n")
@@ -3285,15 +3285,15 @@ class SessionLogger:
 
                 # ---- Operation ----
                 if self._operation_label:
-                    sf.write("─" * 70 + "\n")
+                    sf.write("â”€" * 70 + "\n")
                     sf.write("Operation\n")
-                    sf.write("─" * 70 + "\n")
+                    sf.write("â”€" * 70 + "\n")
                     sf.write(f"  {self._operation_label}\n")
 
                 # ---- Result ----
-                sf.write("─" * 70 + "\n")
+                sf.write("â”€" * 70 + "\n")
                 sf.write("Result\n")
-                sf.write("─" * 70 + "\n")
+                sf.write("â”€" * 70 + "\n")
                 sf.write(f"  {'Overall Result':<25} {_status_icon} {outcome_status}\n")
                 if outcome_note:
                     sf.write(f"  {'Detail':<25} {outcome_note}\n")
@@ -3311,9 +3311,9 @@ class SessionLogger:
                 sf.write(f"  {'Total runtime':<25} {total_elapsed:.1f}s ({total_elapsed/60:.1f}m)\n")
 
                 # ---- Phase Timing ----
-                sf.write("\n" + "─" * 70 + "\n")
+                sf.write("\n" + "â”€" * 70 + "\n")
                 sf.write("Phase Timing\n")
-                sf.write("─" * 70 + "\n")
+                sf.write("â”€" * 70 + "\n")
                 _phase_order = list(self._phase_times.keys())
                 if self._current_phase and self._current_phase not in _phase_order:
                     _phase_order.append(self._current_phase)
@@ -3325,13 +3325,13 @@ class SessionLogger:
                                 0.0, (now - self._current_phase_start).total_seconds()
                             )
                             ph_status = "IN PROGRESS (not yet completed)"
-                            ph_icon = "⏳"
+                            ph_icon = "â³"
                         else:
                             elapsed = float(self._phase_times.get(phase, 0.0))
                             ph_status, _ = self._phase_outcomes.get(phase, ("", ""))
                             if not ph_status:
                                 ph_status = "NOT YET COMPLETED"
-                            ph_icon = {"PASS": "✅", "FAIL": "❌", "PASSED (WITH ERRORS)": "⚠️"}.get(ph_status, "⏳")
+                            ph_icon = {"PASS": "âœ…", "FAIL": "âŒ", "PASSED (WITH ERRORS)": "âš ï¸"}.get(ph_status, "â³")
                         _phase_total_for_accounting += elapsed
                         minutes = elapsed / 60
                         ph_col = f"  {ph_icon} {ph_status}"
@@ -3352,8 +3352,8 @@ class SessionLogger:
                                 f"{_time_str}\n"
                             )
                 else:
-                    sf.write("  (No phases started yet — all phases not yet completed.)\n")
-                sf.write(f"  {'─' * 55}\n")
+                    sf.write("  (No phases started yet â€” all phases not yet completed.)\n")
+                sf.write(f"  {'â”€' * 55}\n")
                 sf.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
                 _pw = float(_prompt_wait_seconds)
                 _paw = float(_pause_wait_seconds)
@@ -3404,9 +3404,9 @@ class SessionLogger:
 
                 # ---- Step Timing ----
                 if self._step_times:
-                    sf.write("\n" + "─" * 70 + "\n")
+                    sf.write("\n" + "â”€" * 70 + "\n")
                     sf.write("Step Timing\n")
-                    sf.write("─" * 70 + "\n")
+                    sf.write("â”€" * 70 + "\n")
                     for name, elapsed in self._step_times.items():
                         count = self._step_counts.get(name, 1)
                         avg = elapsed / count if count else elapsed
@@ -3415,9 +3415,9 @@ class SessionLogger:
 
                 # ---- Warnings ----
                 if self._warnings:
-                    sf.write("\n" + "─" * 70 + "\n")
+                    sf.write("\n" + "â”€" * 70 + "\n")
                     sf.write(f"Warnings ({len(self._warnings)})\n")
-                    sf.write("─" * 70 + "\n")
+                    sf.write("â”€" * 70 + "\n")
                     # Group identical warning text together so repeated timeout
                     # messages don't produce multiple scattered "Log file"
                     # sections in the summary.
@@ -3438,19 +3438,19 @@ class SessionLogger:
 
                 # ---- Errors ----
                 if self._errors:
-                    sf.write("\n" + "─" * 70 + "\n")
+                    sf.write("\n" + "â”€" * 70 + "\n")
                     sf.write(f"Errors ({len(self._errors)})\n")
-                    sf.write("─" * 70 + "\n")
+                    sf.write("â”€" * 70 + "\n")
                     for ts, msg in self._errors:
                         sf.write(f"  [{ts}] {msg}\n")
 
                 sf.write("\n" + "=" * 70 + "\n")
 
             if final:
-                print(f"📋 Summary log: {summary_path}")
+                print(f"ðŸ“‹ Summary log: {summary_path}")
         except OSError as e:
-            # Non-fatal — full log is still written.
-            print(f"  ⚠️  Could not write summary log: {e}")
+            # Non-fatal â€” full log is still written.
+            print(f"  âš ï¸  Could not write summary log: {e}")
 
 
 _session_log = None
@@ -3584,7 +3584,7 @@ def select_operation_mode():
     global _resume_from_start_menu
     _startup_checkpoint_prompt_done = False
     while True:
-        _print_banner("NetApp AFX BMC Console Automation 🤖")
+        _print_banner("NetApp AFX BMC Console Automation ðŸ¤–")
         print("\n  What do you want to do?\n")
         print("  1.  Initial cluster creation")
         print("    1a. Format first node in cluster. Use interactive configuration.")
@@ -3621,10 +3621,10 @@ def select_operation_mode():
         print("  6.  Script help and instructions")
         print("  7.  Exit")
         print("")
-        print("  " + "─" * 58)
+        print("  " + "â”€" * 58)
         print("  (type 'menu' at any prompt to return here)")
         print("")
-        print("  💡 Screen tips (--screen): Ctrl+A Esc=scroll, arrows/PgUp/PgDn navigate, q exits scroll mode, Ctrl+A d detaches, and 'screen -r afx-reinit' reattaches.")
+        print("  ðŸ’¡ Screen tips (--screen): Ctrl+A Esc=scroll, arrows/PgUp/PgDn navigate, q exits scroll mode, Ctrl+A d detaches, and 'screen -r afx-reinit' reattaches.")
         print("")
         if not _startup_checkpoint_prompt_done:
             _startup_checkpoint_prompt_done = True
@@ -3641,7 +3641,7 @@ def select_operation_mode():
                 _menu_opt = _checkpoint_menu_option_label(_cp_mode)
                 _stage = _checkpoint_resume_stage_label(_cp_start)
                 print("=" * 60)
-                print(f"  🔖 Existing checkpoint found{_cp_age} (EXPERIMENTAL)")
+                print(f"  ðŸ”– Existing checkpoint found{_cp_age} (EXPERIMENTAL)")
                 print(f"     Last menu option : {_menu_opt}")
                 print(f"     Checkpoint mode  : {_format_checkpoint_mode(_cp_mode)}")
                 print(f"     Resume stage     : {_stage}")
@@ -3654,10 +3654,10 @@ def select_operation_mode():
                 if _resume_now == "y":
                     if _cp_mode.lower().startswith("4b"):
                         _resume_from_start_menu = True
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 4b.")
+                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 4b.")
                         return 42, False, False
                     if _cp_mode == "2":
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2c.")
+                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 2c.")
                         return 26, False, False
                     if _cp_mode == "3":
                         _mode3_peer_opt4 = bool(_cp_start.nodes_done_for("peer_option4_done"))
@@ -3670,20 +3670,20 @@ def select_operation_mode():
                         )
                         if _mode3_replay_risk:
                             print(
-                                "\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2c "
+                                "\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 2c "
                                 "(safe add-node continuation)."
                             )
                             return 26, False, False
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 3.")
+                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 3.")
                         return 3, True, True
                     if _cp_mode == "1":
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 1b.")
+                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 1b.")
                         return 1, True, False
-                    print("  ⚠️  Checkpoint mode is not auto-routable from the start menu.")
-        choice = input("❯❯  Enter your choice from the menu above (ie, 1a, 2b, 3, etc.): ").strip().lower()
+                    print("  âš ï¸  Checkpoint mode is not auto-routable from the start menu.")
+        choice = input("â¯â¯  Enter your choice from the menu above (ie, 1a, 2b, 3, etc.): ").strip().lower()
 
         if choice == "1a":
-            _print_banner("⚠️  WARNING ⚠️")
+            _print_banner("âš ï¸  WARNING âš ï¸")
             print("")
             print("  You will be destroying the storage availability zone on")
             print("  this cluster, deleting all data and reinitializing the")
@@ -3695,7 +3695,7 @@ def select_operation_mode():
             print("  * INSTEAD TO JOIN A NEW NODE TO THE CLUSTER.            *")
             print("  " + "*" * 58)
             print("")
-            print("  " + "─" * 58)
+            print("  " + "â”€" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
                 while True:
@@ -3711,7 +3711,7 @@ def select_operation_mode():
                     print("  Please enter y or N.")
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
-                    print("  ℹ️   Netboot-install will run at LOADER before the cluster reinit.")
+                    print("  â„¹ï¸   Netboot-install will run at LOADER before the cluster reinit.")
                     while True:
                         while True:
                             _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
@@ -3722,21 +3722,21 @@ def select_operation_mode():
                             break
                         print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
-                print("\n  ✅ Confirmed. 1a: Format first node (interactive)")
-                print("     → LOADER: set-defaults + destroy storage pods + saveenv")
-                print("     → Boot menu: option 9 (Initialize); then interactive\n")
+                print("\n  âœ… Confirmed. 1a: Format first node (interactive)")
+                print("     â†’ LOADER: set-defaults + destroy storage pods + saveenv")
+                print("     â†’ Boot menu: option 9 (Initialize); then interactive\n")
                 return 1, False, False
-            print("\n  ↩️  Returning to menu...\n")
+            print("\n  â†©ï¸  Returning to menu...\n")
             continue
 
         if choice == "1b":
-            _print_banner("⚠️  WARNING ⚠️")
+            _print_banner("âš ï¸  WARNING âš ï¸")
             print("")
             print("  1b will FULLY AUTOMATE first-node initialization, format,")
             print("  and cluster setup. The script will auto-answer:")
-            print("    • storage-availability-zone destroy warning  → no")
-            print("    • second boot menu (after option 9)          → 4")
-            print("    • zero disks / erase / type-yes prompts      → yes")
+            print("    â€¢ storage-availability-zone destroy warning  â†’ no")
+            print("    â€¢ second boot menu (after option 9)          â†’ 4")
+            print("    â€¢ zero disks / erase / type-yes prompts      â†’ yes")
             print("  Node management port/IP/netmask/gateway are taken from")
             print("  retained config when available, prompted otherwise.")
             print("")
@@ -3746,7 +3746,7 @@ def select_operation_mode():
             print("  * INSTEAD TO JOIN A NEW NODE TO THE CLUSTER.            *")
             print("  " + "*" * 58)
             print("")
-            print("  " + "─" * 58)
+            print("  " + "â”€" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
                 while True:
@@ -3762,7 +3762,7 @@ def select_operation_mode():
                     print("  Please enter y or N.")
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
-                    print("  ℹ️   Netboot-install will run at LOADER before the cluster reinit.")
+                    print("  â„¹ï¸   Netboot-install will run at LOADER before the cluster reinit.")
                     while True:
                         while True:
                             _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
@@ -3773,15 +3773,15 @@ def select_operation_mode():
                             break
                         print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
-                print("\n  ✅ Confirmed. 1b: Format first node + setup cluster (auto)")
-                print("     → LOADER: set-defaults + destroy storage pods + saveenv")
-                print("     → Boot menu: option 9, then auto option 4 + auto setup\n")
+                print("\n  âœ… Confirmed. 1b: Format first node + setup cluster (auto)")
+                print("     â†’ LOADER: set-defaults + destroy storage pods + saveenv")
+                print("     â†’ Boot menu: option 9, then auto option 4 + auto setup\n")
                 return 1, True, False
-            print("\n  ↩️  Returning to menu...\n")
+            print("\n  â†©ï¸  Returning to menu...\n")
             continue
 
         if choice == "2a":
-            _print_banner("⚠️  NOTICE ⚠️")
+            _print_banner("âš ï¸  NOTICE âš ï¸")
             print("")
             print("  " + "*" * 58)
             print("  * CAUTION: 2a FORMATS AND JOINS AN AFX NODE TO AN     *")
@@ -3789,7 +3789,7 @@ def select_operation_mode():
             print("  * ALREADY, CHOOSE NO AND SELECT OPTION 1a OR 1b.       *")
             print("  " + "*" * 58)
             print("")
-            print("  " + "─" * 58)
+            print("  " + "â”€" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
                 while True:
@@ -3799,7 +3799,7 @@ def select_operation_mode():
                     print("  Please enter y or N.")
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
-                    print("  ℹ️   Netboot-install will run at LOADER before the node join.")
+                    print("  â„¹ï¸   Netboot-install will run at LOADER before the node join.")
                     while True:
                         while True:
                             _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
@@ -3810,15 +3810,15 @@ def select_operation_mode():
                             break
                         print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
-                print("\n  ✅ Confirmed. 2a: Add node (interactive)")
-                print("     → LOADER: set-defaults + saveenv (no destroy storage pods)")
-                print("     → Boot menu: option 4 (Initialize and configure system)\n")
+                print("\n  âœ… Confirmed. 2a: Add node (interactive)")
+                print("     â†’ LOADER: set-defaults + saveenv (no destroy storage pods)")
+                print("     â†’ Boot menu: option 4 (Initialize and configure system)\n")
                 return 2, False, False
-            print("\n  ↩️  Returning to menu...\n")
+            print("\n  â†©ï¸  Returning to menu...\n")
             continue
 
         if choice == "2b":
-            _print_banner("⚠️  NOTICE ⚠️")
+            _print_banner("âš ï¸  NOTICE âš ï¸")
             print("")
             print("  2b will FULLY AUTOMATE adding a node to an existing")
             print("  cluster. The script auto-answers zero/erase/yes prompts,")
@@ -3834,7 +3834,7 @@ def select_operation_mode():
             print("  * EXISTS, USE 1a OR 1b INSTEAD.                        *")
             print("  " + "*" * 58)
             print("")
-            print("  " + "─" * 58)
+            print("  " + "â”€" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
                 while True:
@@ -3844,7 +3844,7 @@ def select_operation_mode():
                     print("  Please enter y or N.")
                 _netboot_before_reinit = (_nb_ans == "y")
                 if _netboot_before_reinit:
-                    print("  ℹ️   Netboot-install will run at LOADER before the node join.")
+                    print("  â„¹ï¸   Netboot-install will run at LOADER before the node join.")
                     while True:
                         while True:
                             _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
@@ -3855,19 +3855,19 @@ def select_operation_mode():
                             break
                         print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
-                print("\n  ✅ Confirmed. 2b: Add node (auto)")
-                print("     → LOADER: set-defaults + saveenv")
-                print("     → Boot menu: option 4 + auto join wizard\n")
+                print("\n  âœ… Confirmed. 2b: Add node (auto)")
+                print("     â†’ LOADER: set-defaults + saveenv")
+                print("     â†’ Boot menu: option 4 + auto join wizard\n")
                 return 2, False, True
-            print("\n  ↩️  Returning to menu...\n")
+            print("\n  â†©ï¸  Returning to menu...\n")
             continue
 
         if choice == "2c":
-            print("\n  ✅ Confirmed. 2c: Resume node additions\n")
+            print("\n  âœ… Confirmed. 2c: Resume node additions\n")
             return 26, False, False
 
         if choice == "3":
-            _print_banner("⚠️  WARNING ⚠️")
+            _print_banner("âš ï¸  WARNING âš ï¸")
             print("")
             print("  Option 3: End-to-end auto initialize.")
             print("    1) Format + setup the FIRST node automatically (1b).")
@@ -3883,7 +3883,7 @@ def select_operation_mode():
             print("  * THIS DESTROYS ALL DATA ON ALL TARGETED NODES.        *")
             print("  " + "*" * 58)
             print("")
-            print("  " + "─" * 58)
+            print("  " + "â”€" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
                 while True:
@@ -3901,7 +3901,7 @@ def select_operation_mode():
                     _netboot_before_reinit = False
                     _netboot_pkg_preselected = None
                     input("\n  Use the install options in the menu to install a new version of ONTAP. Hit enter to return to menu.")
-                    print("\n  ↩️  Returning to menu...\n")
+                    print("\n  â†©ï¸  Returning to menu...\n")
                     continue
                 _netboot_before_reinit = False
                 _netboot_pkg_preselected = None
@@ -3913,9 +3913,9 @@ def select_operation_mode():
                         break
                     print("  Please enter y or N.")
                 _loader_env_stage_enabled = (_m3_skip_env in ("n", "no"))
-                print("\n  ✅ Confirmed. 3: End-to-end auto initialize\n")
+                print("\n  âœ… Confirmed. 3: End-to-end auto initialize\n")
                 return 3, True, True
-            print("\n  ↩️  Returning to menu...\n")
+            print("\n  â†©ï¸  Returning to menu...\n")
             continue
 
         if choice in ("4", "4a", "4b", "4c"):
@@ -3926,7 +3926,7 @@ def select_operation_mode():
                 print("  4b. Netboot and install ONTAP")
                 print("  4c. Netboot and install image only (no cluster create/node add)")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 choice = input("  Enter sub-option (4a, 4b, 4c) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
@@ -3991,7 +3991,7 @@ def select_operation_mode():
                 continue
 
         if choice == "6":
-            _print_banner("📘 6: Script help and instructions")
+            _print_banner("ðŸ“˜ 6: Script help and instructions")
             print("")
             _print_man_page()
             _print_runtime_controls_help()
@@ -4004,7 +4004,7 @@ def select_operation_mode():
 
         if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5k", "5l", "5z"):
             if choice == "5":
-                _print_banner("🛠️ 5: Administration and maintenance")
+                _print_banner("ðŸ› ï¸ 5: Administration and maintenance")
                 print("\n  5a. Install license file only")
                 print("  5b. Set up passwordless SSH to cluster management")
                 print("  5c. Create backup cluster configuration")
@@ -4020,8 +4020,8 @@ def select_operation_mode():
                 print("  !!Disruptive commands!!")
                 print("    5z. Reset all nodes to LOADER prompt")
                 print("")
-                print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5l, 5z) or blank to go back: ").strip().lower()
+                print("  " + "â”€" * 58)
+                choice = input("  Enter sub-option (5aâ€“5l, 5z) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -4032,7 +4032,7 @@ def select_operation_mode():
                 print("  to the cluster shell, and applies a pre-staged license")
                 print("  file (or license keys) without running any reinit steps.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5a: Install license file only\n")
@@ -4047,7 +4047,7 @@ def select_operation_mode():
                 print("  then configures the cluster to accept public-key login")
                 print("  for the specified user.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5b: Set up passwordless SSH\n")
@@ -4062,7 +4062,7 @@ def select_operation_mode():
                 print("  cluster configuration, then writes it to a local")
                 print("  reinit-config.json snapshot file for future use.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5c: Create backup cluster configuration\n")
@@ -4077,7 +4077,7 @@ def select_operation_mode():
                 print("  attempts SSH login to each BMC, runs 'bmc status', and")
                 print("  reports PASS/FAIL per node.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5d: Verify BMC authentication\n")
@@ -4096,7 +4096,7 @@ def select_operation_mode():
                 print("  BMC addresses are loaded from a reinit config file or")
                 print("  BMC_IP.json if present, otherwise entered manually.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5z: Reset all nodes to LOADER prompt\n")
@@ -4104,7 +4104,7 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
             if choice == "5f":
-                _print_banner("🔍 5f: Check node status")
+                _print_banner("ðŸ” 5f: Check node status")
                 print("")
                 print("  Connects to each BMC via SSH, enters the system console,")
                 print("  and reports whether the node is at a LOADER prompt, an")
@@ -4114,12 +4114,12 @@ def select_operation_mode():
                 print("  BMC addresses are loaded from a config/BMC_IP.json file")
                 print("  or entered manually.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  ✅ Confirmed. 5f: Check node status\n")
+                    print("\n  âœ… Confirmed. 5f: Check node status\n")
                     return 51, False, False
-                print("\n  ↩️  Returning to menu...\n")
+                print("\n  â†©ï¸  Returning to menu...\n")
 
             if choice == "5g":
                 _print_banner("\U0001f4ca 5g: Cluster health and version check")
@@ -4129,7 +4129,7 @@ def select_operation_mode():
                 print("  possible, no pending giveback), then prints the running")
                 print("  ONTAP version from the 'version' command.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5g: Cluster health and version check\n")
@@ -4146,7 +4146,7 @@ def select_operation_mode():
                 print("  optionally SIGTERMs stale prior-run python processes holding")
                 print("  open TCP connections to the BMC.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5h: List and clean up stale BMC SSH sessions\n")
@@ -4163,7 +4163,7 @@ def select_operation_mode():
                 print("  BMC addresses are loaded from a config/BMC_IP.json file")
                 print("  or entered manually.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5i: Backup LOADER environment variables\n")
@@ -4181,7 +4181,7 @@ def select_operation_mode():
                 print("  BMC addresses are loaded from a config/BMC_IP.json file")
                 print("  or entered manually.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5j: Compare LOADER env to defaults (diff)\n")
@@ -4197,7 +4197,7 @@ def select_operation_mode():
                 print("  console and follows the live-cluster or LOADER path")
                 print("  automatically based on the prompt it finds there.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5k: Check boot DNA\n")
@@ -4205,19 +4205,19 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
             if choice == "5l":
-                _print_banner("🧭 5l: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)")
+                _print_banner("ðŸ§­ 5l: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)")
                 print("")
                 print("  Connects to the cluster management shell and collects")
                 print("  all cluster-role interface IP addresses in command output")
                 print("  order. Writes configs/cluster_IP.json for reuse by node-add")
                 print("  workflows and deterministic cluster add-node ordering.")
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  ✅ Confirmed. 5l: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)\n")
+                    print("\n  âœ… Confirmed. 5l: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)\n")
                     return 55, False, False
-                print("\n  ↩️  Returning to menu...\n")
+                print("\n  â†©ï¸  Returning to menu...\n")
             continue
 
         if choice == "7":
@@ -4299,20 +4299,20 @@ def install_system_package(package_name, pkg_manager):
     Returns True on success, False on failure (caller can fall back to pip).
     """
     answer = input(
-        f"⚠️  System package '{package_name}' is required but not installed.\n"
+        f"âš ï¸  System package '{package_name}' is required but not installed.\n"
         f"   Install it now using '{pkg_manager}'? [Y/N]: "
     ).strip().lower()
     if answer != "y":
-        print("⚠️  Skipping system install; will attempt pip fallback.")
+        print("âš ï¸  Skipping system install; will attempt pip fallback.")
         return False
     try:
         cmd = ["sudo", pkg_manager, "install", "-y", package_name]
         print(f"Running: {' '.join(cmd)}")
         subprocess.check_call(cmd)
-        print(f"✅ '{package_name}' installed successfully.")
+        print(f"âœ… '{package_name}' installed successfully.")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"⚠️  System install of '{package_name}' failed ({e}); "
+        print(f"âš ï¸  System install of '{package_name}' failed ({e}); "
               f"will attempt pip fallback.")
         return False
 
@@ -4344,14 +4344,14 @@ def install_required_modules():
                     importlib.import_module(module_name)
                     continue
                 except ImportError:
-                    print("⚠️  System package installed but module still not importable. "
+                    print("âš ï¸  System package installed but module still not importable. "
                           "Falling back to pip.")
         answer = input(
-            f"⚠️  Python module '{module_name}' is not installed.\n"
+            f"âš ï¸  Python module '{module_name}' is not installed.\n"
             f"   Install it now via pip? [Y/N]: "
         ).strip().lower()
         if answer != "y":
-            print("❌ Cannot continue without the required module. Exiting.")
+            print("âŒ Cannot continue without the required module. Exiting.")
             sys.exit(1)
         try:
             subprocess.check_call(
@@ -4364,9 +4364,9 @@ def install_required_modules():
             subprocess.check_call(
                 [sys.executable, "-m", "pip", "install", pkg_info["pip"]]
             )
-            print(f"✅ Module '{module_name}' installed successfully via pip.")
+            print(f"âœ… Module '{module_name}' installed successfully via pip.")
         except subprocess.CalledProcessError as e:
-            print(f"❌ Failed to install module '{module_name}': {e}")
+            print(f"âŒ Failed to install module '{module_name}': {e}")
             sys.exit(1)
 
 
@@ -4450,7 +4450,7 @@ except Exception:
 _pause_state_lock = threading.Lock()
 _pause_announced = False
 
-# ── Pause wait-time tracker ──────────────────────────────────────────────────
+# â”€â”€ Pause wait-time tracker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Mirrors the prompt-wait tracker above.  Accumulated inside _wait_if_paused()
 # so that deliberate operator-initiated pauses are visible in the run summary
 # and subtracted from the unaccounted-time gap alongside prompt waits.
@@ -4495,7 +4495,7 @@ def _create_manual_checkpoint(source: str = "operator") -> bool:
     """Persist a manual checkpoint snapshot of current run state."""
     with _runtime_cmd_lock:
         if _checkpoint is None:
-            _ts_print("⚠️  Manual checkpoint requested, but no active checkpoint context is available.")
+            _ts_print("âš ï¸  Manual checkpoint requested, but no active checkpoint context is available.")
             _slog(f"Manual checkpoint request ignored ({source}): no active checkpoint", prefix="WARN")
             return False
         try:
@@ -4514,11 +4514,11 @@ def _create_manual_checkpoint(source: str = "operator") -> bool:
                 with open(_manual_path, "w", encoding="utf-8") as _mh:
                     json.dump(getattr(_checkpoint, "_data", {}), _mh, indent=2)
                     _mh.write("\n")
-            _ts_print(f"💾 Manual checkpoint saved ({source}): {_manual_path}")
+            _ts_print(f"ðŸ’¾ Manual checkpoint saved ({source}): {_manual_path}")
             _slog(f"Manual checkpoint saved ({source}): {_manual_path}")
             return True
         except Exception as exc:
-            _ts_print(f"⚠️  Manual checkpoint save failed ({source}): {exc}")
+            _ts_print(f"âš ï¸  Manual checkpoint save failed ({source}): {exc}")
             _slog(f"Manual checkpoint save failed ({source}): {exc}", prefix="WARN")
             return False
 
@@ -4564,7 +4564,7 @@ def _wait_if_paused(context: str = "automation") -> None:
             if not _pause_announced:
                 _pause_announced = True
                 _ts_print(
-                    f"⏸️  Pause requested ({context}). "
+                    f"â¸ï¸  Pause requested ({context}). "
                     "Automation and auto-reconnect are paused."
                 )
                 _ts_print(f"   Remove pause file to resume: {_path}")
@@ -4573,13 +4573,13 @@ def _wait_if_paused(context: str = "automation") -> None:
         _now = time.monotonic()
         if _now >= _next_reminder:
             _elapsed = int(_now - _pause_started)
-            _ts_print(f"⏸️  Pause still active ({context}) for {_elapsed}s.")
+            _ts_print(f"â¸ï¸  Pause still active ({context}) for {_elapsed}s.")
             _ts_print(f"   Remove pause file to resume: {_path}")
             _next_reminder = _now + 300
         if (_PAUSE_AUTO_CLEAR_SECONDS > 0
                 and (_now - _pause_started) >= _PAUSE_AUTO_CLEAR_SECONDS):
             _ts_print(
-                f"⏱️  Pause timeout reached ({_PAUSE_AUTO_CLEAR_SECONDS}s); "
+                f"â±ï¸  Pause timeout reached ({_PAUSE_AUTO_CLEAR_SECONDS}s); "
                 "auto-clearing pause sentinel."
             )
             _slog(
@@ -4593,7 +4593,7 @@ def _wait_if_paused(context: str = "automation") -> None:
     with _pause_state_lock:
         if _pause_announced:
             _pause_announced = False
-            _ts_print("▶️  Pause cleared. Resuming automation.")
+            _ts_print("â–¶ï¸  Pause cleared. Resuming automation.")
             _slog("Pause cleared; resuming automation")
     if _pause_was_active:
         _pause_elapsed = time.monotonic() - _pause_started
@@ -4623,17 +4623,17 @@ def _set_pause_state(paused: bool, source: str = "operator") -> bool:
         if paused:
             with open(_path, "a", encoding="utf-8"):
                 pass
-            _ts_print(f"⏸️  Runtime pause enabled ({source}).")
+            _ts_print(f"â¸ï¸  Runtime pause enabled ({source}).")
             _ts_print(f"   Sentinel: {_path}")
             _slog(f"Runtime pause enabled ({source}) via sentinel {_path}", prefix="WARN")
         else:
             with suppress(FileNotFoundError):
                 os.remove(_path)
-            _ts_print(f"▶️  Runtime pause cleared ({source}).")
+            _ts_print(f"â–¶ï¸  Runtime pause cleared ({source}).")
             _slog(f"Runtime pause cleared ({source})")
         return True
     except Exception as exc:
-        _ts_print(f"⚠️  Failed to update runtime pause state ({source}): {exc}")
+        _ts_print(f"âš ï¸  Failed to update runtime pause state ({source}): {exc}")
         _slog(f"Failed to update runtime pause state ({source}): {exc}", prefix="WARN")
         return False
 
@@ -4646,7 +4646,7 @@ def setup_logging(debug: bool):
         logging.basicConfig(level=logging.DEBUG,
                             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
         logging.getLogger("paramiko").setLevel(logging.DEBUG)
-        print("🐛 Debug logging is ENABLED.")
+        print("ðŸ› Debug logging is ENABLED.")
     else:
         logging.basicConfig(level=logging.WARNING)
         logging.getLogger("paramiko").setLevel(logging.WARNING)
@@ -4796,12 +4796,12 @@ def _diagnostic_ping_precheck(host, log=None):
     """Run a lightweight ping precheck before SSH stale-session diagnostics."""
     _ok = _silent_ping(host)
     if _ok:
-        print(f"  ✅ Ping OK: {host} is reachable.")
+        print(f"  âœ… Ping OK: {host} is reachable.")
         if log is not None:
             with suppress(Exception):
                 log.log(f"[{host}] ping precheck: reachable")
     else:
-        print(f"  ⚠️  Ping failed: {host} did not respond. Continuing SSH diagnostics anyway.")
+        print(f"  âš ï¸  Ping failed: {host} did not respond. Continuing SSH diagnostics anyway.")
         if log is not None:
             with suppress(Exception):
                 log.log(f"[{host}] ping precheck: no response", prefix="WARN")
@@ -4815,7 +4815,7 @@ def _print_ping_precheck_summary(results_by_host):
     print("\n  Ping precheck summary:")
     for _host, _ok in results_by_host.items():
         _status = "reachable" if _ok else "no response"
-        _icon = "✅" if _ok else "⚠️"
+        _icon = "âœ…" if _ok else "âš ï¸"
         print(f"    {_icon} {_host}: {_status}")
 
 
@@ -4825,7 +4825,7 @@ def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
         return False
     _ssh_keygen = shutil.which("ssh-keygen")
     if not _ssh_keygen:
-        print("  ⚠️  ssh-keygen not found on PATH; cannot remove known_hosts entries.")
+        print("  âš ï¸  ssh-keygen not found on PATH; cannot remove known_hosts entries.")
         if log is not None:
             with suppress(Exception):
                 log.log(f"[{host}] known_hosts cleanup skipped: ssh-keygen not found", prefix="WARN")
@@ -4843,21 +4843,21 @@ def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
         _combined = ((_res.stdout or "") + "\n" + (_res.stderr or "")).strip().lower()
         if _res.returncode == 0:
             if "not found in" in _combined:
-                print(f"  ℹ️  No known_hosts entry found for {host}.")
+                print(f"  â„¹ï¸  No known_hosts entry found for {host}.")
                 if log is not None:
                     with suppress(Exception):
                         log.log(f"[{host}] known_hosts cleanup: no entry found")
                 _log_ssh_remediation_event(host, "known_hosts_remove", "skipped",
                                            "no entry found")
             else:
-                print(f"  🗑️  Removed known_hosts entry for {host}.")
+                print(f"  ðŸ—‘ï¸  Removed known_hosts entry for {host}.")
                 if log is not None:
                     with suppress(Exception):
                         log.log(f"[{host}] known_hosts cleanup: entry removed")
                 _log_ssh_remediation_event(host, "known_hosts_remove", "ok",
                                            "entry removed")
             return True
-        print(f"  ⚠️  ssh-keygen -R {host} returned rc={_res.returncode}.")
+        print(f"  âš ï¸  ssh-keygen -R {host} returned rc={_res.returncode}.")
         if log is not None:
             with suppress(Exception):
                 log.log(
@@ -4868,7 +4868,7 @@ def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
                                    f"rc={_res.returncode}")
         return False
     except Exception as _kh_ex:
-        print(f"  ⚠️  Failed to run ssh-keygen -R for {host}: {_kh_ex}")
+        print(f"  âš ï¸  Failed to run ssh-keygen -R for {host}: {_kh_ex}")
         if log is not None:
             with suppress(Exception):
                 log.log(
@@ -4890,9 +4890,9 @@ def _preclean_bmc_known_hosts(host: str, log=None, context: str = "") -> bool:
             return False
         _known_hosts_precleaned_bmcs.add(_host)
     if context:
-        print(f"  🧹 Proactive known_hosts cleanup for {_host} ({context})...")
+        print(f"  ðŸ§¹ Proactive known_hosts cleanup for {_host} ({context})...")
     else:
-        print(f"  🧹 Proactive known_hosts cleanup for {_host}...")
+        print(f"  ðŸ§¹ Proactive known_hosts cleanup for {_host}...")
     return _remove_bmc_from_known_hosts(_host, log=log)
 
 
@@ -4917,7 +4917,7 @@ def _cleanup_known_hosts_after_boot_option(host: str, option: str, log=None) -> 
     _host = str(host or "").strip()
     if not _host:
         return False
-    print(f"   🧹 Proactive known_hosts cleanup after option {option} on {_host}...")
+    print(f"   ðŸ§¹ Proactive known_hosts cleanup after option {option} on {_host}...")
     return _remove_bmc_from_known_hosts(_host, log=log)
 
 
@@ -4939,9 +4939,9 @@ def _check_bmc_reachable(host):
     if not _is_ip:
         try:
             resolved = socket.getaddrinfo(host, None)[0][4][0]
-            print(f"  ✅ DNS resolved: {host} → {resolved}")
+            print(f"  âœ… DNS resolved: {host} â†’ {resolved}")
         except socket.gaierror as _e:
-            print(f"  ⚠️  DNS lookup failed for '{host}': {_e}")
+            print(f"  âš ï¸  DNS lookup failed for '{host}': {_e}")
             ok = False
 
     # Ping check (one packet, 2-second timeout).
@@ -4951,13 +4951,13 @@ def _check_bmc_reachable(host):
     try:
         _result = subprocess.run(_ping_cmd, capture_output=True, timeout=5)
         if _result.returncode == 0:
-            print(f"  ✅ Ping OK: {host} is reachable.")
+            print(f"  âœ… Ping OK: {host} is reachable.")
         else:
-            print(f"  ⚠️  Ping failed: {host} did not respond.")
+            print(f"  âš ï¸  Ping failed: {host} did not respond.")
             ok = False
     except Exception as _pe:
-        print(f"  ⚠️  Ping check skipped: {_pe}")
-        # Don't mark as failed — ping may be blocked by firewall.
+        print(f"  âš ï¸  Ping check skipped: {_pe}")
+        # Don't mark as failed â€” ping may be blocked by firewall.
 
     return ok
 
@@ -4975,11 +4975,11 @@ def _prompt_bmc_host(prompt_text="  BMC hostname/IP: ", allow_blank=False):
         if not host:
             if allow_blank:
                 return ""
-            print("  ⚠️  A BMC hostname or IP address is required.")
+            print("  âš ï¸  A BMC hostname or IP address is required.")
             continue
         if _check_bmc_reachable(host):
             return host
-        print("  ⚠️  Please enter a valid, reachable BMC hostname or IP address.\n")
+        print("  âš ï¸  Please enter a valid, reachable BMC hostname or IP address.\n")
 
 
 def configure_transport(client):
@@ -5001,7 +5001,7 @@ def configure_transport(client):
             pass
 
 
-# ── Stale BMC SSH session helpers ────────────────────────────────────────
+# â”€â”€ Stale BMC SSH session helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # These are called by the banner-retry block in _ssh_connect_with_retry to
 # free up BMC SSH session slots before the next retry attempt.
 
@@ -5033,7 +5033,7 @@ def _drop_bmc_clients_for(host: str, log=None) -> int:
 
     Returns the count of clients dropped. The transport is closed rudely
     (no SSH_MSG_DISCONNECT) so a hung remote sshd cannot block us. Safe to
-    call concurrently with other threads using those clients — they will
+    call concurrently with other threads using those clients â€” they will
     see EOF and surface their own errors, which the banner retry logic
     already handles.
     """
@@ -5108,7 +5108,7 @@ def _kill_stale_local_pids_for(host: str, log=None) -> int:
         if not pid or pid == our_pid or pid in seen:
             continue
         seen.add(pid)
-        # Only act on python processes — these are the realistic candidates
+        # Only act on python processes â€” these are the realistic candidates
         # for a stale prior run of this script. Other binaries are left
         # alone so we don't disrupt the operator's own SSH or unrelated
         # automation.
@@ -5123,7 +5123,7 @@ def _kill_stale_local_pids_for(host: str, log=None) -> int:
             continue
         with suppress(Exception):
             print(
-                f"   🧹 [{host}] sending SIGTERM to stale pid={pid} "
+                f"   ðŸ§¹ [{host}] sending SIGTERM to stale pid={pid} "
                 f"({pname}) holding an SSH session to the BMC..."
             )
         if log is not None:
@@ -5142,12 +5142,12 @@ def _kill_stale_local_pids_for(host: str, log=None) -> int:
         except PermissionError:
             with suppress(Exception):
                 print(
-                    f"   ⚠️  [{host}] no permission to signal pid={pid}; "
+                    f"   âš ï¸  [{host}] no permission to signal pid={pid}; "
                     "skipping."
                 )
         except Exception as _kex:
             with suppress(Exception):
-                print(f"   ⚠️  [{host}] could not signal pid={pid}: {_kex}")
+                print(f"   âš ï¸  [{host}] could not signal pid={pid}: {_kex}")
     if killed:
         _log_ssh_remediation_event(host, "kill_stale_pids", "ok",
                                    f"pids_killed={killed}")
@@ -5172,7 +5172,7 @@ def _ipmi_sol_deactivate(host: str, username: str, password: str,
         "sol", "deactivate",
     ]
     try:
-        # Short timeout — if ipmitool hangs the BMC is unreachable anyway.
+        # Short timeout â€” if ipmitool hangs the BMC is unreachable anyway.
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=15,
         )
@@ -5186,12 +5186,12 @@ def _ipmi_sol_deactivate(host: str, username: str, password: str,
                 )
         with suppress(Exception):
             if rc == 0:
-                print(f"   🧹 [{host}] ipmitool: SOL session deactivated.")
+                print(f"   ðŸ§¹ [{host}] ipmitool: SOL session deactivated.")
                 _log_ssh_remediation_event(host, "sol_deactivate", "ok", f"rc={rc}")
             else:
                 # rc != 0 is common (no session to deactivate); just log.
                 print(
-                    f"   ℹ️  [{host}] ipmitool sol deactivate rc={rc} "
+                    f"   â„¹ï¸  [{host}] ipmitool sol deactivate rc={rc} "
                     "(likely no active SOL session)."
                 )
                 _log_ssh_remediation_event(host, "sol_deactivate", "info",
@@ -5228,9 +5228,9 @@ def _diagnose_stale_bmc_sessions(host: str, log=None) -> "dict":
         to `host` (we can close these on the next sweep);
       - count of ESTABLISHED TCP sockets to `host`:22 owned by *other*
         python PIDs on this machine (likely prior AFX_reinit runs that
-        died without cleaning up — killable with --auto-clear-stale-bmc);
+        died without cleaning up â€” killable with --auto-clear-stale-bmc);
       - count owned by non-python PIDs (operator's interactive ssh,
-        sshd, scp, etc. — left alone);
+        sshd, scp, etc. â€” left alone);
       - psutil availability (without psutil only the registry count is
         meaningful).
     """
@@ -5272,8 +5272,8 @@ def _diagnose_stale_bmc_sessions(host: str, log=None) -> "dict":
     if not findings["psutil_available"]:
         with suppress(Exception):
             print(
-                f"   🔍 [{host}] stale-session diagnosis: psutil not "
-                f"installed — can only see registry ({reg} in-process "
+                f"   ðŸ” [{host}] stale-session diagnosis: psutil not "
+                f"installed â€” can only see registry ({reg} in-process "
                 "client(s) held by this run). Install psutil for a full scan."
             )
         if log is not None:
@@ -5289,7 +5289,7 @@ def _diagnose_stale_bmc_sessions(host: str, log=None) -> "dict":
     if not (reg or others or nonpy):
         with suppress(Exception):
             print(
-                f"   🔍 [{host}] stale-session diagnosis: no stale local "
+                f"   ðŸ” [{host}] stale-session diagnosis: no stale local "
                 "SSH sockets to BMC:22 found. BMC slot pool is likely "
                 "starved server-side (try ipmitool sol deactivate)."
             )
@@ -5300,23 +5300,23 @@ def _diagnose_stale_bmc_sessions(host: str, log=None) -> "dict":
         return findings
 
     with suppress(Exception):
-        print(f"   🔍 [{host}] stale-session diagnosis:")
+        print(f"   ðŸ” [{host}] stale-session diagnosis:")
         if reg:
-            print(f"      • {reg} in-process SSH client(s) still held by this "
+            print(f"      â€¢ {reg} in-process SSH client(s) still held by this "
                   "run (will be force-closed before next retry)")
         if findings["our_pid_sockets"]:
-            print(f"      • {findings['our_pid_sockets']} socket(s) owned by "
+            print(f"      â€¢ {findings['our_pid_sockets']} socket(s) owned by "
                   "our own PID (expected; tied to in-process clients)")
         if others:
-            print(f"      • {len(others)} socket(s) owned by OTHER python "
-                  "process(es) — likely stale prior AFX_reinit runs:")
+            print(f"      â€¢ {len(others)} socket(s) owned by OTHER python "
+                  "process(es) â€” likely stale prior AFX_reinit runs:")
             for pid, pname in others:
                 print(f"          - pid={pid} ({pname})")
             if not _auto_clear_stale_bmc:
-                print("      💡 Re-run with --auto-clear-stale-bmc to SIGTERM "
+                print("      ðŸ’¡ Re-run with --auto-clear-stale-bmc to SIGTERM "
                       "these prior runs automatically.")
         if nonpy:
-            print(f"      • {len(nonpy)} socket(s) owned by non-python "
+            print(f"      â€¢ {len(nonpy)} socket(s) owned by non-python "
                   "process(es) (left alone):")
             for pid, pname in nonpy:
                 print(f"          - pid={pid} ({pname})")
@@ -5455,7 +5455,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
     If all fallbacks and the interactive prompt are exhausted the last
     exception is re-raised so the caller can decide to abort.
 
-    `interactive=False` disables the credential re-prompt — useful from
+    `interactive=False` disables the credential re-prompt â€” useful from
     background threads where stdin contention would be problematic. In
     that mode the function only retries transient (non-auth) failures.
     """
@@ -5484,10 +5484,10 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             _silent = _queue_idx <= len(_attempt_queue) and _queue_idx > 1
             if not _silent:
-                print(f"   🔌 [{label}] connecting to {host} as {username} "
+                print(f"   ðŸ”Œ [{label}] connecting to {host} as {username} "
                       f"(attempt {attempt}/{max_attempts})...")
             else:
-                print(f"   🔌 [{label}] trying fallback credentials for {host} "
+                print(f"   ðŸ”Œ [{label}] trying fallback credentials for {host} "
                       f"(attempt {attempt}/{max_attempts})...")
             if _session_log:
                 _session_log.log(
@@ -5508,7 +5508,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
             return client, username, password
         except paramiko.AuthenticationException as e:
             last_exc = e
-            print(f"   ❌ [{label}] authentication failed for {username}@{host}.")
+            print(f"   âŒ [{label}] authentication failed for {username}@{host}.")
             if _session_log:
                 _session_log.log(
                     f"[{label}] auth failed for {username}@{host}",
@@ -5538,7 +5538,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
             except (EOFError, KeyboardInterrupt):
                 break
             if isinstance(new_pass, str) and new_pass.strip().upper() == "SKIP":
-                print("   ⚠️  Credential retry skipped by operator.")
+                print("   âš ï¸  Credential retry skipped by operator.")
                 break
             username, password = new_user, new_pass
             if _session_log:
@@ -5549,11 +5549,11 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
         except Exception as e:
             last_exc = e
             msg = str(e).lower()
-            # ── BMC SSH temporarily not responding ────────────────────
+            # â”€â”€ BMC SSH temporarily not responding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # When the BMC briefly drops SSH (post-reboot, BMC service
             # restart, transient network blip) paramiko surfaces
             # "Connection reset by peer" or a ConnectionResetError. In
-            # those cases the BMC usually recovers in 1–5 minutes, so
+            # those cases the BMC usually recovers in 1â€“5 minutes, so
             # notify the operator and retry every 2 minutes for up to
             # 10 minutes (5 retries) before giving up entirely.
             if (isinstance(e, ConnectionResetError)
@@ -5562,7 +5562,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                 _reset_max = 5
                 _reset_interval = 120  # seconds
                 print(
-                    f"\n   ⚠️  [{label}] SSH to {host} is currently not "
+                    f"\n   âš ï¸  [{label}] SSH to {host} is currently not "
                     f"responding (connection reset by peer)."
                 )
                 print(
@@ -5580,7 +5580,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                 _reset_done = False
                 for _r in range(1, _reset_max + 1):
                     print(
-                        f"   ⏳ [{label}] waiting {_reset_interval}s before "
+                        f"   â³ [{label}] waiting {_reset_interval}s before "
                         f"retry {_r}/{_reset_max}..."
                     )
                     _waited = 0
@@ -5594,7 +5594,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         client.set_missing_host_key_policy(
                             paramiko.AutoAddPolicy())
                         print(
-                            f"   🔌 [{label}] retrying SSH to {host} as "
+                            f"   ðŸ”Œ [{label}] retrying SSH to {host} as "
                             f"{username} (reset retry {_r}/{_reset_max})..."
                         )
                         if _session_log:
@@ -5629,21 +5629,21 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                                 or "connection reset" in msg2
                                 or "reset by peer" in msg2):
                             print(
-                                f"   ⚠️  [{label}] {host} still not "
+                                f"   âš ï¸  [{label}] {host} still not "
                                 f"responding (connection reset)."
                             )
                             continue
-                        # Different failure (auth, banner, etc.) — break
+                        # Different failure (auth, banner, etc.) â€” break
                         # out and let the outer logic handle/raise it.
                         print(
-                            f"   ⚠️  [{label}] retry surfaced a different "
+                            f"   âš ï¸  [{label}] retry surfaced a different "
                             f"error: {e2}"
                         )
                         _reset_done = True
                         break
                 if not _reset_done:
                     print(
-                        f"   ❌ [{label}] {host} SSH did not recover after "
+                        f"   âŒ [{label}] {host} SSH did not recover after "
                         f"{(_reset_max * _reset_interval) // 60} minutes; "
                         "aborting."
                     )
@@ -5654,11 +5654,11 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                             prefix="ERROR",
                         )
                     raise last_exc
-                # _reset_done True → fall through to normal handling
+                # _reset_done True â†’ fall through to normal handling
                 # below using last_exc for the new (non-reset) failure.
                 e = last_exc
                 msg = str(e).lower()
-            # ── BMC SSH banner not received / SP busy ─────────────────
+            # â”€â”€ BMC SSH banner not received / SP busy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # The BMC SSH daemon is slow to start (post-reboot, busy
             # serving console, etc.). Wait 60s and retry, up to 5
             # minutes total (5 retries), before falling through to the
@@ -5666,7 +5666,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
             # paramiko surfaces a slow/half-open transport as the bare
             # SSHException "No existing session" (raised from
             # auth_password when Transport.active is False). Treat it
-            # the same as a banner timeout — the BMC just isn't ready
+            # the same as a banner timeout â€” the BMC just isn't ready
             # to authenticate yet.
             # "Not allowed at this time" is returned by the SP/BMC when
             # it is busy with another session; also treat as transient.
@@ -5679,7 +5679,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                 _bnr_max = 5
                 _bnr_interval = 60  # seconds
                 print(
-                    f"   ⚠️  [{label}] BMC SSH not ready on "
+                    f"   âš ï¸  [{label}] BMC SSH not ready on "
                     f"{host} (banner timeout or SP busy). Waiting "
                     f"{_bnr_interval}s and retrying (up to "
                     f"{(_bnr_max * _bnr_interval) // 60} minutes total)..."
@@ -5694,14 +5694,14 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                 _bnr_done = False
                 for _b in range(1, _bnr_max + 1):
                     print(
-                        f"   ⏳ [{label}] waiting {_bnr_interval}s before "
+                        f"   â³ [{label}] waiting {_bnr_interval}s before "
                         f"banner retry {_b}/{_bnr_max}..."
                     )
                     # Before each retry sleep, try to free up a BMC SSH
                     # session slot: close any in-process clients we still
                     # hold to this host, run 'ipmitool sol deactivate'
                     # (cheap, often unblocks a stuck SOL session), and
-                    # — when --auto-clear-stale-bmc is set — SIGTERM
+                    # â€” when --auto-clear-stale-bmc is set â€” SIGTERM
                     # prior-run python PIDs that still hold a TCP socket
                     # to <host>:22.
                     with suppress(Exception):
@@ -5715,7 +5715,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         time.sleep(1)
                         _waited += 1
                     print(
-                        f"   🔁 [{label}] banner retry window elapsed; "
+                        f"   ðŸ” [{label}] banner retry window elapsed; "
                         f"attempting reconnect {_b}/{_bnr_max} now..."
                     )
                     try:
@@ -5723,7 +5723,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                         client.set_missing_host_key_policy(
                             paramiko.AutoAddPolicy())
                         print(
-                            f"   🔌 [{label}] retrying SSH to {host} as "
+                            f"   ðŸ”Œ [{label}] retrying SSH to {host} as "
                             f"{username} (banner retry {_b}/{_bnr_max})..."
                         )
                         if _session_log:
@@ -5758,20 +5758,20 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                                 or "no existing session" in msg_b
                                 or "not allowed at this time" in msg_b):
                             print(
-                                f"   ⚠️  [{label}] {host} still not "
+                                f"   âš ï¸  [{label}] {host} still not "
                                 "responding to SSH (banner timeout or SP busy)."
                             )
                             continue
-                        # Different failure — let outer logic handle it.
+                        # Different failure â€” let outer logic handle it.
                         print(
-                            f"   ⚠️  [{label}] retry surfaced a different "
+                            f"   âš ï¸  [{label}] retry surfaced a different "
                             f"error: {eb}"
                         )
                         _bnr_done = True
                         break
                 if not _bnr_done:
                     print(
-                        f"   ❌ [{label}] {host} SSH banner never arrived "
+                        f"   âŒ [{label}] {host} SSH banner never arrived "
                         f"after {(_bnr_max * _bnr_interval) // 60} minutes."
                     )
                     if _session_log:
@@ -5781,7 +5781,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                             prefix="ERROR",
                         )
                     raise last_exc
-                # _bnr_done True → a non-banner failure surfaced; fall
+                # _bnr_done True â†’ a non-banner failure surfaced; fall
                 # through to normal handling with the new exception.
                 e = last_exc
                 msg = str(e).lower()
@@ -5794,8 +5794,8 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                     or "no existing session" in msg
                     or "not allowed at this time" in msg):
                 friendly = ("BMC SSH not ready "
-                            "(banner timeout or SP busy — try again shortly)")
-                print(f"   ⚠️  [{label}] connect attempt {attempt} failed: {friendly}")
+                            "(banner timeout or SP busy â€” try again shortly)")
+                print(f"   âš ï¸  [{label}] connect attempt {attempt} failed: {friendly}")
                 if _session_log:
                     _session_log.log(
                         f"[{label}] banner timeout for {host}: {e}",
@@ -5807,7 +5807,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
                     details=str(e).replace("\n", " "),
                 )
             else:
-                print(f"   ⚠️  [{label}] connect attempt {attempt} failed: {e}")
+                print(f"   âš ï¸  [{label}] connect attempt {attempt} failed: {e}")
                 if _session_log:
                     _session_log.log(
                         f"[{label}] connect attempt {attempt} failed: {e}",
@@ -5870,10 +5870,10 @@ def connect_to_sp(host, username, password):
             interactive=True,
         )
     except Exception as e:
-        print(f"❌ Error connecting to SP: {e}")
+        print(f"âŒ Error connecting to SP: {e}")
         _slog(f"SSH connection failed: {e}", prefix="ERROR")
         sys.exit(1)
-    print("✅ Connection successful!")
+    print("âœ… Connection successful!")
     _slog("SSH connection established successfully")
     with _client_lock:
         _active_client = client
@@ -5908,11 +5908,11 @@ def reconnect_to_sp(host, username, password):
             interactive=True,
         )
     except Exception as e:
-        print(f"❌ Could not reconnect: {e}")
+        print(f"âŒ Could not reconnect: {e}")
         _slog(f"All reconnection attempts failed: {e}", prefix="ERROR")
         return None, None
     channel = _open_shell(client)
-    print("✅ Reconnected!")
+    print("âœ… Reconnected!")
     _slog("Reconnected successfully")
     with _client_lock:
         _active_client = client
@@ -5954,7 +5954,7 @@ def _reclaim_system_console(channel, node_log=None):
     Auto-answers 'y' to any existing-session takeover question.
     Called from within the read loops when _looks_like_bmc_drop() fires.
     """
-    print("\n⚠️  BMC prompt/preemption detected – reconnecting to system console...")
+    print("\nâš ï¸  BMC prompt/preemption detected â€“ reconnecting to system console...")
     _slog("BMC prompt or session preemption seen mid-wait; re-sending 'system console'",
           prefix="WARN")
     # Brief pause to let the SP finish its preemption message before we send.
@@ -5974,22 +5974,22 @@ def _reclaim_system_console(channel, node_log=None):
                 _session_log.log_console(chunk)
             buf_lower = buf.lower()
             if "y/n" in buf_lower:
-                print("⚠️  Existing console session – auto-disconnecting (y)...")
+                print("âš ï¸  Existing console session â€“ auto-disconnecting (y)...")
                 _slog("Existing console session; auto-sending 'y'", prefix="WARN")
                 channel.send("y\r")
                 if _session_log:
                     _session_log.log_sent("y")
                 time.sleep(1)
-                print("✅ System console reconnected.")
+                print("âœ… System console reconnected.")
                 _slog("System console reconnected after auto-takeover")
                 return True
             if any(s in buf_lower for s in
                    ("ctrl-d", "type exit", "serial", "loader-", "autoboot", "selection")):
-                print("✅ System console reconnected.")
+                print("âœ… System console reconnected.")
                 _slog("System console reconnected")
                 return True
         time.sleep(0.1)
-    print("⚠️  System console reconnect timed out – continuing anyway.")
+    print("âš ï¸  System console reconnect timed out â€“ continuing anyway.")
     _slog("System console reconnect timed out", prefix="WARN")
     return False
 
@@ -6052,7 +6052,7 @@ def _emit_reconnect_notice_with_suppression(
 
     if not suppressed:
         _sup_msg = (
-            f"ℹ️  [{label}] Suppressing repeated BMC reconnect messages "
+            f"â„¹ï¸  [{label}] Suppressing repeated BMC reconnect messages "
             "until reconnect succeeds or timeout."
         )
         if console_writer:
@@ -6171,7 +6171,7 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
             _emit_reconnect_notice_with_suppression(
                 reconnect_ctx, _label,
                 console_msg=(
-                    f"\n⚠️  [{_label}] No BMC console output for 5 minutes. "
+                    f"\nâš ï¸  [{_label}] No BMC console output for 5 minutes. "
                     "Reconnecting SSH/session console..."
                 ),
                 log_msg=f"[{_label}] no console activity for 5 minutes; reconnecting BMC SSH/system console",
@@ -6230,7 +6230,7 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                 last_console_data = time.monotonic()
                 last_keepalive_send = 0.0
                 start_time += time.monotonic() - _rc_t
-                print(f"✅ [{_label}] BMC reconnect successful. Resuming wait.")
+                print(f"âœ… [{_label}] BMC reconnect successful. Resuming wait.")
                 _slog(f"[{_label}] BMC reconnect successful; resumed console monitoring")
                 continue
             except Exception as _silence_rc_exc:
@@ -6260,11 +6260,11 @@ def direct_send_and_wait(channel, command, look_for, timeout=15, auto_respond=No
         _ch2 = _rc.get("channel") if (_rc and _rc.get("channel") is not None) else _ch
         _ch2.send(auto_respond + "\r")
         if not quiet:
-            print(f"\n✅ {_node_pfx()}Detected '{look_for}' – auto-responded with '{auto_respond}'{_elapsed_str()}")
+            print(f"\nâœ… {_node_pfx()}Detected '{look_for}' â€“ auto-responded with '{auto_respond}'{_elapsed_str()}")
         elif node_log:
             _par_write(node_log, f"\n>>> auto-responded to '{look_for}' with '{auto_respond}'\n")
         if _session_log:
-            _session_log.log(f"Detected '{look_for}' – auto-responded with '{auto_respond}'")
+            _session_log.log(f"Detected '{look_for}' â€“ auto-responded with '{auto_respond}'")
             _session_log.log_sent(auto_respond)
     return output
 
@@ -6316,7 +6316,7 @@ def drain_channel(channel, seconds=2, node_log=None, quiet=False):
 
 
 # ---------------------------------------------------------------------------
-# Signal handler – force exit on second Ctrl+C
+# Signal handler â€“ force exit on second Ctrl+C
 # ---------------------------------------------------------------------------
 
 def signal_handler(sig, frame):
@@ -6324,7 +6324,7 @@ def signal_handler(sig, frame):
     _ctrl_c_count += 1
 
     if _ctrl_c_count == 1:
-        print("\n👋 Received termination signal. Exiting now...")
+        print("\nðŸ‘‹ Received termination signal. Exiting now...")
         _slog("Received termination signal (Ctrl+C or SIGTERM); exiting immediately")
         _shutdown_event.set()
         _restore_terminal()
@@ -6335,7 +6335,7 @@ def signal_handler(sig, frame):
                 _session_log.close()
         raise SystemExit(130)
     else:
-        print("\n⚡ Force exit!")
+        print("\nâš¡ Force exit!")
         _restore_terminal()
         if _session_log:
             try:
@@ -6371,7 +6371,7 @@ def _print_man_page():
     page = f"""
 {rule}
 NAME
-    AFX_reinit.py — NetApp AFX cluster reinitialization automation script
+    AFX_reinit.py â€” NetApp AFX cluster reinitialization automation script
 
 SYNOPSIS
     python3 AFX_reinit.py [OPTIONS]
@@ -6384,11 +6384,11 @@ DESCRIPTION
 
     Operation modes (selected interactively at startup):
 
-      1a   Initialize first node — interactive wizard
-      1b   Initialize first node — fully automated
-      2a   Add node to existing cluster — interactive wizard
+      1a   Initialize first node â€” interactive wizard
+      1b   Initialize first node â€” fully automated
+      2a   Add node to existing cluster â€” interactive wizard
            (supports password groups + blank-password fallback retries)
-      2b   Add node to existing cluster — automated (parallel multi-node)
+      2b   Add node to existing cluster â€” automated (parallel multi-node)
            (supports password groups + blank-password fallback retries)
        3   End-to-end reinit: mode 1b on primary + mode 2b on all peers
            (same credential-grouping/fallback behavior as 2b; reinit-only)
@@ -6452,12 +6452,12 @@ OPTIONS
         any new terminal.
 
         Behaviour:
-          • Checks the STY environment variable.  If STY is set (already
+          â€¢ Checks the STY environment variable.  If STY is set (already
             inside a screen session) this flag is silently ignored and the
-            script proceeds normally — no recursive spawn.
-          • Exits with install instructions if screen(1) is not found.
-          • Automatically appends --bg to the forwarded argument list.
-          • Detached session name: afx-reinit
+            script proceeds normally â€” no recursive spawn.
+          â€¢ Exits with install instructions if screen(1) is not found.
+          â€¢ Automatically appends --bg to the forwarded argument list.
+          â€¢ Detached session name: afx-reinit
 
         Reattach with:
             screen -r afx-reinit
@@ -6473,16 +6473,16 @@ OPTIONS
 
     TERMINAL COLOR SETUP (SSH / PuTTY)
         Linux/macOS terminal clients:
-          • Prefer a 256-color terminal profile.
-          • Ensure TERM is set to xterm-256color:
+          â€¢ Prefer a 256-color terminal profile.
+          â€¢ Ensure TERM is set to xterm-256color:
                 export TERM=xterm-256color
-          • If needed, add to your shell profile (~/.bashrc):
+          â€¢ If needed, add to your shell profile (~/.bashrc):
                 echo 'export TERM=xterm-256color' >> ~/.bashrc
 
         PuTTY (Windows -> Linux jump host):
-          • Window > Colours: enable ANSI color and bright colors.
-          • Connection > Data: set Terminal-type string to xterm-256color.
-          • Save the PuTTY session and reconnect.
+          â€¢ Window > Colours: enable ANSI color and bright colors.
+          â€¢ Connection > Data: set Terminal-type string to xterm-256color.
+          â€¢ Save the PuTTY session and reconnect.
 
         Note: GNU screen is available on Linux and macOS only.  On Windows
         use WSL or a Linux jump host for equivalent functionality.
@@ -6490,7 +6490,7 @@ OPTIONS
     --resume
         EXPERIMENTAL (mode 4b only).  Resume the previous 4b run from its saved
         checkpoint (checkpoints/afx_checkpoint.json, located alongside this script).
-        Phases already completed are skipped — when every BMC IP is
+        Phases already completed are skipped â€” when every BMC IP is
         marked install_done the run jumps straight to Step 6b
         (reconnect to LOADER + boot_ontap menu); peers marked
         peer_joined are skipped during the mode-3 parallel auto-add.
@@ -6567,24 +6567,24 @@ INTERACTIVE FEATURES
         is available on Linux, macOS, and Unix systems with Python's readline module.
 
         On each Tab press:
-          • The script lists matching files and directories
-          • Directory names are suffixed with "/" to indicate you can continue
-          • Partial names are completed to the longest unambiguous match
+          â€¢ The script lists matching files and directories
+          â€¢ Directory names are suffixed with "/" to indicate you can continue
+          â€¢ Partial names are completed to the longest unambiguous match
 
         Works for:
-          • Config file paths (--config or interactive prompts)
-          • ONTAP image paths (mode 4b netboot)
-          • Bootargs files (--diag)
-          • License file paths (mode 5a)
-          • Any other file/URL input
+          â€¢ Config file paths (--config or interactive prompts)
+          â€¢ ONTAP image paths (mode 4b netboot)
+          â€¢ Bootargs files (--diag)
+          â€¢ License file paths (mode 5a)
+          â€¢ Any other file/URL input
 
         Example:
             Path or URL: /scr[TAB]
-            → /scripts/
+            â†’ /scripts/
             Path or URL: /scripts/O[TAB]
-            → /scripts/ONTAP/
+            â†’ /scripts/ONTAP/
             Path or URL: /scripts/ONTAP/ONTAP[TAB]
-            → /scripts/ONTAP/ONTAP-9.15.1.img
+            â†’ /scripts/ONTAP/ONTAP-9.15.1.img
 
 EXAMPLES
     Interactive run (prompts for all values):
@@ -6752,26 +6752,26 @@ def _ensure_argcomplete_installed() -> bool:
     global HAS_ARGCOMPLETE, argcomplete
     if HAS_ARGCOMPLETE:
         return True
-    print("📦 Installing Python module 'argcomplete'...")
+    print("ðŸ“¦ Installing Python module 'argcomplete'...")
     try:
         _proc = subprocess.run(
             [sys.executable, "-m", "pip", "install", "argcomplete"],
             check=False,
         )
     except Exception as _e:
-        print(f"❌ Failed to run pip install for argcomplete: {_e}")
+        print(f"âŒ Failed to run pip install for argcomplete: {_e}")
         return False
     if _proc.returncode != 0:
-        print("❌ Could not install argcomplete.")
+        print("âŒ Could not install argcomplete.")
         return False
     try:
         importlib.invalidate_caches()
         argcomplete = importlib.import_module("argcomplete")
         HAS_ARGCOMPLETE = True
-        print("✅ argcomplete installed.")
+        print("âœ… argcomplete installed.")
         return True
     except Exception as _e:
-        print(f"❌ argcomplete installed but import failed: {_e}")
+        print(f"âŒ argcomplete installed but import failed: {_e}")
         return False
 
 
@@ -6804,7 +6804,7 @@ def _install_completion_hook_block(rc_path: str, hook_line: str) -> bool:
                 _f.write(_updated)
         return True
     except Exception as _e:
-        print(f"❌ Could not update {rc_path}: {_e}")
+        print(f"âŒ Could not update {rc_path}: {_e}")
         return False
 
 
@@ -6816,7 +6816,7 @@ def _install_completion_support() -> int:
     _ok = True
     for _rc in _completion_rc_paths():
         if _install_completion_hook_block(_rc, _hook):
-            print(f"✅ Completion hook installed in {_rc}")
+            print(f"âœ… Completion hook installed in {_rc}")
         else:
             _ok = False
     print("\nRun this now (or open a new shell):")
@@ -6839,7 +6839,7 @@ def _maybe_warn_missing_completion_setup(args) -> None:
     _missing_hook = not _completion_hook_present(_script)
     if not (_missing_module or _missing_hook):
         return
-    print("\nℹ️  Startup option tab-completion is not fully configured.")
+    print("\nâ„¹ï¸  Startup option tab-completion is not fully configured.")
     if _missing_module:
         print("   Missing Python module: argcomplete")
     if _missing_hook:
@@ -6853,7 +6853,7 @@ def parse_args():
     # Disable argparse's built-in -h/--help so we can provide a man-page
     # style replacement instead.
     parser = argparse.ArgumentParser(
-        description="NetApp AFX BMC console automation script 🤖",
+        description="NetApp AFX BMC console automation script ðŸ¤–",
         add_help=False,
     )
     parser.add_argument("--help", "-h", action="store_true", default=False,
@@ -6922,7 +6922,7 @@ def parse_args():
                              "Bootargs are injected with 'setenv' after "
                              "'set-defaults' and before 'saveenv' in the "
                              "LOADER stage.")
-    # ── Mode shortcut flags (bypass the interactive menu) ──────────────────
+    # â”€â”€ Mode shortcut flags (bypass the interactive menu) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     parser.add_argument("--first-node", action="store_true", default=False,
                         help="Skip the menu and run mode 1b: initialize the "
                              "first node and set up the cluster automatically.")
@@ -7026,7 +7026,7 @@ def _display_last_status(exit_when_done=True):
     logs_dir = os.path.join(_script_dir, "logs")
     
     if not os.path.isdir(logs_dir):
-       print(f"❌  No logs directory found at: {logs_dir}")
+       print(f"âŒ  No logs directory found at: {logs_dir}")
        return _finish(1)
     
     # Find all session directories (format: YYYYMMDD_HHMMSS)
@@ -7037,11 +7037,11 @@ def _display_last_status(exit_when_done=True):
            if os.path.isdir(entry_path):
                session_dirs.append((entry, entry_path))
     except OSError as e:
-       print(f"❌  Error reading logs directory: {e}")
+       print(f"âŒ  Error reading logs directory: {e}")
        return _finish(1)
     
     if not session_dirs:
-       print(f"ℹ️   No previous runs found in: {logs_dir}")
+       print(f"â„¹ï¸   No previous runs found in: {logs_dir}")
        return _finish(0)
     
     # Sort by name (YYYYMMDD_HHMMSS format sorts chronologically)
@@ -7066,11 +7066,11 @@ def _display_last_status(exit_when_done=True):
            candidates.sort(key=lambda item: item[0], reverse=True)
            summary_file = candidates[0][1]
     except OSError as e:
-       print(f"❌  Error reading session directory: {e}")
+       print(f"âŒ  Error reading session directory: {e}")
        return _finish(1)
     
     if not summary_file:
-       print(f"ℹ️   No summary file found in: {most_recent_dir}")
+       print(f"â„¹ï¸   No summary file found in: {most_recent_dir}")
        return _finish(0)
     
     # Read and display the summary file
@@ -7078,7 +7078,7 @@ def _display_last_status(exit_when_done=True):
        with open(summary_file, "r", encoding="utf-8") as f:
            print(f.read())
     except OSError as e:
-       print(f"❌  Error reading summary file: {e}")
+       print(f"âŒ  Error reading summary file: {e}")
        return _finish(1)
      
     return _finish(0)
@@ -7103,7 +7103,7 @@ def _setup_path_completion():
        if state == 0:
            path_completer.matches = []
             
-           # Empty input — suggest current dir
+           # Empty input â€” suggest current dir
            if not text:
                text = "."
             
@@ -7163,15 +7163,15 @@ def _relaunch_in_screen():
     ``False`` if we are already inside a screen session, so the caller should
     continue running normally.
     """
-    # Already inside a screen session — STY is set by screen for every child.
+    # Already inside a screen session â€” STY is set by screen for every child.
     if os.environ.get("STY"):
-        print("ℹ️   Already running inside a screen session "
+        print("â„¹ï¸   Already running inside a screen session "
               f"(STY={os.environ['STY']}). Continuing normally.")
         return False
 
     screen_bin = shutil.which("screen")
     if not screen_bin:
-        print("❌  'screen' is not installed or not found in PATH.")
+        print("âŒ  'screen' is not installed or not found in PATH.")
         print("    Install it first:")
         print("      Ubuntu/Debian : sudo apt install screen")
         print("      RHEL/Fedora   : sudo dnf install screen")
@@ -7191,14 +7191,14 @@ def _relaunch_in_screen():
     cmd = [screen_bin, "-dmS", session_name,
            sys.executable, script_path] + fwd_args
 
-    print(f"🖥️   Launching inside screen session '{session_name}'...")
+    print(f"ðŸ–¥ï¸   Launching inside screen session '{session_name}'...")
     try:
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as exc:
-        print(f"❌  screen exited with code {exc.returncode}.")
+        print(f"âŒ  screen exited with code {exc.returncode}.")
         sys.exit(exc.returncode)
 
-    print("\n✅  Script is running in the background.")
+    print("\nâœ…  Script is running in the background.")
     print(f"    Reattach with : screen -r {session_name}")
     print("    List sessions : screen -ls")
     return True
@@ -7218,7 +7218,7 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
     output, matched = direct_read_until_any(channel, ["y/n", ">"], timeout=15)
 
     if matched and "y/n" in matched.lower():
-        print("\n⚠️  An existing session is active on this BMC!")
+        print("\nâš ï¸  An existing session is active on this BMC!")
         if auto_takeover:
             print("   Auto-disconnecting existing session...")
             if _session_log:
@@ -7240,28 +7240,28 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
 
             output = direct_read_until(channel, ">", timeout=15)
             if ">" not in output:
-                print("❌ Did not receive BMC prompt after session takeover. Exiting.")
+                print("âŒ Did not receive BMC prompt after session takeover. Exiting.")
                 _slog("BMC prompt not received after session takeover", prefix="ERROR")
                 return False
-            print("✅ BMC prompt detected after session takeover.")
+            print("âœ… BMC prompt detected after session takeover.")
             _slog("BMC prompt detected after session takeover")
             return True
         else:
-            print("❌ Cannot continue without taking over the session. Exiting.")
+            print("âŒ Cannot continue without taking over the session. Exiting.")
             if _session_log:
-                _session_log.log("User declined to take over existing session – exiting")
+                _session_log.log("User declined to take over existing session â€“ exiting")
                 _session_log.log_sent("n")
             channel.send("n\r")
             return False
 
     elif matched and ">" in matched:
-        print("✅ BMC prompt detected.")
+        print("âœ… BMC prompt detected.")
         _slog("BMC prompt detected (no existing session)")
         return True
 
     else:
-        print("❌ Did not receive BMC prompt. Exiting.")
-        _slog("BMC prompt not received – timeout", prefix="ERROR")
+        print("âŒ Did not receive BMC prompt. Exiting.")
+        _slog("BMC prompt not received â€“ timeout", prefix="ERROR")
         return False
 
 
@@ -7270,7 +7270,7 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
 # ---------------------------------------------------------------------------
 
 def enter_system_console(channel, loader_message=True):
-    print("\n📺 Probing current prompt before entering system console...")
+    print("\nðŸ“º Probing current prompt before entering system console...")
     _slog("Probing prompt before system console")
 
     # Hit Enter to get the current prompt.
@@ -7283,29 +7283,29 @@ def enter_system_console(channel, loader_message=True):
     probe_lower = probe_out.lower()
 
     if "::>" in probe_out:
-        # Already in the cluster shell – nothing to do.
-        print("✅ Already in cluster shell (::> detected). Skipping 'system console'.")
-        _slog("Already in cluster shell – system console skipped")
+        # Already in the cluster shell â€“ nothing to do.
+        print("âœ… Already in cluster shell (::> detected). Skipping 'system console'.")
+        _slog("Already in cluster shell â€“ system console skipped")
         return
 
     if _LOADER_PROMPT_RE.search(probe_out) or "LOADER-" in probe_out.upper():
-        # Already at LOADER – system console command is only valid from BMC.
-        print("✅ Already at LOADER prompt. Skipping 'system console'.")
-        _slog("Already at LOADER prompt – system console skipped")
+        # Already at LOADER â€“ system console command is only valid from BMC.
+        print("âœ… Already at LOADER prompt. Skipping 'system console'.")
+        _slog("Already at LOADER prompt â€“ system console skipped")
         return
 
     if "login:" in probe_lower:
-        # At a cluster login prompt – also already past the BMC.
-        print("✅ Cluster login prompt detected. Skipping 'system console'.")
-        _slog("Cluster login prompt detected – system console skipped")
+        # At a cluster login prompt â€“ also already past the BMC.
+        print("âœ… Cluster login prompt detected. Skipping 'system console'.")
+        _slog("Cluster login prompt detected â€“ system console skipped")
         return
 
     # Only issue "system console" from a BMC prompt.
     if "bmc" in probe_lower or (probe_matched and probe_matched == ">"):
-        print("✅ BMC prompt detected. Entering system console...")
+        print("âœ… BMC prompt detected. Entering system console...")
         _slog("BMC prompt confirmed; sending 'system console'")
     else:
-        print("⚠️  Prompt is not BMC; skipping 'system console'.")
+        print("âš ï¸  Prompt is not BMC; skipping 'system console'.")
         if _session_log:
             _session_log.log(
                 f"Prompt is not BMC; skipped system console. Probe: {probe_out[-200:]!r}",
@@ -7326,7 +7326,7 @@ def enter_system_console(channel, loader_message=True):
     )
 
     if matched and "y/n" in matched.lower():
-        print("\n⚠️  An existing console session is active!")
+        print("\nâš ï¸  An existing console session is active!")
         answer = input("   Do you want to disconnect the other console session? [Y/N]: ").strip().lower()
         if _session_log:
             _session_log.log_user_input(f"Existing console session takeover response: {answer}")
@@ -7346,35 +7346,35 @@ def enter_system_console(channel, loader_message=True):
                 timeout=15, quiet=True
             )
             if matched2:
-                print("✅ System console connected after session takeover.")
+                print("âœ… System console connected after session takeover.")
                 _slog("System console connected after session takeover")
             else:
-                print("⚠️  No console confirmation after takeover, continuing anyway...")
+                print("âš ï¸  No console confirmation after takeover, continuing anyway...")
                 _slog("No console confirmation after takeover", prefix="WARN")
         else:
-            print("❌ Cannot continue without console access. Exiting.")
+            print("âŒ Cannot continue without console access. Exiting.")
             if _session_log:
-                _session_log.log("User declined to take over console session – exiting")
+                _session_log.log("User declined to take over console session â€“ exiting")
                 _session_log.log_sent("n")
             channel.send("n\r")
             sys.exit(1)
 
     elif matched:
-        print("✅ System console connected.")
+        print("âœ… System console connected.")
         _slog(f"System console connected (matched: {matched})")
     else:
-        print("⚠️  No console confirmation detected, continuing anyway...")
+        print("âš ï¸  No console confirmation detected, continuing anyway...")
         _slog("No console confirmation detected", prefix="WARN")
 
     drain_channel(channel, seconds=3, quiet=True)
-    print("✅ System console ready.\n")
+    print("âœ… System console ready.\n")
     if loader_message:
-        print("⏳ LOADER will appear. Script is continuing. Be patient.\n")
+        print("â³ LOADER will appear. Script is continuing. Be patient.\n")
     _slog("System console ready")
 
 
 # ---------------------------------------------------------------------------
-# LOADER-check helper — probe before deciding to system reset
+# LOADER-check helper â€” probe before deciding to system reset
 # ---------------------------------------------------------------------------
 
 def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
@@ -7382,11 +7382,11 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
 
     Flow:
       1. Send CR and inspect current prompt/output.
-      2. If LOADER is detected → return True (caller skips system reset).
-      3. If not at BMC prompt → return False (caller continues normal path).
+      2. If LOADER is detected â†’ return True (caller skips system reset).
+      3. If not at BMC prompt â†’ return False (caller continues normal path).
       4. If at BMC prompt, send 'system console' and probe for LOADER for
          *probe_timeout* seconds.
-      5. If LOADER is detected → return True, else return False.
+      5. If LOADER is detected â†’ return True, else return False.
 
     When *node_log* is supplied, raw I/O is written there instead of stdout.
     *label* is used for status prints; pass an IP or node name.
@@ -7423,23 +7423,23 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
     _probe = drain_channel(channel, seconds=0.7, node_log=node_log, quiet=True)
 
     if _LOADER_PROMPT_RE.search(_probe) or "LOADER-" in _probe.upper():
-        _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
+        _tprint(f"  âœ… {pfx}Already at LOADER prompt â€” skipping system reset.")
         return True
     if any(sig in _probe.lower() for sig in ("::>", "::*>", "login:")):
-        _tprint(f"  ℹ️  {pfx}Not at BMC prompt; skipping system console probe.")
+        _tprint(f"  â„¹ï¸  {pfx}Not at BMC prompt; skipping system console probe.")
         return False
     _at_bmc = ("bmc" in _probe.lower()) or _probe.rstrip().endswith(">")
     if (not _at_bmc) and (not _probe.strip()):
         # Console can occasionally be silent even after a valid BMC prompt was
         # reached. Treat empty probe output as "likely BMC" and continue with
         # a non-destructive system-console LOADER probe before deciding reset.
-        _tprint(f"  ℹ️  {pfx}No prompt text after probe; assuming BMC and checking console state.")
+        _tprint(f"  â„¹ï¸  {pfx}No prompt text after probe; assuming BMC and checking console state.")
         _at_bmc = True
     if not _at_bmc:
-        _tprint(f"  ℹ️  {pfx}Prompt not recognized as BMC; skipping system console probe.")
+        _tprint(f"  â„¹ï¸  {pfx}Prompt not recognized as BMC; skipping system console probe.")
         return False
 
-    _tprint(f"  {pfx}🔍 Checking if already at LOADER before system reset...")
+    _tprint(f"  {pfx}ðŸ” Checking if already at LOADER before system reset...")
     if _session_log:
         _session_log.log_sent("system console")
     channel.send("system console\r")
@@ -7461,7 +7461,7 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
                 _par_write(node_log, chunk)
             elif _session_log:
                 _session_log.log_console(chunk)
-            # Takeover prompt — accept immediately so we can read the console.
+            # Takeover prompt â€” accept immediately so we can read the console.
             if "y/n" in buf.lower() and not loader_found:
                 if _session_log:
                     _session_log.log_sent("y (console takeover during loader probe)")
@@ -7499,12 +7499,12 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
             loader_found = True
 
     if loader_found:
-        _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
+        _tprint(f"  âœ… {pfx}Already at LOADER prompt â€” skipping system reset.")
         return True
 
-    # Not at LOADER — exit console and let caller do system reset.
+    # Not at LOADER â€” exit console and let caller do system reset.
     if _entered_console:
-        _tprint(f"  ℹ️  {pfx}Not at LOADER. Exiting console for system reset...")
+        _tprint(f"  â„¹ï¸  {pfx}Not at LOADER. Exiting console for system reset...")
         _exit_buf = ""
         for _exit_attempt in range(1, 4):
             if _session_log:
@@ -7519,16 +7519,16 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
                 channel, seconds=1.6, node_log=node_log, quiet=True
             )
             if _LOADER_PROMPT_RE.search(_exit_buf) or "LOADER-" in _exit_buf.upper():
-                _tprint(f"  ✅ {pfx}LOADER prompt appeared while exiting console.")
+                _tprint(f"  âœ… {pfx}LOADER prompt appeared while exiting console.")
                 return True
             if _looks_like_bmc_prompt(_exit_buf):
                 return False
             if _exit_attempt < 3:
                 _tprint(
-                    f"  ⚠️  {pfx}BMC prompt not returned after Ctrl-D; retrying console exit..."
+                    f"  âš ï¸  {pfx}BMC prompt not returned after Ctrl-D; retrying console exit..."
                 )
         _tprint(
-            f"  ❌ {pfx}Could not return to BMC prompt after console probe; "
+            f"  âŒ {pfx}Could not return to BMC prompt after console probe; "
             "aborting reset to avoid sending commands to the node console."
         )
         raise RuntimeError("failed to return to BMC prompt after console probe")
@@ -7705,7 +7705,7 @@ def _collect_password_groups_for_nodes(
                             _picked.append(_match)
                 if _bad:
                     print(
-                        f"{prompt_prefix}⚠️  Invalid selection: {', '.join(_bad)}. "
+                        f"{prompt_prefix}âš ï¸  Invalid selection: {', '.join(_bad)}. "
                         "Use node numbers or IP values from the list."
                     )
                     continue
@@ -7726,7 +7726,7 @@ def _collect_password_groups_for_nodes(
 
             _group_idx += 1
             if not _remaining:
-                print(f"{prompt_prefix}✅ All listed nodes have been assigned to a password group.")
+                print(f"{prompt_prefix}âœ… All listed nodes have been assigned to a password group.")
                 break
 
         print(f"\n{prompt_prefix}Password group manifest:")
@@ -7763,7 +7763,7 @@ def _collect_password_groups_for_nodes(
         if _ok in ("2", "n", "no"):
             print(f"{prompt_prefix}Deleting password group manifest and restarting...")
             continue
-        print(f"{prompt_prefix}⚠️  Invalid choice. Restarting password-group setup...")
+        print(f"{prompt_prefix}âš ï¸  Invalid choice. Restarting password-group setup...")
 
 
 def _candidate_cluster_logins():
@@ -7831,7 +7831,7 @@ def _attempt_console_cluster_login(channel):
         # Drain any residual output before the next attempt.
         drain_channel(channel, seconds=0.5)
 
-    # 2) Interactive fallback – re-prompt until success or the operator
+    # 2) Interactive fallback â€“ re-prompt until success or the operator
     # gives up (Ctrl+C / EOF).
     default_user = (candidates[-1][0] if candidates else "admin")
     while True:
@@ -8101,8 +8101,8 @@ def _parse_network_interfaces(output):
 
     # Exact ONTAP label names (case-insensitive). Maps to an internal field
     # name, or to special sentinel strings handled below.
-    #   "address_mask"   — combined "x.x.x.x/prefix" field; split on "/"
-    #   "netmask_prefix" — prefix-length-only field; convert to dotted mask
+    #   "address_mask"   â€” combined "x.x.x.x/prefix" field; split on "/"
+    #   "netmask_prefix" â€” prefix-length-only field; convert to dotted mask
     _KEY_MAP = {
         # LIF name variants across ONTAP versions
         "logical interface name": "lif",
@@ -8114,13 +8114,13 @@ def _parse_network_interfaces(output):
         # Home node / port
         "home node": "home-node",
         "home port": "home-port",
-        # IP address — plain (some versions) or combined with prefix
+        # IP address â€” plain (some versions) or combined with prefix
         "ip address": "address",
         "network address": "address",
         "address": "address",
         "ip address/mask": "address_mask",   # e.g. "169.254.1.1/16"
         "address/mask": "address_mask",
-        # Netmask — full mask or prefix length (varies by ONTAP version)
+        # Netmask â€” full mask or prefix length (varies by ONTAP version)
         "netmask": "netmask",
         "subnet mask": "netmask",
         "network mask": "netmask",
@@ -8310,12 +8310,12 @@ def _parse_matching_gateway(output, clus_mgmt_ip=None):
             except ValueError:
                 pass
 
-    # No subnet match found — return the first usable gateway.
+    # No subnet match found â€” return the first usable gateway.
     return first_gw
 
 
 def _print_retain_summary(cluster_name, net_rows, peer_addresses=None):
-    _print_banner("📝 Retained Configuration Summary")
+    _print_banner("ðŸ“ Retained Configuration Summary")
     if cluster_name:
         print(f"\n  Cluster name: {cluster_name}")
     if net_rows:
@@ -8357,7 +8357,7 @@ def _print_retain_summary(cluster_name, net_rows, peer_addresses=None):
     if peer_addresses:
         print("\n  Discovered service-processor (BMC) addresses:")
         for a in peer_addresses:
-            print(f"    • {a}")
+            print(f"    â€¢ {a}")
     if not cluster_name and not net_rows and not peer_addresses:
         print("\n  (Nothing was retained.)")
     print("")
@@ -8393,7 +8393,7 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
     if collect_peer_sps:
         purposes.append("peer BMC addresses")
     _src = "cluster SSH" if direct_cluster_ssh else "system console"
-    print(f"\n  🔍 Gathering cluster configuration...")
+    print(f"\n  ðŸ” Gathering cluster configuration...")
     if _session_log:
         _session_log.start_phase("Capture Cluster Inventory")
         _session_log.log(
@@ -8408,7 +8408,7 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
     net_rows = None
     peer_addresses = []
 
-    # For direct cluster SSH we are already at ::> — just confirm the prompt
+    # For direct cluster SSH we are already at ::> â€” just confirm the prompt
     # without sending any login commands. For BMC console paths, use the full
     # _wait_for_cluster_prompt which handles login: prompts.
     if direct_cluster_ssh:
@@ -8421,7 +8421,7 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
         _at_shell = _wait_for_cluster_prompt(channel, timeout=30)
 
     if not _at_shell:
-        print("   ⚠️  Could not reach cluster shell prompt (node may be down).")
+        print("   âš ï¸  Could not reach cluster shell prompt (node may be down).")
         print("      Skipping all captures and continuing without retained data")
         print("      or peer BMC addresses.")
         if _session_log:
@@ -8505,7 +8505,7 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
                         )
                     net_rows = _parse_network_interfaces(out)
                 except Exception as e:
-                    print(f"   ⚠️  net int show failed: {e}")
+                    print(f"   âš ï¸  net int show failed: {e}")
                     _slog(f"net int show failed: {e}", prefix="WARN")
                 _slog(f"Captured {len(net_rows or [])} network interface rows")
 
@@ -8581,7 +8581,7 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
         # We connected directly to the cluster shell (not via BMC console).
         # Send 'exit' to close the session cleanly; the caller will close the
         # channel and SSH client. No BMC prompt to wait for.
-        print("\n   ↩️  Finished capture. Exiting cluster SSH session...")
+        print("\n   â†©ï¸  Finished capture. Exiting cluster SSH session...")
         _slog("Direct cluster SSH: sending 'exit' after capture")
         try:
             channel.send("exit\r")
@@ -8590,19 +8590,19 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
             pass
     else:
         # Exit system console back to BMC.
-        print("\n   ↩️  Exiting system console back to BMC...")
+        print("\n   â†©ï¸  Exiting system console back to BMC...")
         _slog("Exiting system console (Ctrl+D) after capture")
         channel.send("\x04")  # Ctrl+D
         time.sleep(2)
         output = direct_read_until(channel, ">", timeout=15)
         if ">" in output and "::" not in output[-10:]:
-            print("   ✅ Returned to BMC prompt.")
+            print("   âœ… Returned to BMC prompt.")
             _slog("Returned to BMC prompt after capture")
         else:
             channel.send("\x04")
             time.sleep(1)
             direct_read_until(channel, ">", timeout=10)
-            print("   ⚠️  BMC prompt not cleanly detected; proceeding.")
+            print("   âš ï¸  BMC prompt not cleanly detected; proceeding.")
             _slog("BMC prompt not cleanly detected after exit", prefix="WARN")
 
     _retained_cluster_name = cluster_name
@@ -8648,7 +8648,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
                 fallback_passwords=_fb_peer,
             )
         except Exception as e:
-            _tprint(f"   ❌ [{host}] Could not authenticate: {e}")
+            _tprint(f"   âŒ [{host}] Could not authenticate: {e}")
             if _session_log:
                 _session_log.log(
                     f"Peer {host} auth/connect failed; skipping: {e}",
@@ -8665,11 +8665,11 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             ch, node_log=node_log,
             takeover_msg=f"[{host}] taking over existing BMC session",
         ):
-            _tprint(f"   ⚠️  [{host}] No BMC prompt; aborting peer reset.")
+            _tprint(f"   âš ï¸  [{host}] No BMC prompt; aborting peer reset.")
             _slog(f"[{host}] no BMC prompt; aborting", prefix="WARN")
             return False
 
-        _tprint(f"   🔎 [{host}] Checking current node status...")
+        _tprint(f"   ðŸ”Ž [{host}] Checking current node status...")
         if _session_log:
             _session_log.log(f"[{host}] checking current node status before reset")
 
@@ -8677,16 +8677,16 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
         if _already_at_loader(
             ch, label=host, node_log=node_log,
         ):
-            _tprint(f"   ✅ [{host}] Already at LOADER prompt. Disconnecting...")
+            _tprint(f"   âœ… [{host}] Already at LOADER prompt. Disconnecting...")
             _slog(f"Peer {host} already at LOADER; skipping reset")
             return True
 
         def _reset_and_enter_console(reason: str = "initial"):
-            _tprint(f"\n🔁 [{host}] Resetting to LOADER prompt...")
+            _tprint(f"\nðŸ” [{host}] Resetting to LOADER prompt...")
             # system reset (auto-confirm).
             direct_send_and_wait(ch, "system reset", "y/n", timeout=15, auto_respond="y",
                                  node_log=node_log, quiet=(node_log is not None))
-            _tprint(f"\n   ⏳ [{host}] System reset in process — reboot will happen soon.")
+            _tprint(f"\n   â³ [{host}] System reset in process â€” reboot will happen soon.")
             if _session_log:
                 _session_log.log(
                     f"[{host}] system reset issued ({reason}); waiting for reboot to LOADER"
@@ -8734,10 +8734,10 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
                     _session_log.log_console(chunk)
                 _buf_lower = buf.lower()
                 if "starting autoboot press ctrl-c to abort" in _buf_lower:
-                    _tprint(f"\n🛑 [{host}] AUTOBOOT detected; sending Ctrl+C...")
+                    _tprint(f"\nðŸ›‘ [{host}] AUTOBOOT detected; sending Ctrl+C...")
                     _slog(f"[{host}] AUTOBOOT detected; sending Ctrl+C")
                     if node_log:
-                        _par_write(node_log, "\n>>> [Ctrl+C x5 — intercepting AUTOBOOT]\n")
+                        _par_write(node_log, "\n>>> [Ctrl+C x5 â€” intercepting AUTOBOOT]\n")
                     for _ in range(5):
                         ch.send("\x03")
                         time.sleep(0.3)
@@ -8747,7 +8747,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
                     # booted to ONTAP login. Re-run reset + console once so we
                     # can catch Ctrl+C on the next reboot.
                     if _login_recovery_attempts >= 1:
-                        _tprint(f"   ⚠️  [{host}] Reached ONTAP login again after retry; giving up.")
+                        _tprint(f"   âš ï¸  [{host}] Reached ONTAP login again after retry; giving up.")
                         _slog(
                             f"Peer {host} reached ONTAP login after recovery retry; "
                             "LOADER not reached",
@@ -8755,7 +8755,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
                         )
                         break
                     _login_recovery_attempts += 1
-                    _tprint(f"\n   ⚠️  [{host}] Node reached ONTAP login (Ctrl+C missed). "
+                    _tprint(f"\n   âš ï¸  [{host}] Node reached ONTAP login (Ctrl+C missed). "
                             "Retrying reset to catch AUTOBOOT...")
                     _slog(
                         f"[{host}] reached ONTAP login instead of LOADER; "
@@ -8780,10 +8780,10 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             time.sleep(0.1)
 
         if loader_seen:
-            _tprint(f"   ✅ [{host}] At LOADER prompt. Disconnecting...")
+            _tprint(f"   âœ… [{host}] At LOADER prompt. Disconnecting...")
             _slog(f"Peer {host} reached LOADER; disconnecting SSH and moving on")
         else:
-            _tprint(f"   ⚠️  [{host}] Did not reach LOADER within {timeout}s.")
+            _tprint(f"   âš ï¸  [{host}] Did not reach LOADER within {timeout}s.")
             _slog(f"Peer {host} did not reach LOADER (timeout)", prefix="WARN")
 
         # Closing the SSH session disconnects the BMC console takeover; no
@@ -8791,7 +8791,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
         # make the script appear hung). We just close and move on.
         return loader_seen
     except Exception as e:
-        _tprint(f"   ❌ [{host}] Error during peer reset: {e}")
+        _tprint(f"   âŒ [{host}] Error during peer reset: {e}")
         _slog(f"Peer reset error on {host}: {e}", prefix="ERROR")
         return False
     finally:
@@ -8834,7 +8834,7 @@ class _InteractivePromptBroker:
         """
         with self._lock:
             suffix = f" [{default}]" if default else ""
-            print(f"\n  🔔 [{node_label}] {prompt_text}{suffix}", flush=True)
+            print(f"\n  ðŸ”” [{node_label}] {prompt_text}{suffix}", flush=True)
             try:
                 if secret:
                     val = getpass.getpass("  Response: ")
@@ -8894,8 +8894,8 @@ class InteractiveSession:
         self._stop = threading.Event()
 
     def _try_reconnect(self):
-        print("\n⚠️  SSH session dropped! The controller is still running.")
-        print("🔄 Reconnecting to BMC and reattaching to console...")
+        print("\nâš ï¸  SSH session dropped! The controller is still running.")
+        print("ðŸ”„ Reconnecting to BMC and reattaching to console...")
         _slog("SSH dropped during interactive session, reconnecting")
         result = reconnect_to_sp(self.sp_host, self.sp_user, self.sp_pass)
         if result[0] is None:
@@ -8904,7 +8904,7 @@ class InteractiveSession:
 
         output, matched = direct_read_until_any(self.channel, ["y/n", ">"], timeout=15)
         if matched and "y/n" in matched.lower():
-            print("⚠️  Existing session detected during reconnect, taking over...")
+            print("âš ï¸  Existing session detected during reconnect, taking over...")
             if _session_log:
                 _session_log.log("Auto-taking over existing session during reconnect")
                 _session_log.log_sent("y")
@@ -8922,7 +8922,7 @@ class InteractiveSession:
             timeout=15
         )
         if matched and "y/n" in matched.lower():
-            print("⚠️  Existing console session detected during reconnect, taking over...")
+            print("âš ï¸  Existing console session detected during reconnect, taking over...")
             if _session_log:
                 _session_log.log("Auto-taking over existing console session during reconnect")
                 _session_log.log_sent("y")
@@ -8930,7 +8930,7 @@ class InteractiveSession:
             time.sleep(2)
 
         drain_channel(self.channel, seconds=2)
-        print("✅ Reattached to system console.\n")
+        print("âœ… Reattached to system console.\n")
         _slog("Reattached to system console after reconnect")
         return True
 
@@ -8962,11 +8962,11 @@ class InteractiveSession:
         if _nlw:
             _nlw.interactive = True
 
-        print("\n📺 Session is now fully interactive.")
+        print("\nðŸ“º Session is now fully interactive.")
         print("   Type your responses to any prompts (yes, no, etc.)")
-        print("   ⚠️  AUTOBOOT messages are NORMAL from this point – they will NOT be interrupted.")
+        print("   âš ï¸  AUTOBOOT messages are NORMAL from this point â€“ they will NOT be interrupted.")
         print("   Press Ctrl+C to exit.\n")
-        _slog("Entered interactive session (Phase 3 – passive mode)")
+        _slog("Entered interactive session (Phase 3 â€“ passive mode)")
 
         reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         reader_thread.start()
@@ -8996,7 +8996,7 @@ class InteractiveSession:
             if _nlw:
                 _nlw.interactive = False
 
-        print("\n👋 Exiting interactive session.")
+        print("\nðŸ‘‹ Exiting interactive session.")
         _slog("Exited interactive session")
 
 
@@ -9017,15 +9017,15 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     option, description = get_boot_menu_option()
 
     _pfx = _node_pfx(node_label)
-    print(f"\n⏳ {_pfx}Primary node booting to boot menu (will auto-select option {option} – {description}){_elapsed_str()}")
+    print(f"\nâ³ {_pfx}Primary node booting to boot menu (will auto-select option {option} â€“ {description}){_elapsed_str()}")
     if node_log and hasattr(node_log, "name"):
-        print(f"   📝 {_pfx}Primary node log: {node_log.name}")
+        print(f"   ðŸ“ {_pfx}Primary node log: {node_log.name}")
     if _session_log and getattr(_session_log, "log_file", None):
-        print(f"   📝 {_pfx}BMC session log: {_session_log.log_file}")
+        print(f"   ðŸ“ {_pfx}BMC session log: {_session_log.log_file}")
     if _session_log:
         _session_log.log(
             f"Phase 2: Waiting for boot menu up to {timeout}s "
-            f"(will auto-select option {option} – {description})"
+            f"(will auto-select option {option} â€“ {description})"
         )
 
     menu_signatures = [
@@ -9073,7 +9073,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 waiting_for_bmc_seen = True
                 waiting_for_bmc_retry_armed = True
                 _screen_status(
-                    f"⚠️  {_pfx}Detected 'Waiting for BMC' in console output; "
+                    f"âš ï¸  {_pfx}Detected 'Waiting for BMC' in console output; "
                     "will retry BMC SSH+console if silent for 60s."
                 )
                 if _session_log:
@@ -9124,7 +9124,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
             _pw = reconnect_ctx.get("password")
             _client = reconnect_ctx.get("client")
             _screen_status(
-                f"🔁 {_pfx}No console output for 60s after 'Waiting for BMC' — "
+                f"ðŸ” {_pfx}No console output for 60s after 'Waiting for BMC' â€” "
                 "retrying BMC SSH + system console..."
             )
             if _session_log:
@@ -9198,14 +9198,14 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 last_keepalive_cr = last_progress
                 output = ""
                 output_lower = ""
-                _screen_status(f"✅ {_pfx}BMC reconnect successful; resuming boot-menu wait.")
+                _screen_status(f"âœ… {_pfx}BMC reconnect successful; resuming boot-menu wait.")
                 if _session_log:
                     _session_log.log(
                         f"[{node_label or _host}] BMC reconnect successful; resumed boot-menu wait"
                     )
                 continue
             except Exception as _rbmc_exc:
-                _screen_status(f"❌ {_pfx}BMC reconnect failed: {_rbmc_exc}")
+                _screen_status(f"âŒ {_pfx}BMC reconnect failed: {_rbmc_exc}")
                 if _session_log:
                     _session_log.log(
                         f"[{node_label or _host}] BMC reconnect failed: {_rbmc_exc}",
@@ -9219,7 +9219,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 and now - start_time >= 600):
             loader_recovery_attempted = True
             _screen_status(
-                f"🔁 {_pfx}No boot menu after 10 minutes; checking for LOADER and "
+                f"ðŸ” {_pfx}No boot menu after 10 minutes; checking for LOADER and "
                 "running 'boot_ontap menu' if needed..."
             )
             _recovered, _booting = _recover_boot_menu_from_loader(
@@ -9234,7 +9234,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
             if _booting and boot_wait_extension == 0:
                 boot_wait_extension = 600
                 _screen_status(
-                    f"⏳ {_pfx}Node still appears to be booting; extending boot-menu "
+                    f"â³ {_pfx}Node still appears to be booting; extending boot-menu "
                     "wait by another 10 minutes."
                 )
                 if _session_log:
@@ -9245,7 +9245,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                     )
         time.sleep(0.1)
     else:
-        print("⚠️  Boot menu prompt not detected within timeout.")
+        print("âš ï¸  Boot menu prompt not detected within timeout.")
         if _session_log:
             _session_log.log(
                 f"Boot menu prompt not detected within {timeout}s", prefix="WARN"
@@ -9256,11 +9256,11 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     drain_channel(channel, seconds=1, node_log=node_log)
 
     if _operation_mode == 2:
-        print(f"\n✅ {_pfx}Boot menu detected! Option {option} selected. Node reinitializing to be added to cluster.{_elapsed_str()}")
+        print(f"\nâœ… {_pfx}Boot menu detected! Option {option} selected. Node reinitializing to be added to cluster.{_elapsed_str()}")
     else:
-        print(f"\n✅ {_pfx}Boot menu detected! Option {option} selected. Node reinitializing and Storage Availability Zone being destroyed.{_elapsed_str()}")
+        print(f"\nâœ… {_pfx}Boot menu detected! Option {option} selected. Node reinitializing and Storage Availability Zone being destroyed.{_elapsed_str()}")
     if _session_log:
-        _session_log.log(f"Boot menu detected – auto-selecting option {option} ({description})")
+        _session_log.log(f"Boot menu detected â€“ auto-selecting option {option} ({description})")
         _session_log.log_sent(option)
 
     channel.send(option + "\r")
@@ -9272,7 +9272,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
         _cleanup_known_hosts_after_boot_option(_boot_host, option, log=_session_log)
     time.sleep(2)
 
-    # Check whether the menu is still sitting at "Selection (1-N)?" — if so,
+    # Check whether the menu is still sitting at "Selection (1-N)?" â€” if so,
     # the keystroke didn't land (slow console, race), so resend once.
     post = drain_channel(channel, seconds=2, node_log=node_log).lower()
     if any(s in post for s in sig_lower):
@@ -9281,7 +9281,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 "Boot menu prompt still present after first send; retrying option",
                 prefix="WARN",
             )
-        print(f"   ↻ Menu prompt still visible; resending option {option}...")
+        print(f"   â†» Menu prompt still visible; resending option {option}...")
         channel.send(option + "\r\n")
         time.sleep(2)
 
@@ -9311,7 +9311,7 @@ def _mark_fatal_boot_dna(node_label=""):
 def _print_fatal_boot_dna_abort_message():
     """Print the shared abort message for unsupported boot DNA."""
     _node = _fatal_boot_dna_label or "one or more nodes"
-    print("\n❌ Unsupported boot DNA detected.")
+    print("\nâŒ Unsupported boot DNA detected.")
     print(f"  Affected node: {_node}")
     print("  Aborting this run for all nodes.")
     print("  Please contact NetApp Support to resolve the issue before retrying.")
@@ -9350,7 +9350,7 @@ def _maybe_prompt_autoboot_true(node_label=""):
         _target = f"[{node_label}] " if node_label else ""
         with _stdin_lock:
             _ans = _prompt_with_timeout(
-                f"\n  ⚠️  {_target}AUTOBOOT is set to false. "
+                f"\n  âš ï¸  {_target}AUTOBOOT is set to false. "
                 "This will break the script. "
                 "Would you like to set to true? (y/n): ",
                 default="n",
@@ -9440,7 +9440,7 @@ def _verify_boot_dna(channel, node_log=None, node_label=""):
     confirm bootarg.init.dna is the supported value.
     Returns True if supported, False otherwise.
     """
-    print("\n🧬 Boot DNA check: verifying bootarg.init.dna...")
+    print("\nðŸ§¬ Boot DNA check: verifying bootarg.init.dna...")
     _slog("Verifying boot DNA via 'printenv'")
 
     output = direct_send_and_wait(
@@ -9484,11 +9484,11 @@ def _verify_boot_dna(channel, node_log=None, node_label=""):
         )
 
     if dna_value == _REQUIRED_BOOT_DNA:
-        print(f"   ✅ Boot DNA check passed: bootarg.init.dna={dna_value}")
+        print(f"   âœ… Boot DNA check passed: bootarg.init.dna={dna_value}")
         _slog(f"Boot DNA verified: {dna_value}")
         return True
 
-    _print_banner("❌ UNSUPPORTED BOOT DNA")
+    _print_banner("âŒ UNSUPPORTED BOOT DNA")
     if dna_value is None:
         print("  Could not determine the boot DNA from 'printenv'.")
     else:
@@ -9564,10 +9564,10 @@ def _extract_boot_dna_records(output, default_label=""):
 def _print_boot_dna_records(records, *, source_label):
     """Print a compact boot-DNA summary table."""
     if not records:
-        print(f"  ⚠️  Could not parse bootarg.init.dna from {source_label}.")
+        print(f"  âš ï¸  Could not parse bootarg.init.dna from {source_label}.")
         return False
 
-    print(f"\n  🧬 bootarg.init.dna values from {source_label}:")
+    print(f"\n  ðŸ§¬ bootarg.init.dna values from {source_label}:")
     print(f"  {'Target':<24}  Value")
     print(f"  {'-'*24}  {'-'*12}")
     for label, value in records:
@@ -9624,20 +9624,20 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
         _loader_ready54 = False
 
         if _init54_match and ("::>" in _init54_match or "::*>" in _init54_match):
-            print("  ✅ Cluster shell detected directly.")
+            print("  âœ… Cluster shell detected directly.")
             _cluster_ready54 = True
             _source54 = "cluster shell"
             _result54["state"] = "At cluster shell"
         elif _init54_match and "login:" in _init54_match.lower():
-            print("  🔐 Cluster login prompt detected directly.")
+            print("  ðŸ” Cluster login prompt detected directly.")
             if not _wait_for_cluster_prompt(_ch54, timeout=45):
-                print("  ❌ Could not reach the cluster shell.")
+                print("  âŒ Could not reach the cluster shell.")
                 return _result54
             _cluster_ready54 = True
             _source54 = "cluster shell"
             _result54["state"] = "At cluster shell"
         elif _init54_match and "loader-" in _init54_match.lower():
-            print("  ✅ LOADER prompt detected directly.")
+            print("  âœ… LOADER prompt detected directly.")
             _loader_ready54 = True
             _source54 = "LOADER"
             _result54["state"] = "At LOADER"
@@ -9648,10 +9648,10 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
                     node_log=_nf54,
                     takeover_msg=f"[{_target54}] taking over existing BMC session for boot DNA check",
                 ):
-                    print("  ❌ Could not reach a BMC or cluster prompt.")
+                    print("  âŒ Could not reach a BMC or cluster prompt.")
                     return _result54
 
-            print("  🖥️  BMC prompt detected; entering system console...")
+            print("  ðŸ–¥ï¸  BMC prompt detected; entering system console...")
             _ch54.send("system console\r")
             _sc54_out, _sc54_match = direct_read_until_any(
                 _ch54,
@@ -9689,25 +9689,25 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
             _combined54 = (_sc54_out + _nudge54).lower()
 
             if _LOADER_PROMPT_RE.search(_sc54_out + _nudge54):
-                print("  ✅ LOADER prompt detected via system console.")
+                print("  âœ… LOADER prompt detected via system console.")
                 _loader_ready54 = True
                 _source54 = "LOADER via BMC console"
                 _result54["state"] = "At LOADER"
             elif ("::>" in _combined54 or "::*>" in _combined54
                   or "login:" in _combined54 or "password:" in _combined54):
-                print("  ✅ Live-cluster console detected; reaching cluster shell...")
+                print("  âœ… Live-cluster console detected; reaching cluster shell...")
                 if not _wait_for_cluster_prompt(_ch54, timeout=45):
-                    print("  ❌ Could not reach the cluster shell from system console.")
+                    print("  âŒ Could not reach the cluster shell from system console.")
                     return _result54
                 _cluster_ready54 = True
                 _source54 = "cluster shell via BMC console"
                 _result54["state"] = "At cluster shell"
             else:
-                print("  ❌ Could not determine whether the node is at LOADER or a live cluster prompt.")
+                print("  âŒ Could not determine whether the node is at LOADER or a live cluster prompt.")
                 return _result54
 
         if _cluster_ready54:
-            print('\n  ▶ Running: node run * -c "priv set diag; bootargs get bootarg.init.dna"\n')
+            print('\n  â–¶ Running: node run * -c "priv set diag; bootargs get bootarg.init.dna"\n')
             _boot54_out = _run_cluster_command(
                 _ch54,
                 'node run * -c "priv set diag; bootargs get bootarg.init.dna"',
@@ -9718,7 +9718,7 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
             _result54["ok"] = bool(_boot54_records)
             _print_boot_dna_records(_boot54_records, source_label=_source54)
         elif _loader_ready54:
-            print("\n  ▶ Running: printenv bootarg.init.dna\n")
+            print("\n  â–¶ Running: printenv bootarg.init.dna\n")
             _boot54_out = direct_send_and_wait(
                 _ch54,
                 "printenv bootarg.init.dna",
@@ -9805,7 +9805,7 @@ def _run_boot_dna_check_mode():
         _cluster_mgmt54 = str(_cluster_config.get("mgmt_ip") or "").strip()
 
     if _found_file54:
-        print(f"  📄 Loaded target hints from: {_found_file54}")
+        print(f"  ðŸ“„ Loaded target hints from: {_found_file54}")
 
     while True:
         print("")
@@ -9822,24 +9822,24 @@ def _run_boot_dna_check_mode():
         _sel54 = _prompt("  Select [1-3]: ", "1").strip()
         if _sel54 == "1":
             if not _bmc_ips54:
-                print("  ⚠️  No BMC IPs were found. Choose option 2 or 3.")
+                print("  âš ï¸  No BMC IPs were found. Choose option 2 or 3.")
                 continue
             _targets54 = list(_bmc_ips54)
             break
         if _sel54 == "2":
             if not _cluster_mgmt54:
-                print("  ⚠️  Cluster management IP not found. Choose option 1 or 3.")
+                print("  âš ï¸  Cluster management IP not found. Choose option 1 or 3.")
                 continue
             _targets54 = [_cluster_mgmt54]
             break
         if _sel54 == "3":
             _custom54 = _prompt("  Custom hostname/IP: ").strip()
             if not _custom54:
-                print("  ⚠️  No target entered.")
+                print("  âš ï¸  No target entered.")
                 continue
             _targets54 = [_custom54]
             break
-        print("  ⚠️  Invalid selection. Enter 1, 2, or 3.")
+        print("  âš ï¸  Invalid selection. Enter 1, 2, or 3.")
 
     _default_user54 = _cluster_config.get("admin_user") or "admin"
     _user54 = input(f"  Username [{_default_user54}]: ").strip() or _default_user54
@@ -9850,8 +9850,8 @@ def _run_boot_dna_check_mode():
 
     _results54 = []
     for _target54 in _targets54:
-        print(f"\n  {'─' * 58}")
-        print(f"  🔎 Checking boot DNA on {_target54}")
+        print(f"\n  {'â”€' * 58}")
+        print(f"  ðŸ”Ž Checking boot DNA on {_target54}")
         _res54 = _run_boot_dna_check_target(_target54, _user54, _pass54) or {
             "target": _target54,
             "state": "Unknown",
@@ -9861,7 +9861,7 @@ def _run_boot_dna_check_mode():
         _results54.append(_res54)
 
     if len(_targets54) > 1 and _results54:
-        print("\n  🧾 Boot DNA summary:")
+        print("\n  ðŸ§¾ Boot DNA summary:")
         print(f"  {'Target':<24}  {'State':<18}  Value(s)")
         print(f"  {'-'*24}  {'-'*18}  {'-'*24}")
         for _r54 in _results54:
@@ -9877,7 +9877,7 @@ def _run_boot_dna_check_mode():
             )
 
     if _session_log:
-        print(f"\n📝 Session log: {_session_log.log_file}")
+        print(f"\nðŸ“ Session log: {_session_log.log_file}")
     try:
         input("  Press Enter to return to the main menu...")
     except (EOFError, KeyboardInterrupt):
@@ -10021,7 +10021,7 @@ def _prompt_ntp_servers(start_index=1):
 def apply_retained_to_cluster_config():
     """Merge values captured from the existing cluster (retain phase) into
     `_config_data["cluster"]` so they're treated as if they came from the
-    JSON config file. Existing keys in the config are NEVER overwritten —
+    JSON config file. Existing keys in the config are NEVER overwritten â€”
     operator-supplied / file-supplied values win, retained values only fill
     gaps. Returns the list of field names that were filled in.
     """
@@ -10051,9 +10051,9 @@ def apply_retained_to_cluster_config():
     if _retained_ntp_servers:
         _fill("ntp_servers", ",".join(_retained_ntp_servers))
     elif not cluster_block.get("ntp_servers"):
-        # No NTP servers found on cluster and none in config — offer picker.
+        # No NTP servers found on cluster and none in config â€” offer picker.
         print(
-            "\n  ⚠️  No NTP server configuration found on the existing cluster."
+            "\n  âš ï¸  No NTP server configuration found on the existing cluster."
         )
         _ntp_list = _prompt_ntp_servers()
         if _ntp_list:
@@ -10111,7 +10111,7 @@ def apply_retained_to_node_configs(primary_bmc=None):
 
     Each entry in ``_config_data["nodes"]`` is matched by ``bmc`` against
     the SP-address-to-node mapping captured during the retain phase. Any
-    field already set in the config is left alone — retained values only
+    field already set in the config is left alone â€” retained values only
     fill gaps, exactly like ``apply_retained_to_cluster_config()``.
 
     The primary BMC (when known) is also added to
@@ -10160,7 +10160,7 @@ def apply_retained_to_node_configs(primary_bmc=None):
                 # Preserve legacy nodes[] layout if the loaded config used it.
                 _config_data["nodes"].append(node_block)
             else:
-                # No existing node section — use secondary_nodes (current format).
+                # No existing node section â€” use secondary_nodes (current format).
                 _config_data.setdefault("secondary_nodes", []).append(node_block)
 
         filled = []
@@ -10232,14 +10232,14 @@ def write_config_snapshot(target_path):
             json.dump(_config_data, f, indent=2, sort_keys=False)
             f.write("\n")
     except OSError as e:
-        print(f"\n   ⚠️  Could not write config snapshot to {target_path}: {e}")
+        print(f"\n   âš ï¸  Could not write config snapshot to {target_path}: {e}")
         if _session_log:
             _session_log.log(
                 f"Config snapshot write failed ({target_path}): {e}",
                 prefix="WARN",
             )
         return None
-    print(f"\n   📄 Wrote config snapshot to {target_path}")
+    print(f"\n   ðŸ“„ Wrote config snapshot to {target_path}")
     _slog(f"Config snapshot written to {target_path}")
     return target_path
 
@@ -10346,7 +10346,7 @@ def _prompt_validated(label, default, validator, error_hint):
     while True:
         value = _prompt_with_default(label, default)
         if value is None:
-            # User pressed Enter with no default – force a real entry.
+            # User pressed Enter with no default â€“ force a real entry.
             print(f"    \u26A0\uFE0F  A value is required. {error_hint}")
             continue
         if validator(value):
@@ -10422,7 +10422,7 @@ def _fetch_existing_cluster_ip(bmc_user=None, bmc_password=None, prompt_before_a
             or None
         )
         _pass_hint = " [press Enter to use stored password]" if _best_pass else ""
-        print("\n  🔐 Enter cluster admin credentials before cluster-network lookup.")
+        print("\n  ðŸ” Enter cluster admin credentials before cluster-network lookup.")
         try:
             prompted_user = input(
                 f"  Cluster admin username [{_best_user}]: "
@@ -10435,7 +10435,7 @@ def _fetch_existing_cluster_ip(bmc_user=None, bmc_password=None, prompt_before_a
             prompted_pass = ""
         if not prompted_pass and _best_pass:
             prompted_pass = _best_pass
-            print("  ℹ️  Using stored cluster password.")
+            print("  â„¹ï¸  Using stored cluster password.")
         if prompted_user and prompted_pass:
             _cluster_config["admin_user"] = prompted_user
             _cluster_config["admin_password"] = prompted_pass
@@ -10473,7 +10473,7 @@ def _fetch_existing_cluster_ip(bmc_user=None, bmc_password=None, prompt_before_a
                     mgmt_ip, user, password,
                     label=f"cluster/{mgmt_ip}", max_attempts=3, interactive=False,
                 )
-                print(f"  ✅ Authenticated to {mgmt_ip} using {source} "
+                print(f"  âœ… Authenticated to {mgmt_ip} using {source} "
                       f"(user={used_user}).")
                 if _session_log:
                     _session_log.log(
@@ -10485,16 +10485,16 @@ def _fetch_existing_cluster_ip(bmc_user=None, bmc_password=None, prompt_before_a
                     _session_log.log(
                         f"Cluster auth via {source} failed: {e}", prefix="WARN"
                     )
-                print(f"  ⚠️  {source}: {e}")
+                print(f"  âš ï¸  {source}: {e}")
                 client = None
 
         # 2) If no candidate worked, prompt the operator and retry with
         # interactive re-prompts on auth failure.
         if client is None:
             if candidates:
-                print("\n  ⚠️  None of the known credentials worked for the cluster.")
+                print("\n  âš ï¸  None of the known credentials worked for the cluster.")
             else:
-                print("\n  ℹ️  No cluster credentials found in config or session state.")
+                print("\n  â„¹ï¸  No cluster credentials found in config or session state.")
 
             # Pre-fill defaults from known sources so the operator can just
             # press Enter if the config values are correct.
@@ -10827,14 +10827,14 @@ def collect_cluster_config():
     # yet, open the picker.
     ntp_servers_raw = cc_cfg.get("ntp_servers") or _cluster_config.get("ntp_servers")
     if ntp_servers_raw:
-        print(f"\n  📄 NTP servers (from config): {ntp_servers_raw}")
+        print(f"\n  ðŸ“„ NTP servers (from config): {ntp_servers_raw}")
         ntp_servers = ntp_servers_raw
     else:
-        print("\n  ℹ️   NTP servers (optional). Select from the list or add custom.")
+        print("\n  â„¹ï¸   NTP servers (optional). Select from the list or add custom.")
         _ntp_entries = _prompt_ntp_servers()
         if _ntp_entries:
             ntp_servers = ",".join(_ntp_entries)
-            print(f"  ✅ NTP servers configured: {ntp_servers}")
+            print(f"  âœ… NTP servers configured: {ntp_servers}")
         else:
             ntp_servers = None
 
@@ -10895,14 +10895,14 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
 
     while pending:
         if time.monotonic() - _overall_start > _overall_timeout:
-            print("\n  ⚠️  Timed out waiting for node management prompts.")
+            print("\n  âš ï¸  Timed out waiting for node management prompts.")
             _slog("Timed out in _auto_answer_node_mgmt", prefix="WARN")
             break
 
         key, trigger, label = pending[0]
         trigger_lower = trigger.lower()
 
-        print(f"\n⏳ Waiting for setup prompt: {label}...")
+        print(f"\nâ³ Waiting for setup prompt: {label}...")
         _slog(f"Waiting for setup prompt: {label}")
 
         # Wait until the trigger appears in the accumulated buffer.
@@ -10922,14 +10922,14 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                     _session_log.log_console(chunk)
             time.sleep(0.1)
 
-        # Prompt detected – resolve the value.
+        # Prompt detected â€“ resolve the value.
         value = cfg.get(key)
         if not value:
             value = _prompt(f"  Enter {label}: ")
             if _session_log:
                 _session_log.log_user_input(f"{label} (manual): {value}")
         else:
-            print(f"  ✅ Using config {label}: {value}")
+            print(f"  âœ… Using config {label}: {value}")
             _slog(f"Auto-answering {label}: {value}")
 
         channel.send(value + "\r")
@@ -10957,8 +10957,8 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                 time.sleep(0.1)
 
         if trigger_lower in _recheck.lower():
-            # ONTAP re-prompted — the value was rejected.
-            print(f"\n  ⚠️  Value '{value}' was rejected for {label}. Please re-enter.")
+            # ONTAP re-prompted â€” the value was rejected.
+            print(f"\n  âš ï¸  Value '{value}' was rejected for {label}. Please re-enter.")
             if _session_log:
                 _session_log.log(
                     f"{label}: value '{value}' rejected by ONTAP; prompting operator",
@@ -11063,7 +11063,7 @@ def _wait_and_send(channel, trigger, response, label, timeout=900,
     Used by the cluster setup wizard automation.
     """
     if not quiet:
-        print(f"\n⏳ Waiting for: {label}...")
+        print(f"\nâ³ Waiting for: {label}...")
     _slog(f"Waiting for: {label}")
     direct_send_and_wait(
         channel, "", trigger, timeout=timeout, check_bmc_drop=True,
@@ -11098,7 +11098,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
     _node_add = (_operation_mode == 2) if is_node_add is None else bool(is_node_add)
     _pfx = _node_pfx(label)
     if _node_add:
-        print(f"\n⏳ {_pfx}Resetting configuration and rebooting.{_elapsed_str()}")
+        print(f"\nâ³ {_pfx}Resetting configuration and rebooting.{_elapsed_str()}")
     _cc_done_ev = None  # set when the cluster-creation progress reporter starts
     _menu_sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
     for trigger, resp, lbl in (
@@ -11116,7 +11116,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             else:
                 _boot_action = "begin cluster creation"
                 _still_waiting_msg = "Still waiting for cluster creation"
-            print(f"\n⏳ {_pfx}Waiting for node to boot and {_boot_action}.{_elapsed_str()}")
+            print(f"\nâ³ {_pfx}Waiting for node to boot and {_boot_action}.{_elapsed_str()}")
             _print_wait_log_hint(node_log=node_log)
             _cc_done_ev = threading.Event()
             _cc_t0 = time.monotonic()
@@ -11124,10 +11124,10 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                 while not _ev.wait(60):
                     elapsed = int(time.monotonic() - _t0)
                     reinit_elapsed = _elapsed_str()
-                    print(f"   ⏳ {_p}{_msg}... ({elapsed}s in this phase{reinit_elapsed})")
+                    print(f"   â³ {_p}{_msg}... ({elapsed}s in this phase{reinit_elapsed})")
             threading.Thread(target=_cc_reporter, daemon=True).start()
         elif not _node_add:
-            print(f"\n⏳ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
+            print(f"\nâ³ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
         _slog(f"Waiting for {lbl}")
         if lbl == "zero disks confirmation":
             # If option 4 was not accepted, the boot menu can remain at
@@ -11239,7 +11239,7 @@ def _load_diag_bootargs():
     raw_entries = []
     if bootargs_path:
         fname = os.path.basename(bootargs_path)
-        print(f"\n  📄 Found {fname} at {bootargs_path}")
+        print(f"\n  ðŸ“„ Found {fname} at {bootargs_path}")
         try:
             with open(bootargs_path) as _f:
                 for line in _f:
@@ -11247,10 +11247,10 @@ def _load_diag_bootargs():
                     if line and not line.startswith("#"):
                         raw_entries.append(line)
         except Exception as e:
-            print(f"  ❌ Failed to read {fname}: {e}")
+            print(f"  âŒ Failed to read {fname}: {e}")
             sys.exit(1)
     else:
-        print("\n  ℹ️  No bootargs.txt / bootargs file found. Enter bootargs interactively.")
+        print("\n  â„¹ï¸  No bootargs.txt / bootargs file found. Enter bootargs interactively.")
         print("     Format: option_name <value>   (do NOT include 'setenv')")
         print("     Examples:  bootarg.init.initrd 1   |   some_option true")
         print("     Press Enter on a blank line when done.")
@@ -11267,7 +11267,7 @@ def _load_diag_bootargs():
     for entry in raw_entries:
         # Reject entries that already include 'setenv'
         if entry.strip().lower().startswith("setenv"):
-            print(f"\n  ❌ Bootarg entry should NOT include 'setenv' prefix: {entry!r}")
+            print(f"\n  âŒ Bootarg entry should NOT include 'setenv' prefix: {entry!r}")
             print("     Please remove 'setenv' from your bootargs file/input and re-run.")
             sys.exit(1)
 
@@ -11275,21 +11275,21 @@ def _load_diag_bootargs():
         if not m:
             tokens = entry.strip().split()
             if len(tokens) == 1:
-                print(f"\n  ❌ Bootarg entry is missing a value: {entry!r}")
+                print(f"\n  âŒ Bootarg entry is missing a value: {entry!r}")
                 print("     Each entry must be exactly: option_name value")
             elif len(tokens) == 0:
-                print(f"\n  ❌ Empty bootarg entry encountered.")
+                print(f"\n  âŒ Empty bootarg entry encountered.")
             else:
-                print(f"\n  ❌ Invalid bootarg format (expected 'option_name value'): {entry!r}")
+                print(f"\n  âŒ Invalid bootarg format (expected 'option_name value'): {entry!r}")
             print("     Please correct your bootargs file/input and re-run.")
             sys.exit(1)
 
         validated.append(f"{m.group(1)} {m.group(2)}")
 
     if not validated:
-        print("  ⚠️  No bootargs loaded for --diag mode.")
+        print("  âš ï¸  No bootargs loaded for --diag mode.")
     else:
-        print(f"\n  📋 {len(validated)} diagnostic bootarg(s) to apply:")
+        print(f"\n  ðŸ“‹ {len(validated)} diagnostic bootarg(s) to apply:")
         for ba in validated:
             print(f"     setenv {ba}")
         print("")
@@ -11298,9 +11298,9 @@ def _load_diag_bootargs():
         except (EOFError, KeyboardInterrupt):
             confirm = ""
         if confirm == "n":
-            print("  ℹ️  Skipping diagnostic bootargs and continuing.")
+            print("  â„¹ï¸  Skipping diagnostic bootargs and continuing.")
             return []
-        print("  ✅ Bootargs confirmed.")
+        print("  âœ… Bootargs confirmed.")
 
     return validated
 
@@ -11332,7 +11332,7 @@ def _collect_license_config(ctx):
             break
         print("  Please enter 'key' or 'file'.")
 
-    # ── Key mode ──────────────────────────────────────────────────────────
+    # â”€â”€ Key mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if ltype == "key":
         ctx.license_mode = "key"
         ctx.license_keys = []
@@ -11351,7 +11351,7 @@ def _collect_license_config(ctx):
         else:
             print(f"  \u2705 {len(ctx.license_keys)} license key(s) staged for post-setup apply.")
 
-    # ── File mode ─────────────────────────────────────────────────────────
+    # â”€â”€ File mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     else:
         ctx.license_mode = "file"
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -11375,7 +11375,7 @@ def _collect_license_config(ctx):
             ctx.apply_to_globals()
             sys.exit(0)
 
-        # Folder exists — look for .txt / .nlf files only.
+        # Folder exists â€” look for .txt / .nlf files only.
         _VALID_LIC_EXTS = {".txt", ".nlf"}
         lic_candidates = sorted(
             f for f in os.listdir(ontap_dir)
@@ -11466,7 +11466,7 @@ def _apply_license(channel):
     except Exception:
         pass
 
-    # ── Key mode ──────────────────────────────────────────────────────────
+    # â”€â”€ Key mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if _license_mode == "key":
         for key in _license_keys:
             display = key[:8] + "..." if len(key) > 8 else key
@@ -11493,7 +11493,7 @@ def _apply_license(channel):
                         f"license add key {display} error: {exc}", prefix="ERROR"
                     )
 
-    # ── File mode ─────────────────────────────────────────────────────────
+    # â”€â”€ File mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     elif _license_mode == "file":
         # 1. Unlock diag account.
         print("\n  \U0001f513 Unlocking diag account...")
@@ -11526,13 +11526,13 @@ def _apply_license(channel):
                 )
                 if not _match_pw:
                     break
-                # Check the FULL output buffer first — "New password must be
+                # Check the FULL output buffer first â€” "New password must be
                 # different..." contains "new password" as a substring, so the
                 # needle alone is not a reliable discriminator.
                 _full_pw = (_out_pw + _match_pw).lower()
                 if "must be different" in _full_pw or "successfully changed" in _full_pw:
                     # Diag password already matches admin; ONTAP rejected the
-                    # change as identical.  This is the desired state — do not
+                    # change as identical.  This is the desired state â€” do not
                     # re-enter the password.
                     _pw_already_correct = True
                     direct_read_until_any(channel, ["::>", "::*>"], timeout=15)
@@ -11549,7 +11549,7 @@ def _apply_license(channel):
                 if _session_log:
                     _session_log.log(
                         "Diag password unchanged "
-                        "(ONTAP: new password must differ from old — already correct)"
+                        "(ONTAP: new password must differ from old â€” already correct)"
                     )
             else:
                 print("  \u2705 Diag account password set.")
@@ -11597,7 +11597,7 @@ def _apply_license(channel):
                     if _session_log:
                         _session_log.log_sent("<hidden>  (diag systemshell password)")
                 else:
-                    break  # cluster prompt — done
+                    break  # cluster prompt â€” done
         except Exception as exc:
             if _session_log:
                 _session_log.log(
@@ -11797,7 +11797,7 @@ def _apply_license(channel):
                 )
                 if _session_log:
                     _session_log.log(
-                        "license show: table empty – license file may not "
+                        "license show: table empty â€“ license file may not "
                         "have worked",
                         prefix="WARN",
                     )
@@ -11845,7 +11845,7 @@ def _apply_license(channel):
                         if _session_log:
                             _session_log.log_sent("<hidden>  (diag systemshell password)")
                     else:
-                        break  # cluster prompt — done
+                        break  # cluster prompt â€” done
                 _slog("systemshell kenv -u cleanup done")
             except Exception as exc:
                 if _session_log:
@@ -11883,7 +11883,7 @@ def _apply_ntp_servers(channel):
     if not servers:
         return
 
-    print("\n⏳ Configuring NTP servers...")
+    print("\nâ³ Configuring NTP servers...")
     if _session_log:
         _session_log.start_phase("NTP Configuration")
         _session_log.log(f"NTP servers to configure: {servers}")
@@ -11895,16 +11895,16 @@ def _apply_ntp_servers(channel):
                 channel, f"ntp server create -server {srv}", timeout=30
             )
             if any(w in out.lower() for w in ("error", "failed", "exists", "duplicate")):
-                print(f"  ⚠️  NTP server {srv}: unexpected response.")
+                print(f"  âš ï¸  NTP server {srv}: unexpected response.")
                 if _session_log:
                     _session_log.log(
                         f"ntp server create {srv} may have issues: {out[:200]}",
                         prefix="WARN",
                     )
             else:
-                print(f"  ✅ NTP server added: {srv}")
+                print(f"  âœ… NTP server added: {srv}")
         except Exception as exc:
-            print(f"  ❌ Error adding NTP server {srv}: {exc}")
+            print(f"  âŒ Error adding NTP server {srv}: {exc}")
             if _session_log:
                 _session_log.log(
                     f"ntp server create {srv} error: {exc}", prefix="ERROR"
@@ -11935,7 +11935,7 @@ def _classify_auth_failure(exc: BaseException) -> str:
     if ("authentication" in msg or "permission denied" in msg
             or "bad authentication" in msg or "auth failed" in msg):
         return "Incorrect username or password (permission denied)"
-    # Connection reset → BMC SSH temporarily offline.
+    # Connection reset â†’ BMC SSH temporarily offline.
     if (isinstance(exc, ConnectionResetError)
             or "connection reset" in msg or "reset by peer" in msg):
         return "SSH connection reset by peer (BMC SSH temporarily not responding)"
@@ -11987,7 +11987,7 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
 
     _ping_results = {}
     for _ip in _targets:
-        print(f"\n  🔍 Diagnosing SSH state for {_ip}...")
+        print(f"\n  ðŸ” Diagnosing SSH state for {_ip}...")
         _ping_results[_ip] = _diagnostic_ping_precheck(_ip, log=_session_log)
         with suppress(Exception):
             _diagnose_stale_bmc_sessions(_ip, log=_session_log)
@@ -12003,7 +12003,7 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
         _kh_ans = "n"
     if _kh_ans == "y":
         for _ip in _targets:
-            print(f"\n  🗑️  Removing known_hosts entry for {_ip}...")
+            print(f"\n  ðŸ—‘ï¸  Removing known_hosts entry for {_ip}...")
             with suppress(Exception):
                 _remove_bmc_from_known_hosts(_ip, log=_session_log)
         _ran_known_hosts_cleanup = True
@@ -12019,22 +12019,22 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
     if ipmi_only_ans == "y":
         for _ip in _targets:
             _pw = (bmc_passwords or {}).get(_ip, "") if isinstance(bmc_passwords, dict) else ""
-            print(f"\n  🔧 Running ipmitool sol deactivate for {_ip}...")
+            print(f"\n  ðŸ”§ Running ipmitool sol deactivate for {_ip}...")
             with suppress(Exception):
                 _ipmi_sol_deactivate(_ip, bmc_user, _pw, log=_session_log)
         _ran_ipmi_only = True
 
     _cleanup_actions = []
     if not _ran_known_hosts_cleanup:
-        _cleanup_actions.append("    • run 'ssh-keygen -R <BMC IP>' to clear known_hosts entries")
-    _cleanup_actions.append("    • drop in-process SSH clients we still hold")
+        _cleanup_actions.append("    â€¢ run 'ssh-keygen -R <BMC IP>' to clear known_hosts entries")
+    _cleanup_actions.append("    â€¢ drop in-process SSH clients we still hold")
     if not _ran_ipmi_only:
-        _cleanup_actions.append("    • run 'ipmitool sol deactivate' (if ipmitool is installed)")
+        _cleanup_actions.append("    â€¢ run 'ipmitool sol deactivate' (if ipmitool is installed)")
     if _auto_clear_stale_bmc:
-        _cleanup_actions.append("    • SIGTERM other-python PIDs holding stale BMC SSH sessions")
+        _cleanup_actions.append("    â€¢ SIGTERM other-python PIDs holding stale BMC SSH sessions")
     else:
         _cleanup_actions.append(
-            "    • SIGTERM other-python PIDs only if --auto-clear-stale-bmc was given (currently: OFF)"
+            "    â€¢ SIGTERM other-python PIDs only if --auto-clear-stale-bmc was given (currently: OFF)"
         )
     _cleanup_prompt = (
         "\n  Attempt the remaining stale SSH cleanup steps for these BMC(s)?"
@@ -12051,7 +12051,7 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
 
     for _ip in _targets:
         _pw = (bmc_passwords or {}).get(_ip, "") if isinstance(bmc_passwords, dict) else ""
-        print(f"\n  🧹 Cleaning stale SSH sessions for {_ip}...")
+        print(f"\n  ðŸ§¹ Cleaning stale SSH sessions for {_ip}...")
         with suppress(Exception):
             _clear_stale_bmc_sessions(
                 _ip,
@@ -12063,7 +12063,7 @@ def _offer_bmc_ssh_diagnostic(failing_ips, bmc_user, bmc_passwords,
                 run_ipmi_sol_deactivate=not _ran_ipmi_only,
             )
     print(
-        "\n  ✅ Cleanup pass complete. Re-run the script (or the same"
+        "\n  âœ… Cleanup pass complete. Re-run the script (or the same"
         " option) to retry BMC verification."
     )
 
@@ -12174,11 +12174,11 @@ def _prompt_bmc_target_scope(candidate_ips, scope_label="operation", prompt_pref
             except (EOFError, KeyboardInterrupt):
                 return []
             if not _custom_ip:
-                print(f"{prompt_prefix}  ⚠️  No custom IP entered.")
+                print(f"{prompt_prefix}  âš ï¸  No custom IP entered.")
                 continue
             return [_custom_ip]
         if not _pick.isdigit():
-            print(f"{prompt_prefix}  ⚠️  Enter a number from the list or 'custom'.")
+            print(f"{prompt_prefix}  âš ï¸  Enter a number from the list or 'custom'.")
             continue
         _i = int(_pick)
         if _i == _all_idx:
@@ -12186,7 +12186,7 @@ def _prompt_bmc_target_scope(candidate_ips, scope_label="operation", prompt_pref
         if 1 <= _i <= len(_numbered_targets):
             return [_numbered_targets[_i - 1][0]]
         print(
-            f"{prompt_prefix}  ⚠️  Out of range: {_pick} "
+            f"{prompt_prefix}  âš ï¸  Out of range: {_pick} "
             f"(valid: 1-{_all_idx})"
         )
 
@@ -12195,7 +12195,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                                   max_attempts=3, retry_pause=5):
     """Verify a list of BMCs via `_verify_bmc_ip`, retrying any that fail
     up to `max_attempts` times (default 3). Returns
-    (ok, bmc_user, failing_ips) — ok is True if every BMC eventually
+    (ok, bmc_user, failing_ips) â€” ok is True if every BMC eventually
     verified, bmc_user reflects any new shared username the operator
     entered while re-credentialing, and failing_ips lists the IPs that
     never verified (empty on success).
@@ -12208,7 +12208,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
     passwords for failing IPs.
     """
     pending = list(bmc_ips)
-    # Reasons (per IP) from the most recent attempt — used to decide
+    # Reasons (per IP) from the most recent attempt â€” used to decide
     # whether to re-prompt for credentials before the next retry.
     last_reasons: "dict[str, str]" = {}
 
@@ -12225,7 +12225,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
         if _attempt == 1:
             print("\n  Verifying BMC IP addresses via 'bmc status'...")
         else:
-            # ── Credential re-prompt for auth failures ────────────────
+            # â”€â”€ Credential re-prompt for auth failures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             _auth_ips = [ip for ip in pending
                          if _is_auth_reason(last_reasons.get(ip))]
             if _auth_ips:
@@ -12235,7 +12235,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                     # silently before re-prompting the operator.
                     if str(bmc_passwords.get(_ip, "") or "") == "":
                         continue
-                    print(f"    🔁 Trying blank-password fallback for {_ip} before re-prompt...")
+                    print(f"    ðŸ” Trying blank-password fallback for {_ip} before re-prompt...")
                     _ok_blank, _, _reason_blank = _verify_bmc_ip(_ip, bmc_user, "")
                     if _ok_blank:
                         bmc_passwords[_ip] = ""
@@ -12246,16 +12246,16 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                     else:
                         last_reasons[_ip] = _reason_blank or last_reasons.get(_ip) or "unknown failure"
                 if _blank_recovered:
-                    print("    ✅ Fallback password succeeded.")
+                    print("    âœ… Fallback password succeeded.")
                     print(
-                        f"    ✅ Blank-password fallback succeeded for: "
+                        f"    âœ… Blank-password fallback succeeded for: "
                         f"{', '.join(_blank_recovered)}"
                     )
                 _auth_ips = [ip for ip in pending
                              if _is_auth_reason(last_reasons.get(ip))]
             if _auth_ips:
                 print(
-                    f"\n  🔐 {len(_auth_ips)} BMC(s) failed with an "
+                    f"\n  ðŸ” {len(_auth_ips)} BMC(s) failed with an "
                     "auth/permission error. Re-enter credentials before "
                     "retrying:"
                 )
@@ -12275,7 +12275,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                     ).strip() or bmc_user
                     bmc_user = _new_user
                     if len(_existing_pw_values) == 1:
-                        print("    ↩️  Reusing current password for all failing BMCs.")
+                        print("    â†©ï¸  Reusing current password for all failing BMCs.")
                     else:
                         _new_pass_raw = getpass.getpass(
                             f"    BMC password for {_new_user} "
@@ -12308,7 +12308,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                         # downstream; warn if the operator changes it.
                         if _u != bmc_user:
                             print(
-                                f"      ℹ️  Note: a single username is "
+                                f"      â„¹ï¸  Note: a single username is "
                                 f"used for all BMCs. '{_u}' will replace "
                                 f"'{bmc_user}' for every BMC."
                             )
@@ -12316,7 +12316,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                         if _p_raw != "":
                             bmc_passwords[_ip] = _p
             print(
-                f"\n  ↻ Retrying verification for {len(pending)} BMC(s) "
+                f"\n  â†» Retrying verification for {len(pending)} BMC(s) "
                 f"(attempt {_attempt}/{max_attempts})..."
             )
             # Brief pause between attempts so a transient BMC blip can clear.
@@ -12327,16 +12327,16 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
         for _ip in pending:
             ok, _, reason = _verify_bmc_ip(_ip, bmc_user, bmc_passwords[_ip])
             if ok:
-                print(f"  ✅ {_ip} verified.")
+                print(f"  âœ… {_ip} verified.")
             else:
-                print(f"  ❌ {_ip} verification failed.")
+                print(f"  âŒ {_ip} verification failed.")
                 next_pending.append(_ip)
                 last_reasons[_ip] = reason or "unknown failure"
         pending = next_pending
         if not pending:
             return True, bmc_user, []
     print(
-        f"\n  ⚠️  {len(pending)} BMC(s) still failed verification after "
+        f"\n  âš ï¸  {len(pending)} BMC(s) still failed verification after "
         f"{max_attempts} attempts: {', '.join(pending)}"
     )
     return False, bmc_user, list(pending)
@@ -12364,14 +12364,14 @@ def _verify_bmc_ip(ip, username, password):
             reported = m.group(1)
             if reported == ip:
                 return True, reported, None
-            print(f"    ⚠️  IP mismatch: entered {ip}, BMC reports {reported}")
+            print(f"    âš ï¸  IP mismatch: entered {ip}, BMC reports {reported}")
             return False, reported, f"IP mismatch (BMC reports {reported})"
-        print(f"    ⚠️  'IP Address:' not found in 'bmc status' output for {ip}.")
+        print(f"    âš ï¸  'IP Address:' not found in 'bmc status' output for {ip}.")
         print(f"       Output snippet: {output[:300].strip()!r}")
         return False, None, "'IP Address:' not found in 'bmc status' output"
     except Exception as exc:
         _reason = _classify_auth_failure(exc)
-        print(f"    ⚠️  Cannot reach {ip}: {_reason}")
+        print(f"    âš ï¸  Cannot reach {ip}: {_reason}")
         if _session_log:
             _session_log.log(
                 f"[BMC verify] {ip} failed: {_reason} (raw: {exc})",
@@ -12392,7 +12392,7 @@ def _collect_netboot_bmcs():
     """
     import json as _json
 
-    # ── Fast-path: use already-loaded config data ──────────────────────────
+    # â”€â”€ Fast-path: use already-loaded config data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # If _config_data was populated from a config file before this function
     # was called, extract BMC addresses and credentials directly without
     # going through the interactive wizard.
@@ -12440,12 +12440,12 @@ def _collect_netboot_bmcs():
     ):
         _ci_ips, _ci_user, _ci_pws = _bmcs_from_data(_config_data)
         if _ci_ips:
-            print(f"\n  📄 Using BMC addresses from loaded config file ({len(_ci_ips)} node(s)):")
+            print(f"\n  ðŸ“„ Using BMC addresses from loaded config file ({len(_ci_ips)} node(s)):")
             for _ip in _ci_ips:
-                print(f"     • {_ip}  (user={_ci_user})")
+                print(f"     â€¢ {_ip}  (user={_ci_user})")
             return _ci_ips, _ci_user, _ci_pws
 
-    # ── Look for existing BMC config files ────────────────────────────────
+    # â”€â”€ Look for existing BMC config files â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _candidates = []
     try:
         _script_dir_nb = os.path.dirname(os.path.abspath(__file__))
@@ -12504,8 +12504,8 @@ def _collect_netboot_bmcs():
 
         if _auto_idx is not None:
             _fpath, _data, _bmc_ips = _candidates[_auto_idx]
-            print(f"\n  ✅ Auto-selected {_fpath}  ({len(_bmc_ips)} node(s): {', '.join(_bmc_ips)})")
-            # Use the file data directly — fall through to the credential
+            print(f"\n  âœ… Auto-selected {_fpath}  ({len(_bmc_ips)} node(s): {', '.join(_bmc_ips)})")
+            # Use the file data directly â€” fall through to the credential
             # extraction block but bypass the interactive selection prompt.
             _sel = str(_auto_idx + 1)
         else:
@@ -12525,11 +12525,11 @@ def _collect_netboot_bmcs():
                     break  # fall through to manual entry
                 if _sel.isdigit() and 1 <= int(_sel) <= len(_candidates):
                     _fpath, _data, _bmc_ips = _candidates[int(_sel) - 1]
-                    print(f"\n  ✅ Loaded {len(_bmc_ips)} BMC(s) from {_fpath}")
+                    print(f"\n  âœ… Loaded {len(_bmc_ips)} BMC(s) from {_fpath}")
                     for _ip in _bmc_ips:
-                        print(f"     • {_ip}")
+                        print(f"     â€¢ {_ip}")
                     break
-                print("  ⚠️  Invalid selection.")
+                print("  âš ï¸  Invalid selection.")
 
         if _auto_idx is not None or (_sel.isdigit() and int(_sel) > 0):
             # Filter the BMC list by role based on operation mode:
@@ -12551,21 +12551,21 @@ def _collect_netboot_bmcs():
                     _role_ips = ([_pn_bmc] if _pn_bmc else []) + _sn_bmcs or _bmc_ips
                 _bmc_ips = [ip for ip in _role_ips if ip]
                 if _bmc_ips and _bmc_ips != _role_ips:
-                    print(f"\n  ℹ️  Filtered to {len(_bmc_ips)} BMC(s) for this operation mode.")
+                    print(f"\n  â„¹ï¸  Filtered to {len(_bmc_ips)} BMC(s) for this operation mode.")
             elif _operation_mode == 2:
                 # Legacy format: skip position-0 (primary); use rest as peers.
                 _legacy_all = [str(n["bmc"]) for n in (_data.get("nodes") or [])
                                if isinstance(n, dict) and n.get("bmc")]
                 if len(_legacy_all) > 1:
                     _bmc_ips = _legacy_all[1:]
-                    print(f"\n  ℹ️  Mode 2: using {len(_bmc_ips)} secondary node(s) from config.")
+                    print(f"\n  â„¹ï¸  Mode 2: using {len(_bmc_ips)} secondary node(s) from config.")
             elif _operation_mode == 1:
                 # Legacy format: use only position-0 as primary.
                 _legacy_all = [str(n["bmc"]) for n in (_data.get("nodes") or [])
                                if isinstance(n, dict) and n.get("bmc")]
                 if _legacy_all:
                     _bmc_ips = [_legacy_all[0]]
-                    print("\n  ℹ️  Mode 1: using primary node only from config.")
+                    print("\n  â„¹ï¸  Mode 1: using primary node only from config.")
 
             # Try to pull credentials from the file.
             _bmc_user = None
@@ -12603,7 +12603,7 @@ def _collect_netboot_bmcs():
                     if _override:
                         _bmc_user = _override
                 else:
-                    print(f"  📄 BMC username from config: {_bmc_user}")
+                    print(f"  ðŸ“„ BMC username from config: {_bmc_user}")
 
             # Fill in any missing passwords.
             _missing = [_ip for _ip in _bmc_ips
@@ -12666,7 +12666,7 @@ def _collect_netboot_bmcs():
         # end if _candidates
 
     while True:  # outer retry loop on verification failure
-        # ── IP collection ──────────────────────────────────────────────────
+        # â”€â”€ IP collection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         bmc_ips = []
         print("\n  Enter the BMC IP address for each node.")
         print("  Press Enter on a blank line when done.")
@@ -12681,7 +12681,7 @@ def _collect_netboot_bmcs():
             print("  No BMC IP addresses entered. Aborting.")
             return None, None, None
 
-        # ── Optional JSON save ─────────────────────────────────────────────
+        # â”€â”€ Optional JSON save â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         save_ans = input("\n  Save these BMC addresses to a JSON file for later"
                          " use? [y/N]: ").strip().lower()
         if save_ans == "y":
@@ -12693,11 +12693,11 @@ def _collect_netboot_bmcs():
             try:
                 with open(json_path, "w", encoding="utf-8") as _f:
                     _json.dump({"netboot_bmcs": bmc_ips}, _f, indent=2)
-                print(f"  ✅ Saved to {json_path}")
+                print(f"  âœ… Saved to {json_path}")
             except Exception as exc:
-                print(f"  ⚠️  Could not save JSON: {exc}")
+                print(f"  âš ï¸  Could not save JSON: {exc}")
 
-        # ── Credentials ────────────────────────────────────────────────────
+        # â”€â”€ Credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         print("\n  BMC credentials:")
         same_ans = input("  Use the same username/password for all BMCs? [Y/n]: ").strip().lower()
         bmc_user = input("  BMC username: ").strip() or "admin"
@@ -12713,7 +12713,7 @@ def _collect_netboot_bmcs():
                 else:
                     bmc_passwords[ip] = getpass.getpass(f"  Password for {ip}: ")
 
-        # ── Verification (auto-retries each failing BMC up to 3 times) ─────
+        # â”€â”€ Verification (auto-retries each failing BMC up to 3 times) â”€â”€â”€â”€â”€
         all_ok, bmc_user, failing_ips = _verify_bmc_list_with_retries(
             bmc_ips, bmc_user, bmc_passwords, max_attempts=3,
         )
@@ -12744,7 +12744,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
     (None, None, "ssh"/"loader_timeout") on failure.
     """
     _preclean_bmc_known_hosts(host, log=_session_log, context="before BMC login")
-    print(f"\n  🔁 [{host}] Connecting and moving to LOADER...")
+    print(f"\n  ðŸ” [{host}] Connecting and moving to LOADER...")
     if node_log:
         _par_write(node_log, f"\n=== _bmc_reach_loader: {host} ===\n")
     try:
@@ -12754,7 +12754,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             interactive=False, fallback_passwords=fallback_passwords,
         )
     except Exception as exc:
-        print(f"  ❌ [{host}] SSH failed: {exc}")
+        print(f"  âŒ [{host}] SSH failed: {exc}")
         return None, None, "ssh"
 
     try:
@@ -12762,31 +12762,23 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
 
         # Reach BMC '>' prompt.
         if not _reach_bmc_prompt(ch, node_log=node_log):
-            print(f"  ❌ [{host}] No BMC prompt received.")
+            print(f"  âŒ [{host}] No BMC prompt received.")
             ch.close()
             client.close()
             return None, None, "ssh"
 
-        # Check if already at LOADER before issuing system reset.
-        # Run a second, longer probe before reset to avoid unnecessary reboots
-        # when the console is slow to repaint LOADER after attach/takeover.
-        _at_loader = _already_at_loader(ch, probe_timeout=25, label=host, node_log=node_log)
-        if not _at_loader:
-            print(f"  ⏳ [{host}] LOADER not confirmed yet; re-checking before reset...")
-            _at_loader = _already_at_loader(
-                ch, probe_timeout=45, label=host, node_log=node_log
+        def _reset_and_enter_console(reason: str = "initial"):
+            direct_send_and_wait(
+                ch, "system reset", "y/n", timeout=10,
+                auto_respond="y", node_log=node_log
             )
-        if not _at_loader:
-            # system reset (auto-confirm if prompted).
-            direct_send_and_wait(ch, "system reset", "y/n", timeout=10,
-                                 auto_respond="y", node_log=node_log)
-            print(f"  ⏳ [{host}] Node rebooting...")
+            print(f"  â³ [{host}] Node rebooting...")
+            if node_log:
+                _par_write(node_log, f"\n>>> [reset] reason={reason}\n")
             time.sleep(3)
             direct_read_until(ch, ">", timeout=20, node_log=node_log)
-
-            # system console.
             ch.send("system console\r")
-            out2, matched2 = direct_read_until_any(
+            _out2, matched2 = direct_read_until_any(
                 ch,
                 ["y/n", "ctrl-d", "serial console", "loader-", "autoboot"],
                 timeout=10,
@@ -12795,29 +12787,49 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             if matched2 and "y/n" in matched2.lower():
                 ch.send("y\r")
                 time.sleep(2)
+
+        # Check if already at LOADER before issuing system reset.
+        _at_loader = _already_at_loader(ch, probe_timeout=25, label=host, node_log=node_log)
+        if not _at_loader:
+            print(f"  â³ [{host}] LOADER not confirmed yet; re-checking before reset...")
+            _at_loader = _already_at_loader(
+                ch, probe_timeout=45, label=host, node_log=node_log
+            )
+        if not _at_loader:
+            _reset_and_enter_console("initial")
         else:
-            print(f"  ✅ [{host}] Already at LOADER — system reset skipped.")
+            print(f"  âœ… [{host}] Already at LOADER â€” system reset skipped.")
 
         # Monitor for AUTOBOOT interrupt and LOADER prompt.
-        # Raw console output (BIOS init, driver load, etc.) goes to node_log
-        # only; status milestones are printed to the terminal.
-        print(f"  ⏳ [{host}] Waiting for AUTOBOOT / LOADER prompt...")
+        print(f"  â³ [{host}] Waiting for AUTOBOOT / LOADER prompt...")
         _print_wait_log_hint(node_log=node_log)
-        # Some BMC consoles stay silent until Enter is pressed.
         with suppress(Exception):
             ch.send("\r")
         buf = ""
         start = time.monotonic()
         loader_seen = False
+        _login_recovery_attempts = 0
         _next_progress = start + 30
+        _next_ctrlc_probe = start + 8
+        _ctrlc_probe_count = 0
         while time.monotonic() - start < timeout:
             if _shutdown_event.is_set():
                 break
             now = time.monotonic()
             if now >= _next_progress:
                 elapsed = int(now - start)
-                print(f"  ⏳ [{host}] Still booting... ({elapsed}s elapsed)")
+                print(f"  â³ [{host}] Still booting... ({elapsed}s elapsed)")
                 _next_progress = now + 30
+            if now >= _next_ctrlc_probe:
+                _ctrlc_probe_count += 1
+                if _ctrlc_probe_count == 1 or (_ctrlc_probe_count % 4 == 0):
+                    print(f"  ðŸ›‘ [{host}] Sending proactive Ctrl+C pulse while waiting for LOADER...")
+                if node_log:
+                    _par_write(node_log, f"\n>>> ^C (proactive pulse #{_ctrlc_probe_count})\n")
+                for _ in range(2):
+                    ch.send("\x03")
+                    time.sleep(0.15)
+                _next_ctrlc_probe = now + 8
             if ch.recv_ready():
                 chunk = ch.recv(4096).decode("utf-8", errors="replace")
                 buf += chunk
@@ -12826,14 +12838,35 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
                 else:
                     sys.stdout.write(chunk)
                     sys.stdout.flush()
-                if "starting autoboot press ctrl-c to abort" in buf.lower():
-                    print(f"  🛑 [{host}] AUTOBOOT detected – sending Ctrl+C...")
+                _buf_lower = buf.lower()
+                if ("starting autoboot press ctrl-c to abort" in _buf_lower
+                        or ("autoboot" in _buf_lower and "ctrl-c" in _buf_lower)):
+                    print(f"  ðŸ›‘ [{host}] AUTOBOOT detected â€“ sending Ctrl+C...")
                     if node_log:
                         _par_write(node_log, "\n>>> ^C (interrupting autoboot)\n")
                     for _ in range(6):
                         ch.send("\x03")
                         time.sleep(0.3)
                     buf = ""
+                    _next_ctrlc_probe = time.monotonic() + 8
+                elif "login:" in _buf_lower:
+                    if _login_recovery_attempts >= 1:
+                        print(f"  âš ï¸  [{host}] Reached login prompt again after retry; LOADER not reached.")
+                        break
+                    _login_recovery_attempts += 1
+                    print(f"  âš ï¸  [{host}] Reached ONTAP login before LOADER; retrying reset to catch AUTOBOOT...")
+                    try:
+                        ch.send("\x04")
+                        time.sleep(1)
+                        direct_read_until(ch, ">", timeout=10, node_log=node_log)
+                    except Exception:
+                        pass
+                    _reset_and_enter_console("autoboot-missed-retry")
+                    buf = ""
+                    start = time.monotonic()
+                    _next_progress = start + 30
+                    _next_ctrlc_probe = start + 8
+                    continue
                 elif _LOADER_PROMPT_RE.search(buf):
                     loader_seen = True
                     break
@@ -12842,16 +12875,16 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             time.sleep(0.1)
 
         if not loader_seen:
-            print(f"  ❌ [{host}] LOADER prompt not detected within {timeout}s.")
+            print(f"  âŒ [{host}] LOADER prompt not detected within {timeout}s.")
             ch.close()
             client.close()
             return None, None, "loader_timeout"
 
-        print(f"  ✅ [{host}] At LOADER prompt.")
+        print(f"  âœ… [{host}] At LOADER prompt.")
         return client, ch, None
 
     except Exception as exc:
-        print(f"  ❌ [{host}] Error reaching LOADER: {exc}")
+        print(f"  âŒ [{host}] Error reaching LOADER: {exc}")
         try:
             ch.close()
         except Exception:
@@ -12871,7 +12904,7 @@ def _bmc_attach_console_without_reset(host, username, password, node_log=None,
     ``_probe_console_prompt_state()``. On failure returns
     ``(None, None, "ssh", "")``.
     """
-    print(f"\n  🔁 [{host}] Reconnecting without reset to inspect current console state...")
+    print(f"\n  ðŸ” [{host}] Reconnecting without reset to inspect current console state...")
     if node_log:
         _par_write(node_log, f"\n=== _bmc_attach_console_without_reset: {host} ===\n")
     try:
@@ -12881,13 +12914,13 @@ def _bmc_attach_console_without_reset(host, username, password, node_log=None,
             interactive=False, fallback_passwords=fallback_passwords,
         )
     except Exception as exc:
-        print(f"  ❌ [{host}] SSH failed during non-destructive reconnect: {exc}")
+        print(f"  âŒ [{host}] SSH failed during non-destructive reconnect: {exc}")
         return None, None, "ssh", ""
 
     try:
         ch = _open_shell(client)
         if not _reach_bmc_prompt(ch, node_log=node_log):
-            print(f"  ❌ [{host}] No BMC prompt received.")
+            print(f"  âŒ [{host}] No BMC prompt received.")
             ch.close()
             client.close()
             return None, None, "ssh", ""
@@ -12905,7 +12938,7 @@ def _bmc_attach_console_without_reset(host, username, password, node_log=None,
             _state = _state2
         return client, ch, _state, _out or ""
     except Exception as exc:
-        print(f"  ❌ [{host}] Error probing current console state: {exc}")
+        print(f"  âŒ [{host}] Error probing current console state: {exc}")
         try:
             ch.close()
         except Exception:
@@ -13002,15 +13035,15 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                                   static_ifconfig=None, phase_name=""):
     """Run the netboot install sequence on a channel already at LOADER prompt.
 
-    *static_ifconfig* — when supplied, a dict with keys ``port``, ``ip``,
+    *static_ifconfig* â€” when supplied, a dict with keys ``port``, ``ip``,
     ``netmask``, and ``gateway`` used to configure the LOADER interface
-    statically (``priv set diag`` + ``ifconfig <port> -addr=… -mask=… -gw=…``)
+    statically (``priv set diag`` + ``ifconfig <port> -addr=â€¦ -mask=â€¦ -gw=â€¦``)
     instead of the default ``ifconfig e0M -auto``.
 
     Steps:
       1. ifconfig (DHCP -auto or static via priv set diag)
       2. netboot <pkg_url>
-      3. Wait for boot menu → select option 7
+      3. Wait for boot menu â†’ select option 7
       4. Answer all install prompts
       5. Wait for final reboot signal
 
@@ -13039,7 +13072,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                 log.log_sent(cmd)
             channel.send(cmd + "\r")
 
-    # ── 1. ifconfig ────────────────────────────────────────────────────────
+    # â”€â”€ 1. ifconfig â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if static_ifconfig:
         _iface = static_ifconfig.get("port") or "e0M"
         _addr  = static_ifconfig.get("ip") or ""
@@ -13059,7 +13092,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             direct_send_and_wait(channel, "priv set diag", "LOADER-", timeout=15)
             output = direct_send_and_wait(channel, _ifc_cmd, "LOADER-", timeout=60)
         if "loader-" not in output.lower():
-            _status_ts(f"  ⚠️  [{node_label}] LOADER prompt not seen after static ifconfig; continuing...")
+            _status_ts(f"  âš ï¸  [{node_label}] LOADER prompt not seen after static ifconfig; continuing...")
     else:
         _status_ts(f"\n  [{node_label}] Running ifconfig e0M -auto...")
         if log:
@@ -13070,13 +13103,13 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         else:
             output = direct_send_and_wait(channel, "ifconfig e0M -auto", "LOADER-", timeout=60)
         if "loader-" not in output.lower():
-            _status_ts(f"  ⚠️  [{node_label}] LOADER prompt not seen after ifconfig; continuing...")
+            _status_ts(f"  âš ï¸  [{node_label}] LOADER prompt not seen after ifconfig; continuing...")
 
-    # ── 2+3. netboot + wait for boot menu (retry on download failure) ────────
+    # â”€â”€ 2+3. netboot + wait for boot menu (retry on download failure) â”€â”€â”€â”€â”€â”€â”€â”€
     _NETBOOT_MAX_ATTEMPTS = 3
     menu_sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
     sig_lower = [s.lower() for s in menu_sigs]
-    # Patterns that mean the download itself failed — no point waiting 900s
+    # Patterns that mean the download itself failed â€” no point waiting 900s
     # for a boot menu that will never arrive.
     _netboot_fail_sigs = [
         "download failed",          # "Download failed: Socket is not connected"
@@ -13105,7 +13138,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                     f"{_nb_attempt}/{_NETBOOT_MAX_ATTEMPTS}: {pkg_url}"
                 )
         _send_raw(f"netboot {pkg_url}")
-        _status_ts(f"\n  [{node_label}] 📥 Downloading ONTAP image — this may take several minutes...")
+        _status_ts(f"\n  [{node_label}] ðŸ“¥ Downloading ONTAP image â€” this may take several minutes...")
 
         # Download-phase progress thread: emits a status line every 30 s so
         # the terminal doesn't look hung while the image transfers.
@@ -13114,11 +13147,11 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         def _dl_progress(_ev=_dl_stop, _t0=_dl_t0):
             while not _ev.wait(30):
                 elapsed = time.monotonic() - _t0
-                _status_ts(f"  ⏳ [{node_label}] Image downloading... ({elapsed:.0f}s elapsed)")
+                _status_ts(f"  â³ [{node_label}] Image downloading... ({elapsed:.0f}s elapsed)")
         _dl_thread = threading.Thread(target=_dl_progress, daemon=True)
         _dl_thread.start()
 
-        # Wait for boot menu ────────────────────────────────────────────────
+        # Wait for boot menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         buf = ""
         buf_lower = ""
         start = time.monotonic()
@@ -13161,11 +13194,11 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             _dl_thread.join(timeout=1.0)
 
         if menu_detected:
-            break  # success — exit retry loop
+            break  # success â€” exit retry loop
         if netboot_failed:
             if _nb_attempt < _NETBOOT_MAX_ATTEMPTS:
                 _status_ts(
-                    f"\n  ⚠️  [{node_label}] Netboot download failed "
+                    f"\n  âš ï¸  [{node_label}] Netboot download failed "
                     f"('{netboot_fail_reason}'); retrying in 10s..."
                 )
                 if log:
@@ -13184,25 +13217,25 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                 _recv(["LOADER-", "loader-"], timeout=30)
             # else: fall through; post-loop block reports the final error
         else:
-            break  # timeout with no menu and no download error — don't retry
+            break  # timeout with no menu and no download error â€” don't retry
 
     if netboot_failed:
         _status_ts(
-            f"  ❌ [{node_label}] Netboot download failed "
+            f"  âŒ [{node_label}] Netboot download failed "
             f"('{netboot_fail_reason}' seen in bootloader output). "
             f"Check that the HTTP server IP is reachable from the node's "
             f"management interface and that the package file exists."
         )
         if log:
             log.log(
-                f"[{node_label}] netboot aborted — download failure "
+                f"[{node_label}] netboot aborted â€” download failure "
                 f"(trigger: '{netboot_fail_reason}')",
                 prefix="ERROR",
             )
         return False
 
     if not menu_detected:
-        _status_ts(f"  ❌ [{node_label}] Boot menu not detected after netboot.")
+        _status_ts(f"  âŒ [{node_label}] Boot menu not detected after netboot.")
         if log:
             log.log(f"[{node_label}] boot menu not detected after netboot", prefix="ERROR")
         return False
@@ -13210,22 +13243,22 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     time.sleep(1)  # let the selection prompt fully render
     _whole_dl_elapsed = time.monotonic() - _whole_dl_t0  # GAP-2: download span
     _inst_t0 = time.monotonic()                          # GAP-3: install span start
-    _status_ts(f"\n  ✅ [{node_label}] Download complete — boot menu detected.")
-    _status_ts(f"  [{node_label}] 💿 Installing ONTAP image (selecting option 7)...")
+    _status_ts(f"\n  âœ… [{node_label}] Download complete â€” boot menu detected.")
+    _status_ts(f"  [{node_label}] ðŸ’¿ Installing ONTAP image (selecting option 7)...")
     if log:
-        log.log(f"[{node_label}] boot menu detected – sending option 7")
+        log.log(f"[{node_label}] boot menu detected â€“ sending option 7")
     _send_raw("7")
     time.sleep(2)
 
-    # ── 4. Answer install prompts ──────────────────────────────────────────
+    # â”€â”€ 4. Answer install prompts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Prompt 1: "Do you want to continue? {y|n}"
     out, m = _recv(
         ["do you want to continue", "url for the package", "selection (1-"],
         timeout=120,
     )
     if m and "selection (1-" in m.lower():
-        # menu re-appeared — option 7 wasn't registered; retry once
-        _status_ts(f"  ↻ [{node_label}] Resending option 7...")
+        # menu re-appeared â€” option 7 wasn't registered; retry once
+        _status_ts(f"  â†» [{node_label}] Resending option 7...")
         if log:
             log.log(f"[{node_label}] resending boot menu option 7")
         _send_raw("7")
@@ -13234,12 +13267,12 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             timeout=120,
         )
     if m and "do you want to continue" in m.lower():
-        _status_ts(f"  [{node_label}] Answering 'do you want to continue?' → y")
+        _status_ts(f"  [{node_label}] Answering 'do you want to continue?' â†’ y")
         _send_raw("y")
     elif m and "url for the package" in m.lower():
         pass  # ONTAP skipped the first question; fall through
     else:
-        _status_ts(f"  ⚠️  [{node_label}] Did not see continuation prompt; continuing anyway...")
+        _status_ts(f"  âš ï¸  [{node_label}] Did not see continuation prompt; continuing anyway...")
 
     # Prompt 2: "What is the URL for the package?"
     out, m = _recv(
@@ -13268,7 +13301,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             log.add_phase_subtiming(phase_name, f"  [{node_label}] image download", _whole_dl_elapsed)
             log.add_phase_subtiming(phase_name, f"  [{node_label}] image install", _inst_e)
         _send_raw("y")
-        _status_ts(f"\n  ✅ [{node_label}] Image installed — 🔄 node rebooting...")
+        _status_ts(f"\n  âœ… [{node_label}] Image installed â€” ðŸ”„ node rebooting...")
         if log:
             log.log(f"[{node_label}] reboot triggered; install complete")
         return True
@@ -13279,9 +13312,9 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         timeout=300,
     )
     if m and "user name" in m.lower():
-        _status_ts(f"  [{node_label}] User name prompt → (blank)")
+        _status_ts(f"  [{node_label}] User name prompt â†’ (blank)")
         if nf and hasattr(nf, "name"):
-            _status_ts(f"  [{node_label}] 📝 Installing — log: {nf.name}")
+            _status_ts(f"  [{node_label}] ðŸ“ Installing â€” log: {nf.name}")
         _send_raw("")
         # Start a periodic progress reporter so the terminal doesn't look hung.
         _ps = threading.Event()
@@ -13290,25 +13323,25 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         def _progress_reporter(_ev=_ps, _t0=_install_start):
             while not _ev.wait(30):
                 elapsed = time.monotonic() - _t0
-                _status_ts(f"  ⏳ [{node_label}] 💿 Image installing... ({elapsed:.0f}s elapsed)")
+                _status_ts(f"  â³ [{node_label}] ðŸ’¿ Image installing... ({elapsed:.0f}s elapsed)")
         threading.Thread(target=_progress_reporter, daemon=True).start()
         # Fall through to prompt 4.
     elif m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
         # ONTAP skipped both username and backup prompts.
-        _status_ts(f"  [{node_label}] Reboot prompt (early, username+backup skipped) → y")
+        _status_ts(f"  [{node_label}] Reboot prompt (early, username+backup skipped) â†’ y")
         return _do_reboot()
     elif m and "restore the backup" in m.lower():
         # ONTAP skipped the username prompt; handle backup restore inline.
-        _status_ts(f"  [{node_label}] Restore backup prompt (username skipped) → n")
+        _status_ts(f"  [{node_label}] Restore backup prompt (username skipped) â†’ n")
         if log:
-            log.log(f"[{node_label}] restore backup (username skipped) → n")
+            log.log(f"[{node_label}] restore backup (username skipped) â†’ n")
         _send_raw("n")
         # Skip prompt 4's _recv so we don't double-consume.
         out, m = _recv(["reboot now", "do you want to reboot"], timeout=180)
         if m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
             return _do_reboot()
-        _status_ts(f"  ⚠️  [{node_label}] Reboot prompt not seen; node may reboot automatically.")
-        _status_ts(f"  ✅ [{node_label}] Install complete.")
+        _status_ts(f"  âš ï¸  [{node_label}] Reboot prompt not seen; node may reboot automatically.")
+        _status_ts(f"  âœ… [{node_label}] Install complete.")
         if log:
             log.log(f"[{node_label}] install complete (reboot prompt not seen)")
         if log and phase_name:
@@ -13322,15 +13355,15 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         timeout=600,
     )
     if m and "restore the backup" in m.lower():
-        _status_ts(f"  [{node_label}] Restore backup prompt → n")
+        _status_ts(f"  [{node_label}] Restore backup prompt â†’ n")
         if log:
-            log.log(f"[{node_label}] restore backup → n")
+            log.log(f"[{node_label}] restore backup â†’ n")
         _send_raw("n")
         # Fall through so prompt 5 can catch the reboot prompt that follows.
 
     elif m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
         # ONTAP skipped the backup-restore step and jumped straight to reboot.
-        _status_ts(f"  [{node_label}] Reboot prompt (early, backup skipped) → y")
+        _status_ts(f"  [{node_label}] Reboot prompt (early, backup skipped) â†’ y")
         return _do_reboot()
 
     # Prompt 5: "Do you want to reboot now? {y|n}"
@@ -13339,8 +13372,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         return _do_reboot()
     if _progress_stop[0] is not None:
         _progress_stop[0].set()
-    _status_ts(f"  ⚠️  [{node_label}] Reboot prompt not seen; node may reboot automatically.")
-    _status_ts(f"  ✅ [{node_label}] Install complete.")
+    _status_ts(f"  âš ï¸  [{node_label}] Reboot prompt not seen; node may reboot automatically.")
+    _status_ts(f"  âœ… [{node_label}] Install complete.")
     if log:
         log.log(f"[{node_label}] install complete (reboot prompt not seen)")
     if log and phase_name:
@@ -13393,7 +13426,7 @@ def _peer_reinit_worker(ip, ctx):
 
     try:
         # Wait for boot menu, then send option 4.
-        _status(f"  ⏳ [{ip}] Waiting for boot menu (peer)...")
+        _status(f"  â³ [{ip}] Waiting for boot menu (peer)...")
         _buf_lower = ""
         _start = time.monotonic()
         _found = False
@@ -13403,7 +13436,7 @@ def _peer_reinit_worker(ip, ctx):
                 break
             _elapsed = time.monotonic() - _start
             if time.monotonic() - _last_progress >= 120:
-                _status(f"  ⏳ [{ip}] Still waiting for boot menu... ({int(_elapsed)}s elapsed)")
+                _status(f"  â³ [{ip}] Still waiting for boot menu... ({int(_elapsed)}s elapsed)")
                 try:
                     _keepalive_ch = (_peer_rc_ctx.get("channel")
                                      if (_peer_rc_ctx and _peer_rc_ctx.get("channel") is not None)
@@ -13439,15 +13472,15 @@ def _peer_reinit_worker(ip, ctx):
             time.sleep(0.1)
 
         if not _found:
-            _status(f"  ⚠️  [{ip}] Boot menu not detected for peer.")
+            _status(f"  âš ï¸  [{ip}] Boot menu not detected for peer.")
             with peer_lock:
                 peer_errors.append((ip, "boot menu timeout"))
             return
 
         time.sleep(1)
-        _status(f"  ✅ [{ip}] Boot menu detected – selecting option 4...")
+        _status(f"  âœ… [{ip}] Boot menu detected â€“ selecting option 4...")
         if log:
-            log.log(f"[{ip}] boot menu detected – sending option 4")
+            log.log(f"[{ip}] boot menu detected â€“ sending option 4")
         if _pnf:
             _par_write(_pnf, "\n>>> sending option 4\n")
         peer_ch.send("4\r")
@@ -13468,12 +13501,12 @@ def _peer_reinit_worker(ip, ctx):
             peer_ch, ip, admin_password, cluster_ips_out, ip, node_log=_pnf)
 
         if _cluster_ip is None:
-            _status(f"  ⚠️  [{ip}] Could not capture cluster IP; "
+            _status(f"  âš ï¸  [{ip}] Could not capture cluster IP; "
                     "node will not be added via cluster add-node.")
             with peer_lock:
                 peer_errors.append((ip, "cluster IP capture failed"))
         else:
-            _status(f"  ✅ [{ip}] Ready for cluster add-node (IP: {_cluster_ip}).")
+            _status(f"  âœ… [{ip}] Ready for cluster add-node (IP: {_cluster_ip}).")
     finally:
         # Restore stdout; log file is closed after all workers finish.
         sys.stdout = _prev_stdout
@@ -13492,7 +13525,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     _loader_env_stage_enabled = None
     _bootarg_check_enabled = None
 
-    # ── Shared state ───────────────────────────────────────────────────────
+    # â”€â”€ Shared state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Serializes the brief status lines printed to the console by parallel
     # worker threads, so they never interleave mid-line.
     _stdout_lock = threading.Lock()
@@ -13506,9 +13539,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         # Mirror to the session log so the log file is a complete record.
         if log:
             stripped = msg.strip()
-            if "❌" in stripped:
+            if "âŒ" in stripped:
                 prefix = "ERROR"
-            elif "⚠️" in stripped:
+            elif "âš ï¸" in stripped:
                 prefix = "WARN"
             else:
                 prefix = "INFO"
@@ -13525,16 +13558,16 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         _log_dir = os.path.join(_log_base, "logs", datetime.now().strftime("%Y%m%d_%H%M%S"))
         os.makedirs(_log_dir, exist_ok=True)
 
-    # Per-node file handles – opened before workers start, closed at the end.
+    # Per-node file handles â€“ opened before workers start, closed at the end.
     _node_files = {}   # {ip: file}
 
-    # ── Step 1: Collect BMC info ───────────────────────────────────────────
+    # â”€â”€ Step 1: Collect BMC info â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if resuming and _checkpoint and _checkpoint.bmc_ips:
         # Re-use the saved BMC IP list; ask only for passwords (never stored).
         bmc_ips = _checkpoint.bmc_ips
-        print(f"\n  🔖 Resuming with {len(bmc_ips)} BMC(s) from checkpoint: "
+        print(f"\n  ðŸ”– Resuming with {len(bmc_ips)} BMC(s) from checkpoint: "
               f"{', '.join(bmc_ips)}")
-        print("  (Passwords are not stored in the checkpoint — please re-enter.)")
+        print("  (Passwords are not stored in the checkpoint â€” please re-enter.)")
         _same = input(
             "  Use the same password for all BMCs? [Y/n]: "
         ).strip().lower()
@@ -13581,15 +13614,15 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     log.log("4b: cluster admin password pre-collected (BMC password was empty)")
                 break
 
-    # ── Step 1b: Package selection (ask now, before operations begin) ──────
+    # â”€â”€ Step 1b: Package selection (ask now, before operations begin) â”€â”€â”€â”€â”€â”€
     if log:
-        log.start_phase("4b – Package Selection")
+        log.start_phase("4b â€“ Package Selection")
     _cp_src_type  = _checkpoint.get_param("netboot_src_type")  if (resuming and _checkpoint) else None
     _cp_src_value = _checkpoint.get_param("netboot_src_value") if (resuming and _checkpoint) else None
     if resuming and _cp_src_type is not None:
         src_type  = _cp_src_type
         src_value = _cp_src_value
-        print(f"\n  🔖 Resuming: using saved package: {src_value}")
+        print(f"\n  ðŸ”– Resuming: using saved package: {src_value}")
         if log:
             log.end_phase(note=f"resumed from checkpoint: {src_value}")
     else:
@@ -13603,12 +13636,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if log:
             log.end_phase()
 
-    # ── Step 1c: Reinit questions (ask now, before operations begin) ───────
+    # â”€â”€ Step 1c: Reinit questions (ask now, before operations begin) â”€â”€â”€â”€â”€â”€â”€
     if install_only:
         _do_reinit = False
         _mode_sel = None
         _cp_skip_env = None
-        print("\n  ✅ Package selected. Mode 4c will stop after netboot/install (no reinit).")
+        print("\n  âœ… Package selected. Mode 4c will stop after netboot/install (no reinit).")
     else:
         _cp_do_reinit   = _checkpoint.get_param("do_reinit") if (resuming and _checkpoint) else None
         _cp_mode_sel    = _checkpoint.get_param("reinit_mode") if (resuming and _checkpoint) else None
@@ -13617,9 +13650,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if resuming and _cp_do_reinit is not None:
             _do_reinit = _cp_do_reinit
             _mode_sel  = _cp_mode_sel
-            print(f"\n  🔖 Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
+            print(f"\n  ðŸ”– Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
         else:
-            print("\n  ✅ Package selected. Now collecting all setup information upfront.")
+            print("\n  âœ… Package selected. Now collecting all setup information upfront.")
             while True:
                 reinit_ans = input(
                     "\n  Would you like to reinit the cluster after the ONTAP installation? [y/N]: "
@@ -13640,7 +13673,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _mode_sel = _prompt("  Enter 1a, 1b, or 3: ").lower()
             if _mode_sel in ("1a", "1b", "3"):
                 break
-            print("  ⚠️  Invalid choice.")
+            print("  âš ï¸  Invalid choice.")
 
     if _do_reinit:
         global _operation_mode, _auto_setup, _auto_add
@@ -13663,7 +13696,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if resuming and _cp_skip_env is not None:
             _loader_env_stage_enabled = (not bool(_cp_skip_env))
             print(
-                "\n  🔖 Resuming: LOADER bootarg backup/printenv stage "
+                "\n  ðŸ”– Resuming: LOADER bootarg backup/printenv stage "
                 f"{'skipped' if _cp_skip_env else 'enabled'}."
             )
         else:
@@ -13678,14 +13711,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             )
 
         # Discover and load a config file.
-        print("\n  " + "─" * 58)
+        print("\n  " + "â”€" * 58)
         print("  Looking for a reinit config file for the cluster setup...")
         _cfg_loaded = _discover_and_prompt_config(_run_context)
         if _cfg_loaded:
             if log:
                 log.log(f"4b: reinit config loaded: {_cfg_loaded}")
         else:
-            print("  ℹ️  No config file loaded; wizard will prompt for all values.")
+            print("  â„¹ï¸  No config file loaded; wizard will prompt for all values.")
             if log:
                 log.log("4b: no config file loaded; wizard will use manual prompts")
 
@@ -13722,15 +13755,15 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         global _physical_zeroing
         if resuming and _checkpoint and _checkpoint.get_param("physical_zeroing") is not None:
             _physical_zeroing = _checkpoint.get_param("physical_zeroing")
-            print(f"\n  🔖 Resuming: physical zeroing={'enabled' if _physical_zeroing else 'disabled'}.")
+            print(f"\n  ðŸ”– Resuming: physical zeroing={'enabled' if _physical_zeroing else 'disabled'}.")
         else:
-            print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
+            print("\n  â„¹ï¸   Physical zeroing can help ensure consistency in throughput results.")
             _pz_q = _prompt(
                 "  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: "
             , "n").lower()
             _physical_zeroing = (_pz_q == "y")
             if _physical_zeroing:
-                print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+                print("  â„¹ï¸   Physical disk zeroing enabled (raid.use-physical-zeroing).")
         if log:
             log.log(f"4b: physical disk zeroing requested: {_physical_zeroing}")
 
@@ -13740,7 +13773,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _cp_diag = _checkpoint.get_param("diag_bootargs") if (resuming and _checkpoint) else None
             if resuming and _cp_diag is not None:
                 _diag_bootargs = _cp_diag
-                print(f"\n  🔖 Resuming: {len(_diag_bootargs)} diagnostic bootarg(s) loaded from checkpoint.")
+                print(f"\n  ðŸ”– Resuming: {len(_diag_bootargs)} diagnostic bootarg(s) loaded from checkpoint.")
             else:
                 _diag_bootargs = _load_diag_bootargs()
             if log:
@@ -13751,7 +13784,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if resuming and _checkpoint and _checkpoint.get_param("prevent_bios_fw_update") is not None:
             _prevent_bios_fw_update = bool(_checkpoint.get_param("prevent_bios_fw_update"))
             print(
-                "\n  🔖 Resuming: BIOS firmware auto-update prevention="
+                "\n  ðŸ”– Resuming: BIOS firmware auto-update prevention="
                 f"{'enabled' if _prevent_bios_fw_update else 'disabled'}."
             )
         else:
@@ -13761,17 +13794,17 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             ).lower()
             _prevent_bios_fw_update = (_fw_q not in ("n", "no"))
         if _prevent_bios_fw_update:
-            print("  ℹ️   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
+            print("  â„¹ï¸   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
         else:
-            print("  ℹ️   BIOS firmware auto-update prevention disabled.")
+            print("  â„¹ï¸   BIOS firmware auto-update prevention disabled.")
         if log:
             log.log(f"4b: prevent BIOS firmware update: {_prevent_bios_fw_update}")
 
-    # ── Static vs DHCP ifconfig in LOADER ─────────────────────────────────
+    # â”€â”€ Static vs DHCP ifconfig in LOADER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     global _netboot_static_ip
     if resuming and _checkpoint and _checkpoint.get_param("netboot_static_ip") is not None:
         _netboot_static_ip = _checkpoint.get_param("netboot_static_ip")
-        print(f"  🔖 Resuming: static LOADER ifconfig={'enabled' if _netboot_static_ip else 'disabled'}.")
+        print(f"  ðŸ”– Resuming: static LOADER ifconfig={'enabled' if _netboot_static_ip else 'disabled'}.")
     else:
         while True:
             _sip_ans = _prompt(
@@ -13802,21 +13835,21 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             or not all(_node_mgmt_by_bmc[ip].get(k) for k in ("ip", "netmask", "gateway"))
         ]
         if _missing_static:
-            print(f"  ⚠️  No complete static IP config found for: {', '.join(_missing_static)}")
+            print(f"  âš ï¸  No complete static IP config found for: {', '.join(_missing_static)}")
             print("     These nodes will fall back to 'ifconfig -auto'.")
         if log:
             log.log(f"4b: static LOADER ifconfig enabled for {len(bmc_ips) - len(_missing_static)}/{len(bmc_ips)} node(s)")
     if log:
         log.log(f"4b: static ifconfig in LOADER: {_netboot_static_ip}")
 
-    print("\n  ✅ All setup information collected. Starting operations...")
+    print("\n  âœ… All setup information collected. Starting operations...")
     _print_autopilot_banner()
     if log:
         log.log(f"4b: all upfront questions answered; do_reinit={_do_reinit}, mode={_mode_sel}")
 
-    # ── Initialise / update checkpoint ────────────────────────────────────
+    # â”€â”€ Initialise / update checkpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if resuming and _checkpoint is not None:
-        # On resume: update metadata only — do NOT call init_run(), which
+        # On resume: update metadata only â€” do NOT call init_run(), which
         # would wipe all the install_done/option6_done phase data we loaded.
         _checkpoint.resume_run(
             mode=f"{'4c' if install_only else '4b'}-{_mode_sel or 'no-reinit'}",
@@ -13833,7 +13866,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         )
         # Print checkpoint creation message to screen and log
         _cp_filename = os.path.basename(_checkpoint.path)
-        _msg_cp = f"\n🔖 Checkpoint created: {_cp_filename}"
+        _msg_cp = f"\nðŸ”– Checkpoint created: {_cp_filename}"
         _msg_cp_hint = f"   Run 'python AFX_reinit.py --checkpoint' to view or resume from checkpoint."
         print(_msg_cp)
         print(_msg_cp_hint)
@@ -13859,18 +13892,18 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     if log:
         log.log(f"4b: checkpoint {'resumed' if resuming else 'initialised'} at {_checkpoint._path}")
 
-    # ── Resume status display ────────────────────────────────────────────
+    # â”€â”€ Resume status display â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # The checkpoint records each phase as it completes; on a resumed run
     # we show the operator what was already done before re-running so they
     # know roughly where the prior run left off. (Phase-level skip is a
-    # future improvement — the operator can re-confirm progress visually.)
+    # future improvement â€” the operator can re-confirm progress visually.)
     if resuming and _checkpoint:
         _install_done_ips = _checkpoint.nodes_done_for("install_done")
         _opt6_done_ips    = _checkpoint.nodes_done_for("option6_done")
         _reinit_done_ips  = _checkpoint.nodes_done_for("reinit_loader")
         _opt4_done_ips    = _checkpoint.nodes_done_for("peer_option4_done")
         _joined_ips       = _checkpoint.nodes_done_for("peer_joined")
-        print("\n  🔖 Resume status from checkpoint:")
+        print("\n  ðŸ”– Resume status from checkpoint:")
         print(f"     resume_stage         : {_describe_4b_resume_stage(_checkpoint)}")
         for _ip in bmc_ips:
             _flags = []
@@ -13886,18 +13919,18 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 _flags.append("peer_joined")
             print(f"     [{_ip}] {', '.join(_flags) if _flags else '(no prior progress)'}")
         if _checkpoint.is_done("primary_bootmenu_done"):
-            print("     primary_bootmenu_done : ✅ (primary cleared boot menu)")
+            print("     primary_bootmenu_done : âœ… (primary cleared boot menu)")
         if _checkpoint.is_done("primary_node_mgmt_done"):
-            print("     primary_node_mgmt_done: ✅ (primary node configuration completed)")
+            print("     primary_node_mgmt_done: âœ… (primary node configuration completed)")
         if _checkpoint.is_done("cluster_formed"):
-            print("     cluster_formed        : ✅ (prior run completed cluster setup)")
+            print("     cluster_formed        : âœ… (prior run completed cluster setup)")
         if _checkpoint.is_done("primary_setup_done"):
-            print("     primary_setup_done    : ✅ (primary wizard finished)")
+            print("     primary_setup_done    : âœ… (primary wizard finished)")
         if _checkpoint.is_done("option3_complete"):
-            print("     option3_complete      : ✅")
+            print("     option3_complete      : âœ…")
         if log:
             log.log(
-                "4b resume: prior progress — install_done="
+                "4b resume: prior progress â€” install_done="
                 f"{_install_done_ips}, option6_done={_opt6_done_ips}, "
                 f"reinit_loader={_reinit_done_ips}, "
                 f"peer_option4_done={_opt4_done_ips}, "
@@ -13912,12 +13945,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     for ip in bmc_ips:
         try:
             _node_files[ip] = _node_log_open(ip, _log_dir, prefix="bmc_session")
-            print(f"  📝 [{ip}] BMC session log: {_node_files[ip].name}")
+            print(f"  ðŸ“ [{ip}] BMC session log: {_node_files[ip].name}")
         except Exception as exc:
-            print(f"  ⚠️  [{ip}] Could not open node log: {exc}")
+            print(f"  âš ï¸  [{ip}] Could not open node log: {exc}")
             _node_files[ip] = None
 
-    # ── Decide whether to skip the install phase (Steps 2–6a) ────────────
+    # â”€â”€ Decide whether to skip the install phase (Steps 2â€“6a) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # On a resumed run where every BMC IP already has install_done OR
     # option6_done recorded, the destructive install work is complete and
     # we can jump straight to Step 6b (reinit reconnect). option6_done is
@@ -13938,13 +13971,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     )
     if _skip_install:
         print(
-            f"\n  🔖 Checkpoint: all {len(bmc_ips)} node(s) have install_done "
-            "or option6_done — skipping Steps 2–6a (BMC connect / reset / "
+            f"\n  ðŸ”– Checkpoint: all {len(bmc_ips)} node(s) have install_done "
+            "or option6_done â€” skipping Steps 2â€“6a (BMC connect / reset / "
             "netboot / option 6)."
         )
         if log:
             log.log(
-                "4b resume: skipping install phase — install_done/option6_done "
+                "4b resume: skipping install phase â€” install_done/option6_done "
                 "for all nodes"
             )
 
@@ -13967,8 +14000,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if resuming and len(_install_bmc_ips) < len(bmc_ips):
             _skipped = [ip for ip in bmc_ips if ip not in _install_bmc_ips]
             print(
-                f"\n  🔖 Checkpoint: {len(_skipped)} node(s) already have "
-                f"install_done/option6_done — skipping their install: "
+                f"\n  ðŸ”– Checkpoint: {len(_skipped)} node(s) already have "
+                f"install_done/option6_done â€” skipping their install: "
                 f"{', '.join(_skipped)}"
             )
             if log:
@@ -13977,10 +14010,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         else:
             _install_bmc_ips = list(bmc_ips)
 
-        # ── Step 2: SSH to all BMCs in parallel, verify BMC prompt ────────────
+        # â”€â”€ Step 2: SSH to all BMCs in parallel, verify BMC prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         print(f"\n  Connecting to {len(_install_bmc_ips)} BMC(s) in parallel...")
         if log:
-            log.start_phase("4b – BMC SSH Connections")
+            log.start_phase("4b â€“ BMC SSH Connections")
 
         bmc_clients = {}   # {ip: paramiko.SSHClient}
         bmc_channels = {}  # {ip: channel}
@@ -13989,14 +14022,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
         def _connect_worker(ip, stagger_idx=0):
             # Stagger connection attempts by 2s per node index to avoid
-            # hammering all BMCs simultaneously — simultaneous SSH handshakes
+            # hammering all BMCs simultaneously â€” simultaneous SSH handshakes
             # can exhaust the BMC daemon's connection limit and cause banner
             # timeout errors.
             if stagger_idx > 0:
                 time.sleep(stagger_idx * 2)
             nf = _node_files.get(ip)
             try:
-                _status(f"  ⏳ [{ip}] Connecting to BMC...")
+                _status(f"  â³ [{ip}] Connecting to BMC...")
                 # Build fallback password list: BMC password first (primary),
                 # then the cluster admin password if one was collected.
                 _fallbacks = _bmc_fallback_passwords(ip, bmc_passwords)
@@ -14006,7 +14039,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     interactive=False, fallback_passwords=_fallbacks,
                 )
                 ch = _open_shell(client)
-                # Wait for BMC prompt – output goes to node file only.
+                # Wait for BMC prompt â€“ output goes to node file only.
                 out, matched = _par_recv_until(ch, nf, ["y/n", ">"], timeout=15)
                 if matched and "y/n" in matched.lower():
                     if nf:
@@ -14019,20 +14052,20 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 with connect_lock:
                     bmc_clients[ip] = client
                     bmc_channels[ip] = ch
-                _status(f"  ✅ [{ip}] BMC shell ready.")
+                _status(f"  âœ… [{ip}] BMC shell ready.")
                 if log:
                     log.log(f"[{ip}] BMC shell ready")
             except Exception as exc:
                 with connect_lock:
                     connect_errors.append((ip, str(exc)))
-                _status(f"  ❌ [{ip}] Connect failed: {exc}")
+                _status(f"  âŒ [{ip}] Connect failed: {exc}")
                 if log:
                     log.log(f"[{ip}] BMC connect failed: {exc}", prefix="ERROR")
 
         _run_parallel(_install_bmc_ips, _connect_worker, with_index=True)
 
         if connect_errors:
-            print(f"\n  ❌ Failed to connect to {len(connect_errors)} BMC(s):")
+            print(f"\n  âŒ Failed to connect to {len(connect_errors)} BMC(s):")
             for ip, err in connect_errors:
                 print(f"     {ip}: {err}")
             if log:
@@ -14042,10 +14075,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if log:
             log.end_phase()
 
-        # ── Step 3: Simultaneously reset all nodes and reach LOADER ──────────
-        print(f"\n  Resetting {len(_install_bmc_ips)} node(s) to LOADER (output → per-node logs)...")
+        # â”€â”€ Step 3: Simultaneously reset all nodes and reach LOADER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        print(f"\n  Resetting {len(_install_bmc_ips)} node(s) to LOADER (output â†’ per-node logs)...")
         if log:
-            log.start_phase("4b – Reset to LOADER")
+            log.start_phase("4b â€“ Reset to LOADER")
 
         loader_channels = {}   # {ip: channel}  at LOADER prompt
         loader_clients = {}    # {ip: client}
@@ -14065,10 +14098,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 if _already_at_loader(ch, probe_timeout=25, label=ip, node_log=nf):
                     _already_loader = True
                     if log:
-                        log.log(f"[{ip}] already at LOADER – system reset skipped")
+                        log.log(f"[{ip}] already at LOADER â€“ system reset skipped")
                 else:
                     # system reset (auto-confirm y/n prompt)
-                    _status(f"  ⏳ [{ip}] Sending system reset...")
+                    _status(f"  â³ [{ip}] Sending system reset...")
                     if nf:
                         _par_write(nf, "\n>>> system reset\n")
                     ch.send("system reset\r")
@@ -14077,7 +14110,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         if nf:
                             _par_write(nf, "\n>>> y  (confirming system reset)\n")
                         ch.send("y\r")
-                    _status(f"  ⏳ [{ip}] Node rebooting...")
+                    _status(f"  â³ [{ip}] Node rebooting...")
                     if log:
                         log.log(f"[{ip}] system reset issued")
                     time.sleep(3)
@@ -14104,12 +14137,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     with connect_lock:
                         loader_channels[ip] = ch
                         loader_clients[ip] = cl
-                    _status(f"  ✅ [{ip}] At LOADER prompt.")
+                    _status(f"  âœ… [{ip}] At LOADER prompt.")
                     if log:
                         log.log(f"[{ip}] confirmed LOADER prompt (no reset needed)")
                     return
 
-                # Monitor for AUTOBOOT/LOADER – all raw output → node file only.
+                # Monitor for AUTOBOOT/LOADER â€“ all raw output â†’ node file only.
                 buf = ""
                 start = time.monotonic()
                 found = False
@@ -14122,9 +14155,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         if nf:
                             _par_write(nf, chunk)
                         if "starting autoboot press ctrl-c to abort" in buf.lower():
-                            _status(f"  🛑 [{ip}] Interrupting AUTOBOOT...")
+                            _status(f"  ðŸ›‘ [{ip}] Interrupting AUTOBOOT...")
                             if log:
-                                log.log(f"[{ip}] AUTOBOOT detected – sending Ctrl+C")
+                                log.log(f"[{ip}] AUTOBOOT detected â€“ sending Ctrl+C")
                             if nf:
                                 _par_write(nf, "\n>>> ^C (interrupting autoboot)\n")
                             for _ in range(6):
@@ -14142,26 +14175,26 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     with connect_lock:
                         loader_channels[ip] = ch
                         loader_clients[ip] = cl
-                    _status(f"  ✅ [{ip}] At LOADER prompt.")
+                    _status(f"  âœ… [{ip}] At LOADER prompt.")
                     if log:
                         log.log(f"[{ip}] reached LOADER prompt")
                 else:
                     with connect_lock:
                         loader_errors.append((ip, "LOADER prompt timeout"))
-                    _status(f"  ❌ [{ip}] LOADER not reached (timeout).")
+                    _status(f"  âŒ [{ip}] LOADER not reached (timeout).")
                     if log:
                         log.log(f"[{ip}] LOADER not reached (timeout)", prefix="ERROR")
             except Exception as exc:
                 with connect_lock:
                     loader_errors.append((ip, str(exc)))
-                _status(f"  ❌ [{ip}] Error during reset: {exc}")
+                _status(f"  âŒ [{ip}] Error during reset: {exc}")
                 if log:
                     log.log(f"[{ip}] reset error: {exc}", prefix="ERROR")
 
         _run_parallel(_install_bmc_ips, _reset_worker)
 
         if loader_errors:
-            print(f"\n  ❌ {len(loader_errors)} node(s) did not reach LOADER:")
+            print(f"\n  âŒ {len(loader_errors)} node(s) did not reach LOADER:")
             for ip, err in loader_errors:
                 print(f"     {ip}: {err}")
             if log:
@@ -14171,7 +14204,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if log:
             log.end_phase()
 
-        # ── Attempt to capture ONTAP version from primary LOADER prompt ──────
+        # â”€â”€ Attempt to capture ONTAP version from primary LOADER prompt â”€â”€â”€â”€â”€â”€
         if bmc_ips and bmc_ips[0] in loader_channels and _checkpoint:
             _loader_ch_primary = loader_channels[bmc_ips[0]]
             try:
@@ -14211,26 +14244,26 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         prefix="WARN"
                     )
 
-        # ── Step 4: Start HTTP server if serving a local file ─────────────────
+        # â”€â”€ Step 4: Start HTTP server if serving a local file â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if log:
-            log.start_phase("4b – HTTP Server")
+            log.start_phase("4b â€“ HTTP Server")
         httpd = None
         if src_type == "file":
             _ht, pkg_url, httpd = _start_http_server(src_value)
-            print(f"  🌐 HTTP server started: {pkg_url}")
+            print(f"  ðŸŒ HTTP server started: {pkg_url}")
             if log:
                 log.log(f"HTTP server URL: {pkg_url}")
         else:
             pkg_url = src_value
-            print(f"  🌐 Using URL: {pkg_url}")
+            print(f"  ðŸŒ Using URL: {pkg_url}")
         if log:
             log.end_phase()
 
-        # ── Step 5: ifconfig + netboot on all nodes in parallel ────────────────
+        # â”€â”€ Step 5: ifconfig + netboot on all nodes in parallel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         print(f"\n  Starting netboot-install on {len(_install_bmc_ips)} node(s) in parallel"
-              f" (output → per-node logs)...")
+              f" (output â†’ per-node logs)...")
         if log:
-            log.start_phase("4b – Netboot Install")
+            log.start_phase("4b â€“ Netboot Install")
 
         install_results = {}  # {ip: True/False}
 
@@ -14255,7 +14288,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 install_results[ip] = ok
             # Note: install_done checkpoint is marked AFTER option 6 completes
             # (Step 6a, below) so it reflects the node having reached ONTAP
-            # login — not just the netboot transfer.
+            # login â€” not just the netboot transfer.
 
         threads = [threading.Thread(target=_install_worker, args=(ip,), daemon=True)
                    for ip in _install_bmc_ips]
@@ -14264,7 +14297,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
         # All install threads are now running in parallel.  Print a single
         # status block so the operator knows where to follow progress.
-        _real_stdout.write("\n  ⏳ Nodes installing — check logs for details:\n")
+        _real_stdout.write("\n  â³ Nodes installing â€” check logs for details:\n")
         for _ip in _install_bmc_ips:
             _nf = _node_files.get(_ip)
             _log_path = _nf.name if _nf else "(no log file)"
@@ -14285,7 +14318,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
         failed = [ip for ip, ok in install_results.items() if not ok]
         if failed:
-            print(f"\n  ❌ Netboot install failed on: {', '.join(failed)}")
+            print(f"\n  âŒ Netboot install failed on: {', '.join(failed)}")
             if log:
                 log.end_phase(outcome="FAIL", note=f"install failed: {failed}")
             return False
@@ -14293,13 +14326,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if log:
             log.end_phase()
 
-        # ── Step 6: Transition to reinit ──────────────────────────────────────
+        # â”€â”€ Step 6: Transition to reinit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         first_ip = bmc_ips[0]
 
         if log:
             log.log(f"4b: netboot install complete on {len(_install_bmc_ips)} node(s)")
 
-        print(f"\n  ✅ Netboot complete on all {len(_install_bmc_ips)} node(s).")
+        print(f"\n  âœ… Netboot complete on all {len(_install_bmc_ips)} node(s).")
         # (_do_reinit and _mode_sel were collected upfront before operations began)
 
         # Close and log all node files now (before option 6 and init take over).
@@ -14307,12 +14340,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             if nf:
                 try:
                     nf.close()
-                    print(f"  📝 [{ip}] Log saved: {nf.name}")
+                    print(f"  ðŸ“ [{ip}] Log saved: {nf.name}")
                 except Exception:
                     pass
         _node_files.clear()
 
-        # ── Step 6a: Option 6 on all nodes (finish the netboot/install) ───────
+        # â”€â”€ Step 6a: Option 6 on all nodes (finish the netboot/install) â”€â”€â”€â”€â”€â”€â”€
         # Always run option 6 first: this updates flash from backup config and
         # boots every node to the login prompt, confirming the install succeeded.
         # If reinit was requested we reconnect via BMC afterwards (Step 6b).
@@ -14332,7 +14365,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         # Populated by _select_option6; checked after all workers join.
         _opt6_login_nodes = set()
         # Nodes that reached _opt6_login_nodes via the VLDB-timeout path
-        # (not at a real login prompt — used to skip the "cluster running"
+        # (not at a real login prompt â€” used to skip the "cluster running"
         # version-check prompt below).
         _vldb_timeout_nodes = set()
         # Nodes where ONTAP reported NVRAM/sysid mismatch. These should proceed
@@ -14361,7 +14394,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             earlier than install_done (which waits for login: after the
             post-option-6 reboot loop). Most observed failures happen in
             that boot-wait window, so recording option6_done here lets
-            --resume skip Steps 2–6a even when the boot wait dies."""
+            --resume skip Steps 2â€“6a even when the boot wait dies."""
             if _checkpoint is None:
                 return
             try:
@@ -14376,16 +14409,16 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
         def _select_option6(ip, ch):
             if ch is None:
-                _status(f"  ⚠️  [{ip}] No channel – skipping option 6.")
+                _status(f"  âš ï¸  [{ip}] No channel â€“ skipping option 6.")
                 return
             # Open a per-node log for all raw boot output.
             _nf6 = None
             try:
                 _nf6 = _node_log_open(ip, _log_dir, prefix="4b_opt6",
                                       previous_log=_node_files.get(ip))
-                _status(f"  📝 [{ip}] Boot output → {_nf6.name}")
+                _status(f"  ðŸ“ [{ip}] Boot output â†’ {_nf6.name}")
             except Exception as _e:
-                _status(f"  ⚠️  [{ip}] Could not open log file: {_e}")
+                _status(f"  âš ï¸  [{ip}] Could not open log file: {_e}")
 
             def _drain(timeout_s, stop_sigs):
                 """Read from channel for up to timeout_s seconds.
@@ -14408,7 +14441,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     time.sleep(0.1)
                 return None
 
-            # ── VLDB online timeout detection ──────────────────────────────────
+            # â”€â”€ VLDB online timeout detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # This flow is all-or-nothing for cluster reinit. Do not block each
             # node worker on stdin when VLDB times out; proceed directly and let
             # the single cluster-level continue prompt gate the run.
@@ -14422,7 +14455,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _vldb_timeout_nodes.add(ip)
                 return True
 
-            # ── Phase 1: wait for any boot-menu indicator ──────────────────
+            # â”€â”€ Phase 1: wait for any boot-menu indicator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # The warning text ("Normal Boot is prohibited") appears a few
             # seconds before the numbered selection prompt renders. We detect
             # either, then explicitly drain until the selection prompt is ready
@@ -14441,7 +14474,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 "reconnect_notice_suppressed": False,
             }
 
-            # ── BMC reconnect helper ────────────────────────────────────────
+            # â”€â”€ BMC reconnect helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # If the BMC SSH session or system-console session has dropped, this
             # re-establishes the connection and re-enters system console so the
             # boot-menu wait can continue on the same `ch` binding.
@@ -14454,7 +14487,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _reconnect_notice_state6,
                     ip,
                     console_msg=(
-                        f"  ⚠️  [{ip}] BMC session dropped – reconnecting and "
+                        f"  âš ï¸  [{ip}] BMC session dropped â€“ reconnecting and "
                         "re-entering system console..."
                     ),
                     log_msg=f"[{ip}] BMC session dropped; reconnecting",
@@ -14518,14 +14551,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     loader_channels[ip] = _new_ch
                     loader_clients[ip]  = _new_cl
                     _reset_reconnect_notice_suppression(_reconnect_notice_state6)
-                    _status(f"  ✅ [{ip}] BMC reconnected – system console active.")
+                    _status(f"  âœ… [{ip}] BMC reconnected â€“ system console active.")
                     if log:
                         log.log(f"[{ip}] BMC reconnected; system console active")
                 except Exception as _exc:
                     _emit_reconnect_notice_with_suppression(
                         _reconnect_notice_state6,
                         ip,
-                        console_msg=f"  ❌ [{ip}] BMC reconnect failed: {_exc}",
+                        console_msg=f"  âŒ [{ip}] BMC reconnect failed: {_exc}",
                         log_msg=f"[{ip}] BMC reconnect failed: {_exc}",
                         log_prefix="ERROR",
                         console_writer=_status,
@@ -14545,9 +14578,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 now = time.monotonic()
                 if now >= _next_progress:
                     elapsed = int(now - start)
-                    _status(f"  ⏳ [{ip}] Still waiting for boot menu... ({elapsed}s elapsed)")
+                    _status(f"  â³ [{ip}] Still waiting for boot menu... ({elapsed}s elapsed)")
                     _next_progress = now + 60
-                    # ── Heartbeat: keep the channel alive ──────────────────
+                    # â”€â”€ Heartbeat: keep the channel alive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                     # If the channel has closed entirely, reconnect the BMC SSH
                     # session and re-enter system console.
                     if ch.closed:
@@ -14571,7 +14604,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     buf_lower += chunk.lower()
                     if _nf6:
                         _par_write(_nf6, chunk)
-                    # ── BMC-prompt detection ────────────────────────────────
+                    # â”€â”€ BMC-prompt detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                     # If system console dropped we receive the BMC shell prompt.
                     # Detect via the module-level signature ("bmc>") and by
                     # noticing any short line that ends with "> " and contains
@@ -14613,7 +14646,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 time.sleep(0.1)
 
             if not found:
-                _status(f"  ⚠️  [{ip}] Boot menu not detected; skipping option 6.")
+                _status(f"  âš ï¸  [{ip}] Boot menu not detected; skipping option 6.")
                 if log:
                     log.log(f"[{ip}] boot menu not seen for option 6 (timeout)", prefix="WARN")
                 if _nf6:
@@ -14621,9 +14654,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         _nf6.close()
                 return
 
-            # ── Node already running ONTAP (login: before boot menu) ────────
+            # â”€â”€ Node already running ONTAP (login: before boot menu) â”€â”€â”€â”€â”€â”€â”€â”€
             if _matched_sig == "login:":
-                _status(f"  [{ip}] Node is already at ONTAP login prompt – no option 6 needed.")
+                _status(f"  [{ip}] Node is already at ONTAP login prompt â€“ no option 6 needed.")
                 if log:
                     log.log(f"[{ip}] reached login: without boot menu; skipping option 6")
                 with connect_lock:
@@ -14634,12 +14667,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         _nf6.close()
                 return
 
-            # ── Phase 2: if we matched an early-warning sig, keep draining
+            # â”€â”€ Phase 2: if we matched an early-warning sig, keep draining
             # until the numbered selection prompt actually appears (up to 60s).
             matched_early = any(sig in buf_lower for sig in _early_sigs)
             sel_already_seen = any(sig in buf_lower for sig in _sel_sigs)
             if matched_early and not sel_already_seen:
-                _status(f"  [{ip}] Boot warning detected – waiting for selection prompt...")
+                _status(f"  [{ip}] Boot warning detected â€“ waiting for selection prompt...")
                 if log:
                     log.log(f"[{ip}] boot warning seen; waiting for selection prompt")
                 _drain(60, _sel_sigs)
@@ -14647,15 +14680,15 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             # Short pause to let the selection prompt fully render.
             time.sleep(2)
 
-            _status(f"  [{ip}] Boot menu ready – sending option 6...")
+            _status(f"  [{ip}] Boot menu ready â€“ sending option 6...")
             if log:
-                log.log(f"[{ip}] boot menu ready – sending option 6")
+                log.log(f"[{ip}] boot menu ready â€“ sending option 6")
             if _nf6:
                 _par_write(_nf6, "\n>>> sending option 6\n")
             try:
                 ch.send("6\r")
             except OSError as exc:
-                _status(f"  ❌ [{ip}] Channel closed before option 6 could be sent: {exc}")
+                _status(f"  âŒ [{ip}] Channel closed before option 6 could be sent: {exc}")
                 if log:
                     log.log(f"[{ip}] channel closed before option 6: {exc}", prefix="ERROR")
                 if _nf6:
@@ -14663,14 +14696,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         _nf6.close()
                 return
 
-            # ── Phase 3: wait for confirmation prompt ──────────────────────
+            # â”€â”€ Phase 3: wait for confirmation prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # Prompt: "Are you sure you want to continue?:"
             # If the menu re-appears it means our "6" wasn't registered; retry.
             _m = _drain(30, ["are you sure you want to continue", "selection (1-"])
             if _m and "are you sure you want to continue" in _m:
-                _status(f"  [{ip}] Option 6 confirmation → y")
+                _status(f"  [{ip}] Option 6 confirmation â†’ y")
                 if log:
-                    log.log(f"[{ip}] option 6 confirmation → y")
+                    log.log(f"[{ip}] option 6 confirmation â†’ y")
                 if _nf6:
                     _par_write(_nf6, "\n>>> y (option 6 confirmation)\n")
                 try:
@@ -14679,8 +14712,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     pass
                 _mark_option6_done(ip)
             elif _m and "selection (1-" in _m:
-                # Menu reappeared – retry once.
-                _status(f"  ↻ [{ip}] Resending option 6 (menu reappeared)...")
+                # Menu reappeared â€“ retry once.
+                _status(f"  â†» [{ip}] Resending option 6 (menu reappeared)...")
                 if log:
                     log.log(f"[{ip}] resending boot menu option 6")
                 if _nf6:
@@ -14695,9 +14728,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     return
                 _m2 = _drain(30, ["are you sure you want to continue"])
                 if _m2:
-                    _status(f"  [{ip}] Option 6 confirmation → y")
+                    _status(f"  [{ip}] Option 6 confirmation â†’ y")
                     if log:
-                        log.log(f"[{ip}] option 6 confirmation (retry) → y")
+                        log.log(f"[{ip}] option 6 confirmation (retry) â†’ y")
                     if _nf6:
                         _par_write(_nf6, "\n>>> y (option 6 confirmation retry)\n")
                     try:
@@ -14706,7 +14739,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         pass
                     _mark_option6_done(ip)
                 else:
-                    _status(f"  ⚠️  [{ip}] Option 6 confirmation not seen after retry.")
+                    _status(f"  âš ï¸  [{ip}] Option 6 confirmation not seen after retry.")
                     if log:
                         log.log(f"[{ip}] option 6 confirmation not seen (retry timeout)", prefix="WARN")
                     if _nf6:
@@ -14714,7 +14747,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             _nf6.close()
                     return
             else:
-                _status(f"  ⚠️  [{ip}] Option 6 confirmation not seen.")
+                _status(f"  âš ï¸  [{ip}] Option 6 confirmation not seen.")
                 if log:
                     log.log(f"[{ip}] option 6 confirmation not seen (timeout)", prefix="WARN")
                 if _nf6:
@@ -14722,11 +14755,11 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         _nf6.close()
                 return
 
-            # ── Phase 4: wait for login: prompt OR second boot menu ────────
+            # â”€â”€ Phase 4: wait for login: prompt OR second boot menu â”€â”€â”€â”€â”€â”€â”€â”€
             # After option 6 there is sometimes a false-positive login: prompt
             # that appears briefly before the node reboots a second time.
             # If "The boot device has changed / Normal Boot is prohibited"
-            # appears, the node can't boot normally – send option 4 (Initialize).
+            # appears, the node can't boot normally â€“ send option 4 (Initialize).
             _reboot_indicators = [
                 "starting autoboot", "press ctrl-c", "loader>",
                 "autoboot in", "selection (1-", "normal boot is prohibited",
@@ -14734,7 +14767,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             # Each node waits up to 30 min after option 6 for the boot to complete.
             _boot_timeout = 1800
             _boot_timeout_min = _boot_timeout // 60
-            _status(f"  ⏳ [{ip}] Option 6 confirmed – waiting for node to boot (up to {_boot_timeout_min} min)...")
+            _status(f"  â³ [{ip}] Option 6 confirmed â€“ waiting for node to boot (up to {_boot_timeout_min} min)...")
             _print_wait_log_hint(node_log=_nf6)
             if log:
                 log.log(f"[{ip}] option 6 confirmed; waiting for login prompt (up to {_boot_timeout_min} min)")
@@ -14767,7 +14800,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 if _now >= _next_progress:
                     _elapsed_min = int((_now - _boot_wait_start) / 60)
                     _remaining_min = int((_boot_timeout - (_now - _boot_wait_start)) / 60)
-                    _status(f"  ⏳ [{ip}] Option 6 boot: waiting for node to boot... "
+                    _status(f"  â³ [{ip}] Option 6 boot: waiting for node to boot... "
                             f"({_elapsed_min} min elapsed, {_remaining_min} minutes before timeout)")
                     if log:
                         log.log(f"[{ip}] boot wait progress: {_elapsed_min} min elapsed")
@@ -14783,7 +14816,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _boot_buf += _chunk
                     if _nf6:
                         _par_write(_nf6, _chunk)
-                    # ── BMC-drop detection ────────────────────────────────────
+                    # â”€â”€ BMC-drop detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                     # If someone takes over the BMC session or the system
                     # console exits, we'll receive a BMC prompt instead of
                     # boot output.  Detect and re-enter system console.
@@ -14805,7 +14838,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             timeout=6,
                         )
                         if _probe_state6 == "boot_menu":
-                            _status(f"  ⚠️  [{ip}] Boot menu detected during boot wait – continuing with option 4...")
+                            _status(f"  âš ï¸  [{ip}] Boot menu detected during boot wait â€“ continuing with option 4...")
                             if log:
                                 log.log(f"[{ip}] boot menu detected during option 6 boot wait probe", prefix="WARN")
                             _boot_wait_notice_state6["console_reentry_pending"] = False
@@ -14815,7 +14848,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             _boot_buf = _probe_out6 or "selection (1-"
                             break
                         if _probe_state6 == "loader":
-                            _status(f"  ⚠️  [{ip}] LOADER prompt detected during boot wait – recovering boot menu...")
+                            _status(f"  âš ï¸  [{ip}] LOADER prompt detected during boot wait â€“ recovering boot menu...")
                             if log:
                                 log.log(f"[{ip}] LOADER prompt detected during option 6 boot wait; recovering boot menu", prefix="WARN")
                             _recovered6, _booting6 = _recover_boot_menu_from_loader(
@@ -14839,7 +14872,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             time.sleep(1)
                             continue
                         if _probe_state6 == "login":
-                            _status(f"  ✅ [{ip}] Login prompt detected during boot wait.")
+                            _status(f"  âœ… [{ip}] Login prompt detected during boot wait.")
                             if log:
                                 log.log(f"[{ip}] login prompt detected during option 6 boot wait probe")
                             _boot_wait_notice_state6["console_reentry_pending"] = False
@@ -14875,7 +14908,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 _boot_wait_notice_state6,
                                 ip,
                                 console_msg=(
-                                    f"  ⚠️  [{ip}] {_drop_reason} during boot wait – "
+                                    f"  âš ï¸  [{ip}] {_drop_reason} during boot wait â€“ "
                                     "re-entering system console..."
                                 ),
                                 log_msg=(
@@ -14902,13 +14935,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     # won't come online normally.
                     if ("timed out waiting for vldb online" in _boot_buf_lower
                             or "failed to get number of nodes in cluster" in _boot_buf_lower):
-                        _status(f"  ⚠️  [{ip}] VLDB online timeout detected during boot wait.")
+                        _status(f"  âš ï¸  [{ip}] VLDB online timeout detected during boot wait.")
                         if log:
                             log.log(f"[{ip}] VLDB online timeout seen during option 6 boot wait", prefix="WARN")
                         if _vldb_prompt():
-                            _status(f"  ✅ [{ip}] Proceeding to reinitialization.")
-                            # Image is installed at this point — record
-                            # install_done so --resume can skip Steps 2–6a
+                            _status(f"  âœ… [{ip}] Proceeding to reinitialization.")
+                            # Image is installed at this point â€” record
+                            # install_done so --resume can skip Steps 2â€“6a
                             # and jump straight to the reinit reconnect.
                             with connect_lock:
                                 _opt6_login_nodes.add(ip)
@@ -14918,18 +14951,18 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                     _nf6.close()
                             return
                         else:
-                            _status(f"  ❌ [{ip}] Operator chose to exit after VLDB timeout.")
+                            _status(f"  âŒ [{ip}] Operator chose to exit after VLDB timeout.")
                             _shutdown_event.set()
                             if _nf6:
                                 with suppress(Exception):
                                     _nf6.close()
                             return
-                    # NVRAM sysid mismatch – node cannot complete boot; proceed to reinit.
+                    # NVRAM sysid mismatch â€“ node cannot complete boot; proceed to reinit.
                     if "nvram changed on this node" in _boot_buf_lower:
-                        _status(f"  ⚠️  [{ip}] NVRAM sysid mismatch detected – proceeding directly to reinitialization.")
+                        _status(f"  âš ï¸  [{ip}] NVRAM sysid mismatch detected â€“ proceeding directly to reinitialization.")
                         if log:
                             log.log(f"[{ip}] NVRAM changed / sysid mismatch seen; skipping boot wait", prefix="WARN")
-                        # Image is installed at this point — record install_done
+                        # Image is installed at this point â€” record install_done
                         # so a failed reinit reconnect does not force a re-install.
                         with connect_lock:
                             _opt6_login_nodes.add(ip)
@@ -14946,9 +14979,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     if _m3:
                         # Auto-answer "Type yes to confirm and continue" and keep waiting.
                         if "type yes to confirm and continue" in _m3:
-                            _status(f"  [{ip}] Option 6 boot confirmation prompt → yes")
+                            _status(f"  [{ip}] Option 6 boot confirmation prompt â†’ yes")
                             if log:
-                                log.log(f"[{ip}] option 6 boot confirmation 'type yes to confirm' → yes")
+                                log.log(f"[{ip}] option 6 boot confirmation 'type yes to confirm' â†’ yes")
                             if _nf6:
                                 _par_write(_nf6, "\n>>> yes (option 6 boot confirmation)\n")
                             try:
@@ -14963,12 +14996,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         _boot_buf = _boot_buf[-8192:]
                 time.sleep(0.1)
 
-            # Timeout with no match – ask the operator whether to proceed.
+            # Timeout with no match â€“ ask the operator whether to proceed.
             if not _m3:
-                _status(f"  ⚠️  [{ip}] Node failed to boot within {_boot_timeout_min}-minute timeout.")
+                _status(f"  âš ï¸  [{ip}] Node failed to boot within {_boot_timeout_min}-minute timeout.")
                 with _stdout_lock:
                     _real_stdout.write(
-                        f"\n  ⚠️  [{ip}] Node failed to boot within timeout period; "
+                        f"\n  âš ï¸  [{ip}] Node failed to boot within timeout period; "
                         f"continue with reinit? [y/n] (auto-yes in 5 min): "
                     )
                     _real_stdout.flush()
@@ -14984,23 +15017,23 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 _ans_thread.start()
                 _ans_thread.join(timeout=300)
                 if _boot_ans_holder[0] is None:
-                    # Timed out – default to yes.
+                    # Timed out â€“ default to yes.
                     _boot_ans = "y"
                     with _stdout_lock:
-                        _real_stdout.write("\n  ⏱  No response in 5 min – assuming yes.\n")
+                        _real_stdout.write("\n  â±  No response in 5 min â€“ assuming yes.\n")
                         _real_stdout.flush()
                 else:
                     _boot_ans = _boot_ans_holder[0]
                 if _session_log:
                     log.log(f"[{ip}] boot timeout prompt answered: {_boot_ans}")
                 if _boot_ans == "y":
-                    _status(f"  ✅ [{ip}] Proceeding to reinitialization after boot timeout.")
+                    _status(f"  âœ… [{ip}] Proceeding to reinitialization after boot timeout.")
                     if _nf6:
                         with suppress(Exception):
                             _nf6.close()
                     return
                 else:
-                    _status(f"  ❌ [{ip}] Operator chose to exit after boot timeout.")
+                    _status(f"  âŒ [{ip}] Operator chose to exit after boot timeout.")
                     _shutdown_event.set()
                     if _nf6:
                         with suppress(Exception):
@@ -15009,12 +15042,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
             # If a boot menu appeared (node can't boot normally), send option 4.
             if _m3 and any(s in _m3.lower() for s in _boot_menu_sigs_6):
-                _status(f"  ⚠️  [{ip}] Boot menu appeared after option 6 "
-                        f"('Normal Boot is prohibited') – sending option 4...")
+                _status(f"  âš ï¸  [{ip}] Boot menu appeared after option 6 "
+                        f"('Normal Boot is prohibited') â€“ sending option 4...")
                 if log:
                     log.log(f"[{ip}] boot menu seen after option 6; sending option 4", prefix="WARN")
                 if _nf6:
-                    _par_write(_nf6, "\n>>> boot menu appeared – draining to selection prompt\n")
+                    _par_write(_nf6, "\n>>> boot menu appeared â€“ draining to selection prompt\n")
                 _opt4_progress_sigs = [
                     "please choose one of the following",
                     "starting autoboot",
@@ -15041,7 +15074,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
                 except OSError:
                     pass
-                _status(f"  ⏳ [{ip}] Option 4 sent – auto-answering disk erase prompts...")
+                _status(f"  â³ [{ip}] Option 4 sent â€“ auto-answering disk erase prompts...")
                 if log:
                     log.log(f"[{ip}] option 4 sent after unexpected boot menu; answering disk erase prompts")
 
@@ -15070,11 +15103,11 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         break
                     for _trigger, _answer, _lbl in _remaining:
                         if _trigger in _ma.lower():
-                            _status(f"  [{ip}] {_lbl} prompt → {_answer}")
+                            _status(f"  [{ip}] {_lbl} prompt â†’ {_answer}")
                             if log:
-                                log.log(f"[{ip}] {_lbl} → {_answer}")
+                                log.log(f"[{ip}] {_lbl} â†’ {_answer}")
                             if _nf6:
-                                _par_write(_nf6, f"\n>>> {_lbl} → {_answer}\n")
+                                _par_write(_nf6, f"\n>>> {_lbl} â†’ {_answer}\n")
                             try:
                                 ch.send(_answer + "\r")
                             except OSError:
@@ -15108,7 +15141,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                     "type yes to confirm and continue",
                                     "complete cluster setup by accessing",
                                     "press enter to complete cluster setup"]
-                _status(f"  ⏳ [{ip}] Option 4 boot: waiting for node to boot (up to 20 min)...")
+                _status(f"  â³ [{ip}] Option 4 boot: waiting for node to boot (up to 20 min)...")
                 _print_wait_log_hint(node_log=_nf6)
                 if log:
                     log.log(f"[{ip}] option 4 sent; waiting for login prompt (up to 20 min)")
@@ -15120,7 +15153,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     if _now4 >= _opt4_next_progress:
                         _el4 = int((_now4 - _opt4_boot_start) / 60)
                         _rm4 = int((_opt4_boot_timeout - (_now4 - _opt4_boot_start)) / 60)
-                        _status(f"  ⏳ [{ip}] Option 4 boot: waiting for node to boot... "
+                        _status(f"  â³ [{ip}] Option 4 boot: waiting for node to boot... "
                                 f"({_el4} min elapsed, {_rm4} minutes before timeout)")
                         if log:
                             log.log(f"[{ip}] option 4 boot wait: {_el4} min elapsed")
@@ -15130,7 +15163,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         _opt4_buf += _chunk4
                         if _nf6:
                             _par_write(_nf6, _chunk4)
-                        # ── BMC-drop detection ────────────────────────────────
+                        # â”€â”€ BMC-drop detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                         _bmc_drop4 = _looks_like_bmc_drop(_chunk4)
                         if (not _bmc_drop4
                                 and _opt4_notice_state.get("console_reentry_pending")):
@@ -15149,7 +15182,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 timeout=6,
                             )
                             if _probe_state4 == "loader":
-                                _status(f"  ⚠️  [{ip}] LOADER prompt detected during option 4 boot wait – sending boot_ontap...")
+                                _status(f"  âš ï¸  [{ip}] LOADER prompt detected during option 4 boot wait â€“ sending boot_ontap...")
                                 if log:
                                     log.log(f"[{ip}] LOADER prompt detected during option 4 boot wait; sending boot_ontap", prefix="WARN")
                                 if _nf6:
@@ -15163,7 +15196,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 time.sleep(1)
                                 continue
                             if _probe_state4 == "login":
-                                _status(f"  ✅ [{ip}] Login prompt detected during option 4 boot wait.")
+                                _status(f"  âœ… [{ip}] Login prompt detected during option 4 boot wait.")
                                 if log:
                                     log.log(f"[{ip}] login prompt detected during option 4 boot wait probe")
                                 _opt4_notice_state["console_reentry_pending"] = False
@@ -15173,7 +15206,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 _opt4_buf = _probe_out4 or "login:"
                                 break
                             if _probe_state4 == "wizard":
-                                _status(f"  ✅ [{ip}] Cluster setup wizard prompt detected during option 4 boot wait.")
+                                _status(f"  âœ… [{ip}] Cluster setup wizard prompt detected during option 4 boot wait.")
                                 if log:
                                     log.log(f"[{ip}] wizard prompt detected during option 4 boot wait probe")
                                 with suppress(Exception):
@@ -15212,7 +15245,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                     _opt4_notice_state,
                                     ip,
                                     console_msg=(
-                                        f"  ⚠️  [{ip}] {_drop_reason4} during option 4 boot wait – "
+                                        f"  âš ï¸  [{ip}] {_drop_reason4} during option 4 boot wait â€“ "
                                         "re-entering system console..."
                                     ),
                                     log_msg=(
@@ -15237,7 +15270,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         _opt4_buf_lower = _opt4_buf.lower()
                         if (not _opt4_mgmt_answered
                                 and any(_t in _opt4_buf_lower for _t in _opt4_mgmt_triggers)):
-                            _status(f"  [{ip}] Option 4 node-mgmt prompt detected – auto-answering setup fields...")
+                            _status(f"  [{ip}] Option 4 node-mgmt prompt detected â€“ auto-answering setup fields...")
                             if log:
                                 log.log(f"[{ip}] option 4 node-mgmt prompt detected; auto-answering fields")
                             try:
@@ -15250,14 +15283,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 _opt4_mgmt_answered = True
                                 _opt4_buf_lower = _opt4_buf.lower()
                             except Exception as _e_opt4_mgmt:
-                                _status(f"  ⚠️  [{ip}] Failed to auto-answer node-mgmt prompts: {_e_opt4_mgmt}")
+                                _status(f"  âš ï¸  [{ip}] Failed to auto-answer node-mgmt prompts: {_e_opt4_mgmt}")
                                 if log:
                                     log.log(
                                         f"[{ip}] option 4 node-mgmt auto-answer failed: {_e_opt4_mgmt}",
                                         prefix="WARN",
                                     )
                         if _output_contains_wizard_start(_opt4_buf):
-                            _status(f"  ✅ [{ip}] Cluster setup wizard prompt detected after option 4.")
+                            _status(f"  âœ… [{ip}] Cluster setup wizard prompt detected after option 4.")
                             if log:
                                 log.log(f"[{ip}] wizard prompt detected after option 4; sending Enter and continuing")
                             with suppress(Exception):
@@ -15275,9 +15308,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 break
                         if _m3:
                             if "type yes to confirm and continue" in _m3:
-                                _status(f"  [{ip}] Option 4 boot confirmation prompt → yes")
+                                _status(f"  [{ip}] Option 4 boot confirmation prompt â†’ yes")
                                 if log:
-                                    log.log(f"[{ip}] option 4 boot confirmation 'type yes to confirm' → yes")
+                                    log.log(f"[{ip}] option 4 boot confirmation 'type yes to confirm' â†’ yes")
                                 if _nf6:
                                     _par_write(_nf6, "\n>>> yes (option 4 boot confirmation)\n")
                                 try:
@@ -15288,7 +15321,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 _opt4_buf = ""
                             elif ("complete cluster setup" in _m3 or 
                                   "press enter to complete cluster setup" in _opt4_buf_lower):
-                                _status(f"  ✅ [{ip}] Cluster setup wizard prompt detected → sending Enter.")
+                                _status(f"  âœ… [{ip}] Cluster setup wizard prompt detected â†’ sending Enter.")
                                 if log:
                                     log.log(f"[{ip}] cluster setup wizard prompt detected; sending Enter")
                                 if _nf6:
@@ -15305,7 +15338,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                         _nf6.close()
                                 return
                             elif "nvram changed on this node" in _m3:
-                                _status(f"  ⚠️  [{ip}] NVRAM sysid mismatch detected during option 4 boot – proceeding to reinitialization.")
+                                _status(f"  âš ï¸  [{ip}] NVRAM sysid mismatch detected during option 4 boot â€“ proceeding to reinitialization.")
                                 if log:
                                     log.log(f"[{ip}] NVRAM changed / sysid mismatch seen during option 4 boot; proceeding to reinit", prefix="WARN")
                                 with connect_lock:
@@ -15318,16 +15351,16 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 break
                         if len(_opt4_buf) > 16384:
                             _opt4_buf = _opt4_buf[-8192:]
-                    # ── Idle-path wizard check ──────────────────────────────────
+                    # â”€â”€ Idle-path wizard check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                     # ONTAP displays the wizard prompt then waits silently for
                     # Enter.  No more data arrives so ch.recv_ready() is always
                     # False.  Catch the prompt here so we don't time out.
                     if _opt4_mgmt_answered and _output_contains_wizard_start(_opt4_buf):
-                        _status(f"  \u2705 [{ip}] Cluster setup wizard prompt detected – sending Enter.")
+                        _status(f"  \u2705 [{ip}] Cluster setup wizard prompt detected â€“ sending Enter.")
                         if log:
                             log.log(f"[{ip}] wizard prompt detected (idle poll); sending Enter")
                         if _nf6:
-                            _par_write(_nf6, "\n>>> Enter (wizard – idle poll)\n")
+                            _par_write(_nf6, "\n>>> Enter (wizard â€“ idle poll)\n")
                         with suppress(Exception):
                             ch.send("\r")
                         with connect_lock:
@@ -15339,15 +15372,15 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         return
                     time.sleep(0.1)
                 if not _m3:
-                    _status(f"  ⚠️  [{ip}] Option 4 boot timed out after 20 min.")
+                    _status(f"  âš ï¸  [{ip}] Option 4 boot timed out after 20 min.")
                     if log:
                         log.log(f"[{ip}] option 4 boot timed out", prefix="WARN")
 
             if _m3 and "timed out waiting for vldb online" in _m3.lower():
-                _status(f"  ⚠️  [{ip}] VLDB online timeout detected.")
+                _status(f"  âš ï¸  [{ip}] VLDB online timeout detected.")
                 if _vldb_prompt():
-                    _status(f"  ✅ [{ip}] Proceeding to reinitialization.")
-                    # Image is installed at this point — mark install_done
+                    _status(f"  âœ… [{ip}] Proceeding to reinitialization.")
+                    # Image is installed at this point â€” mark install_done
                     # so a failed reconnect does not force a re-install on
                     # resume.
                     with connect_lock:
@@ -15358,7 +15391,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             _nf6.close()
                     return
                 else:
-                    _status(f"  ❌ [{ip}] Operator chose not to proceed. Exiting.")
+                    _status(f"  âŒ [{ip}] Operator chose not to proceed. Exiting.")
                     _shutdown_event.set()
                     if _nf6:
                         with suppress(Exception):
@@ -15366,11 +15399,11 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     return
 
             if not (_m3 and "login:" in _m3):
-                _status(f"  ⚠️  [{ip}] Login prompt not seen within 20 min; node may still be booting.")
+                _status(f"  âš ï¸  [{ip}] Login prompt not seen within 20 min; node may still be booting.")
                 if log:
                     log.log(f"[{ip}] login prompt not seen after option 6 (timeout)", prefix="WARN")
             else:
-                _status(f"  [{ip}] Login prompt seen – waiting for varfs reboot trigger...")
+                _status(f"  [{ip}] Login prompt seen â€“ waiting for varfs reboot trigger...")
                 if log:
                     log.log(f"[{ip}] first login prompt seen; waiting for varfs_backup_restore reboot message")
                 # Phase 1: wait (no timer) until the varfs reboot message
@@ -15392,7 +15425,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     if _now_pre >= _next_varfs_progress:
                         _elapsed_pre = int(_now_pre - _varfs_wait_start)
                         _status(
-                            f"  ⏳ [{ip}] Still waiting for varfs reboot trigger... "
+                            f"  â³ [{ip}] Still waiting for varfs reboot trigger... "
                             f"({_elapsed_pre}s elapsed)"
                         )
                         if log:
@@ -15418,7 +15451,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             _status(f"  \u26a0\ufe0f  [{ip}] VLDB online timeout detected (post-login wait).")
                             if _vldb_prompt():
                                 _status(f"  \u2705 [{ip}] Proceeding to reinitialization.")
-                                # Image is installed at this point — mark
+                                # Image is installed at this point â€” mark
                                 # install_done so resume skips install on
                                 # restart even if the reconnect later fails.
                                 with connect_lock:
@@ -15431,7 +15464,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             break
                         if _varfs_trigger in _pre_buf.lower():
                             _varfs_seen = True
-                            _status(f"  [{ip}] varfs reboot trigger detected – starting 15 min watch timer...")
+                            _status(f"  [{ip}] varfs reboot trigger detected â€“ starting 15 min watch timer...")
                             if log:
                                 log.log(f"[{ip}] varfs_backup_restore reboot message seen; starting watch timer")
                             break
@@ -15440,7 +15473,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     time.sleep(0.1)
                 if (not _varfs_seen) and (not _shutdown_event.is_set()):
                     _status(
-                        f"  ⚠️  [{ip}] varfs reboot trigger not seen within "
+                        f"  âš ï¸  [{ip}] varfs reboot trigger not seen within "
                         f"{_varfs_wait_timeout // 60} min; treating option 6 as complete."
                     )
                     if log:
@@ -15451,15 +15484,15 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         )
 
                 if not _varfs_seen:
-                    # Shutdown/interrupt before varfs message – treat as done.
-                    _status(f"  ✅ [{ip}] Option 6 complete – node is at login prompt.")
+                    # Shutdown/interrupt before varfs message â€“ treat as done.
+                    _status(f"  âœ… [{ip}] Option 6 complete â€“ node is at login prompt.")
                     if log:
                         log.log(
                             f"[{ip}] option 6 complete; no varfs reboot trigger "
                             "(interrupted/timeout)"
                         )
                 else:
-                    # Phase 2: varfs reboot confirmed – watch up to 15 min for
+                    # Phase 2: varfs reboot confirmed â€“ watch up to 15 min for
                     # boot indicators, then wait for final login prompt.
                     _watch_buf = _pre_buf  # carry over any already-received data
                     _watch_start = time.monotonic()
@@ -15503,7 +15536,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         time.sleep(0.1)
 
                     if _reboot_seen:
-                        _status(f"  ⏳ [{ip}] Reboot detected – waiting up to 20 min for final login prompt...")
+                        _status(f"  â³ [{ip}] Reboot detected â€“ waiting up to 20 min for final login prompt...")
                         if log:
                             log.log(f"[{ip}] reboot detected; waiting for second login prompt (up to 20 min)")
                         _reboot_wait_start = time.monotonic()
@@ -15511,18 +15544,18 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         _reboot_elapsed = time.monotonic() - _reboot_wait_start
                         _elapsed_str = f"{_reboot_elapsed / 60:.1f} min ({_reboot_elapsed:.0f}s)"
                         if _m4 and "login:" in _m4:
-                            _status(f"  ✅ [{ip}] Option 6 complete – login prompt seen after {_elapsed_str}.")
+                            _status(f"  âœ… [{ip}] Option 6 complete â€“ login prompt seen after {_elapsed_str}.")
                             if log:
                                 log.log(f"[{ip}] option 6 complete; final login prompt seen in {_elapsed_str}")
                             with connect_lock:
                                 _opt6_login_nodes.add(ip)
                             _mark_install_done(ip)
                         else:
-                            _status(f"  ⚠️  [{ip}] Final login prompt not seen after {_elapsed_str}; node may still be booting.")
+                            _status(f"  âš ï¸  [{ip}] Final login prompt not seen after {_elapsed_str}; node may still be booting.")
                             if log:
                                 log.log(f"[{ip}] final login prompt not seen after reboot; waited {_elapsed_str}", prefix="WARN")
                     else:
-                        _status(f"  ✅ [{ip}] Option 6 complete – node is at login prompt.")
+                        _status(f"  âœ… [{ip}] Option 6 complete â€“ node is at login prompt.")
                         if log:
                             log.log(f"[{ip}] option 6 complete; login prompt confirmed (no further reboot)")
                         with connect_lock:
@@ -15532,7 +15565,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             if _nf6:
                 try:
                     _nf6.close()
-                    _status(f"  📝 [{ip}] Boot log saved: {_nf6.name}")
+                    _status(f"  ðŸ“ [{ip}] Boot log saved: {_nf6.name}")
                 except Exception:
                     pass
                 except Exception:
@@ -15552,7 +15585,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             t.join()
         _raise_pending_checkpoint_failure()
 
-        # ── Checkpoint: mark install_done for every node that reached login ─
+        # â”€â”€ Checkpoint: mark install_done for every node that reached login â”€
         # Per-node marks are already written inside _select_option6 as soon
         # as each node reaches login, so a kill mid-run preserves progress.
         # This post-join sweep is a belt-and-suspenders idempotent backstop.
@@ -15569,12 +15602,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 except Exception:
                     pass
 
-        # ── Version check when all nodes are already running ONTAP ────────────
+        # â”€â”€ Version check when all nodes are already running ONTAP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # If every node reached login: without needing option 6, the cluster is
         # still running.  Log in via the first node's console, run 'version',
         # and let the operator confirm before wiping everything.
         # Skip this block when VLDB timeout caused nodes to be marked as
-        # "login" — those nodes are NOT actually at a login prompt.
+        # "login" â€” those nodes are NOT actually at a login prompt.
         if (_opt6_login_nodes == set(_install_bmc_ips)
                 and not _vldb_timeout_nodes
                 and not _nvram_mismatch_nodes):
@@ -15653,7 +15686,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 log.log(f"4b: version check prompt answered '{_cont_ans}' "
                         f"(version={_ver_str!r})")
             if _cont_ans != "y":
-                print("\n  Aborting reinit – install succeeded, cluster left running.")
+                print("\n  Aborting reinit â€“ install succeeded, cluster left running.")
                 if log:
                     log.set_outcome("PASS", "install complete; operator chose not to reinit")
                 # Clean up channels and return success (install worked fine).
@@ -15668,7 +15701,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 return True
         elif _nvram_mismatch_nodes:
             _status(
-                "  ⚠️  NVRAM sysid mismatch was detected on one or more nodes; "
+                "  âš ï¸  NVRAM sysid mismatch was detected on one or more nodes; "
                 "proceeding directly to reinitialization without prompt."
             )
             if log:
@@ -15696,7 +15729,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if not _do_reinit:
             return True
 
-    # ── Skip-install equivalent of the in-block early return ──────────────
+    # â”€â”€ Skip-install equivalent of the in-block early return â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # When the install block was skipped on resume (all nodes already at
     # ONTAP login) and the operator did not request reinit, there is nothing
     # left to do; mirror the in-block early-return so flow does not fall
@@ -15748,7 +15781,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 if _is_valid_ipv4(_saved_ip):
                     _resume_ready_peer_ips[_peer_ip] = _saved_ip
 
-    # ── Step 6b: Reinit – reconnect to all BMCs and reach LOADER ──────────
+    # â”€â”€ Step 6b: Reinit â€“ reconnect to all BMCs and reach LOADER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # All nodes are now at the ONTAP login prompt (4b install finished).
     # Reconnect via BMC, reset each node to LOADER, send the boot commands
     # that bring up the boot menu, and then run the selected init flow.
@@ -15769,7 +15802,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 and (_checkpoint.is_done("cluster_formed")
                      or _checkpoint.is_done("primary_setup_done"))):
             _ans_primary_reinit = _prompt_with_timeout(
-                "\n  ⚠️  Checkpoint shows primary cluster is already created. "
+                "\n  âš ï¸  Checkpoint shows primary cluster is already created. "
                 "Reinit/reset the primary anyway? [y/N]: ",
                 default="n",
                 timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
@@ -15777,7 +15810,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             if _ans_primary_reinit not in ("y", "yes"):
                 _reconnect_targets.remove(first_ip)
                 _status(
-                    f"  🔒 [{first_ip}] Primary reinit skipped by checkpoint safety policy."
+                    f"  ðŸ”’ [{first_ip}] Primary reinit skipped by checkpoint safety policy."
                 )
                 if log:
                     log.log(
@@ -15802,7 +15835,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if _protected_peers:
             _peer_list = ", ".join(sorted(_protected_peers))
             _ans_peer_reinit = _prompt_with_timeout(
-                "\n  ⚠️  Checkpoint shows these peers already passed option 4: "
+                "\n  âš ï¸  Checkpoint shows these peers already passed option 4: "
                 f"{_peer_list}. Replay destructive reinit for them anyway? [y/N]: ",
                 default="n",
                 timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
@@ -15812,7 +15845,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     if _ip in _reconnect_targets:
                         _reconnect_targets.remove(_ip)
                 _status(
-                    "  🔒 Skipping peer reinit replay for option4-complete nodes "
+                    "  ðŸ”’ Skipping peer reinit replay for option4-complete nodes "
                     "(checkpoint safety policy)."
                 )
                 if log:
@@ -15829,7 +15862,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     if _resume_mode3_add_only:
         if _resume_add_phase_inferred:
             print(
-                "\n  🔖 Resume checkpoint indicates add-node progress "
+                "\n  ðŸ”– Resume checkpoint indicates add-node progress "
                 "(peer_option4_done present); skipping destructive reinit and "
                 "resuming add-node phase."
             )
@@ -15838,16 +15871,16 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             )
         else:
             print(
-                "\n  🔖 Resume checkpoint indicates cluster creation already completed; "
+                "\n  ðŸ”– Resume checkpoint indicates cluster creation already completed; "
                 "skipping destructive reinit and resuming add-node phase."
             )
     elif _resume_cluster_already_created:
         print(
-            "\n  🔖 Resume checkpoint indicates primary cluster is already created; "
+            "\n  ðŸ”– Resume checkpoint indicates primary cluster is already created; "
             "skipping primary reset/boot-menu replay."
         )
     else:
-        print(f"\n  ✅ Netboot/install complete on all nodes. Reconnecting to "
+        print(f"\n  âœ… Netboot/install complete on all nodes. Reconnecting to "
               f"{len(_reconnect_targets)} BMC(s) for cluster reinit (mode {_mode_sel})...")
     if log:
         if _resume_mode3_add_only:
@@ -15855,16 +15888,16 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         elif _resume_cluster_already_created:
             log.log("4b resume: primary cluster already created; skipping primary reconnect/reset")
         else:
-            log.start_phase("4b – Reinit Reconnect to LOADER")
+            log.start_phase("4b â€“ Reinit Reconnect to LOADER")
 
     _reconnect_errors = []
     _reconnect_lock = threading.Lock()
     _primary_resume_buf = ""
 
-    # ── Pre-reconnect cleanup: clear known_hosts for all BMCs ─────────────
+    # â”€â”€ Pre-reconnect cleanup: clear known_hosts for all BMCs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Before attempting to reconnect via BMC SSH, pre-emptively refresh
     # known_hosts to avoid stale host-key issues from the boot menu phase.
-    # Use parallel cleanup to avoid per-BMC delays (20s per IP → single pass).
+    # Use parallel cleanup to avoid per-BMC delays (20s per IP â†’ single pass).
     if _reconnect_targets:
         _parallel_cleanup_known_hosts(
             _reconnect_targets, 
@@ -15874,8 +15907,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
     # Pre-open one unified per-BMC session log file for reinit phases
     # (reconnect-to-LOADER, boot menu, and init wizard).
-    #   Primary node → bmc_session_reinit_primary_<ip>_<ts>.log
-    #   Peer nodes   → bmc_session_add_<ip>_<ts>.log
+    #   Primary node â†’ bmc_session_reinit_primary_<ip>_<ts>.log
+    #   Peer nodes   â†’ bmc_session_add_<ip>_<ts>.log
     _node_reinit_logs = {}  # {ip: file_handle}
     for _ip in bmc_ips:
         _pfx = "bmc_session_reinit_primary" if _ip == first_ip else "bmc_session_add"
@@ -15883,12 +15916,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _nf = _node_log_open(_ip, _log_dir, prefix=_pfx,
                                  previous_log=_node_files.get(_ip))
             _node_reinit_logs[_ip] = _nf
-            _status(f"  📝 [{_ip}] Reinit log → {_nf.name}")
+            _status(f"  ðŸ“ [{_ip}] Reinit log â†’ {_nf.name}")
             # Populate module-level peer log paths for peer nodes only.
             if _ip != first_ip:
                 _peer_log_paths[_ip] = _nf.name
         except Exception as _e:
-            _status(f"  ⚠️  [{_ip}] Could not open reinit log: {_e}")
+            _status(f"  âš ï¸  [{_ip}] Could not open reinit log: {_e}")
             _node_reinit_logs[_ip] = None
 
     if _resume_primary_from_wizard:
@@ -15903,7 +15936,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             loader_channels[first_ip] = _pch
             _primary_resume_buf = _pbuf or ""
             _status(
-                f"  🔖 [{first_ip}] Resume checkpoint found node already in cluster setup "
+                f"  ðŸ”– [{first_ip}] Resume checkpoint found node already in cluster setup "
                 "wizard; skipping reset/LOADER replay."
             )
             if log:
@@ -15944,7 +15977,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         # probe the current console state first and skip reset if this node is
         # already sitting at LOADER.
         if resuming and _skip_install:
-            _status(f"  🔍 [{ip}] Checkpoint resume: probing console state before reset...")
+            _status(f"  ðŸ” [{ip}] Checkpoint resume: probing console state before reset...")
             _pcl, _pch, _pstate, _ = _bmc_attach_console_without_reset(
                 ip, bmc_user, bmc_passwords.get(ip, ""),
                 node_log=_rl_nf, fallback_passwords=_fb,
@@ -15952,7 +15985,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             if _pcl is not None and _pch is not None and _pstate == "loader":
                 cl, ch, _fail_reason = _pcl, _pch, None
                 _status(
-                    f"  ✅ [{ip}] Checkpoint resume: node already at LOADER; "
+                    f"  âœ… [{ip}] Checkpoint resume: node already at LOADER; "
                     "skipping system reset."
                 )
                 if log:
@@ -16004,12 +16037,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     )
 
         if (cl is None or ch is None) and _fail_reason == "loader_timeout":
-            # LOADER was not seen within the timeout but SSH auth succeeded –
+            # LOADER was not seen within the timeout but SSH auth succeeded â€“
             # the node is likely still booting.  Give it one more extended
             # wait (the existing retry loop already tried 3 times; this adds
             # one final 120s back-off before the password-fallback path).
             _status(
-                f"  \u23f3 [{ip}] LOADER timeout (SSH OK) – waiting up to 120s "
+                f"  \u23f3 [{ip}] LOADER timeout (SSH OK) â€“ waiting up to 120s "
                 f"before final retry..."
             )
             # Use event-based wait instead of sleep loop to allow early exit
@@ -16031,7 +16064,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             # the whole parallel run.
             # NOTE: only attempt alternate passwords on SSH-level failures.
             # A loader_timeout failure means SSH was fine; the node is just
-            # still booting – prompting for a new password would mislead.
+            # still booting â€“ prompting for a new password would mislead.
             if _fail_reason == "loader_timeout":
                 with _reconnect_lock:
                     _reconnect_errors.append(ip)
@@ -16044,7 +16077,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             # Blank password is now included in the fallback queue tried by the
             # primary loop (_bmc_fallback_passwords).  Only retry blank explicitly
             # if the stored password was already blank (i.e. blank didn't work at
-            # all and something else is wrong) — skip the redundant attempt.
+            # all and something else is wrong) â€” skip the redundant attempt.
             if bmc_passwords.get(ip, "") != "":
                 _status(
                     f"  \U0001f510 [{ip}] Reconnect failed after {_reach_max} "
@@ -16065,7 +16098,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 # Last resort: ask the operator for an updated password.
                 # Serialize across worker threads so prompts don't tangle.
                 # First check if another parallel thread already obtained a new
-                # password for a different node – try it before prompting again.
+                # password for a different node â€“ try it before prompting again.
                 _new_pw = None
                 _SKIP_SENTINEL = "SKIP"
                 _current_pw = bmc_passwords.get(ip, "")
@@ -16143,7 +16176,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             with _reconnect_lock:
                 _reconnect_errors.append(ip)
             _status(
-                f"  ❌ [{ip}] Unsupported boot DNA detected; aborting all node work."
+                f"  âŒ [{ip}] Unsupported boot DNA detected; aborting all node work."
             )
             return
         for cmd in get_loader_commands():
@@ -16157,7 +16190,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         with _reconnect_lock:
             loader_channels[ip] = ch
             loader_clients[ip] = cl
-        _status(f"  ✅ [{ip}] Reconnected to LOADER – boot_ontap menu sent.")
+        _status(f"  âœ… [{ip}] Reconnected to LOADER â€“ boot_ontap menu sent.")
         if _checkpoint:
             _checkpoint.mark_node_done("reinit_loader", ip)
             if log:
@@ -16171,12 +16204,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         return False
 
     if _reconnect_errors:
-        print(f"\n  ⚠️  Reconnect failed for: {', '.join(_reconnect_errors)}")
+        print(f"\n  âš ï¸  Reconnect failed for: {', '.join(_reconnect_errors)}")
         if log:
             log.log(f"4b: reinit reconnect failed: {_reconnect_errors}", prefix="WARN")
         # If the primary node failed to reconnect, there is nothing to do.
         if first_ip in _reconnect_errors:
-            print(f"\n  ❌ Authentication/connection failed for primary node {first_ip}."
+            print(f"\n  âŒ Authentication/connection failed for primary node {first_ip}."
                   f" Aborting.")
             if log:
                 log.log(f"4b: primary node {first_ip} reconnect failed; aborting",
@@ -16190,12 +16223,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     _peers_for_reinit = bmc_ips[1:] if _mode_sel == "3" else []
 
     if first_ch is None and not (_resume_mode3_add_only or _resume_cluster_already_created):
-        print("\n  ❌ No channel available for first node. Cannot start reinit.")
+        print("\n  âŒ No channel available for first node. Cannot start reinit.")
         if log:
             log.log("4b: no channel for primary reinit after reconnect", prefix="ERROR")
         return False
 
-    # ── Wait for post-install boot menu on primary, select 9 (modes 1/3) ──
+    # â”€â”€ Wait for post-install boot menu on primary, select 9 (modes 1/3) â”€â”€
     # Reuse the unified log already opened for the primary node.
     _pnf_primary = _node_reinit_logs.get(first_ip)
 
@@ -16207,7 +16240,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             log.log(f"[{first_ip}] resume: primary cluster already created; skipping option 9/4 replay")
     elif not _resume_primary_from_wizard:
         if log:
-            log.start_phase("4b – Boot Menu Selection")
+            log.start_phase("4b â€“ Boot Menu Selection")
         _first_rc_ctx = _make_reconnect_ctx(
             first_ip,
             bmc_user,
@@ -16218,7 +16251,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         )
         if not wait_for_boot_menu_and_select(
                 first_ch, node_log=_pnf_primary, reconnect_ctx=_first_rc_ctx):
-            print(f"  ⚠️  [{first_ip}] Boot menu not detected; operator may need to intervene.")
+            print(f"  âš ï¸  [{first_ip}] Boot menu not detected; operator may need to intervene.")
             if log:
                 log.log(f"[{first_ip}] boot menu not seen for primary reinit", prefix="WARN")
         first_ch = _first_rc_ctx.get("channel") or first_ch
@@ -16241,7 +16274,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     elif log:
         log.log(f"[{first_ip}] resume: skipping boot-menu replay because wizard is already active")
 
-    # ── Run primary init wizard ────────────────────────────────────────────
+    # â”€â”€ Run primary init wizard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Install _NodeLogWriter on sys.stdout so all wizard/auto_complete output
     # goes to the file; only milestone lines reach the terminal.
     _primary_nlw = (
@@ -16260,7 +16293,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         elif _resume_primary_from_wizard:
             print(f"\n  [{first_ip}] Resuming cluster setup wizard without reset...")
             if log:
-                log.start_phase("4b – Cluster Initialization (primary resume)")
+                log.start_phase("4b â€“ Cluster Initialization (primary resume)")
             _wizard_ok = _run_cluster_setup_wizard(
                 first_ch, primary_bmc=first_ip, initial_buf=_primary_resume_buf
             )
@@ -16271,7 +16304,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         elif _auto_setup:
             print(f"\n  [{first_ip}] Starting automatic cluster initialization...")
             if log:
-                log.start_phase("4b – Parallel Option 4 (primary init + peers wait)")
+                log.start_phase("4b â€“ Parallel Option 4 (primary init + peers wait)")
             _auto_init_rc = _make_reconnect_ctx(
                 first_ip,
                 bmc_user,
@@ -16286,12 +16319,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             if log:
                 log.end_phase()
         else:
-            # 1a: interactive session — pass-through mode so operator sees everything
+            # 1a: interactive session â€” pass-through mode so operator sees everything
             if _primary_nlw:
                 _primary_nlw.interactive = True
             print(f"\n  [{first_ip}] Switching to interactive session...")
             if log:
-                log.start_phase("4b – Interactive Session")
+                log.start_phase("4b â€“ Interactive Session")
             session = InteractiveSession(
                 first_ch, first_cl, first_ip,
                 bmc_user, bmc_passwords.get(first_ip, ""),
@@ -16353,7 +16386,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             with suppress(Exception):
                 _pcl.close()
 
-    # ── Mode 3: auto-join peer nodes ───────────────────────────────────────
+    # â”€â”€ Mode 3: auto-join peer nodes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if _mode_sel == "3" and _peers_for_reinit:
         print(f"\n  Mode 3: auto-joining {len(_peers_for_reinit)} peer node(s) in parallel...")
         if log:
@@ -16395,7 +16428,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if _resume_ready_peer_ips:
             _4b_cluster_ips_out.update(_resume_ready_peer_ips)
             print(
-                "\n  🔖 Checkpoint: skipping peer LOADER replay for "
+                "\n  ðŸ”– Checkpoint: skipping peer LOADER replay for "
                 f"{len(_resume_ready_peer_ips)} node(s) already past node configuration:"
             )
             for _peer_ip, _cluster_ip in sorted(_resume_ready_peer_ips.items()):
@@ -16429,7 +16462,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         ]
         if _resume_mode3_add_only and _peer_replay_targets:
             _status(
-                "\n  🔎 Resume add-node phase: probing remaining peer nodes "
+                "\n  ðŸ”Ž Resume add-node phase: probing remaining peer nodes "
                 "without reset/reinit..."
             )
             _probed_ready = []
@@ -16443,7 +16476,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _probed_not_ready.append((_pip, _why or "not ready for add-node"))
             _peer_replay_targets = []
             if _probed_ready:
-                _status("  ✅ Resume probe ready peers:")
+                _status("  âœ… Resume probe ready peers:")
                 for _pip, _cip in _probed_ready:
                     _status(f"     [{_pip}] cluster IP {_cip}")
                     if _checkpoint:
@@ -16451,7 +16484,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             _checkpoint.mark_node_done("peer_option4_done", _pip)
             if _probed_not_ready:
                 for _pip, _why in _probed_not_ready:
-                    _status(f"  ⚠️  [{_pip}] resume probe not add-node ready: {_why}")
+                    _status(f"  âš ï¸  [{_pip}] resume probe not add-node ready: {_why}")
                     with _peer_lock:
                         _peer_errors.append((_pip, _why))
 
@@ -16468,12 +16501,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         _raise_pending_checkpoint_failure()
 
         if _peer_errors:
-            print(f"  ⚠️  Peer reinit issues: {_peer_errors}")
+            print(f"  âš ï¸  Peer reinit issues: {_peer_errors}")
             _run_ok = False
             if log:
                 log.log(f"4b mode 3: peer reinit issues: {_peer_errors}", prefix="ERROR")
 
-        # ── Bulk cluster add via the primary node's cluster shell ──────────
+        # â”€â”€ Bulk cluster add via the primary node's cluster shell â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         _4b_pch = None
         _4b_pcl = None
         _4b_filtered_ips_out = dict(_4b_cluster_ips_out)
@@ -16497,7 +16530,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     if not _login_primary_cluster_shell(_4b_pch, _4b_admin_pw):
                         _4b_pch = None
                 except Exception as _4b_e:
-                    _status(f"  ⚠️  Could not connect to cluster mgmt: {_4b_e}")
+                    _status(f"  âš ï¸  Could not connect to cluster mgmt: {_4b_e}")
                     _4b_pch = None
 
             if _4b_pch:
@@ -16519,7 +16552,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     if ((_cip and _cip in _joined_cluster_ips)
                             or (_nmip and _nmip in _joined_node_mgmt)):
                         _status(
-                            f"  🔖 [{_pip}] already appears in primary cluster; "
+                            f"  ðŸ”– [{_pip}] already appears in primary cluster; "
                             "skipping add-node for this peer."
                         )
                         with suppress(Exception):
@@ -16533,14 +16566,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 if _4b_collected_ips:
                     _add_ok = _cluster_add_nodes_bulk(_4b_pch, _4b_collected_ips, log=log)
                 else:
-                    _status("  ℹ️  No pending peers remain for cluster add-node.")
+                    _status("  â„¹ï¸  No pending peers remain for cluster add-node.")
                     _add_ok = True
                 if not _add_ok:
                     _run_ok = False
                     if log:
                         log.log("4b mode 3: cluster add-node did not complete", prefix="ERROR")
             else:
-                _status("  ⚠️  No cluster shell available; skipping cluster add-node.")
+                _status("  âš ï¸  No cluster shell available; skipping cluster add-node.")
                 _run_ok = False
                 if log:
                     log.log("4b mode 3: cluster shell unavailable; skipping cluster add-node",
@@ -16548,13 +16581,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         else:
             if _resume_mode3_add_only:
                 _status(
-                    "  ℹ️  No add-node candidates discovered during resume probe; "
+                    "  â„¹ï¸  No add-node candidates discovered during resume probe; "
                     "nothing to add."
                 )
                 if log:
                     log.log("4b mode 3 resume: no pending add-node candidates")
             else:
-                _status("  ⚠️  No cluster IPs collected from peers; skipping cluster add-node.")
+                _status("  âš ï¸  No cluster IPs collected from peers; skipping cluster add-node.")
                 _run_ok = False
                 if log:
                     log.log("4b mode 3: no cluster IPs; skipping cluster add-node",
@@ -16562,7 +16595,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
         if _4b_pch:
             _target_nodes = len(bmc_ips)
-            print(f"\n  🔍 Final health check: waiting for {_target_nodes} healthy node(s)...")
+            print(f"\n  ðŸ” Final health check: waiting for {_target_nodes} healthy node(s)...")
             _healthy_nodes = _wait_for_cluster_nodes_healthy(
                 _4b_pch,
                 target_count=_target_nodes,
@@ -16592,7 +16625,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out) if r.get("node")]
             if len(_expected_nodes) >= _target_nodes:
                 _expected_nodes = _expected_nodes[:_target_nodes]
-                print("\n  🔍 Final failover/giveback check...")
+                print("\n  ðŸ” Final failover/giveback check...")
                 if not _wait_for_cluster_healthy(
                     _4b_pch, _expected_nodes, total_timeout=1200, poll_interval=60, log=log
                 ):
@@ -16636,7 +16669,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if _nf:
             try:
                 _nf.close()
-                _status(f"  📝 [{_ip}] Reinit log saved: {_nf.name}")
+                _status(f"  ðŸ“ [{_ip}] Reinit log saved: {_nf.name}")
             except Exception:
                 pass
 
@@ -16728,7 +16761,7 @@ def _find_upgrade_package():
                 return None, None
             if sel.isdigit() and 1 <= int(sel) <= len(tgz_files):
                 return "file", tgz_files[int(sel) - 1]
-            print("  ⚠️  Out of range.")
+            print("  âš ï¸  Out of range.")
 
     # Manual entry
     print("\n  Enter a path to a .tgz file, a directory containing .tgz files,")
@@ -16754,7 +16787,7 @@ def _find_upgrade_package():
                 if fn.lower().endswith(".tgz")
             )
             if not dir_tgz:
-                print(f"  ⚠️  No .tgz files found in: {expanded}")
+                print(f"  âš ï¸  No .tgz files found in: {expanded}")
                 continue
             print(f"\n  Found {len(dir_tgz)} package(s) in {expanded}:")
             for i, p in enumerate(dir_tgz, 1):
@@ -16776,13 +16809,13 @@ def _find_upgrade_package():
                     return None, None
                 if sel.isdigit() and 1 <= int(sel) <= len(dir_tgz):
                     return "file", dir_tgz[int(sel) - 1]
-                print("  ⚠️  Out of range.")
+                print("  âš ï¸  Out of range.")
             continue
         if not os.path.isfile(expanded):
-            print(f"  ⚠️  Path not found: {expanded}")
+            print(f"  âš ï¸  Path not found: {expanded}")
             continue
         if not expanded.lower().endswith(".tgz"):
-            print("  ⚠️  Only .tgz upgrade packages are supported.")
+            print("  âš ï¸  Only .tgz upgrade packages are supported.")
             continue
         return "file", expanded
 
@@ -16790,12 +16823,12 @@ def _find_upgrade_package():
 def _start_http_server(file_path):
     """Serve a single file over HTTP/1.0 in a detached subprocess.
 
-    The subprocess is fully independent of this process — it survives if the
+    The subprocess is fully independent of this process â€” it survives if the
     parent script exits normally, is interrupted, or crashes.  The server
     auto-exits 30 minutes after the last transfer completes (or 30 minutes
     after start if no connection ever arrives) so it does not run forever.
 
-    Returns (None, url, server) — call server.shutdown() to stop it early.
+    Returns (None, url, server) â€” call server.shutdown() to stop it early.
     The first element is None (callers only store it; none join on it).
 
     Why a raw-socket server (same rationale as before)
@@ -16808,7 +16841,7 @@ def _start_http_server(file_path):
     file_path = os.path.abspath(file_path)
     filename  = os.path.basename(file_path)
 
-    # ── Self-contained server code run inside the detached subprocess ──────
+    # â”€â”€ Self-contained server code run inside the detached subprocess â”€â”€â”€â”€â”€â”€
     # Uses only stdlib.  file_path and filename are embedded as literals via
     # the two f-string lines; all other braces belong to the subprocess code.
     _srv_code = (
@@ -17089,7 +17122,7 @@ def _parse_failover_show(output):
     rows = []
     lines = output.splitlines()
 
-    # ── 1. Find the dashes separator and derive column boundaries ──────────
+    # â”€â”€ 1. Find the dashes separator and derive column boundaries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Each group of consecutive '-' chars maps to one column.
     col_bounds = []   # list of (start, end) tuples
     data_start = None
@@ -17119,7 +17152,7 @@ def _parse_failover_show(output):
         s, e = col_bounds[col_idx]
         return line[s:e].strip() if len(line) > s else ""
 
-    # ── 2. Group data lines into logical records ────────────────────────────
+    # â”€â”€ 2. Group data lines into logical records â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # A new record starts when a line begins with a non-space character
     # (i.e. content at the Node column). Indented lines are continuations.
     records = []
@@ -17141,7 +17174,7 @@ def _parse_failover_show(output):
     if current:
         records.append(current)
 
-    # ── 3. Extract fields from each record ──────────────────────────────────
+    # â”€â”€ 3. Extract fields from each record â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     for rec in records:
         first = rec[0]
 
@@ -17158,7 +17191,7 @@ def _parse_failover_show(output):
         possible_str = ""
 
         if not first_is_node_only:
-            # Short node name — all columns fit on one line.
+            # Short node name â€” all columns fit on one line.
             partner     = _extract(first, 1)
             possible_str = _extract(first, 2)
 
@@ -17275,7 +17308,7 @@ def _cluster_port_health_issues(channel, expected_nodes=None, log=None):
 
     _ports_out = _ANSI_RE.sub("", _ports_out).replace("\r\n", "\n").replace("\r", "\n")
     if log:
-        log.log(f"Cluster health poll — network port show -ipspace Cluster:\n{_ports_out.strip()}")
+        log.log(f"Cluster health poll â€” network port show -ipspace Cluster:\n{_ports_out.strip()}")
 
     _rows = _parse_cluster_port_show(_ports_out)
     if not _rows:
@@ -17314,7 +17347,7 @@ def _parse_sfo_fields(out, node):
     Returns dict {"state_description": str, "tof": bool|None}
     or None if the node's row was not found / output unparseable.
     """
-    # Strip ANSI/VT100 escape codes — PTY sessions inject these and they
+    # Strip ANSI/VT100 escape codes â€” PTY sessions inject these and they
     # inflate string positions, breaking column-bounds-based extraction.
     out = _ANSI_RE.sub("", out)
     # Normalize carriage returns from PTY/serial-console sessions.
@@ -17384,7 +17417,7 @@ def _parse_sfo_fields(out, node):
             if state_col is not None:
                 state_parts.append(_ext(line, state_col))
         else:
-            # Continuation line — only collect if it is indented.
+            # Continuation line â€” only collect if it is indented.
             if line[0] != " ":
                 break
             if state_col is not None:
@@ -17414,7 +17447,7 @@ def _run_with_lif_reconnect_retry(operation, *, log=None, context="cluster poll"
     _last_error = None
     for _r in range(3):
         if _r > 0:
-            print(f"  ⏳ Waiting 60s for cluster LIF migration to complete and "
+            print(f"  â³ Waiting 60s for cluster LIF migration to complete and "
                   f"then retrying (round {_r + 1}/3)...")
             if log:
                 log.log(
@@ -17426,7 +17459,7 @@ def _run_with_lif_reconnect_retry(operation, *, log=None, context="cluster poll"
             return operation()
         except Exception as _e:
             _last_error = _e
-            print(f"  ⚠️  {context} error ({_e} - Cluster LIF migrating); "
+            print(f"  âš ï¸  {context} error ({_e} - Cluster LIF migrating); "
                   "attempting reconnect...")
             if log:
                 log.log(
@@ -17447,7 +17480,7 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
     not contain any of `exclude_substrs`.
 
     `also_accept` is an optional list of additional substrings (without
-    exclusions) that also count as success — used to handle cases where
+    exclusions) that also count as success â€” used to handle cases where
     the node transitions through the target state faster than the poll
     interval and is already in a later state (e.g. already "connected to"
     when waiting for "waiting for giveback").
@@ -17479,7 +17512,7 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
             if log:
                 log.log(f"Failover state poll failed for {node}: {_e}",
                         prefix="WARN")
-            print(f"  ⚠️  Failover state poll failed for {node}: {_e}")
+            print(f"  âš ï¸  Failover state poll failed for {node}: {_e}")
             _time.sleep(min(poll_interval, max(1, remaining)))
             continue
         # ONTAP wraps long node names and state descriptions across multiple
@@ -17489,7 +17522,7 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
         matched_state = None
         lines = [l for l in out.splitlines() if l.strip()]
         for i, line in enumerate(lines):
-            # Only match the node's OWN row — which always starts at column 0
+            # Only match the node's OWN row â€” which always starts at column 0
             # (non-indented).  Indented continuation lines carry partner names
             # and state fragments that may also contain the node name (e.g.
             # "Connected to rtp-afx1k-c01-01") but belong to a DIFFERENT node.
@@ -17518,7 +17551,7 @@ def _wait_for_failover_state(channel, node, target_substr, total_timeout=1800,
                     if log:
                         log.log(f"Failover state for {node}: matched '{target_substr}'")
                     return True
-            # Check also_accept targets (no exclusions — these are "past" states).
+            # Check also_accept targets (no exclusions â€” these are "past" states).
             for alt in also_accept:
                 if alt in block_lower:
                     if log:
@@ -17578,22 +17611,22 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
         except Exception as _e:
             if log:
                 log.log(f"Cluster health poll failed: {_e}", prefix="WARN")
-            print(f"  ⚠️  Cluster health poll failed: {_e}")
+            print(f"  âš ï¸  Cluster health poll failed: {_e}")
             _time.sleep(min(poll_interval, max(1, remaining)))
             continue
 
-        # Strip ANSI/VT100 escape codes injected by the BMC PTY — without this
+        # Strip ANSI/VT100 escape codes injected by the BMC PTY â€” without this
         # line[0] may be \x1b, causing node-name detection to fail or embed
         # escape sequences in the node name key.
         out_fo = _ANSI_RE.sub("", out_fo).replace("\r\n", "\n").replace("\r", "\n")
         out_gb = _ANSI_RE.sub("", out_gb).replace("\r\n", "\n").replace("\r", "\n")
 
-        # ── Check 1: all nodes connected cleanly ────────────────────────────
+        # â”€â”€ Check 1: all nodes connected cleanly â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         fo_rows = _parse_failover_show(out_fo)
         if log:
-            log.log(f"Cluster health poll — failover show:\n{out_fo.strip()}")
+            log.log(f"Cluster health poll â€” failover show:\n{out_fo.strip()}")
 
-        # Build node→row map from the already-parsed fo_rows (which use
+        # Build nodeâ†’row map from the already-parsed fo_rows (which use
         # column-bound extraction and handle ANSI/wrapped-line format).
         fo_map = {r["node"]: r for r in fo_rows}
 
@@ -17617,7 +17650,7 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
             if r["node"] in expected_nodes and not r["takeover_possible"]:
                 not_clean.append(f"{r['node']}: takeover_possible=false")
 
-        # ── Check 2: no aggregates to give back ─────────────────────────────
+        # â”€â”€ Check 2: no aggregates to give back â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Use raw (non-stripped) lines so we can distinguish unindented node-name
         # header rows (e.g. "rtp-afx1k-c01-01") from indented aggregate/status
         # rows.  Node-name headers must be skipped; only indented lines carry
@@ -17626,7 +17659,7 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
         for gl_raw in out_gb.splitlines():
             if not gl_raw.strip():
                 continue
-            # Skip unindented lines — these are node-name headers, not data.
+            # Skip unindented lines â€” these are node-name headers, not data.
             if gl_raw[0] != " " and "::" not in gl_raw:
                 continue
             gl = gl_raw.strip()
@@ -17644,7 +17677,7 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
             not_clean.append(f"pending giveback: {gl}")
             break
 
-        # ── Check 3: all cluster ports healthy/up ────────────────────────────
+        # â”€â”€ Check 3: all cluster ports healthy/up â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         not_clean.extend(
             _cluster_port_health_issues(channel, expected_nodes=expected_nodes, log=log)
         )
@@ -17756,9 +17789,9 @@ def _pick_bmc_from_existing_config():
     # Pick which file to use.
     if len(_candidates) == 1:
         _path, _data, _ents = _candidates[0]
-        print(f"\n  📄 Using BMC list from {_path}")
+        print(f"\n  ðŸ“„ Using BMC list from {_path}")
     else:
-        print("\n  📄 Found multiple config file(s) with BMC entries:")
+        print("\n  ðŸ“„ Found multiple config file(s) with BMC entries:")
         for _i, (_p, _, _e) in enumerate(_candidates, 1):
             _default_tag = "  (default)" if _i == 1 else ""
             print(f"    {_i}. {_p}  ({len(_e)} BMC(s)){_default_tag}")
@@ -17771,9 +17804,9 @@ def _pick_bmc_from_existing_config():
                 return None, None, None
             if _sel.isdigit() and 1 <= int(_sel) <= len(_candidates):
                 _path, _data, _ents = _candidates[int(_sel) - 1]
-                print(f"  ✅ Loaded {_path}")
+                print(f"  âœ… Loaded {_path}")
                 break
-            print("  ⚠️  Invalid selection.")
+            print("  âš ï¸  Invalid selection.")
 
     # Pick which BMC from the chosen file.
     print("\n  Select the BMC to use for this upgrade:")
@@ -17799,10 +17832,10 @@ def _pick_bmc_from_existing_config():
                 else:
                     _pw = getpass.getpass(f"  BMC password for {_u}@{_ip}: ")
             else:
-                print(f"  🔑 Using password from config for {_u}@{_ip}.")
+                print(f"  ðŸ”‘ Using password from config for {_u}@{_ip}.")
             # Stash the picked config so downstream lookups (e.g. per-node
             # management IPs for parallel image updates) can default from
-            # it without re-prompting. Promote any reinit-style file —
+            # it without re-prompting. Promote any reinit-style file â€”
             # node entries are useful even without a top-level `cluster`
             # block.
             if isinstance(_data, dict) and (
@@ -17817,7 +17850,7 @@ def _pick_bmc_from_existing_config():
                 if _cl_mgmt:
                     _cluster_config.setdefault("mgmt_ip", _cl_mgmt)
             return _ip, _u, _pw
-        print("  ⚠️  Invalid selection.")
+        print("  âš ï¸  Invalid selection.")
 
 
 def _run_ontap_upgrade(log):
@@ -17829,7 +17862,7 @@ def _run_ontap_upgrade(log):
     _print_banner("\U0001f4e6 ONTAP Software Upgrade (4a)")
     print("\n  Note: only upgrades are supported (not downgrades).\n")
 
-    # ── Step 0: check for config files before doing anything else ───────────
+    # â”€â”€ Step 0: check for config files before doing anything else â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _has_any_config = bool(_find_config_files(deep_scan=True)) or any(
         os.path.isfile(os.path.join(_d, "BMC_IP.json"))
         for _d in _default_config_search_dirs()
@@ -17848,7 +17881,7 @@ def _run_ontap_upgrade(log):
             _4a_pending_after_4e = True
             return None
 
-    # ── Step 1: locate upgrade package ─────────────────────────────────────
+    # â”€â”€ Step 1: locate upgrade package â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     src_type, src_value = _find_upgrade_package()
     if src_type is None:
         print("\n  No package selected. Exiting.")
@@ -17888,7 +17921,7 @@ def _run_ontap_upgrade(log):
             if log:
                 log.log(f"Upgrade package URL (user-supplied): {pkg_url}")
 
-        # ── Step 2: Credentials ──────────────────────────────────────────────
+        # â”€â”€ Step 2: Credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # The same credentials work for both the cluster-mgmt LIF and the BMC.
         print("")
         print("  " + "\u2500" * 58)
@@ -17908,7 +17941,7 @@ def _run_ontap_upgrade(log):
         _primary_bmc_user = bmc_user
         _primary_bmc_password = bmc_pass
 
-        # ── Step 3: Connect to cluster (prefer direct SSH, fall back to BMC) ──
+        # â”€â”€ Step 3: Connect to cluster (prefer direct SSH, fall back to BMC) â”€â”€
         # Direct SSH to the cluster-mgmt LIF is cleaner than BMC console:
         # no ANSI noise, no PTY pager quirks.  BMC is used only when the
         # cluster-mgmt LIF IP is unknown or unreachable.
@@ -17979,7 +18012,7 @@ def _run_ontap_upgrade(log):
                 _direct_cl_channel = None
 
         if _cl_ch is None:
-            # ── BMC fallback path ────────────────────────────────────────────
+            # â”€â”€ BMC fallback path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if log:
                 log.start_phase("BMC Connection")
             print(f"\n  \U0001f50c Connecting to BMC {bmc_host}...")
@@ -18002,7 +18035,7 @@ def _run_ontap_upgrade(log):
             if log:
                 log.end_phase()
 
-            # ── Step 4: BMC prompt + system console ──────────────────────────
+            # â”€â”€ Step 4: BMC prompt + system console â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if not wait_for_bmc_prompt(channel_41, auto_takeover=True):
                 print("  \u274c BMC prompt not received. Exiting.")
                 if log:
@@ -18016,7 +18049,7 @@ def _run_ontap_upgrade(log):
             with _suppress_console():
                 enter_system_console(channel_41, loader_message=False)
 
-            # ── Step 5: cluster shell login ──────────────────────────────────
+            # â”€â”€ Step 5: cluster shell login â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             with _suppress_console():
                 _cluster_up = _wait_for_cluster_prompt(channel_41, timeout=60)
             if not _cluster_up:
@@ -18044,7 +18077,7 @@ def _run_ontap_upgrade(log):
 
         print("  \u2705 Logged in to cluster shell.")
 
-        # ── Step 6: determine current image per node ────────────────────────
+        # â”€â”€ Step 6: determine current image per node â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if log:
             log.start_phase("Upgrade Workflow")
         print("\n  \U0001f50d Querying current images per node...")
@@ -18094,7 +18127,7 @@ def _run_ontap_upgrade(log):
         for node, img in node_image.items():
             image_to_nodes.setdefault(img, []).append(node)
 
-        # ── Step 7: promoted-dev-update per node (must run before image update) ──
+        # â”€â”€ Step 7: promoted-dev-update per node (must run before image update) â”€â”€
         print("\n  \U0001f504 Running promoted-dev-update on all nodes...")
         for nodename in node_image:
             print(f"  \u27a1\ufe0f  promoted-dev-update: {nodename}...")
@@ -18117,7 +18150,7 @@ def _run_ontap_upgrade(log):
                     _pdu_elapsed,
                 )
 
-        # ── Step 8: validate then run image update per group ────────────────
+        # â”€â”€ Step 8: validate then run image update per group â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         print("")
         print("  " + "\u2500" * 58)
         _parallel_update = True
@@ -18181,12 +18214,12 @@ def _run_ontap_upgrade(log):
                 print(f"\n  \U0001f4cd Using {len(_node_mgmt_pool)} node management "
                       f"IP(s) from reinit config for parallel SSH:")
                 for _ip in _node_mgmt_pool:
-                    print(f"     • {_ip}")
+                    print(f"     â€¢ {_ip}")
                 if log:
                     log.log(f"4a: node mgmt IPs from config: {_node_mgmt_pool}")
                 _validate_targets = list(_node_mgmt_pool)
             else:
-                # No node mgmt IPs anywhere on disk — try to discover them
+                # No node mgmt IPs anywhere on disk â€” try to discover them
                 # from the live cluster session before falling back to manual
                 # entry.
                 print("\n  \u26a0\ufe0f  No node management IPs found in any reinit "
@@ -18287,7 +18320,7 @@ def _run_ontap_upgrade(log):
                 if _bad:
                     print(f"\n  \u26a0\ufe0f  {len(_bad)} target(s) failed validation:")
                     for _ip, _why in _bad:
-                        print(f"     • {_ip}: {_why}")
+                        print(f"     â€¢ {_ip}: {_why}")
                     if log:
                         log.log(f"4a: parallel target validation failures: {_bad}",
                                 prefix="ERROR")
@@ -18334,8 +18367,8 @@ def _run_ontap_upgrade(log):
                 log.log(f"4a: per-node SSH target map: {_node_ssh_targets}")
 
         if _parallel_update:
-            # ── Parallel helper ────────────────────────────────────────────
-            # Each worker opens its own SSH connection → invoke_shell so
+            # â”€â”€ Parallel helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            # Each worker opens its own SSH connection â†’ invoke_shell so
             # ONTAP sees a proper interactive CLI session.  Output is
             # collected into a per-thread local buffer; nothing is written
             # to shared sys.stdout during the send/recv loop, eliminating
@@ -18386,7 +18419,7 @@ def _run_ontap_upgrade(log):
                 ch.close()
                 return buf
 
-            # ── Parallel validation ────────────────────────────────────────
+            # â”€â”€ Parallel validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             print("\n  \U0001f504 Running validation on all nodes in parallel...")
             if log:
                 log.log(f"Starting parallel validation on: {[t[0] for t in _update_tasks]}")
@@ -18473,7 +18506,7 @@ def _run_ontap_upgrade(log):
                     log.log("Validate-only: exiting after validation")
                 return True
 
-            # ── Parallel install ───────────────────────────────────────────
+            # â”€â”€ Parallel install â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             print(f"\n  \U0001f680 Starting parallel image install on {len(_update_tasks)} node(s)...")
             if log:
                 log.log(f"Starting parallel image install on: {[t[0] for t in _update_tasks]}")
@@ -18560,7 +18593,7 @@ def _run_ontap_upgrade(log):
                 log.log("All parallel image installs complete")
 
         else:
-            # ── Sequential path (original behaviour) ──────────────────────
+            # â”€â”€ Sequential path (original behaviour) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             for nodename, replace_img, current_img in _update_tasks:
                 _disp = _display_ontap_node_label(nodename, _node_mgmt_by_name)
                 print(f"\n  \u27a1\ufe0f  Node: {_disp}  (current={current_img}, replace={replace_img})")
@@ -18625,7 +18658,7 @@ def _run_ontap_upgrade(log):
                     log.log(f"Image installed on {nodename}")
                     log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] download + install", _seq_inst_elapsed)
 
-        # ── Pre-stage / validate-only exits ─────────────────────────────────
+        # â”€â”€ Pre-stage / validate-only exits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # The HTTP server is no longer needed once all image downloads are done.
         if httpd is not None:
             print("\n  \U0001f310 Shutting down temporary HTTP server (downloads complete)...")
@@ -18651,7 +18684,7 @@ def _run_ontap_upgrade(log):
                 log.log("Pre-stage only: exiting after image install, skipping rolling upgrade")
             return True
 
-        # ── Step 8b: version downgrade guard ────────────────────────────────
+        # â”€â”€ Step 8b: version downgrade guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Before marking the new image as default, verify it is not a lower
         # version than what is currently running.  Handles GA, P-patch, RC,
         # and X (engineering) builds correctly.
@@ -18721,17 +18754,17 @@ def _run_ontap_upgrade(log):
                 return False
             print("  \u26a0\ufe0f  Proceeding with lower-version image at operator request.")
             if log:
-                log.log("Operator confirmed version downgrade — proceeding")
+                log.log("Operator confirmed version downgrade â€” proceeding")
         elif _img_ver_data:
             print("  \u2705 Version check passed.")
             if log:
-                log.log("Version downgrade check passed — new image is same or higher version")
+                log.log("Version downgrade check passed â€” new image is same or higher version")
         else:
             print("  \u2139\ufe0f   Could not parse image version data; skipping downgrade check.")
             if log:
                 log.log("Could not parse image versions for downgrade check", prefix="WARN")
 
-        # ── Step 9: verify default image ────────────────────────────────────
+        # â”€â”€ Step 9: verify default image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         print("\n  \U0001f50d Verifying default image setting...")
         with _suppress_console():
             out_def = _run_cluster_command(
@@ -18759,7 +18792,7 @@ def _run_ontap_upgrade(log):
         if log:
             log.log("Default image verified on all nodes")
 
-        # ── Step 9: storage failover readiness ──────────────────────────────
+        # â”€â”€ Step 9: storage failover readiness â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         print("\n  \U0001f4e1 Checking storage failover readiness...")
         with _suppress_console():
             out_fo = _run_cluster_command(
@@ -18777,7 +18810,7 @@ def _run_ontap_upgrade(log):
         not_ready = [r for r in fo_rows if not r["takeover_possible"]]
         if not_ready:
             # Check if every blocked node is blocked solely due to version
-            # mismatch — if so we can proceed with allow-version-mismatch.
+            # mismatch â€” if so we can proceed with allow-version-mismatch.
             _ver_mismatch_nodes = {
                 r["node"] for r in not_ready
                 if _VERSION_MISMATCH_SIG in r.get("state_description", "").lower()
@@ -18785,7 +18818,7 @@ def _run_ontap_upgrade(log):
             _other_blocked = [r for r in not_ready
                               if r["node"] not in _ver_mismatch_nodes]
             if _other_blocked:
-                print("\n  ❌ Takeover not possible for:")
+                print("\n  âŒ Takeover not possible for:")
                 for r in _other_blocked:
                     print(f"    {r['node']} (partner: {r['partner']}): "
                           f"{r.get('state_description','')}")
@@ -18798,7 +18831,7 @@ def _run_ontap_upgrade(log):
                     )
                 return False
             if _ver_mismatch_nodes:
-                print(f"\n  ⚠️   Version mismatch detected for: "
+                print(f"\n  âš ï¸   Version mismatch detected for: "
                       f"{', '.join(sorted(_ver_mismatch_nodes))}")
                 print("  Will use -option allow-version-mismatch for affected nodes.")
                 if log:
@@ -18809,11 +18842,11 @@ def _run_ontap_upgrade(log):
                     )
         else:
             _ver_mismatch_nodes = set()
-            print("  ✅ All nodes report takeover-possible=true.")
+            print("  âœ… All nodes report takeover-possible=true.")
             if log:
                 log.log("All nodes takeover-possible")
 
-        # ── Step 10: build rolling upgrade groups ───────────────────────────
+        # â”€â”€ Step 10: build rolling upgrade groups â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Strategy: "partner" group = nodes that will be taken over first;
         # "main" group = nodes that take over.  Each node appears in exactly
         # one group (the partnership set is symmetric, so we pick unique pairs).
@@ -18834,9 +18867,9 @@ def _run_ontap_upgrade(log):
         print(f"    Phase 1 (partner group): {partner_group}")
         print(f"    Phase 2 (main group)   : {main_group}")
         if log:
-            log.log(f"Upgrade groups — partner: {partner_group}, main: {main_group}")
+            log.log(f"Upgrade groups â€” partner: {partner_group}, main: {main_group}")
 
-        # ── Step 11: rolling takeover/giveback ──────────────────────────────
+        # â”€â”€ Step 11: rolling takeover/giveback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Resolve the cluster-mgmt LIF IP once before starting the rolling
         # upgrade.  This IP floats to whichever node is alive during a
         # takeover, so it's the right target for SFO poll commands.
@@ -18883,12 +18916,12 @@ def _run_ontap_upgrade(log):
         if not _sfo_poll_ip:
             _sfo_poll_ip = _cluster_config.get("mgmt_ip")
         if not _sfo_poll_ip:
-            print("\n  ⚠️  Could not determine cluster-mgmt LIF IP for SFO polling.")
+            print("\n  âš ï¸  Could not determine cluster-mgmt LIF IP for SFO polling.")
             _sfo_poll_ip = input(
                 "  Enter cluster management IP for SFO monitoring: "
             ).strip() or None
         if _sfo_poll_ip:
-            print(f"  📡 SFO poll channel will use cluster-mgmt LIF: {_sfo_poll_ip}")
+            print(f"  ðŸ“¡ SFO poll channel will use cluster-mgmt LIF: {_sfo_poll_ip}")
             if log:
                 log.log(f"SFO poll IP: {_sfo_poll_ip}")
 
@@ -18902,9 +18935,9 @@ def _run_ontap_upgrade(log):
               storage failover show -node <node> -fields
                 state-description,takeover-of-possible
 
-            Phase 1: poll until "Waiting for giveback" → issue giveback.
+            Phase 1: poll until "Waiting for giveback" â†’ issue giveback.
             Phase 2: poll until tof=true and state does NOT contain
-                     "Waiting for cluster applications to come online…".
+                     "Waiting for cluster applications to come onlineâ€¦".
 
             If the SSH channel drops (e.g. while the main-group node reboots
             the cluster process), the function reconnects automatically.
@@ -18916,7 +18949,7 @@ def _run_ontap_upgrade(log):
                 "waiting for cluster applications to come online"
             )
 
-            # ── Dedicated direct-SSH poll channel ────────────────────────────
+            # â”€â”€ Dedicated direct-SSH poll channel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # _cl_ch is the primary cluster command channel (direct SSH or BMC
             # console).  When the taken-over node
             # reboots, that serial console shows boot messages and cannot
@@ -18930,7 +18963,7 @@ def _run_ontap_upgrade(log):
                 """Open (or reopen) a direct SSH poll connection.
                 Returns True on success, False if no usable IP is known.
                 """
-                # Always prefer the cluster-mgmt LIF — it floats to the
+                # Always prefer the cluster-mgmt LIF â€” it floats to the
                 # surviving node during a takeover and is always responsive.
                 # Fall back to _cl_mgmt_ip (user-supplied) then any node-mgmt
                 # IP as a last resort.
@@ -19010,7 +19043,7 @@ def _run_ontap_upgrade(log):
                         return _parsed, _out
                     except Exception as _e:
                         if _attempt == 0:
-                            print(f"  ⚠️  Poll channel error ({_e} - "
+                            print(f"  âš ï¸  Poll channel error ({_e} - "
                                   "Cluster LIF migrating); attempting reconnect...")
                             if log:
                                 log.log(f"Poll channel error: {_e} - "
@@ -19020,7 +19053,7 @@ def _run_ontap_upgrade(log):
                             _reconnected = False
                             for _r in range(3):
                                 if _r > 0:
-                                    print(f"  ⏳ Waiting 60s for cluster LIF "
+                                    print(f"  â³ Waiting 60s for cluster LIF "
                                           f"migration to complete and then retrying "
                                           f"(round {_r + 1}/3)...")
                                     if log:
@@ -19084,7 +19117,7 @@ def _run_ontap_upgrade(log):
                 except Exception as _sc_err:
                     # _cl_ch may have dropped when the cluster-mgmt LIF
                     # migrated during the takeover.  The poll channel
-                    # auto-reconnects to the surviving node — use it.
+                    # auto-reconnects to the surviving node â€” use it.
                     if _poll_channel[0]:
                         if log:
                             log.log(
@@ -19101,7 +19134,7 @@ def _run_ontap_upgrade(log):
                         )
                 return _out
 
-            # ── Issue takeover ───────────────────────────────────────────────
+            # â”€â”€ Issue takeover â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             def _close_poll():
                 try:
                     if _poll_client[0]:
@@ -19114,7 +19147,7 @@ def _run_ontap_upgrade(log):
             print(f"\n  \U0001f504 Takeover: {takeover_by} takes over "
                   f"{takeover_node}...")
             if allow_version_mismatch:
-                print(f"  ℹ️   Using -option allow-version-mismatch "
+                print(f"  â„¹ï¸   Using -option allow-version-mismatch "
                       "(version mismatch detected).")
             if log:
                 log.log(f"Initiating takeover of {takeover_node} by {takeover_by}"
@@ -19128,7 +19161,7 @@ def _run_ontap_upgrade(log):
                 f"-option {_takeover_option} -override-vetoes true"
             )
 
-            # ── Phase 1: poll until "Waiting for giveback" ──────────────────
+            # â”€â”€ Phase 1: poll until "Waiting for giveback" â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             print(f"  \u23f3 Monitoring {takeover_node}: "
                   "waiting for 'Waiting for giveback'...")
             _PHASE1_TIMEOUT = 1800
@@ -19176,7 +19209,7 @@ def _run_ontap_upgrade(log):
 
                 if "waiting for giveback" in _state_lower:
                     print(f"  \U0001f501 {takeover_node} reached 'Waiting for "
-                          "giveback' — issuing giveback...")
+                          "giveback' â€” issuing giveback...")
                     if log:
                         log.log(f"{takeover_node}: issuing giveback "
                                 f"(state={_state!r})")
@@ -19191,7 +19224,7 @@ def _run_ontap_upgrade(log):
                         and "connected to" in _state_lower
                         and _WAITING_FOR_CLUSTER_APPS not in _state_lower):
                     _total = time.monotonic() - _t0
-                    print(f"  \u2705 {takeover_node} auto-giveback detected — "
+                    print(f"  \u2705 {takeover_node} auto-giveback detected â€” "
                           "already online.")
                     if log:
                         log.log(
@@ -19213,7 +19246,7 @@ def _run_ontap_upgrade(log):
                       f" Current state: {_state_label})")
                 time.sleep(60)
 
-            # ── Phase 2: poll until node fully back online ───────────────────
+            # â”€â”€ Phase 2: poll until node fully back online â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             print(f"  \u23f3 Monitoring {takeover_node}: waiting for "
                   "node to come back online...")
             _PHASE2_TIMEOUT = 1800
@@ -19277,7 +19310,7 @@ def _run_ontap_upgrade(log):
                 # tof=false with a "version mismatch" reason even though the
                 # giveback completed and the node IS back online.  Detect
                 # "Connected to <partner>" + the version-mismatch text and
-                # treat it as success — the mismatch resolves once the second
+                # treat it as success â€” the mismatch resolves once the second
                 # node is upgraded.
                 _version_mismatch_in_state = (
                     _VERSION_MISMATCH_SIG in _state_lower
@@ -19293,7 +19326,7 @@ def _run_ontap_upgrade(log):
                     _total = time.monotonic() - _t0
                     if _connected_and_version_mismatch:
                         print(f"  \u2705 {takeover_node} back online "
-                              "(tof=false due to inter-node version mismatch — "
+                              "(tof=false due to inter-node version mismatch â€” "
                               "expected mid-upgrade). "
                               f"(total: {int(_total)}s)")
                         if log:
@@ -19327,8 +19360,8 @@ def _run_ontap_upgrade(log):
                         if _proactive_out and _WAFL_NEWER_ERR in _proactive_out:
                             # ONTAP rejected takeover of takeover_by because its
                             # WAFL/RAID is considered newer from this node's
-                            # perspective — retry in the opposite direction.
-                            print(f"  ⚠️  Takeover of {takeover_by} rejected "
+                            # perspective â€” retry in the opposite direction.
+                            print(f"  âš ï¸  Takeover of {takeover_by} rejected "
                                   f"(WAFL/RAID newer). Retrying takeover of "
                                   f"{takeover_node} instead...")
                             if log:
@@ -19379,19 +19412,19 @@ def _run_ontap_upgrade(log):
                     print(f"     \u2022 {_r}")
                 time.sleep(60)
 
-        # Build a node→its_partner lookup for the takeover calls
+        # Build a nodeâ†’its_partner lookup for the takeover calls
         partner_of = {r["node"]: r["partner"] for r in fo_rows}
         partner_of.update({r["partner"]: r["node"] for r in fo_rows})
 
         for phase, nodes in (("1 (partner)", partner_group), ("2 (main)", main_group)):
-            print(f"\n  ── Phase {phase} ─────────────────────────────────────")
+            print(f"\n  â”€â”€ Phase {phase} â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€")
             for to_node in nodes:
                 by_node = partner_of.get(to_node, "")
                 if not _do_takeover_giveback(to_node, by_node,
                                              allow_version_mismatch=(to_node in _ver_mismatch_nodes)):
                     return False
 
-        # ── Step 11b: remediation pass ──────────────────────────────────────
+        # â”€â”€ Step 11b: remediation pass â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # After the rolling upgrade, verify that every node is running its
         # default image (is-default=true AND is-current=true on the same row).
         # A node where the default image is *not* current missed its takeover
@@ -19472,9 +19505,9 @@ def _run_ontap_upgrade(log):
             # Find the default image entry
             _def_entry = next((e for e in _imgs if e[1]), None)
             if _def_entry and not _def_entry[2]:
-                # Default image is not current — node needs a takeover/giveback
+                # Default image is not current â€” node needs a takeover/giveback
                 _needs_remediation.append(_n)
-                print(f"  \u26a0\ufe0f  {_n}: default image '{_def_entry[0]}' is NOT current — "
+                print(f"  \u26a0\ufe0f  {_n}: default image '{_def_entry[0]}' is NOT current â€” "
                       "will perform takeover/giveback.")
                 if log:
                     log.log(f"{_n}: default image not current; queuing remediation takeover")
@@ -19482,7 +19515,7 @@ def _run_ontap_upgrade(log):
         if not _needs_remediation:
             print("  \u2705 All nodes are running their default image.")
             if log:
-                log.log("All nodes running default image — no remediation needed")
+                log.log("All nodes running default image â€” no remediation needed")
         else:
             print(f"\n  \U0001f504 Remediating {len(_needs_remediation)} node(s)...")
             for _rn in _needs_remediation:
@@ -19496,7 +19529,7 @@ def _run_ontap_upgrade(log):
             if log:
                 log.log("Remediation takeover/giveback complete")
 
-        # ── Step 11c: final cluster health gate ─────────────────────────────
+        # â”€â”€ Step 11c: final cluster health gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Use a direct SSH session to the cluster-mgmt LIF so the final health
         # check gets clean output (no ANSI/VT100 from the BMC PTY).  Fall back
         # to channel_41 only if no cluster-mgmt IP is available.
@@ -19550,9 +19583,9 @@ def _run_ontap_upgrade(log):
 
         print("  \u2705 Cluster fully healthy.")
         if log:
-            log.log("Final health check passed — all nodes connected, no pending giveback")
+            log.log("Final health check passed â€” all nodes connected, no pending giveback")
 
-        # ── Step 12: verify version ─────────────────────────────────────────
+        # â”€â”€ Step 12: verify version â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Use a fresh SSH session to the cluster-mgmt LIF (same as health
         # check) to avoid BMC PTY noise / ANSI codes / spurious prompts.
         print("\n  \U0001f50d Verifying ONTAP version post-upgrade...")
@@ -19778,7 +19811,7 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
     _print_banner("\U0001f511 Configuring passwordless SSH")
     _slog(f"Setting up passwordless SSH for {ssh_user}@{mgmt_ip}")
 
-    # 1. Remove stale known_hosts entries — by IP and by reverse-DNS hostname.
+    # 1. Remove stale known_hosts entries â€” by IP and by reverse-DNS hostname.
     _hosts_to_remove = [mgmt_ip]
     try:
         import socket as _socket
@@ -19787,16 +19820,16 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
             _hosts_to_remove.append(_rdns)
             _slog(f"Reverse DNS for {mgmt_ip}: {_rdns}")
     except Exception:
-        pass  # no reverse DNS entry — fine, just clean by IP
+        pass  # no reverse DNS entry â€” fine, just clean by IP
     try:
         for _host in _hosts_to_remove:
             subprocess.run(["ssh-keygen", "-R", _host],
                            check=False, capture_output=True)
         _removed_str = ", ".join(_hosts_to_remove)
-        print(f"  🗑️  Removed existing known_hosts entries for {_removed_str}.")
+        print(f"  ðŸ—‘ï¸  Removed existing known_hosts entries for {_removed_str}.")
         _slog(f"Removed known_hosts entries for {_removed_str}")
     except FileNotFoundError:
-        print("  ℹ️  ssh-keygen not found; skipping known_hosts cleanup.")
+        print("  â„¹ï¸  ssh-keygen not found; skipping known_hosts cleanup.")
         _slog("ssh-keygen not found; known_hosts cleanup skipped", prefix="WARN")
 
     # 2. Generate key pair if absent.
@@ -19864,7 +19897,7 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
     )
     print("  \u2705 Public key installed on cluster.")
 
-    # 6. Test login from this host — open an interactive shell and look for ::>
+    # 6. Test login from this host â€” open an interactive shell and look for ::>
     print(f"\n  \U0001f50e Testing ssh {ssh_user}@{mgmt_ip}...")
     try:
         _pk_path = os.path.expanduser("~/.ssh/id_rsa")
@@ -19895,7 +19928,7 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
                 )
         else:
             print(
-                f"  \u26a0\ufe0f  Cluster prompted for a password — "
+                f"  \u26a0\ufe0f  Cluster prompted for a password â€” "
                 f"key may need a moment to activate.\n"
                 f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
             )
@@ -19905,7 +19938,7 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
                 )
     except paramiko.AuthenticationException:
         print(
-            f"  \u26a0\ufe0f  Authentication failed — public key not accepted yet.\n"
+            f"  \u26a0\ufe0f  Authentication failed â€” public key not accepted yet.\n"
             f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
         )
         _slog("SSH test: AuthenticationException", prefix="WARN")
@@ -19946,7 +19979,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # fails, offer the operator another chance to supply a config file before
     # falling back to fully interactive prompts.
     if not _cluster_config:
-        print("\n⚠️  Cluster setup config not yet collected.")
+        print("\nâš ï¸  Cluster setup config not yet collected.")
         if _session_log:
             _session_log.log(
                 "Cluster wizard: _cluster_config empty; attempting to populate",
@@ -19965,8 +19998,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         collect_cluster_config()
 
     if not _cluster_config:
-        msg = "Cluster setup config unavailable after all attempts – cannot drive wizard."
-        print(f"\n❌ {msg}")
+        msg = "Cluster setup config unavailable after all attempts â€“ cannot drive wizard."
+        print(f"\nâŒ {msg}")
         if _session_log:
             _session_log.log(msg, prefix="ERROR")
             _session_log.set_outcome("FAIL", msg)
@@ -19974,7 +20007,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
 
     cc = _cluster_config
 
-    print("\n🤖 Driving ONTAP cluster setup wizard from collected values...")
+    print("\nðŸ¤– Driving ONTAP cluster setup wizard from collected values...")
     if _session_log:
         _session_log.start_phase("Cluster Setup Wizard (1b)")
         loggable = {k: ("<hidden>" if k == "admin_password" else v) for k, v in cc.items()}
@@ -19984,17 +20017,17 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             _checkpoint.set_current_phase(
                 "Cluster Setup Wizard (1b)",
                 state="in_progress",
-                next_phase="2b – Parallel Node Add",
+                next_phase="2b â€“ Parallel Node Add",
             )
 
     # Some ONTAP builds show "Press Enter to complete cluster setup" first;
     # others jump directly to the create/join question. Wait for whichever
     # comes first, sending CR every 15 s of silence to nudge the prompt.
-    print("\n⏳ Waiting for cluster setup wizard to begin...")
+    print("\nâ³ Waiting for cluster setup wizard to begin...")
     _slog("Waiting for wizard start (press-enter or create/join prompt)")
     _which = _wait_for_wizard_start(channel, timeout=1800, initial_buf=initial_buf)
     if _which is None:
-        print("\n❌ Timed out waiting for cluster setup wizard start.")
+        print("\nâŒ Timed out waiting for cluster setup wizard start.")
         if _session_log:
             _session_log.log("Timeout waiting for wizard start", prefix="ERROR")
             _session_log.set_outcome("FAIL", "wizard start timeout")
@@ -20003,9 +20036,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # create/join text can be present in residual output while ONTAP still
     # requires Enter to continue from the "Otherwise, press Enter..." gate.
     if "press enter" in _which.lower():
-        print("\n✅ 'Press Enter' prompt detected – sending Enter")
+        print("\nâœ… 'Press Enter' prompt detected â€“ sending Enter")
     else:
-        print("\nℹ️  Sending Enter to advance past any pending wizard gate...")
+        print("\nâ„¹ï¸  Sending Enter to advance past any pending wizard gate...")
     _slog("Sent Enter after wizard-start detection")
     channel.send("\r")
     time.sleep(0.5)
@@ -20013,7 +20046,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # ONTAP can occasionally echo/repaint the create/join prompt and ignore the
     # first answer due to console timing. Keep sending "create" until the
     # wizard advances to the yes/no confirmation.
-    print("\n⏳ Waiting for create/join prompt and selecting 'create'...")
+    print("\nâ³ Waiting for create/join prompt and selecting 'create'...")
     _slog("Waiting for create/join prompt and confirming transition to yes/no")
     _create_deadline = time.monotonic() + 600
     _create_sent_attempts = 1
@@ -20091,13 +20124,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             _session_log.log_sent("create")
         time.sleep(0.5)
     if _shutdown_event.is_set():
-        print("\n👋 Interrupted while waiting for create/join; exiting wizard.")
+        print("\nðŸ‘‹ Interrupted while waiting for create/join; exiting wizard.")
         if _session_log:
             _session_log.log("Interrupted while waiting for create/join", prefix="WARN")
             _session_log.set_outcome("FAIL", "user interrupted during create/join wait")
         return False
     if not _create_ok:
-        print("\n❌ Timed out advancing past create/join prompt.")
+        print("\nâŒ Timed out advancing past create/join prompt.")
         if _session_log:
             _session_log.log(
                 f"Wizard did not advance past create/join prompt after {_create_sent_attempts} create attempt(s)",
@@ -20121,8 +20154,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                    f"Cluster name -> {cc['name']}", timeout=600)
 
     # After cluster creation:
-    print("\n⏳ Cluster creating...", end="", flush=True)
-    _slog("Cluster creating – waiting for license key prompt")
+    print("\nâ³ Cluster creating...", end="", flush=True)
+    _slog("Cluster creating â€“ waiting for license key prompt")
     _dot_done = threading.Event()
     def _dot_ticker(_ev=_dot_done):
         while not _ev.wait(15):
@@ -20134,7 +20167,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     _dot_done.set()
     print()  # newline after dots
     _log_path = _session_log.log_file if _session_log else "the log file"
-    print(f"\n⏳ Cluster creating. See log for details in a separate SSH session:\n   {_log_path}")
+    print(f"\nâ³ Cluster creating. See log for details in a separate SSH session:\n   {_log_path}")
     _wait_and_send(channel, "cluster management interface port", cc["mgmt_port"],
                    f"Cluster mgmt port -> {cc['mgmt_port']}", timeout=900)
     _wait_and_send(channel, "cluster management interface ip address", cc["mgmt_ip"],
@@ -20146,7 +20179,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # outside the management interface's subnet.
     _gw_to_send = cc.get("mgmt_gateway") or ""
     while True:
-        print("\n⏳ Waiting for: Cluster mgmt gateway...")
+        print("\nâ³ Waiting for: Cluster mgmt gateway...")
         _slog("Waiting for: cluster management interface default gateway")
         direct_send_and_wait(
             channel, "", "cluster management interface default gateway",
@@ -20171,7 +20204,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                 time.sleep(0.1)
         if "not a valid gateway" in _gw_recheck.lower():
             print(
-                f"\n  ❌ Gateway '{_gw_to_send}' rejected by ONTAP "
+                f"\n  âŒ Gateway '{_gw_to_send}' rejected by ONTAP "
                 "('not a valid gateway address')."
             )
             if _session_log:
@@ -20186,7 +20219,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             )
             if not _gw_to_send:
                 print(
-                    "\n  ❌ No replacement gateway provided in time; "
+                    "\n  âŒ No replacement gateway provided in time; "
                     "aborting wizard automation."
                 )
                 if _session_log:
@@ -20200,7 +20233,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             _cluster_config["mgmt_gateway"] = _gw_to_send
             # Loop back: ONTAP will re-prompt after the bad value.
             continue
-        break  # value accepted — move on
+        break  # value accepted â€” move on
     # The 4-second gateway-validation drain may have already consumed the DNS /
     # name-server / location prompts when ONTAP accepts the gateway quickly.
     # For each step, if the trigger was already seen in _gw_recheck, send the
@@ -20208,7 +20241,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # waiting for text that was already read and discarded).
     def _wizard_step(trigger, response, label, timeout=600, hide_in_log=False):
         if trigger in _gw_recheck.lower():
-            print(f"\n✅ Prompt already received (fast cluster): {label}")
+            print(f"\nâœ… Prompt already received (fast cluster): {label}")
             _slog(f"{label}: prompt already seen in gateway drain; sending directly")
             channel.send((response or "") + "\r")
             if _session_log:
@@ -20231,7 +20264,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # print friendly status updates before waiting for login:.
     _log_path = _session_log.log_file if _session_log else "the log file"
     print(
-        "\n⏳ Finishing remaining cluster configuration steps. "
+        "\nâ³ Finishing remaining cluster configuration steps. "
         f"For details see log in a separate SSH session:\n   {_log_path}"
     )
     _slog("Monitoring post-wizard output for cluster creation milestones")
@@ -20250,11 +20283,11 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         if _shutdown_event.is_set():
             break
         if not _matched:
-            break  # timeout – fall through to login: wait below
+            break  # timeout â€“ fall through to login: wait below
         _ml = _matched.lower()
         if "creating root aggregate" in _ml and not _saz_done:
             _saz_done = True
-            print("\n✅ Storage Availability Zone successfully created. Configuring capacity pool.")
+            print("\nâœ… Storage Availability Zone successfully created. Configuring capacity pool.")
             _slog("Milestone: root aggregate creation started (SAZ created)")
             continue
         if "has been created" in _ml and not _cluster_created:
@@ -20266,15 +20299,15 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                     _cname = _m.group(1)
                     break
             _cluster_created = True
-            print(f"\n✅ Cluster {_cname} has been created.")
-            print("\n⏳ Finishing remaining cluster configuration steps...")
+            print(f"\nâœ… Cluster {_cname} has been created.")
+            print("\nâ³ Finishing remaining cluster configuration steps...")
             _slog(f"Milestone: cluster '{_cname}' has been created")
             continue
         if "login:" in _ml:
             break  # cluster creation fully complete
 
     if _shutdown_event.is_set():
-        print("\n👋 Interrupted while finishing cluster configuration; exiting wizard.")
+        print("\nðŸ‘‹ Interrupted while finishing cluster configuration; exiting wizard.")
         if _session_log:
             _session_log.log("Interrupted during post-create cluster configuration wait",
                              prefix="WARN")
@@ -20286,13 +20319,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         _slog("Waiting for login: prompt to confirm cluster creation")
         direct_send_and_wait(channel, "", "login:", timeout=1800)
         if _shutdown_event.is_set():
-            print("\n👋 Interrupted while waiting for login prompt; exiting wizard.")
+            print("\nðŸ‘‹ Interrupted while waiting for login prompt; exiting wizard.")
             if _session_log:
                 _session_log.log("Interrupted while waiting for login prompt", prefix="WARN")
                 _session_log.set_outcome("FAIL", "user interrupted during login wait")
             return False
 
-    print("\n✅ Cluster creation complete.")
+    print("\nâœ… Cluster creation complete.")
     if _session_log:
         _session_log.log("Cluster creation complete (login: prompt observed)")
         _session_log.end_phase()
@@ -20340,7 +20373,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         if _login_primary_cluster_shell(channel, cc.get("admin_password")):
             _apply_ntp_servers(channel)
         else:
-            print("\n  ⚠️  Could not log in to cluster shell for NTP configuration.")
+            print("\n  âš ï¸  Could not log in to cluster shell for NTP configuration.")
             if _session_log:
                 _session_log.log(
                     "Cluster shell login failed for NTP configuration",
@@ -20373,7 +20406,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             if _mode3_ok:
                 _option3_finalize(_run_context, cc.get("mgmt_ip"))
                 return
-            print("\n❌ Mode 3 did not complete: one or more peer nodes failed to add.")
+            print("\nâŒ Mode 3 did not complete: one or more peer nodes failed to add.")
             if _session_log:
                 _session_log.log(
                     "Mode 3 aborted before finalize: peer add did not complete",
@@ -20391,7 +20424,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         if _mode3_ok:
             _option3_finalize(_run_context, cc.get("mgmt_ip"))
             return
-        print("\n❌ Mode 3 did not complete: one or more peer nodes failed to add.")
+        print("\nâŒ Mode 3 did not complete: one or more peer nodes failed to add.")
         if _session_log:
             _session_log.log(
                 "Mode 3 aborted before finalize: peer add did not complete",
@@ -20404,10 +20437,10 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                 pass
         sys.exit(1)
 
-    # Mode 1 (1a/1b) only initialises the first node — exit cleanly here.
+    # Mode 1 (1a/1b) only initialises the first node â€” exit cleanly here.
     if _operation_mode == 1:
         mgmt_ip = cc.get("mgmt_ip") or "<cluster-management-ip>"
-        _print_banner("✅ Configuration complete.")
+        _print_banner("âœ… Configuration complete.")
         print(f"  To login to the cluster, SSH to {mgmt_ip} or use a web")
         print(f"  browser to access https://{mgmt_ip}")
         print("=" * 60)
@@ -20435,10 +20468,10 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # For automated modes (2b, 3) answer yes automatically.
     if _auto_add or _operation_mode == 3:
         ans = "y"
-        print("\n✅ Cluster configuration complete. Moving on to add nodes.")
+        print("\nâœ… Cluster configuration complete. Moving on to add nodes.")
         _slog("Continue to add nodes? y [auto-answered for automated mode]")
     else:
-        print("  " + "─" * 58)
+        print("  " + "â”€" * 58)
         ans = _prompt_with_timeout(
             "\nCluster configuration complete. Would you like to continue the "
             "script to add nodes? (y/N): ",
@@ -20450,7 +20483,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
 
     if ans != "y":
         mgmt_ip = cc.get("mgmt_ip") or "<cluster-management-ip>"
-        _print_banner("✅ Configuration complete.")
+        _print_banner("âœ… Configuration complete.")
         print(f"  To login to the cluster, SSH to {mgmt_ip} or use a web")
         print(f"  browser to access https://{mgmt_ip}")
         print("=" * 60)
@@ -20464,22 +20497,22 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                 pass
         sys.exit(0)
     if not (_auto_add or _operation_mode == 3):
-        print("\n✅ Cluster configuration complete. Moving on to add nodes.")
+        print("\nâœ… Cluster configuration complete. Moving on to add nodes.")
 
     # Ask whether to add nodes interactively (2a) or automatically (2b).
     # Mode 3 always auto-selects 2b (no prompt needed).
     if _operation_mode == 3:
         node_choice = "2b"
-        print("\n✅ Mode 3: auto-selecting 2b (automatic node add).")
+        print("\nâœ… Mode 3: auto-selecting 2b (automatic node add).")
         _slog("Mode 3: auto-selected 2b for node add")
     else:
-        _print_banner("➕ Add Nodes")
+        _print_banner("âž• Add Nodes")
         print("")
         print("  2a. Add nodes interactively  (manual prompts at each step)")
         print("  2b. Add nodes automatically  (auto-answer all prompts)")
         print("")
         while True:
-            print("  " + "─" * 58)
+            print("  " + "â”€" * 58)
             node_choice = _prompt_with_timeout(
                 "  Enter sub-option (2a / 2b) or blank to end session: ",
                 default="",
@@ -20491,7 +20524,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                 return
             if node_choice in ("2a", "2b"):
                 break
-            print("  ⚠️  Please enter 2a or 2b.")
+            print("  âš ï¸  Please enter 2a or 2b.")
 
     _operation_mode = 2
     _auto_add = (node_choice == "2b")
@@ -20502,7 +20535,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     if _checkpoint:
         with suppress(Exception):
             _checkpoint.set_current_phase(
-                "2b – Parallel Node Add" if _auto_add else "2a – Interactive Parallel Node Add",
+                "2b â€“ Parallel Node Add" if _auto_add else "2a â€“ Interactive Parallel Node Add",
                 state="in_progress",
                 next_phase="Node join finalization",
             )
@@ -20531,41 +20564,41 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = ""):
     `_join_lock` around the create/join answer so parallel peer-add threads
     don't collide. Returns True on success, False on timeout/abort.
     """
-    print(f"\n🤖 [{label}] Driving join wizard...")
+    print(f"\nðŸ¤– [{label}] Driving join wizard...")
     _slog(f"[{label}] starting join wizard automation")
 
     # Some ONTAP builds show "Press Enter to complete cluster setup" first;
     # others jump directly to the create/join question. Wait for whichever
     # comes first, sending CR every 15 s of silence to nudge the prompt.
-    print(f"\n⏳ [{label}] Waiting for cluster setup wizard to begin...")
+    print(f"\nâ³ [{label}] Waiting for cluster setup wizard to begin...")
     _slog(f"[{label}] waiting for wizard start (press-enter or create/join prompt)")
     _which = _wait_for_wizard_start(channel, timeout=1800, initial_buf=initial_buf)
     if _which is None:
-        print(f"\n❌ [{label}] Timed out waiting for cluster setup wizard start.")
+        print(f"\nâŒ [{label}] Timed out waiting for cluster setup wizard start.")
         _slog(f"[{label}] Timeout waiting for wizard start", prefix="ERROR")
         return False
     # Always send one Enter after wizard-start detection. As with mode 1b,
     # residual create/join text can appear before ONTAP consumes the required
     # Enter from the "Otherwise, press Enter..." screen.
     if "press enter" in _which.lower():
-        print(f"\n✅ [{label}] 'Press Enter' prompt detected – sending Enter")
+        print(f"\nâœ… [{label}] 'Press Enter' prompt detected â€“ sending Enter")
     else:
-        print(f"\nℹ️  [{label}] Sending Enter to advance past any pending wizard gate...")
+        print(f"\nâ„¹ï¸  [{label}] Sending Enter to advance past any pending wizard gate...")
     _slog(f"[{label}] Sent Enter after wizard-start detection")
     channel.send("\r")
     time.sleep(0.5)
     if "press enter" in _which.lower():
         # Serialize the join keystroke across peer-add threads.
-        print(f"\n🔒 [{label}] Waiting for join lock...")
+        print(f"\nðŸ”’ [{label}] Waiting for join lock...")
         _slog(f"[{label}] waiting to acquire _join_lock")
         with _join_lock:
             _slog(f"[{label}] acquired _join_lock; sending 'join'")
             _wait_and_send(channel, "do you want to create a new cluster or join",
                            "join", f"[{label}] Create or join -> join", timeout=900)
     else:
-        print(f"\n✅ [{label}] Create/join prompt detected (no 'Press Enter' screen) – sending 'join'")
+        print(f"\nâœ… [{label}] Create/join prompt detected (no 'Press Enter' screen) â€“ sending 'join'")
         _slog(f"[{label}] Sent 'join' at create/join prompt (Press Enter screen skipped)")
-        print(f"\n🔒 [{label}] Waiting for join lock...")
+        print(f"\nðŸ”’ [{label}] Waiting for join lock...")
         _slog(f"[{label}] waiting to acquire _join_lock")
         with _join_lock:
             _slog(f"[{label}] acquired _join_lock; sending 'join'")
@@ -20587,7 +20620,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     another node.
     """
     global _add_another_node_request
-    print("\n🤖 Mode 2b: automated node-add in progress...")
+    print("\nðŸ¤– Mode 2b: automated node-add in progress...")
     if _session_log:
         _session_log.start_phase("Auto Join")
         _session_log.log("Mode 2b automated join starting after option 4 sent")
@@ -20604,7 +20637,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
 
     # Node mgmt config (from per-BMC pre-collection).
     cfg = _resolve_node_mgmt_config(bmc_host)
-    print("\n📋 Node management config to apply:")
+    print("\nðŸ“‹ Node management config to apply:")
     for k in ("port", "ip", "netmask", "gateway"):
         v = cfg.get(k)
         print(f"   {k:<8} = {v if v else '(prompt manually)'}")
@@ -20617,12 +20650,12 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
 
     # ---- Post-create/join: drive every remaining prompt through "login:".
     # 1. Confirm "use this configuration?" with yes.
-    print("\n⏳ Auto-confirming 'use this configuration?'...")
+    print("\nâ³ Auto-confirming 'use this configuration?'...")
     _slog("Waiting for join confirmation prompt")
     direct_send_and_wait(channel, "", "[yes]:", timeout=900, auto_respond="yes")
 
     # 2. Cluster-network IP (looked up from existing cluster).
-    print("\n📡 Looking up a cluster-network IP from the existing cluster...")
+    print("\nðŸ“¡ Looking up a cluster-network IP from the existing cluster...")
     _slog("Looking up cluster-network IP")
     cluster_iface_ip = _fetch_existing_cluster_ip(
         bmc_user=sp_user,
@@ -20630,54 +20663,54 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         prompt_before_auth=False,
     )
 
-    print("\n⏳ Waiting for cluster-network IP prompt...")
+    print("\nâ³ Waiting for cluster-network IP prompt...")
     direct_send_and_wait(
         channel, "", "enter the ip address of an interface on the private",
         timeout=900,
     )
     if not cluster_iface_ip:
-        print("\n⚠️  No cluster-network IP available; falling back to interactive entry.")
+        print("\nâš ï¸  No cluster-network IP available; falling back to interactive entry.")
         if _session_log:
             _session_log.log("Cluster IP unavailable; falling back to interactive",
                              prefix="WARN")
         if _session_log:
             _session_log.end_phase()
         return
-    print(f"\n✅ Sending cluster-network IP: {cluster_iface_ip}")
+    print(f"\nâœ… Sending cluster-network IP: {cluster_iface_ip}")
     channel.send(cluster_iface_ip + "\r")
     if _session_log:
         _session_log.log_sent(cluster_iface_ip)
     time.sleep(0.5)
 
     # 3. Username (use the BMC username).
-    print("\n⏳ Waiting for username prompt...")
+    print("\nâ³ Waiting for username prompt...")
     direct_send_and_wait(channel, "", "username", timeout=600)
-    print(f"\n✅ Sending BMC username: {sp_user}")
+    print(f"\nâœ… Sending BMC username: {sp_user}")
     channel.send(sp_user + "\r")
     if _session_log:
         _session_log.log_sent(sp_user)
     time.sleep(0.5)
 
-    # 4. Password – the prompt is asking for the cluster admin password, not
+    # 4. Password â€“ the prompt is asking for the cluster admin password, not
     #    the BMC password.  Prefer the stored cluster admin password; fall
     #    back to the BMC password only if nothing better is available.
     _join_pw = (_cluster_config.get("admin_password")
                 or sp_pass
                 or "")
-    print("\n⏳ Waiting for password prompt...")
+    print("\nâ³ Waiting for password prompt...")
     direct_send_and_wait(channel, "", "password", timeout=600)
-    print("\n✅ Sending cluster admin password (hidden).")
+    print("\nâœ… Sending cluster admin password (hidden).")
     channel.send(_join_pw + "\r")
     if _session_log:
         _pw_src = ("cluster admin" if _cluster_config.get("admin_password") else "BMC")
         _session_log.log(f"Sent {_pw_src} password (<hidden>)")
     time.sleep(0.5)
 
-    # 5. Wait for the login: prompt – marks the join as complete.
+    # 5. Wait for the login: prompt â€“ marks the join as complete.
     #    ONTAP may also present "Add another node to the cluster? [Y/N]"
     #    before the login prompt; if so, ask the operator and respond.
     _join_node_label = bmc_host or sp_host or "node"
-    print(f"\n⏳ [{_join_node_label}] Waiting for 'login:' prompt – node is joining the cluster...")
+    print(f"\nâ³ [{_join_node_label}] Waiting for 'login:' prompt â€“ node is joining the cluster...")
     _slog("Waiting for 'login:' to confirm node join completed")
     _join_deadline = time.monotonic() + 3600
     while True:
@@ -20690,23 +20723,23 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
             reconnect_ctx=_join_reconnect_ctx,
         )
         if not _matched:
-            print("\n⚠️  'login:' not seen; you may need to monitor manually.")
+            print("\nâš ï¸  'login:' not seen; you may need to monitor manually.")
             if _session_log:
                 _session_log.log("'login:' not observed within timeout", prefix="WARN")
                 _session_log.end_phase()
             return
         if "login:" in _matched.lower():
             break
-        # ONTAP asked "Add another node to the cluster? [Y/N]" – always
+        # ONTAP asked "Add another node to the cluster? [Y/N]" â€“ always
         # answer 'no' here. This function only drives one join; the outer
         # loop below offers add-another via stdin after login: is reached.
         _ontap_ans_str = "no"
-        print(f"\n✅ ONTAP: 'Add another node to the cluster?' – auto-answering '{_ontap_ans_str}'")
+        print(f"\nâœ… ONTAP: 'Add another node to the cluster?' â€“ auto-answering '{_ontap_ans_str}'")
         channel.send(_ontap_ans_str + "\r")
         if _session_log:
-            _session_log.log(f"ONTAP 'add another node?' – auto-answered '{_ontap_ans_str}'")
+            _session_log.log(f"ONTAP 'add another node?' â€“ auto-answered '{_ontap_ans_str}'")
             _session_log.log_sent(_ontap_ans_str)
-    print(f"\n🎉 Node {bmc_host or sp_host} has joined the cluster!")
+    print(f"\nðŸŽ‰ Node {bmc_host or sp_host} has joined the cluster!")
     if _session_log:
         _session_log.log(f"Node {bmc_host or sp_host} reached login: prompt")
         _session_log.end_phase()
@@ -20726,16 +20759,16 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     _2b_processed_bmcs.add(bmc_host or sp_host)
 
     if no_add_another:
-        # Called from a parallel worker — skip interactive stdin to avoid
+        # Called from a parallel worker â€” skip interactive stdin to avoid
         # multiple threads racing on the same input stream.
         return
 
     while True:
         try:
-            _real_stdout.write("\n  " + "─" * 58 + "\n")
+            _real_stdout.write("\n  " + "â”€" * 58 + "\n")
             _real_stdout.flush()
             ans = _prompt_with_timeout(
-                "\n➕ Add another node to the cluster? [Y/N]: ",
+                "\nâž• Add another node to the cluster? [Y/N]: ",
                 default="n",
                 timeout=300,
             ).strip().lower()
@@ -20744,7 +20777,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         if _session_log:
             _session_log.log_user_input(f"Add another node? {ans}")
         if ans != "y":
-            print("\n👋 No more nodes to add – exiting.")
+            print("\nðŸ‘‹ No more nodes to add â€“ exiting.")
             _slog("Operator declined to add another node; exiting")
             # Checkpoint: mark option 2 as complete
             if _checkpoint and _operation_mode == 2:
@@ -20758,7 +20791,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
             _shutdown_event.set()
             return
 
-        # ── Check config file for un-processed peer nodes first ───────────
+        # â”€â”€ Check config file for un-processed peer nodes first â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         _cfg_nodes = (_config_data.get("nodes") or []) if isinstance(_config_data, dict) else []
         _cfg_pending = [
             n for n in _cfg_nodes
@@ -20767,7 +20800,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
             and n["bmc"] not in _2b_processed_bmcs
         ]
         if _cfg_pending:
-            print(f"\n  📄 Found {len(_cfg_pending)} additional node(s) in the config file:")
+            print(f"\n  ðŸ“„ Found {len(_cfg_pending)} additional node(s) in the config file:")
             for _cn in _cfg_pending:
                 print(f"     {_cn['bmc']}")
 
@@ -20803,7 +20836,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
                 break
 
         if next_host is None:
-            # No config node accepted – fall back to manual entry.
+            # No config node accepted â€“ fall back to manual entry.
             try:
                 next_host = _prompt_with_timeout(
                     "  Next BMC IP/hostname: ",
@@ -20886,7 +20919,7 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
 
     Returns the cluster IP string, or None on failure.
     """
-    print(f"\n🛑 [{label}] Aborting cluster wizard (Ctrl+C)...")
+    print(f"\nðŸ›‘ [{label}] Aborting cluster wizard (Ctrl+C)...")
     _slog(f"[{label}] sending Ctrl+C to abort cluster wizard")
     for _ in range(5):
         ch.send("\x03")
@@ -20898,7 +20931,7 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
         ch, ["login:", "::>", "::*>"], timeout=180, node_log=node_log)
 
     if not _matched:
-        print(f"   ⚠️  [{label}] No login: or ::> seen after Ctrl+C; aborting.")
+        print(f"   âš ï¸  [{label}] No login: or ::> seen after Ctrl+C; aborting.")
         _slog(f"[{label}] no login/shell after Ctrl+C", prefix="WARN")
         return None
 
@@ -20910,10 +20943,10 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             _out += _out2
         if not (_out and (_CLUSTER_PROMPT_RE.search(_out[-200:]) or "::>" in _out or "::*>" in _out)):
             if not _has_real_cluster_login_prompt(_out):
-                print(f"   ⚠️  [{label}] No real cluster login: or ::> seen after Ctrl+C; aborting.")
+                print(f"   âš ï¸  [{label}] No real cluster login: or ::> seen after Ctrl+C; aborting.")
                 _slog(f"[{label}] no real login/shell after Ctrl+C", prefix="WARN")
                 return None
-        print(f"\n⏳ [{label}] Logging in as admin...")
+        print(f"\nâ³ [{label}] Logging in as admin...")
         ch.send("admin\r")
         _pw_out, _pw_matched = direct_read_until_any(
             ch, ["password:", "::>", "::*>"], timeout=30, node_log=node_log)
@@ -20922,7 +20955,7 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             _shell_out, _shell_matched = direct_read_until_any(
                 ch, ["::>", "::*>", "login:"], timeout=60, node_log=node_log)
             if not (_shell_matched and ("::>" in _shell_matched or "::*>" in _shell_matched)):
-                print(f"   ⚠️  [{label}] Could not reach ::> after login; aborting.")
+                print(f"   âš ï¸  [{label}] Could not reach ::> after login; aborting.")
                 _slog(f"[{label}] no ::> after admin login", prefix="WARN")
                 return None
 
@@ -20973,7 +21006,7 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             return _cluster_node, _cluster_ip_local
         return "", None
 
-    print(f"\n📡 [{label}] Capturing cluster interface IP...")
+    print(f"\nðŸ“¡ [{label}] Capturing cluster interface IP...")
     _cluster_node_name = ""
     _cluster_ip = None
     for _cmd in (
@@ -20988,7 +21021,7 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             break
 
     if _cluster_ip:
-        print(f"\n✅ [{label}] Cluster interface IP: {_cluster_ip}")
+        print(f"\nâœ… [{label}] Cluster interface IP: {_cluster_ip}")
         _slog(f"[{label}] cluster IP: {_cluster_ip}")
         if cluster_ips_out is not None:
             cluster_ips_out[peer_bmc] = {
@@ -21008,7 +21041,7 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             node_name=_cluster_node_name,
         )
     else:
-        print(f"\n⚠️  [{label}] Could not parse cluster IP from net int show output.")
+        print(f"\nâš ï¸  [{label}] Could not parse cluster IP from net int show output.")
         _slog(f"[{label}] cluster IP parse failed", prefix="WARN")
 
     return _cluster_ip
@@ -21102,7 +21135,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     print("\n  Fetching cluster network IP")
     print("  Running add-node command")
     print(f"     cluster add-node -cluster-ips {ips_str}")
-    print(f"\n  ➕ Adding {len(cluster_ips)} node(s) to cluster...")
+    print(f"\n  âž• Adding {len(cluster_ips)} node(s) to cluster...")
     if log:
         log.log(f"cluster add-node -cluster-ips {ips_str}")
 
@@ -21222,7 +21255,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             row_lower = f"{_node_name} {_row_ip} {_node_status} {_node_err}".lower()
             status_rows.append(row_lower)
             _relevant_rows.append(_row)
-            _icon = "✅" if _node_status.lower() == "success" else "⏳"
+            _icon = "âœ…" if _node_status.lower() == "success" else "â³"
             _err_suffix = f" ({_node_err})" if _node_err else ""
             _ip_suffix = f" [{_row_ip}]" if _row_ip else ""
             if log:
@@ -21240,7 +21273,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
 
         if _requested_ips and _requested_ips.issubset(_already_succeeded):
             elapsed_total = round(time.monotonic() - start, 1)
-            print(f"\n  ✅ All {len(cluster_ips)} node(s) added successfully "
+            print(f"\n  âœ… All {len(cluster_ips)} node(s) added successfully "
                   f"({elapsed_total}s).")
             if log:
                 log.log(f"cluster add-node: {len(cluster_ips)} node(s) all success "
@@ -21265,7 +21298,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                             f"ports_ok={_ports_ok}")
                 if _count >= _target_count and _all_true and not _has_warning and _ports_ok:
                     elapsed_total = round(time.monotonic() - start, 1)
-                    print(f"\n  ✅ Cluster reports {_count} healthy node(s); "
+                    print(f"\n  âœ… Cluster reports {_count} healthy node(s); "
                           f"treating cluster add-node as complete ({elapsed_total}s).")
                     if log:
                         log.log("cluster add-node: completed via cluster-show fallback "
@@ -21280,10 +21313,10 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
 
         elapsed = int(time.monotonic() - start)
         remaining = max(0, total_timeout - elapsed)
-        print(f"\n  ⏳ Waiting for all nodes to report success "
+        print(f"\n  â³ Waiting for all nodes to report success "
               f"({elapsed}s elapsed, up to {remaining}s remaining)...")
 
-    print(f"\n  ⚠️  cluster add-node did not complete for all "
+    print(f"\n  âš ï¸  cluster add-node did not complete for all "
           f"{len(cluster_ips)} node(s) within 15 minutes.")
     if log:
         log.log("cluster add-node: timeout waiting for success status", prefix="WARN")
@@ -21303,7 +21336,7 @@ def _cluster_show_node_status(channel):
 
     `all_true` is True only if every node row reports both Health and
     Eligibility as 'true'. `has_warning` is True if any line in the
-    command output contains the word 'warning' (case-insensitive) — for
+    command output contains the word 'warning' (case-insensitive) â€” for
     example the post-join 'Cluster HA must be configured...' notice.
     Returns `(-1, False, False)` on parse failure.
     """
@@ -21317,7 +21350,7 @@ def _cluster_show_node_status(channel):
     has_warning = "warning" in out.lower()
     for raw_line in out.splitlines():
         s = raw_line.strip()
-        # An empty line *after* the dashes terminates the data table —
+        # An empty line *after* the dashes terminates the data table â€”
         # anything that follows (warning paragraphs, "N entries were
         # displayed", new prompt) must NOT be counted as a node row.
         if not s:
@@ -21377,7 +21410,7 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
     verification step is skipped and True is returned immediately.
     """
     if channel is None:
-        return True  # no primary channel — skip cluster-show verification
+        return True  # no primary channel â€” skip cluster-show verification
     prefix = f"[{label}] " if label else ""
     attempt = 0
     ha_fix_attempted = False
@@ -21403,7 +21436,7 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
         _ports_ok = not _port_issues
         elapsed = time.monotonic() - start
         if count >= target_count and all_true and not has_warning and _ports_ok:
-            print(f"\n   ✅ {prefix}cluster show reports {count} healthy node(s) "
+            print(f"\n   âœ… {prefix}cluster show reports {count} healthy node(s) "
                   f"after {elapsed:.0f}s.")
             if _session_log:
                 _session_log.log(
@@ -21413,13 +21446,13 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
             return True
         # Still waiting. Decide whether to retry or give up.
         if elapsed + poll_interval > total_timeout:
-            print(f"\n   ⚠️  {prefix}cluster show did not reach {target_count} "
+            print(f"\n   âš ï¸  {prefix}cluster show did not reach {target_count} "
                   f"healthy node(s) within {total_timeout}s "
                   f"(last: count={count}, all_true={all_true}, "
                   f"has_warning={has_warning}, ports_ok={_ports_ok}).")
             if _port_issues:
                 for _pi in _port_issues:
-                    print(f"      • {_pi}")
+                    print(f"      â€¢ {_pi}")
             if _session_log:
                 _session_log.log(
                     f"{prefix}cluster show timeout after {elapsed:.0f}s "
@@ -21434,7 +21467,7 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
             if ha_attempt_count > 0 and has_warning:
                 msg = ("Cluster HA modify failed. Try again manually later. "
                        "If the issue persists, contact NetApp support.")
-                print(f"\n   ❌ {prefix}{msg}")
+                print(f"\n   âŒ {prefix}{msg}")
                 _slog(f"{prefix}{msg}", prefix="ERROR")
             return False
         if _session_log:
@@ -21450,10 +21483,10 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
         #   `cluster ha modify -configured true`
         # For clusters with >2 nodes, cluster HA is already configured
         # false (set when the third node was first added), so no modify
-        # is needed — we just wait for the warning to clear on its own.
+        # is needed â€” we just wait for the warning to clear on its own.
         # Auto-answer y to the y/n confirmation.
         # If ONTAP rejects the modify with an error, run `cluster ha show`
-        # to see whether HA is already in the desired state — when it is,
+        # to see whether HA is already in the desired state â€” when it is,
         # we're done; when it isn't, leave the attempt-flag clear so the
         # next poll iteration tries the modify again.
         _ha_target = final_count if final_count is not None else target_count
@@ -21521,7 +21554,7 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
                     "high-availability configured: false" in ha_show_lower
                 )
                 if ha_is_true:
-                    print(f"\n   ✅ {prefix}'cluster ha show' reports HA "
+                    print(f"\n   âœ… {prefix}'cluster ha show' reports HA "
                           "already configured; nothing more to do.")
                     if _session_log:
                         _session_log.log(
@@ -21547,8 +21580,8 @@ def _wait_for_cluster_nodes_healthy(channel, target_count, total_timeout=900,
         _es = int(elapsed) % 60
         _elapsed_disp = f"{_em}m{_es:02d}s" if _em else f"{_es}s"
         _next_min = int(poll_interval) // 60
-        print(f"   ⏳ {prefix}Still waiting for {target_count} healthy "
-              f"node(s) — elapsed {_elapsed_disp}; "
+        print(f"   â³ {prefix}Still waiting for {target_count} healthy "
+              f"node(s) â€” elapsed {_elapsed_disp}; "
               f"next check in ~{_next_min} min...")
         # Sleep with shutdown sensitivity so Ctrl-C aborts promptly.
         slept = 0.0
@@ -21568,7 +21601,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                           broker=None, cluster_ips_out=None):
     """Run a full add-node automation against a single peer BMC.
 
-    Each thread runs LOADER → option 4 → disk erase → node-mgmt in parallel.
+    Each thread runs LOADER â†’ option 4 â†’ disk erase â†’ node-mgmt in parallel.
     After node-mgmt is complete the cluster wizard is aborted (Ctrl+C) and the
     thread logs in as admin, captures the node's cluster interface IP via
     ``net int show``, and stores it in ``cluster_ips_out[peer_bmc]`` along
@@ -21585,7 +21618,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
     label = f"peer/{peer_bmc}"
     if _fatal_boot_dna_event.is_set():
         return False
-    print(f"\n🧵 [{label}] Starting peer auto-add thread...")
+    print(f"\nðŸ§µ [{label}] Starting peer auto-add thread...")
     if _session_log:
         _session_log.log(f"[{label}] thread starting")
 
@@ -21604,10 +21637,10 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
     node_file = None
     try:
         node_file = _node_log_open(peer_bmc, _nf_log_dir, prefix="2b_node")
-        print(f"   📝 [{label}] Log: {node_file.name}")
+        print(f"   ðŸ“ [{label}] Log: {node_file.name}")
         _slog(f"[{label}] node log: {node_file.name}")
     except Exception as _nfe:
-        print(f"   ⚠️  [{label}] Could not open node log: {_nfe}")
+        print(f"   âš ï¸  [{label}] Could not open node log: {_nfe}")
 
     client = None
     ch = None
@@ -21624,7 +21657,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 fallback_passwords=_fb_init,
             )
         except Exception as e:
-            print(f"   ❌ [{label}] could not authenticate: {e}")
+            print(f"   âŒ [{label}] could not authenticate: {e}")
             if _session_log:
                 _session_log.log(f"[{label}] auth/connect failed: {e}",
                                  prefix="ERROR")
@@ -21637,13 +21670,13 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             client=client, channel=ch, label=label,
         )
 
-        # BMC takeover – accept if another session is active.
+        # BMC takeover â€“ accept if another session is active.
         if not _reach_bmc_prompt(
             ch,
             node_log=node_file,
-            takeover_msg=f"[{label}] Existing BMC session detected — auto-answering yes to take over",
+            takeover_msg=f"[{label}] Existing BMC session detected â€” auto-answering yes to take over",
         ):
-            print(f"   ⚠️  [{label}] no BMC prompt; aborting.")
+            print(f"   âš ï¸  [{label}] no BMC prompt; aborting.")
             return False
 
         _ts_print(f"[{label}] Starting node add process...")
@@ -21671,7 +21704,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     _session_log.log(_log_msg)
                 return
             if not _reconnect_msg_suppressed:
-                print(f"   ℹ️  [{label}] Suppressing repeated BMC reconnect messages until reconnect succeeds or timeout.")
+                print(f"   â„¹ï¸  [{label}] Suppressing repeated BMC reconnect messages until reconnect succeeds or timeout.")
                 if _session_log:
                     _session_log.log(
                         f"[{label}] suppressing repeated BMC reconnect messages after "
@@ -21748,7 +21781,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         _already_loader = _already_at_loader(ch, label=label, node_log=node_file)
         if not _already_loader:
             # Reset the node to begin a clean boot cycle.
-            print(f"   🔄 [{label}] Sending system reset...")
+            print(f"   ðŸ”„ [{label}] Sending system reset...")
             _slog(f"[{label}] sending system reset")
             ch.send("system reset\r")
             out, matched = direct_read_until_any(ch, ["y/n", ">"], timeout=15,
@@ -21822,7 +21855,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 _elapsed_silent = int(time.monotonic() - last_recv)
                 if _fw_update_active:
                     _emit_reconnect_notice(
-                        f"   ⏳ [{label}] {_fw_update_notice}",
+                        f"   â³ [{label}] {_fw_update_notice}",
                         f"[{label}] {_fw_update_notice}",
                     )
                     _sleep_left = 120
@@ -21834,7 +21867,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         _sleep_left -= _step
                 else:
                     _emit_reconnect_notice(
-                        f"   ⚠️  [{label}] No console data for {_elapsed_silent}s – reconnecting to BMC...",
+                        f"   âš ï¸  [{label}] No console data for {_elapsed_silent}s â€“ reconnecting to BMC...",
                         f"[{label}] reconnecting BMC during LOADER wait after {_elapsed_silent}s silence",
                     )
                 if node_file:
@@ -21865,9 +21898,9 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         _peer_reconnect_ctx["password"] = peer_password
                     if not _reach_bmc_prompt(
                         ch, timeout=15, node_log=node_file,
-                        takeover_msg=f"[{label}] Existing BMC session detected during reconnect — auto-answering yes",
+                        takeover_msg=f"[{label}] Existing BMC session detected during reconnect â€” auto-answering yes",
                     ):
-                        print(f"   ⚠️  [{label}] BMC prompt not reached after reconnect; continuing...")
+                        print(f"   âš ï¸  [{label}] BMC prompt not reached after reconnect; continuing...")
                     _entered_sc, _out_sc, _m_sc = _maybe_enter_system_console(
                         ch, _reason="LOADER wait reconnect",
                     )
@@ -21882,20 +21915,20 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     last_nudge = time.monotonic()
                     _reset_reconnect_notice_suppression()
                     if not _fw_update_active:
-                        print(f"   ✅ [{label}] Reconnected to BMC during LOADER wait; resuming...")
+                        print(f"   âœ… [{label}] Reconnected to BMC during LOADER wait; resuming...")
                     if _session_log and not _fw_update_active:
                         _session_log.log(f"[{label}] BMC reconnect successful during LOADER wait")
                 except Exception as _rc_err:
                     if _fw_update_active:
                         _emit_reconnect_notice(
-                            f"   ⏳ [{label}] {_fw_update_notice}",
+                            f"   â³ [{label}] {_fw_update_notice}",
                             f"[{label}] reconnect deferred during firmware update: {_rc_err}",
                         )
                         last_recv = time.monotonic()
                         last_keepalive = time.monotonic()
                         last_nudge = time.monotonic()
                         continue
-                    print(f"   ❌ [{label}] BMC reconnect failed during LOADER wait: {_rc_err}")
+                    print(f"   âŒ [{label}] BMC reconnect failed during LOADER wait: {_rc_err}")
                     if _session_log:
                         _session_log.log(
                             f"[{label}] BMC reconnect failed during LOADER wait: {_rc_err}",
@@ -21905,11 +21938,11 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             time.sleep(0.1)
 
         if not loader_seen:
-            print(f"   ⚠️  [{label}] LOADER not reached; aborting.")
+            print(f"   âš ï¸  [{label}] LOADER not reached; aborting.")
             _slog(f"[{label}] LOADER not reached", prefix="WARN")
             return False
 
-        # LOADER commands (NO destroy storage pods – this node is JOINING).
+        # LOADER commands (NO destroy storage pods â€“ this node is JOINING).
         # Physical zeroing, if requested, is set on every node so the
         # whole cluster ends up with consistent raid.use-physical-zeroing?
         # behaviour.
@@ -21944,7 +21977,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                                             node_log=node_file)
                 if cmd.startswith("setenv bootarg."):
                     if any(tok in _out for tok in ("%", "Error", "error", "invalid", "unknown", "Unknown")):
-                        print(f"   ❌ [{label}] LOADER error after '{cmd}': {_out.strip()!r}")
+                        print(f"   âŒ [{label}] LOADER error after '{cmd}': {_out.strip()!r}")
                         sys.exit(1)
             else:
                 ch.send(cmd + "\r"); time.sleep(1)
@@ -21984,12 +22017,12 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     pass
                 last_keepalive = time.monotonic()
             elif time.monotonic() - last_recv > 120:
-                # No data for 2+ minutes – BMC channel may have silently died.
+                # No data for 2+ minutes â€“ BMC channel may have silently died.
                 # Reconnect SSH and re-attach to system console.
                 _elapsed_silent = int(time.monotonic() - last_recv)
                 if _fw_update_active:
                     _emit_reconnect_notice(
-                        f"   ⏳ [{label}] {_fw_update_notice}",
+                        f"   â³ [{label}] {_fw_update_notice}",
                         f"[{label}] {_fw_update_notice}",
                     )
                     _sleep_left = 120
@@ -22001,7 +22034,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         _sleep_left -= _step
                 else:
                     _emit_reconnect_notice(
-                        f"   ⚠️  [{label}] No console data for {_elapsed_silent}s – reconnecting to BMC...",
+                        f"   âš ï¸  [{label}] No console data for {_elapsed_silent}s â€“ reconnecting to BMC...",
                         f"[{label}] reconnecting BMC after {_elapsed_silent}s silence",
                     )
                 if node_file:
@@ -22032,34 +22065,34 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         _peer_reconnect_ctx["password"] = peer_password
                     if not _reach_bmc_prompt(
                         ch, timeout=15, node_log=node_file,
-                        takeover_msg=f"[{label}] Existing BMC session detected during reconnect — auto-answering yes",
+                        takeover_msg=f"[{label}] Existing BMC session detected during reconnect â€” auto-answering yes",
                     ):
-                        print(f"   ⚠️  [{label}] BMC prompt not reached after reconnect; continuing...")
+                        print(f"   âš ï¸  [{label}] BMC prompt not reached after reconnect; continuing...")
                     _entered_sc, _out_sc, _m_sc = _maybe_enter_system_console(
                         ch, _reason="boot menu wait reconnect",
                     )
                     if _m_sc and any(sg in (_m_sc or "").lower() for sg in sig_lower):
-                        # Boot menu already visible – drop into detection immediately.
+                        # Boot menu already visible â€“ drop into detection immediately.
                         out_lower += _out_sc.lower()
                     # Send CR to nudge any waiting prompt.
                     ch.send("\r")
                     last_recv = time.monotonic()
-                    # Don't reset s – preserve original timeout budget.
+                    # Don't reset s â€“ preserve original timeout budget.
                     _reset_reconnect_notice_suppression()
                     if not _fw_update_active:
-                        print(f"   ✅ [{label}] Reconnected to BMC (120s silence); resuming boot menu wait...")
+                        print(f"   âœ… [{label}] Reconnected to BMC (120s silence); resuming boot menu wait...")
                     if _session_log and not _fw_update_active:
                         _session_log.log(f"[{label}] BMC reconnect successful; resuming boot menu wait")
                 except Exception as _rc_err:
                     if _fw_update_active:
                         _emit_reconnect_notice(
-                            f"   ⏳ [{label}] {_fw_update_notice}",
+                            f"   â³ [{label}] {_fw_update_notice}",
                             f"[{label}] reconnect deferred during firmware update: {_rc_err}",
                         )
                         last_recv = time.monotonic()
                         last_keepalive = time.monotonic()
                         continue
-                    print(f"   ❌ [{label}] BMC reconnect failed: {_rc_err}")
+                    print(f"   âŒ [{label}] BMC reconnect failed: {_rc_err}")
                     if _session_log:
                         _session_log.log(f"[{label}] BMC reconnect failed: {_rc_err}", prefix="ERROR")
                     return False
@@ -22067,7 +22100,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     and time.monotonic() - s >= 600):
                 loader_recovery_attempted = True
                 print(
-                    f"   🔁 [{label}] No boot menu after 10 minutes; checking LOADER "
+                    f"   ðŸ” [{label}] No boot menu after 10 minutes; checking LOADER "
                     "and running 'boot_ontap menu' if needed..."
                 )
                 _recovered, _booting = _recover_boot_menu_from_loader(
@@ -22082,7 +22115,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 if _booting and boot_wait_extension == 0:
                     boot_wait_extension = 600
                     print(
-                        f"   ⏳ [{label}] Node still appears to be booting; extending "
+                        f"   â³ [{label}] Node still appears to be booting; extending "
                         "boot-menu wait by another 10 minutes."
                     )
                     if _session_log:
@@ -22093,12 +22126,12 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         )
             time.sleep(0.1)
         if not seen_menu:
-            print(f"   ⚠️  [{label}] boot menu not detected; aborting.")
+            print(f"   âš ï¸  [{label}] boot menu not detected; aborting.")
             return False
         ch.send("4\r"); time.sleep(2)
         _cleanup_known_hosts_after_boot_option(peer_bmc, "4", log=_session_log)
         _t_option4_sent = time.monotonic()
-        print(f"   ⏱️  [{label}] Option 4 sent at +{_t_option4_sent - _t_thread_start:.1f}s")
+        print(f"   â±ï¸  [{label}] Option 4 sent at +{_t_option4_sent - _t_thread_start:.1f}s")
 
         # Yes confirmations + node mgmt + join wizard.
         if broker is not None:
@@ -22110,14 +22143,14 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                                             is_node_add=True,
                                             reconnect_ctx=_peer_reconnect_ctx)
         _t_disk_erase_done = time.monotonic()
-        print(f"   ⏱️  [{label}] Disk erase done at +{_t_disk_erase_done - _t_thread_start:.1f}s")
+        print(f"   â±ï¸  [{label}] Disk erase done at +{_t_disk_erase_done - _t_thread_start:.1f}s")
 
         cfg = _resolve_node_mgmt_config(peer_bmc)
         _mgmt_residual = _auto_answer_node_mgmt(ch, cfg, node_log=node_file) or ""
         _t_node_mgmt_done = time.monotonic()
-        print(f"   ⏱️  [{label}] Node mgmt applied at +{_t_node_mgmt_done - _t_thread_start:.1f}s")
+        print(f"   â±ï¸  [{label}] Node mgmt applied at +{_t_node_mgmt_done - _t_thread_start:.1f}s")
 
-        # ── Abort cluster wizard, log in, and capture cluster IP ──────────────
+        # â”€â”€ Abort cluster wizard, log in, and capture cluster IP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # After node-mgmt is applied, Ctrl+C out of the cluster wizard,
         # log in as admin, and read the node's cluster interface IP.
         # The caller collects all IPs and runs cluster add-node in bulk.
@@ -22127,7 +22160,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         )
         _t_cluster_ip_done = time.monotonic()
         if _t_loader_seen:
-            print(f"   ⏱️  [{label}] Cluster IP captured at +{_t_cluster_ip_done - _t_thread_start:.1f}s")
+            print(f"   â±ï¸  [{label}] Cluster IP captured at +{_t_cluster_ip_done - _t_thread_start:.1f}s")
 
         # Checkpoint: option-4 and node-mgmt prep done for this peer.
         if _checkpoint:
@@ -22173,7 +22206,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
 
         return _cluster_ip is not None
     except Exception as e:
-        print(f"   ❌ [{label}] Error: {e}")
+        print(f"   âŒ [{label}] Error: {e}")
         _slog(f"[{label}] thread error: {e}", prefix="ERROR")
         return False
     finally:
@@ -22190,7 +22223,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         if node_file:
             try:
                 node_file.close()
-                print(f"   📝 [{label}] Log saved: {node_file.name}")
+                print(f"   ðŸ“ [{label}] Log saved: {node_file.name}")
             except Exception:
                 pass
 
@@ -22224,17 +22257,17 @@ def _omit_nodes_by_number(peer_bmcs, mode_label="", log=None):
             return list(peer_bmcs)
         _bad = [p for p in _parts if not p.isdigit()]
         if _bad:
-            print(f"  ⚠️  Invalid entry: {', '.join(_bad)}. Use numbers like: 2,4")
+            print(f"  âš ï¸  Invalid entry: {', '.join(_bad)}. Use numbers like: 2,4")
             continue
         _idxs = sorted(set(int(p) for p in _parts))
         _oor = [str(i) for i in _idxs if i < 1 or i > len(peer_bmcs)]
         if _oor:
-            print(f"  ⚠️  Out of range: {', '.join(_oor)} (valid: 1-{len(peer_bmcs)})")
+            print(f"  âš ï¸  Out of range: {', '.join(_oor)} (valid: 1-{len(peer_bmcs)})")
             continue
         _omit_set = set(_idxs)
         _omitted = [peer_bmcs[i - 1] for i in _idxs]
         _kept = [b for i, b in enumerate(peer_bmcs, start=1) if i not in _omit_set]
-        print(f"  ℹ️  Omitted {len(_omitted)} node(s): {', '.join(_omitted)}")
+        print(f"  â„¹ï¸  Omitted {len(_omitted)} node(s): {', '.join(_omitted)}")
         if log:
             log.log(f"{mode_label}: operator omitted nodes by index: {_omitted}")
         return _kept
@@ -22259,9 +22292,9 @@ def _omit_already_joined_nodes(peer_bmcs, primary_channel, mode_label="", log=No
         else:
             _keep.append(_bmc)
     if _already:
-        print(f"\n  ℹ️  Skipping {len(_already)} node(s) already in cluster:")
+        print(f"\n  â„¹ï¸  Skipping {len(_already)} node(s) already in cluster:")
         for _bmc, _nip in _already:
-            print(f"    ✅ {_bmc} (node-mgmt {_nip})")
+            print(f"    âœ… {_bmc} (node-mgmt {_nip})")
         if log:
             log.log(f"{mode_label}: omitted already-joined nodes: {_already}")
     return _keep
@@ -22280,29 +22313,29 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     if not peer_bmcs:
         return False
 
-    # ── 1. Display nodes and confirm ────────────────────────────────────────
+    # â”€â”€ 1. Display nodes and confirm â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print("\n" + "=" * 60)
-    print(f"  ➕ Mode 2b: add the following {len(peer_bmcs)} node(s) to the cluster?")
-    print("  " + "─" * 58)
+    print(f"  âž• Mode 2b: add the following {len(peer_bmcs)} node(s) to the cluster?")
+    print("  " + "â”€" * 58)
     _col_w = 18
     print(f"  {'#':<4} {'BMC IP':<{_col_w}} {'Node Mgmt IP':<{_col_w}} "
           f"{'Port':<8} {'Gateway':<{_col_w}}")
-    print("  " + "─" * 58)
+    print("  " + "â”€" * 58)
     for i, ip in enumerate(peer_bmcs, 1):
         _nc = _node_cfg_for(ip)
-        _n_ip  = _nc.get("node_mgmt_ip")      or _nc.get("ip")      or "—"
-        _n_prt = _nc.get("node_mgmt_port")    or _nc.get("port")    or "—"
-        _n_gw  = _nc.get("node_mgmt_gateway") or _nc.get("gateway") or "—"
+        _n_ip  = _nc.get("node_mgmt_ip")      or _nc.get("ip")      or "â€”"
+        _n_prt = _nc.get("node_mgmt_port")    or _nc.get("port")    or "â€”"
+        _n_gw  = _nc.get("node_mgmt_gateway") or _nc.get("gateway") or "â€”"
         print(f"  {i:<4} {ip:<{_col_w}} {_n_ip:<{_col_w}} {_n_prt:<8} {_n_gw:<{_col_w}}")
     print("=" * 60)
     peer_bmcs = _omit_nodes_by_number(peer_bmcs, mode_label="2b", log=log)
     if not peer_bmcs:
-        print("\n  ✅ No nodes selected for add. Nothing to do.")
+        print("\n  âœ… No nodes selected for add. Nothing to do.")
         if log:
             log.log("2b: operator omitted all listed nodes; no-op")
         return True
 
-    # ── 2. BMC credentials ─────────────────────────────────────────────────
+    # â”€â”€ 2. BMC credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Check whether any node still needs a password collected.
     _needs_creds = [
         ip for ip in peer_bmcs
@@ -22324,7 +22357,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             _primary_p = (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password") or ""
             if _primary_p:
                 _shared_pw = _primary_p
-                print("  ✅ Using primary node BMC password for all nodes.")
+                print("  âœ… Using primary node BMC password for all nodes.")
             else:
                 try:
                     _shared_pw = getpass.getpass("  BMC password for all nodes: ")
@@ -22343,7 +22376,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             _ep_u = ((_nc.get("bmc_user") or "").strip() or bmc_user)
             _ep_p_cfg = _nc.get("bmc_password")
             if _ep_p_cfg:
-                print(f"  📄 Using config credentials for {ip} (user={_ep_u})")
+                print(f"  ðŸ“„ Using config credentials for {ip} (user={_ep_u})")
                 _ep_p = _ep_p_cfg
             elif _shared_pw is not None:
                 _ep_p = _shared_pw
@@ -22368,18 +22401,18 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             if log:
                 log.log(f"2b: resolved BMC creds for {ip} (user={_ep_u})")
 
-    # ── 3. Ping all BMC IPs ────────────────────────────────────────────────
-    print(f"\n  🏓 Pinging {len(peer_bmcs)} BMC(s)...")
+    # â”€â”€ 3. Ping all BMC IPs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    print(f"\n  ðŸ“ Pinging {len(peer_bmcs)} BMC(s)...")
     _unreachable = []
     for ip in peer_bmcs:
         _ok = _silent_ping(ip)
-        _sym = "✅" if _ok else "❌"
+        _sym = "âœ…" if _ok else "âŒ"
         print(f"    {_sym} {ip}")
         if not _ok:
             _unreachable.append(ip)
     if _unreachable:
-        print(f"\n  ❌ {len(_unreachable)} node(s) unreachable: {', '.join(_unreachable)}")
-        print("  Aborting — resolve connectivity before retrying.")
+        print(f"\n  âŒ {len(_unreachable)} node(s) unreachable: {', '.join(_unreachable)}")
+        print("  Aborting â€” resolve connectivity before retrying.")
         if log:
             log.log(
                 f"2b parallel add aborted: unreachable BMCs: {_unreachable}",
@@ -22387,8 +22420,8 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             )
         return False
 
-    # ── 3b. Pre-flight BMC authentication check ───────────────────────────
-    print(f"\n  🔐 Testing BMC authentication ({len(peer_bmcs)} node(s))...")
+    # â”€â”€ 3b. Pre-flight BMC authentication check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    print(f"\n  ðŸ” Testing BMC authentication ({len(peer_bmcs)} node(s))...")
     _auth_failed_nodes = []
     for _ip in list(peer_bmcs):
         _c = _peer_bmc_creds.get(_ip) or {}
@@ -22411,12 +22444,12 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 except Exception:
                     pass
                 _peer_bmc_creds[_ip] = {"user": _u, "password": _p}
-                print(f"    ✅ {_ip} (user={_u})")
+                print(f"    âœ… {_ip} (user={_u})")
                 if log:
                     log.log(f"2b pre-auth OK: {_ip} (user={_u})")
                 break
             except Exception as _ae:
-                print(f"    ❌ {_ip} — authentication failed: {_ae}")
+                print(f"    âŒ {_ip} â€” authentication failed: {_ae}")
                 if log:
                     log.log(f"2b pre-auth FAIL: {_ip}: {_ae}", prefix="WARN")
                 print(
@@ -22426,17 +22459,17 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 try:
                     _u_in = input(f"      Username [{_u}]: ").strip()
                     if _u_in.lower() == "skip":
-                        print(f"    ⚠️  Skipping {_ip} — operator requested skip.")
+                        print(f"    âš ï¸  Skipping {_ip} â€” operator requested skip.")
                         _auth_failed_nodes.append(_ip)
                         break
                     _u = _u_in or _u
                     _p = getpass.getpass(f"      Password for {_u}@{_ip}: ")
                 except (EOFError, KeyboardInterrupt):
-                    print(f"    ⚠️  Skipping {_ip} — input cancelled.")
+                    print(f"    âš ï¸  Skipping {_ip} â€” input cancelled.")
                     _auth_failed_nodes.append(_ip)
                     break
     if _auth_failed_nodes:
-        print(f"\n  ❌ Authentication failed for: {', '.join(_auth_failed_nodes)}")
+        print(f"\n  âŒ Authentication failed for: {', '.join(_auth_failed_nodes)}")
         _skip_ans = _prompt(
             "  Remove failed node(s) and continue, or abort? [remove/abort]: "
         , "abort").lower()
@@ -22459,7 +22492,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                         prefix="ERROR")
             return False
 
-    # ── 4. Final confirmation ──────────────────────────────────────────────
+    # â”€â”€ 4. Final confirmation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print()
     _confirm = _prompt(
         f"  Proceed with adding all {len(peer_bmcs)} node(s) to the cluster? [y/n]: "
@@ -22501,7 +22534,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                                  or ""),
     )
 
-    # ── 2. Admin password (for join wizard + cluster show) ─────────────────
+    # â”€â”€ 2. Admin password (for join wizard + cluster show) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     admin_password = (
         _cluster_config.get("admin_password")
         or ((_config_data.get("cluster") or {}).get("password")
@@ -22515,13 +22548,13 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         or "admin"
     )
 
-    # ── 3. Establish primary-channel for cluster show (best-effort) ────────
+    # â”€â”€ 3. Establish primary-channel for cluster show (best-effort) â”€â”€â”€â”€â”€â”€â”€â”€
     primary_channel = None
     primary_client = None
     baseline = 0
     mgmt_ip = _cluster_config.get("mgmt_ip")
     if mgmt_ip:
-        print(f"\n  🔌 Connecting to cluster {mgmt_ip} for join verification...")
+        print(f"\n  ðŸ”Œ Connecting to cluster {mgmt_ip} for join verification...")
         _cm_user, _cm_pass = _admin_user, admin_password
         while True:
             try:
@@ -22535,19 +22568,19 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     _admin_user = _cm_user
                     admin_password = _cm_pass
                     baseline = _cluster_show_node_count(primary_channel)
-                    print(f"  ✅ Connected; current cluster node count: {baseline}")
+                    print(f"  âœ… Connected; current cluster node count: {baseline}")
                     if log:
                         log.log(f"2b parallel: cluster mgmt OK; baseline={baseline}")
                 else:
                     primary_client.close()
                     primary_client = None
-                    print("  ⚠️  Could not log into cluster shell; join verification skipped.")
+                    print("  âš ï¸  Could not log into cluster shell; join verification skipped.")
                     if log:
                         log.log("2b parallel: cluster shell login failed; verification skipped",
                                 prefix="WARN")
                 break
             except paramiko.AuthenticationException:
-                print(f"  ❌ Cluster mgmt authentication failed for {_cm_user}@{mgmt_ip}.")
+                print(f"  âŒ Cluster mgmt authentication failed for {_cm_user}@{mgmt_ip}.")
                 if log:
                     log.log(f"2b parallel: cluster mgmt auth failed for {_cm_user}@{mgmt_ip}",
                             prefix="WARN")
@@ -22569,14 +22602,14 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     primary_client = None
                     break
             except Exception as _ce:
-                print(f"  ⚠️  Cluster mgmt connection failed ({_ce}); verification skipped.")
+                print(f"  âš ï¸  Cluster mgmt connection failed ({_ce}); verification skipped.")
                 if log:
                     log.log(f"2b parallel: cluster mgmt connection failed: {_ce}", prefix="WARN")
                 primary_channel = None
                 primary_client = None
                 break
     else:
-        print("  ℹ️  Cluster mgmt IP not set; join verification will be skipped.")
+        print("  â„¹ï¸  Cluster mgmt IP not set; join verification will be skipped.")
         if log:
             log.log("2b parallel: no cluster mgmt IP; verification skipped")
 
@@ -22585,7 +22618,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             peer_bmcs, primary_channel, mode_label="2b", log=log
         )
         if not peer_bmcs:
-            print("\n  ✅ All selected nodes are already in cluster. Nothing to add.")
+            print("\n  âœ… All selected nodes are already in cluster. Nothing to add.")
             if log:
                 log.log("2b: all selected nodes already in cluster; no-op")
             if primary_client:
@@ -22623,9 +22656,9 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                                     or ""),
         )
 
-    # ── 4. Spawn one thread per peer ────────────────────────────────────────
+    # â”€â”€ 4. Spawn one thread per peer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if log:
-        log.start_phase("2b – Parallel Node Add")
+        log.start_phase("2b â€“ Parallel Node Add")
 
     _cluster_ips_out = {}   # peer_bmc -> cluster interface IP (populated by threads)
     _2b_peer_timings: "dict[str, dict]" = {}
@@ -22660,9 +22693,9 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             )
             t.start()
             threads.append(t)
-            print(f"  ▶️  [{addr}] Thread started.")
+            print(f"  â–¶ï¸  [{addr}] Thread started.")
 
-        print(f"\n  ⏳ Waiting for {_n} node(s) to complete "
+        print(f"\n  â³ Waiting for {_n} node(s) to complete "
               f"(parallel LOADER/format/node-mgmt, then bulk cluster join)...")
         if not _join_threads_with_deadline(threads, label="mode 2b", log=log):
             return False
@@ -22677,18 +22710,18 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         if not _failed:
             break
 
-        print(f"\n  ⚠️  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
+        print(f"\n  âš ï¸  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
         if log:
             log.log(f"2b: {len(_failed)} node(s) failed: {_failed}", prefix="WARN")
         _retry_ans = _prompt("  Retry failed node(s)? [y/n]: ", "n").lower()
         if _retry_ans != "y":
             break
-        print(f"\n  🔁 Retrying {len(_failed)} node(s)...")
+        print(f"\n  ðŸ” Retrying {len(_failed)} node(s)...")
         if log:
             log.log(f"2b: operator chose to retry: {_failed}")
         _pending = _failed
 
-    # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
+    # â”€â”€ 5. Bulk cluster join via cluster add-node â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _2b_add_node_timings: "dict[str, float]" = {}
     if primary_channel and _cluster_ips_out:
         _collected_ips = _ordered_cluster_ips_for_add(
@@ -22698,24 +22731,24 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             _cluster_add_nodes_bulk(primary_channel, _collected_ips, log=log,
                                     node_timings_out=_2b_add_node_timings)
         else:
-            print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
+            print("\n  âš ï¸  No cluster IPs collected; skipping cluster add-node.")
             if log:
                 log.log("2b: no cluster IPs collected; skipping cluster add-node",
                         prefix="WARN")
     elif not primary_channel:
-        print("\n  ℹ️  No primary channel; skipping cluster add-node.")
+        print("\n  â„¹ï¸  No primary channel; skipping cluster add-node.")
         if log:
             log.log("2b: no primary channel; skipping cluster add-node")
 
     if log:
         # Per-node detailed timing breakdown.
-        _2B_PHASE = "2b – Parallel Node Add"
+        _2B_PHASE = "2b â€“ Parallel Node Add"
         for _bmc in peer_bmcs:
             _t = _2b_peer_timings.get(_bmc)
             if not _t:
                 continue
             _nm = _t.get("node_name") or ""
-            _ok = "✅" if _t.get("ok") else "❌"
+            _ok = "âœ…" if _t.get("ok") else "âŒ"
             _pfx = f"{_ok} {_nm} ({_bmc})" if _nm else f"{_ok} {_bmc}"
             for _label, _key in [
                 ("LOADER reached",    "t_loader"),
@@ -22726,12 +22759,12 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             ]:
                 _ts = _t.get(_key, 0.0)
                 if _ts:
-                    log.add_phase_subtiming(_2B_PHASE, f"  {_pfx} → {_label}", _ts)
+                    log.add_phase_subtiming(_2B_PHASE, f"  {_pfx} â†’ {_label}", _ts)
         if _2b_add_node_timings:
             for _ip, _elapsed in sorted(_2b_add_node_timings.items(),
                                         key=lambda x: x[1]):
                 log.add_phase_subtiming(
-                    _2B_PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
+                    _2B_PHASE, f"  cluster add-node [{_ip}] â†’ success", _elapsed)
         log.end_phase()
 
     if primary_client:
@@ -22740,15 +22773,15 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         except Exception:
             pass
 
-    print("\n  ✅ Mode 2b parallel add complete.")
+    print("\n  âœ… Mode 2b parallel add complete.")
     if log:
         log.log("Mode 2b parallel add: all threads finished")
     return True
 
 
 def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
-    """Mode 2a: run nodes in parallel, each going through LOADER → option 4 →
-    disk erase → node-mgmt, then all nodes are joined via ONTAP's
+    """Mode 2a: run nodes in parallel, each going through LOADER â†’ option 4 â†’
+    disk erase â†’ node-mgmt, then all nodes are joined via ONTAP's
     ``cluster add-node`` command from the primary cluster.
 
     peer_bmcs    : ordered list of BMC IPs/hostnames
@@ -22761,31 +22794,31 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
     broker = _InteractivePromptBroker()
 
-    # ── 1. Display nodes ─────────────────────────────────────────────────────
+    # â”€â”€ 1. Display nodes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print("\n" + "=" * 60)
-    print(f"  ➕ Mode 2a: add the following {len(peer_bmcs)} node(s) interactively")
-    print("  " + "─" * 58)
+    print(f"  âž• Mode 2a: add the following {len(peer_bmcs)} node(s) interactively")
+    print("  " + "â”€" * 58)
     _col_w = 18
     print(f"  {'#':<4} {'BMC IP':<{_col_w}} {'Node Mgmt IP':<{_col_w}} "
           f"{'Port':<8} {'Gateway':<{_col_w}}")
-    print("  " + "─" * 58)
+    print("  " + "â”€" * 58)
     for i, ip in enumerate(peer_bmcs, 1):
         _nc = _node_cfg_for(ip)
-        _n_ip  = _nc.get("node_mgmt_ip")      or _nc.get("ip")      or "—"
-        _n_prt = _nc.get("node_mgmt_port")    or _nc.get("port")    or "—"
-        _n_gw  = _nc.get("node_mgmt_gateway") or _nc.get("gateway") or "—"
+        _n_ip  = _nc.get("node_mgmt_ip")      or _nc.get("ip")      or "â€”"
+        _n_prt = _nc.get("node_mgmt_port")    or _nc.get("port")    or "â€”"
+        _n_gw  = _nc.get("node_mgmt_gateway") or _nc.get("gateway") or "â€”"
         print(f"  {i:<4} {ip:<{_col_w}} {_n_ip:<{_col_w}} {_n_prt:<8} {_n_gw:<{_col_w}}")
     print("=" * 60)
-    print("\n  ℹ️   Nodes will boot in parallel. When user input is needed")
+    print("\n  â„¹ï¸   Nodes will boot in parallel. When user input is needed")
     print("  the relevant node will pause and ask you here.\n")
     peer_bmcs = _omit_nodes_by_number(peer_bmcs, mode_label="2a", log=log)
     if not peer_bmcs:
-        print("\n  ✅ No nodes selected for add. Nothing to do.")
+        print("\n  âœ… No nodes selected for add. Nothing to do.")
         if log:
             log.log("2a: operator omitted all listed nodes; no-op")
         return True
 
-    # ── 2. Collect BMC credentials ───────────────────────────────────────────
+    # â”€â”€ 2. Collect BMC credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _needs_creds = [
         ip for ip in peer_bmcs
         if ip not in _peer_bmc_creds
@@ -22802,7 +22835,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             _primary_p = (_peer_bmc_creds.get(peer_bmcs[0]) or {}).get("password") or ""
             if _primary_p:
                 _shared_pw = _primary_p
-                print("  ✅ Using primary node BMC password for all nodes.")
+                print("  âœ… Using primary node BMC password for all nodes.")
             else:
                 try:
                     _shared_pw = getpass.getpass("  BMC password for all nodes: ")
@@ -22820,7 +22853,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             _ep_u = ((_nc.get("bmc_user") or "").strip() or bmc_user)
             _ep_p_cfg = _nc.get("bmc_password")
             if _ep_p_cfg:
-                print(f"  📄 Using config credentials for {ip} (user={_ep_u})")
+                print(f"  ðŸ“„ Using config credentials for {ip} (user={_ep_u})")
                 _ep_p = _ep_p_cfg
             elif _shared_pw is not None:
                 _ep_p = _shared_pw
@@ -22845,7 +22878,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             if log:
                 log.log(f"2a: resolved BMC creds for {ip} (user={_ep_u})")
 
-    # ── 3. Connect to cluster mgmt for join verification ─────────────────────
+    # â”€â”€ 3. Connect to cluster mgmt for join verification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     admin_password = (
         _cluster_config.get("admin_password")
         or ((_config_data.get("cluster") or {}).get("password")
@@ -22863,7 +22896,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     baseline = 0
     mgmt_ip = _cluster_config.get("mgmt_ip")
     if mgmt_ip:
-        print(f"\n  🔌 Connecting to cluster {mgmt_ip} for join verification...")
+        print(f"\n  ðŸ”Œ Connecting to cluster {mgmt_ip} for join verification...")
         try:
             primary_client, _admin_user, admin_password = _ssh_connect_with_retry(
                 mgmt_ip, _admin_user, admin_password,
@@ -22873,24 +22906,24 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             if _login_primary_cluster_shell(_pch, admin_password):
                 primary_channel = _pch
                 baseline = _cluster_show_node_count(primary_channel)
-                print(f"  ✅ Connected; current cluster node count: {baseline}")
+                print(f"  âœ… Connected; current cluster node count: {baseline}")
             else:
                 primary_client.close()
                 primary_client = None
-                print("  ⚠️  Could not log into cluster shell; join verification skipped.")
+                print("  âš ï¸  Could not log into cluster shell; join verification skipped.")
         except Exception as _ce:
-            print(f"  ⚠️  Cluster mgmt connection failed ({_ce}); verification skipped.")
+            print(f"  âš ï¸  Cluster mgmt connection failed ({_ce}); verification skipped.")
             primary_channel = None
             primary_client = None
     else:
-        print("  ℹ️  Cluster mgmt IP not set; join verification will be skipped.")
+        print("  â„¹ï¸  Cluster mgmt IP not set; join verification will be skipped.")
 
     if primary_channel:
         peer_bmcs = _omit_already_joined_nodes(
             peer_bmcs, primary_channel, mode_label="2a", log=log
         )
         if not peer_bmcs:
-            print("\n  ✅ All selected nodes are already in cluster. Nothing to add.")
+            print("\n  âœ… All selected nodes are already in cluster. Nothing to add.")
             if log:
                 log.log("2a: all selected nodes already in cluster; no-op")
             if primary_client:
@@ -22900,9 +22933,9 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     pass
             return True
 
-    # ── 4. Spawn threads ─────────────────────────────────────────────────────
+    # â”€â”€ 4. Spawn threads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if log:
-        log.start_phase("2a – Interactive Parallel Node Add")
+        log.start_phase("2a â€“ Interactive Parallel Node Add")
 
     _cluster_ips_out = {}   # peer_bmc -> cluster interface IP
     _2a_peer_timings: "dict[str, dict]" = {}
@@ -22939,9 +22972,9 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             )
             t.start()
             threads.append(t)
-            print(f"  ▶️  [{addr}] Thread started.")
+            print(f"  â–¶ï¸  [{addr}] Thread started.")
 
-        print(f"\n  ⏳ Nodes running in parallel. Answer prompts above when asked...")
+        print(f"\n  â³ Nodes running in parallel. Answer prompts above when asked...")
         if not _join_threads_with_deadline(threads, label="mode 2a", log=log):
             return False
         _raise_pending_checkpoint_failure()
@@ -22955,7 +22988,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         if not _failed:
             break
 
-        print(f"\n  ⚠️  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
+        print(f"\n  âš ï¸  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
         if log:
             log.log(f"2a: {len(_failed)} node(s) failed: {_failed}", prefix="WARN")
         _retry_ans = _prompt("  Retry failed node(s)? [y/n]: ", "n").lower()
@@ -22963,7 +22996,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             break
         _pending = _failed
 
-    # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
+    # â”€â”€ 5. Bulk cluster join via cluster add-node â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _2a_add_node_timings: "dict[str, float]" = {}
     if primary_channel and _cluster_ips_out:
         _collected_ips = _ordered_cluster_ips_for_add(
@@ -22973,24 +23006,24 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             _cluster_add_nodes_bulk(primary_channel, _collected_ips, log=log,
                                     node_timings_out=_2a_add_node_timings)
         else:
-            print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
+            print("\n  âš ï¸  No cluster IPs collected; skipping cluster add-node.")
             if log:
                 log.log("2a: no cluster IPs collected; skipping cluster add-node",
                         prefix="WARN")
     elif not primary_channel:
-        print("\n  ℹ️  No primary channel; skipping cluster add-node.")
+        print("\n  â„¹ï¸  No primary channel; skipping cluster add-node.")
         if log:
             log.log("2a: no primary channel; skipping cluster add-node")
 
     if log:
         # Per-node detailed timing breakdown.
-        _2A_PHASE = "2a – Interactive Parallel Node Add"
+        _2A_PHASE = "2a â€“ Interactive Parallel Node Add"
         for _bmc in peer_bmcs:
             _t = _2a_peer_timings.get(_bmc)
             if not _t:
                 continue
             _nm = _t.get("node_name") or ""
-            _ok = "✅" if _t.get("ok") else "❌"
+            _ok = "âœ…" if _t.get("ok") else "âŒ"
             _pfx = f"{_ok} {_nm} ({_bmc})" if _nm else f"{_ok} {_bmc}"
             for _label, _key in [
                 ("LOADER reached",    "t_loader"),
@@ -23001,12 +23034,12 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             ]:
                 _ts = _t.get(_key, 0.0)
                 if _ts:
-                    log.add_phase_subtiming(_2A_PHASE, f"  {_pfx} → {_label}", _ts)
+                    log.add_phase_subtiming(_2A_PHASE, f"  {_pfx} â†’ {_label}", _ts)
         if _2a_add_node_timings:
             for _ip, _elapsed in sorted(_2a_add_node_timings.items(),
                                         key=lambda x: x[1]):
                 log.add_phase_subtiming(
-                    _2A_PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
+                    _2A_PHASE, f"  cluster add-node [{_ip}] â†’ success", _elapsed)
         log.end_phase()
 
     if primary_client:
@@ -23015,16 +23048,16 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         except Exception:
             pass
 
-    print("\n  ✅ Mode 2a interactive parallel add complete.")
+    print("\n  âœ… Mode 2a interactive parallel add complete.")
     if log:
         log.log("Mode 2a parallel add: all threads finished")
     return True
 
 
-# ── Option 3 helpers ────────────────────────────────────────────────────────
+# â”€â”€ Option 3 helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Small option-3-specific bookkeeping pulled out of main() so the inline
 # 1/2/3 flow stays readable. The destructive primary path (system reset, boot
-# menu, cluster create) is intentionally NOT extracted — it is shared with
+# menu, cluster create) is intentionally NOT extracted â€” it is shared with
 # option 1 and would require duplicating ~1500 lines to split cleanly.
 
 def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
@@ -23053,21 +23086,21 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
         prior_bootmenu = prior.is_done("primary_bootmenu_done")
         prior_cluster = prior.is_done("cluster_formed")
         prior_opt4 = prior.nodes_done_for("peer_option4_done")
-        _print_banner("🔖 Prior option-3 checkpoint found")
+        _print_banner("ðŸ”– Prior option-3 checkpoint found")
         print(f"     Mode          : {_format_checkpoint_mode(prior.mode)}")
         print(f"     BMC IPs       : {', '.join(prior.bmc_ips)}")
         if prior_bootmenu:
-            print("     primary_bootmenu_done : ✅ (primary cleared boot menu)")
+            print("     primary_bootmenu_done : âœ… (primary cleared boot menu)")
         if prior_cluster:
-            print("     cluster_formed        : ✅ (cluster create succeeded)")
+            print("     cluster_formed        : âœ… (cluster create succeeded)")
         if prior_primary:
-            print("     primary_setup_done    : ✅ (cluster already created)")
+            print("     primary_setup_done    : âœ… (cluster already created)")
         if prior_opt4:
             print(f"     peer_option4_done     : {', '.join(prior_opt4)}")
         if prior_joined:
             print(f"     peer_joined           : {', '.join(prior_joined)}")
         if prior_complete:
-            print("     option3_complete      : ✅")
+            print("     option3_complete      : âœ…")
         print("=" * 60)
 
         _prior_node_mgmt = prior.is_done("primary_node_mgmt_done")
@@ -23083,7 +23116,7 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
         )
 
         if _destructive_progress:
-            print("\n  ⚠️  Prior checkpoint shows option 3 already passed destructive")
+            print("\n  âš ï¸  Prior checkpoint shows option 3 already passed destructive")
             print("      reset/format/reboot stages.")
             print("      Re-running option 3 may SYSTEM RESET the primary")
             print("      and can DESTROY an existing cluster.")
@@ -23096,7 +23129,7 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
                 timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
             ).lower()
             if ans != "y":
-                print("  ↩️  Aborting option 3. Run option 2c to resume node additions.")
+                print("  â†©ï¸  Aborting option 3. Run option 2c to resume node additions.")
                 if session_log:
                     session_log.log(
                         "option 3 aborted by operator at resume prompt; cluster already up"
@@ -23158,19 +23191,19 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
         prior_format = prior.is_done("primary_format_done")
         prior_primary = prior.is_done("primary_setup_done")
         prior_complete = prior.is_done("option1_complete")
-        _print_banner("🔖 Prior option-1 checkpoint found")
+        _print_banner("ðŸ”– Prior option-1 checkpoint found")
         print(f"     BMC IP                : {sp_host}")
         print(f"     Mode                  : {_format_checkpoint_mode(prior.mode)}")
         if prior_bootmenu:
-            print("     primary_bootmenu_done : ✅ (boot menu cleared)")
+            print("     primary_bootmenu_done : âœ… (boot menu cleared)")
         if prior_install:
-            print("     primary_install_done  : ✅ (ONTAP image installed)")
+            print("     primary_install_done  : âœ… (ONTAP image installed)")
         if prior_format:
-            print("     primary_format_done   : ✅ (disks formatted)")
+            print("     primary_format_done   : âœ… (disks formatted)")
         if prior_primary:
-            print("     primary_setup_done    : ✅ (cluster already created)")
+            print("     primary_setup_done    : âœ… (cluster already created)")
         if prior_complete:
-            print("     option1_complete      : ✅")
+            print("     option1_complete      : âœ…")
         print("=" * 60)
         
         _destructive_progress = bool(
@@ -23180,7 +23213,7 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
         )
 
         if _destructive_progress:
-            print("\n  ⚠️  Prior checkpoint shows this run already passed destructive")
+            print("\n  âš ï¸  Prior checkpoint shows this run already passed destructive")
             print("      install/format/reboot stages.")
             print("  Running option 1 again can DESTROY THE CLUSTER and lose all data.")
             print("  The cluster is likely still running.\n")
@@ -23195,7 +23228,7 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
         
         # Clear prior checkpoint for fresh run
         prior.clear()
-        print("\n  Prior checkpoint cleared — starting fresh.\n")
+        print("\n  Prior checkpoint cleared â€” starting fresh.\n")
         if session_log:
             session_log.log("Prior option-1 checkpoint cleared; starting fresh")
 
@@ -23239,24 +23272,24 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
         prior_format = prior.is_done("node_format_done")
         prior_joined = prior.is_done("node_joined")
         prior_complete = prior.is_done("option2_complete")
-        _print_banner("🔖 Prior option-2 checkpoint found")
+        _print_banner("ðŸ”– Prior option-2 checkpoint found")
         print(f"     BMC IP                : {secondary_bmc}")
         print(f"     Mode                  : {_format_checkpoint_mode(prior.mode)}")
         if prior_install:
-            print("     node_install_done     : ✅ (ONTAP image installed)")
+            print("     node_install_done     : âœ… (ONTAP image installed)")
         if prior_format:
-            print("     node_format_done      : ✅ (disks formatted)")
+            print("     node_format_done      : âœ… (disks formatted)")
         if prior_joined:
-            print("     node_joined           : ✅ (node already joined cluster)")
+            print("     node_joined           : âœ… (node already joined cluster)")
         if prior_complete:
-            print("     option2_complete      : ✅")
+            print("     option2_complete      : âœ…")
         print("=" * 60)
         
         _destructive_progress = bool(
             not prior_complete and (prior_joined or prior_format or prior_install)
         )
         if _destructive_progress:
-            print("\n  ⚠️  Prior checkpoint shows this node already passed destructive")
+            print("\n  âš ï¸  Prior checkpoint shows this node already passed destructive")
             print("      install/format/reboot stages.")
             print("  Running option 2 again may re-enter those phases or cause")
             print("  duplicate node entries.\n")
@@ -23271,7 +23304,7 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
         
         # Clear prior checkpoint for fresh run
         prior.clear()
-        print("\n  Prior checkpoint cleared — starting fresh.\n")
+        print("\n  Prior checkpoint cleared â€” starting fresh.\n")
         if session_log:
             session_log.log("Prior option-2 checkpoint cleared; starting fresh")
 
@@ -23351,7 +23384,7 @@ def _prompt_and_run_post_script(session_log=None):
                 print(f"    {idx}. {rel}")
             print(f"    {len(scripts) + 1}. Enter a custom path")
             print(f"    0. Skip")
-            sel = _prompt(f"\n  Select [0–{len(scripts) + 1}]: ").strip()
+            sel = _prompt(f"\n  Select [0â€“{len(scripts) + 1}]: ").strip()
             if sel == "0" or sel == "":
                 return
             if sel.isdigit() and 1 <= int(sel) <= len(scripts):
@@ -23359,10 +23392,10 @@ def _prompt_and_run_post_script(session_log=None):
             elif sel == str(len(scripts) + 1):
                 chosen_path = None  # fall through to custom-path prompt
             else:
-                print("  ⚠️  Invalid selection.")
+                print("  âš ï¸  Invalid selection.")
                 continue
         else:
-            print("  ℹ️  No Python scripts found in the script directory or subfolders.")
+            print("  â„¹ï¸  No Python scripts found in the script directory or subfolders.")
 
         if chosen_path is None:
             raw = _prompt("  Enter the full path to the script: ").strip()
@@ -23371,21 +23404,21 @@ def _prompt_and_run_post_script(session_log=None):
             chosen_path = os.path.abspath(raw)
 
         if not os.path.isfile(chosen_path):
-            print(f"  ⚠️  File not found: {chosen_path}")
+            print(f"  âš ï¸  File not found: {chosen_path}")
             continue
 
-        print(f"\n  ▶️  Running: {chosen_path}")
+        print(f"\n  â–¶ï¸  Running: {chosen_path}")
         if session_log:
             session_log.log(f"Running post-script: {chosen_path}")
         try:
             result = subprocess.run([sys.executable, chosen_path])
             rc = result.returncode
-            status = "✅ completed" if rc == 0 else f"⚠️  exited with code {rc}"
+            status = "âœ… completed" if rc == 0 else f"âš ï¸  exited with code {rc}"
             print(f"\n  {status}: {os.path.basename(chosen_path)}")
             if session_log:
                 session_log.log(f"Post-script {chosen_path} exited with code {rc}")
         except Exception as exc:
-            print(f"  ❌  Error running script: {exc}")
+            print(f"  âŒ  Error running script: {exc}")
             if session_log:
                 session_log.log(f"Post-script error: {exc}", prefix="WARN")
 
@@ -23405,7 +23438,7 @@ def _option3_finalize(ctx, cluster_mgmt_ip):
         except Exception:
             pass
     mgmt_ip = cluster_mgmt_ip or "<cluster-management-ip>"
-    _print_banner("✅ End-to-end configuration complete.")
+    _print_banner("âœ… End-to-end configuration complete.")
     print(f"  To login to the cluster, SSH to {mgmt_ip} or use a web")
     print(f"  browser to access https://{mgmt_ip}")
     print("=" * 60)
@@ -23640,14 +23673,14 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         ]
         _excluded = [p for p in _before if p not in peer_bmcs]
         if _excluded:
-            print(f"\n  ⚠️  Excluded primary BMC from peer add list: "
+            print(f"\n  âš ï¸  Excluded primary BMC from peer add list: "
                   f"{', '.join(_excluded)}")
             if _session_log:
                 _session_log.log(
                     f"add_peer_nodes_parallel: excluded primary BMC(s) "
                     f"from peer list: {_excluded}", prefix="WARN")
         if not peer_bmcs:
-            print("  ℹ️  No peer BMCs remain after excluding primary; nothing to do.")
+            print("  â„¹ï¸  No peer BMCs remain after excluding primary; nothing to do.")
             return True
 
     # Checkpoint: primary is up and we're about to add peers. Record this
@@ -23669,19 +23702,19 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
             _skip = [p for p in peer_bmcs if p in _already]
             peer_bmcs = [p for p in peer_bmcs if p not in _already]
             if _skip:
-                print("\n  🔖 Checkpoint: skipping peer(s) already joined: "
+                print("\n  ðŸ”– Checkpoint: skipping peer(s) already joined: "
                       f"{', '.join(_skip)}")
                 if _session_log:
                     _session_log.log(
                         f"checkpoint resume: skipping already-joined peers: {_skip}"
                     )
             if not peer_bmcs:
-                print("  ✅ All peers already joined per checkpoint; nothing to do.")
+                print("  âœ… All peers already joined per checkpoint; nothing to do.")
                 if _session_log:
                     _session_log.log("checkpoint resume: all peers already joined")
                 return True
 
-    _print_banner(f"🚀 Mode 3: parallel auto-add for {len(peer_bmcs)} peer node(s)")
+    _print_banner(f"ðŸš€ Mode 3: parallel auto-add for {len(peer_bmcs)} peer node(s)")
     print(f"  Peers: {', '.join(peer_bmcs)}")
     _t_mode3_start = time.monotonic()
     if _session_log:
@@ -23697,14 +23730,14 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         _nb_src_type, _nb_src_value = _netboot_pkg_preselected
         if _nb_src_type == "file":
             _nb_t, _peer_nb_pkg_url, _nb_httpd = _start_http_server(_nb_src_value)
-            print(f"\n  🌐 Peer netboot server: {_peer_nb_pkg_url}")
+            print(f"\n  ðŸŒ Peer netboot server: {_peer_nb_pkg_url}")
             _peer_nb_version = _extract_version_from_package_path(_nb_src_value)
         else:
             _peer_nb_pkg_url = _nb_src_value
             _peer_nb_version = _extract_version_from_package_path(_nb_src_value)
         
         if _peer_nb_pkg_url:
-            print(f"\n  🔄 Netbooting {len(peer_bmcs)} peer node(s) to version {_peer_nb_version}...")
+            print(f"\n  ðŸ”„ Netbooting {len(peer_bmcs)} peer node(s) to version {_peer_nb_version}...")
             if _session_log:
                 _session_log.start_phase("Peer Netboot Install")
             
@@ -23718,7 +23751,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                                             else "one or more peers failed netboot"))
             
             if not _peer_nb_ok:
-                print("  ⚠️  One or more peers failed netboot; attempting option 4 anyway...")
+                print("  âš ï¸  One or more peers failed netboot; attempting option 4 anyway...")
                 if _session_log:
                     _session_log.log("Peer netboot incomplete but continuing to option 4",
                                     prefix="WARN")
@@ -23753,13 +23786,13 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
 
     _mode3_ok = True
     if _checkpoint and not _checkpoint.is_done("cluster_formed"):
-        print("\n  ⏳ Waiting for primary cluster creation before peer add-node...")
+        print("\n  â³ Waiting for primary cluster creation before peer add-node...")
         _wait_started = time.monotonic()
         while not _shutdown_event.is_set():
             if _checkpoint.is_done("cluster_formed"):
                 break
             if time.monotonic() - _wait_started >= 7200:
-                print("  ❌ Timed out waiting for primary cluster creation.")
+                print("  âŒ Timed out waiting for primary cluster creation.")
                 if _session_log:
                     _session_log.log(
                         "mode 3: timed out waiting for cluster_formed before peer add",
@@ -23769,7 +23802,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
             time.sleep(5)
 
     if not _login_primary_cluster_shell(primary_channel, admin_password):
-        print("⚠️  Could not log in to primary cluster shell; "
+        print("âš ï¸  Could not log in to primary cluster shell; "
               "cluster add-node will be skipped.")
         if _session_log:
             _session_log.log("Primary cluster shell login failed; "
@@ -23821,7 +23854,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         if not _m3_failed:
             break
 
-        print(f"\n⚠️  {len(_m3_failed)} node(s) did not complete: {', '.join(_m3_failed)}")
+        print(f"\nâš ï¸  {len(_m3_failed)} node(s) did not complete: {', '.join(_m3_failed)}")
         if _session_log:
             _session_log.log(f"peer add: {len(_m3_failed)} node(s) failed: {_m3_failed}",
                              prefix="WARN")
@@ -23829,12 +23862,12 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         if _m3_retry_ans != "y":
             _mode3_ok = False
             break
-        print(f"\n🔁 Retrying {len(_m3_failed)} node(s)...")
+        print(f"\nðŸ” Retrying {len(_m3_failed)} node(s)...")
         if _session_log:
             _session_log.log(f"peer add: operator chose to retry: {_m3_failed}")
         _m3_pending = _m3_failed
 
-    # ── Bulk cluster join via cluster add-node ─────────────────────────────
+    # â”€â”€ Bulk cluster join via cluster add-node â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _m3_collected_ips = _ordered_cluster_ips_for_add(
         _m3_cluster_ips_out, preferred_bmcs=peer_bmcs
     )
@@ -23848,7 +23881,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         if not _add_nodes_ok:
             _mode3_ok = False
     else:
-        print("\n⚠️  No cluster IPs collected from peer nodes; skipping cluster add-node.")
+        print("\nâš ï¸  No cluster IPs collected from peer nodes; skipping cluster add-node.")
         if _session_log:
             _session_log.log("peer add: no cluster IPs collected; skipping cluster add-node",
                              prefix="WARN")
@@ -23870,7 +23903,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
             if not _t:
                 continue
             _nm = _t.get("node_name") or ""
-            _ok = "✅" if _t.get("ok") else "❌"
+            _ok = "âœ…" if _t.get("ok") else "âŒ"
             _pfx = f"{_ok} {_nm} ({_bmc})" if _nm else f"{_ok} {_bmc}"
             _milestones = [
                 ("LOADER reached",    "t_loader"),
@@ -23883,22 +23916,22 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                 _ts = _t.get(_key, 0.0)
                 if _ts:
                     _session_log.add_phase_subtiming(
-                        _PHASE, f"  {_pfx} → {_label}", _ts)
+                        _PHASE, f"  {_pfx} â†’ {_label}", _ts)
         # cluster add-node per-IP success timing.
         if _m3_add_node_timings:
             for _ip, _elapsed in sorted(_m3_add_node_timings.items(),
                                         key=lambda x: x[1]):
                 _session_log.add_phase_subtiming(
-                    _PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
+                    _PHASE, f"  cluster add-node [{_ip}] â†’ success", _elapsed)
     if _mode3_ok:
-        print("\n✅ Parallel peer auto-add complete.")
+        print("\nâœ… Parallel peer auto-add complete.")
     else:
-        print("\n❌ Parallel peer auto-add incomplete.")
+        print("\nâŒ Parallel peer auto-add incomplete.")
     return _mode3_ok
 
 
 def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
-    """Drive option-9 → option-4 cluster init non-interactively for mode 1b.
+    """Drive option-9 â†’ option-4 cluster init non-interactively for mode 1b.
 
     Sequence:
       1. Auto-answer 'no' to the storage-availability-zone destroy warning.
@@ -23910,7 +23943,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
     Remaining setup-wizard prompts (cluster name, admin password, etc.) are
     left to the interactive session that runs after this function returns.
     """
-    print(f"\n🤖 {_node_pfx(bmc_host)}Mode 1b: automated cluster initialization in progress...{_elapsed_str()}")
+    print(f"\nðŸ¤– {_node_pfx(bmc_host)}Mode 1b: automated cluster initialization in progress...{_elapsed_str()}")
     if _session_log:
         _session_log.start_phase("Auto Cluster Init (1b)")
         _session_log.log("Mode 1b automated init starting after option 9 sent")
@@ -23950,7 +23983,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
     _second_bootmenu_visible = False
 
     # 1) Storage availability zone warning -> "no"
-    print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for storage-availability-zone warning (auto-answer 'no')...{_elapsed_str()}")
+    print(f"\nâ³ {_node_pfx(bmc_host)}Waiting for storage-availability-zone warning (auto-answer 'no')...{_elapsed_str()}")
     _slog("Waiting for storage-availability-zone warning")
     _ch_init = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
     _init_sigs = [
@@ -23986,7 +24019,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
     elif ("type yes to confirm and continue" in _init_l
           or "welcome to the cluster setup wizard" in _init_l):
         _already_in_wizard = True
-        print(f"   ℹ️  {_node_pfx(bmc_host)}Cluster setup wizard already active; skipping second boot-menu wait.")
+        print(f"   â„¹ï¸  {_node_pfx(bmc_host)}Cluster setup wizard already active; skipping second boot-menu wait.")
         _slog(f"[{bmc_host}] cluster setup wizard detected before second boot menu")
     elif any(_sig in _init_l for _sig in (
         "selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu"
@@ -23995,7 +24028,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         _slog(f"[{bmc_host}] second boot menu already visible after option 9")
 
     # 2) Wait for the *second* boot menu and select option 4.
-    print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for second boot menu (auto-select option 4)...{_elapsed_str()}")
+    print(f"\nâ³ {_node_pfx(bmc_host)}Waiting for second boot menu (auto-select option 4)...{_elapsed_str()}")
     _slog("Waiting for second boot menu (option 4)")
     sig_lower = [
         "selection (1-",
@@ -24020,7 +24053,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         now = time.monotonic()
         if now - last_progress >= 120:
             elapsed = int(now - start)
-            print(f"   ⏳ {_node_pfx(bmc_host)}Still waiting for second boot menu... ({elapsed}s elapsed)")
+            print(f"   â³ {_node_pfx(bmc_host)}Still waiting for second boot menu... ({elapsed}s elapsed)")
             _slog(f"[{bmc_host}] still waiting for second boot menu after {elapsed}s")
             try:
                 channel.send("\r")
@@ -24056,7 +24089,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
                 and time.monotonic() - start >= 600):
             loader_recovery_attempted = True
             print(
-                f"   🔁 {_node_pfx(bmc_host)}No second boot menu after 10 minutes; "
+                f"   ðŸ” {_node_pfx(bmc_host)}No second boot menu after 10 minutes; "
                 "checking LOADER and running 'boot_ontap menu' if needed..."
             )
             _ch2 = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
@@ -24074,7 +24107,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
             if _booting and boot_wait_extension == 0:
                 boot_wait_extension = 600
                 print(
-                    f"   ⏳ {_node_pfx(bmc_host)}Node still appears to be booting; "
+                    f"   â³ {_node_pfx(bmc_host)}Node still appears to be booting; "
                     "extending second boot-menu wait by another 10 minutes."
                 )
                 _slog(
@@ -24086,7 +24119,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
 
     if not found:
         _limit = 2400 + boot_wait_extension
-        print(f"⚠️  2nd boot menu not detected within {_limit}s; aborting auto-init.")
+        print(f"âš ï¸  2nd boot menu not detected within {_limit}s; aborting auto-init.")
         if _session_log:
             _session_log.log(f"2nd boot menu not detected within {_limit}s", prefix="WARN")
             _session_log.end_phase()
@@ -24094,12 +24127,12 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         return
 
     if _skip_option4:
-        print(f"ℹ️  {_node_pfx(bmc_host)}Skipping option 4 because cluster setup wizard is already active.")
+        print(f"â„¹ï¸  {_node_pfx(bmc_host)}Skipping option 4 because cluster setup wizard is already active.")
         if _session_log:
             _session_log.log("Cluster setup wizard already active; skipping option 4 selection")
     else:
         drain_channel(channel, seconds=1)
-        print(f"🔢 {_node_pfx(bmc_host)}Selecting option 4 (Initialize and configure)...{_elapsed_str()}")
+        print(f"ðŸ”¢ {_node_pfx(bmc_host)}Selecting option 4 (Initialize and configure)...{_elapsed_str()}")
         if _session_log:
             _session_log.log("2nd boot menu detected; auto-selecting option 4")
             _session_log.log_sent("4")
@@ -24113,7 +24146,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
 
     # 4) Node management config.
     cfg = _resolve_node_mgmt_config(bmc_host)
-    print("\n📋 Node management config to apply:")
+    print("\nðŸ“‹ Node management config to apply:")
     for k in ("port", "ip", "netmask", "gateway"):
         v = cfg.get(k)
         print(f"   {k:<8} = {v if v else '(prompt manually)'}")
@@ -24128,7 +24161,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         except Exception:
             pass
 
-    print("\n✅ Mode 1b auto-init complete; driving cluster setup wizard...")
+    print("\nâœ… Mode 1b auto-init complete; driving cluster setup wizard...")
     if _session_log:
         _session_log.log("Auto-init phase complete; transitioning to wizard automation")
         _session_log.end_phase()
@@ -24140,7 +24173,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         initial_buf=_mgmt_residual,
     )
     if wizard_ok is False:
-        print("\n❌ Cluster setup wizard failed – cannot proceed. Exiting.")
+        print("\nâŒ Cluster setup wizard failed â€“ cannot proceed. Exiting.")
         if _session_log:
             _session_log.log(
                 "Cluster setup wizard returned failure; aborting", prefix="ERROR"
@@ -24210,8 +24243,8 @@ def _loader_env_diff(pre, post):
     """Return list of (key, pre_value, post_value) for changed/removed vars.
 
     Only vars present in *pre* are considered:
-      - removed entirely  → post_value = None
-      - value changed     → post_value = new string
+      - removed entirely  â†’ post_value = None
+      - value changed     â†’ post_value = new string
     Result is sorted by key.
     """
     diffs = []
@@ -24334,9 +24367,9 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     try:
         with open(diff_path, "w", encoding="utf-8") as fh:
             fh.write(f"LOADER env diff for {label} at {ts}\n")
-            fh.write("─" * 60 + "\n")
+            fh.write("â”€" * 60 + "\n")
             fh.write(f"  {'Variable':<35} {'Before':<20} After (post-defaults)\n")
-            fh.write("─" * 60 + "\n")
+            fh.write("â”€" * 60 + "\n")
             for key, pre_val, post_val in diff_vars:
                 after_str = "(removed)" if post_val is None else post_val
                 fh.write(f"  {key:<35} {pre_val:<20} {after_str}\n")
@@ -24357,22 +24390,22 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
         return []
 
     # Interactive: show diff table and ask whether to restore
-    _real_stdout.write("\n  ┌─ LOADER env diff: vars changed by set-defaults ─┐\n")
+    _real_stdout.write("\n  â”Œâ”€ LOADER env diff: vars changed by set-defaults â”€â”\n")
     _real_stdout.write(
-        f"  │  {'Variable':<35} {'Before':<20} After\n"
+        f"  â”‚  {'Variable':<35} {'Before':<20} After\n"
     )
-    _real_stdout.write("  │  " + "─" * 58 + "\n")
+    _real_stdout.write("  â”‚  " + "â”€" * 58 + "\n")
     for key, pre_val, post_val in diff_vars:
         after_str = "(removed)" if post_val is None else post_val
         _real_stdout.write(
-            f"  │  {key:<35} {pre_val:<20} {after_str}\n"
+            f"  â”‚  {key:<35} {pre_val:<20} {after_str}\n"
         )
-    _real_stdout.write("  └" + "─" * 60 + "\n")
+    _real_stdout.write("  â””" + "â”€" * 60 + "\n")
     _real_stdout.flush()
 
     # Give the user a chance to abort before any further changes are made
     _real_stdout.write(
-        "\n  ⚠️  Review the diff above. Exit the reinit process now? [y/N]: "
+        "\n  âš ï¸  Review the diff above. Exit the reinit process now? [y/N]: "
     )
     _real_stdout.flush()
     try:
@@ -24382,7 +24415,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
     if abort_answer in ("y", "yes"):
         _slog("User chose to abort reinit after reviewing LOADER env diff")
-        _real_stdout.write("\n  ❌ Reinit aborted by user after LOADER env diff review.\n")
+        _real_stdout.write("\n  âŒ Reinit aborted by user after LOADER env diff review.\n")
         _real_stdout.flush()
         if _session_log:
             _session_log.end_phase(outcome="ABORT", note="user aborted after env diff review")
@@ -24427,11 +24460,11 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     global _netboot_pkg_preselected, _mode3_peer_netboot_done
     _reinit_label = sp_host or _reinit_label
     _pfx = _node_pfx()
-    print(f"\n⏳ {_pfx}Setting LOADER boot options...{_elapsed_str()}")
+    print(f"\nâ³ {_pfx}Setting LOADER boot options...{_elapsed_str()}")
     if _session_log:
         _session_log.end_phase()  # End AUTOBOOT/LOADER Monitoring
         _session_log.start_phase("LOADER Commands")
-        _session_log.log("LOADER prompt detected – running boot configuration commands")
+        _session_log.log("LOADER prompt detected â€“ running boot configuration commands")
 
     drain_channel(channel, seconds=1)
 
@@ -24440,7 +24473,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     channel.send("\r")
     output = direct_read_until(channel, "LOADER-", timeout=15)
     if "loader-" not in output.lower():
-        print("⚠️  No LOADER prompt seen, attempting commands anyway...")
+        print("âš ï¸  No LOADER prompt seen, attempting commands anyway...")
 
     loader_commands = get_loader_commands()
 
@@ -24487,21 +24520,21 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
                 _slog(f"Restoring env var: setenv {_ev}")
                 direct_send_and_wait(channel, f"setenv {_ev}", "LOADER-", timeout=15)
             continue
-        # When netboot-before-reinit is active, skip boot_ontap menu – the
+        # When netboot-before-reinit is active, skip boot_ontap menu â€“ the
         # node will boot into the menu naturally after the netboot install.
         if command == "boot_ontap menu" and _netboot_before_reinit and _operation_mode != 3:
-            _slog("Skipping 'boot_ontap menu' – netboot will handle boot")
-            print("\n  ℹ️  Skipping 'boot_ontap menu' (netboot-install requested).")
+            _slog("Skipping 'boot_ontap menu' â€“ netboot will handle boot")
+            print("\n  â„¹ï¸  Skipping 'boot_ontap menu' (netboot-install requested).")
             continue
         _slog(f"Running LOADER command: {command}")
         if command != "boot_ontap menu":
             output = direct_send_and_wait(channel, command, "LOADER-", timeout=15)
             if "loader-" not in output.lower():
-                print(f"⚠️  No LOADER prompt after '{command}', continuing anyway...")
+                print(f"âš ï¸  No LOADER prompt after '{command}', continuing anyway...")
             # Check for LOADER errors on diag bootarg setenv commands.
             if command.startswith("setenv bootarg."):
                 if any(tok in output for tok in ("%", "Error", "error", "invalid", "unknown", "Unknown")):
-                    print(f"\n  ❌ LOADER error after '{command}':")
+                    print(f"\n  âŒ LOADER error after '{command}':")
                     print(f"     {output.strip()!r}")
                     if _session_log:
                         _session_log.log(f"LOADER error after '{command}': {output.strip()!r}",
@@ -24518,11 +24551,11 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
                 _session_log.log_sent(command)
             time.sleep(1)
 
-    # ── Netboot-before-reinit hook ─────────────────────────────────────────
+    # â”€â”€ Netboot-before-reinit hook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # When the operator answered 'y' to the 1a/1b ONTAP-version prompt, skip
     # boot_ontap menu and instead do ifconfig + netboot on the primary node.
     # After the install completes and the node reboots, the normal boot-menu
-    # selection below will pick up the new ONTAP boot menu (option 9 → init).
+    # selection below will pick up the new ONTAP boot menu (option 9 â†’ init).
     if _netboot_before_reinit and _operation_mode != 3:
         if _session_log:
             _session_log.end_phase()  # End LOADER Commands
@@ -24531,18 +24564,18 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         src_value = None
         if _netboot_pkg_preselected is not None:
             src_type, src_value = _netboot_pkg_preselected
-            print("\n  🌐 Netboot-before-reinit: using package selected at menu time.")
+            print("\n  ðŸŒ Netboot-before-reinit: using package selected at menu time.")
         else:
             # Temporarily restore real stdout so _find_upgrade_package() prompts
             # appear on screen (sys.stdout may be a _NodeLogWriter at this point).
             _prev_stdout_nb = sys.stdout
             sys.stdout = _real_stdout
-            print("\n  🌐 Netboot-before-reinit: selecting ONTAP package...")
+            print("\n  ðŸŒ Netboot-before-reinit: selecting ONTAP package...")
             src_type, src_value = _find_upgrade_package()
             sys.stdout = _prev_stdout_nb
         _netboot_pkg_preselected = None
         if src_type is None:
-            print("  ❌ No package selected. Aborting.")
+            print("  âŒ No package selected. Aborting.")
             if _session_log:
                 _session_log.end_phase(outcome="FAIL", note="no package selected")
                 _session_log.set_outcome("FAIL", "no package selected for netboot")
@@ -24552,7 +24585,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         _nb_httpd = None
         if src_type == "file":
             _nb_t, _nb_pkg_url, _nb_httpd = _start_http_server(src_value)
-            print(f"  🌐 HTTP server started: {_nb_pkg_url}")
+            print(f"  ðŸŒ HTTP server started: {_nb_pkg_url}")
         else:
             _nb_pkg_url = src_value
 
@@ -24569,7 +24602,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         if _operation_mode == 3 and _peer_bmc_list:
             _peer_nb_version = _extract_version_from_package_path(src_value or _nb_pkg_url)
             _peer_list = list(_peer_bmc_list)
-            print(f"  🔄 Starting parallel peer netboot-install for {len(_peer_list)} node(s)...")
+            print(f"  ðŸ”„ Starting parallel peer netboot-install for {len(_peer_list)} node(s)...")
 
             def _run_peer_netboot():
                 _ok = _netboot_peers_parallel(_peer_list, _nb_pkg_url, _peer_nb_version, _session_log)
@@ -24605,7 +24638,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
                 _peer_ok = bool(_peer_nb_result.get("ok", False))
             _mode3_peer_netboot_done = _peer_ok
             if not _peer_ok:
-                print("  ❌ Peer netboot-install failed on one or more nodes.")
+                print("  âŒ Peer netboot-install failed on one or more nodes.")
                 if _session_log:
                     _session_log.set_outcome("FAIL", "peer netboot-install failed")
                     _session_log.close()
@@ -24616,7 +24649,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             except Exception:
                 pass
         if not ok:
-            print("  ❌ Netboot install failed.")
+            print("  âŒ Netboot install failed.")
             if _session_log:
                 _session_log.end_phase(outcome="FAIL", note="netboot install failed")
                 _session_log.set_outcome("FAIL", "netboot install failed")
@@ -24651,14 +24684,14 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     sp_user = _bootmenu_reconnect_ctx.get("user", sp_user)
     sp_pass = _bootmenu_reconnect_ctx.get("password", sp_pass)
     if not _bootmenu_ok:
-        print("\n⚠️  Falling back to manual menu selection...")
+        print("\nâš ï¸  Falling back to manual menu selection...")
         _slog("Auto-select failed, falling back to manual input", prefix="WARN")
         drain_channel(channel, seconds=5)
         while True:
             try:
                 user_option = input("\nEnter a numeric option from the menu: ")
                 if not user_option.isdigit():
-                    print("⚠️  Invalid input. Please enter a numeric value.")
+                    print("âš ï¸  Invalid input. Please enter a numeric value.")
                     continue
                 if _session_log:
                     _session_log.log_user_input(f"Manual boot menu selection: {user_option}")
@@ -24749,7 +24782,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
 
     if _session_log:
         _session_log.start_phase("Interactive Session")
-        _session_log.log("Switching to interactive mode (Phase 3 – passive)")
+        _session_log.log("Switching to interactive mode (Phase 3 â€“ passive)")
 
     session = InteractiveSession(channel, client, sp_host, sp_user, sp_pass)
     session.run()
@@ -24762,11 +24795,11 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
 def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
     option, description = get_boot_menu_option()
 
-    print("\nMonitoring for AUTOBOOT or LOADER prompt... 👀")
-    print("  ➡️  AUTOBOOT will be interrupted automatically with Ctrl+C")
-    print("  ➡️  LOADER prompt will trigger boot configuration commands")
-    print(f"  ➡️  Boot menu option {option} ({description}) will be selected automatically")
-    print("  ➡️  After that, session becomes fully interactive\n")
+    print("\nMonitoring for AUTOBOOT or LOADER prompt... ðŸ‘€")
+    print("  âž¡ï¸  AUTOBOOT will be interrupted automatically with Ctrl+C")
+    print("  âž¡ï¸  LOADER prompt will trigger boot configuration commands")
+    print(f"  âž¡ï¸  Boot menu option {option} ({description}) will be selected automatically")
+    print("  âž¡ï¸  After that, session becomes fully interactive\n")
     _slog("Phase 1: Monitoring for AUTOBOOT/LOADER (active interruption mode)")
     # Quiet console attaches can hide the current prompt until Enter is sent.
     with suppress(Exception):
@@ -24790,21 +24823,21 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                 _emit_reconnect_notice_with_suppression(
                     _monitor_reconnect_notice_state,
                     sp_host or "primary",
-                    console_msg="\n⚠️  Session dropped during monitoring. Reconnecting...",
+                    console_msg="\nâš ï¸  Session dropped during monitoring. Reconnecting...",
                     log_msg="Session dropped during monitoring",
                     log_prefix="WARN",
                     log_writer=_log_monitor_reconnect_notice,
                 )
                 client, channel = reconnect_to_sp(sp_host, sp_user, sp_pass)
                 if client is None:
-                    print("❌ Reconnection failed. Press Ctrl+C to exit...")
+                    print("âŒ Reconnection failed. Press Ctrl+C to exit...")
                     while not _shutdown_event.is_set():
                         time.sleep(1)
                     break
 
                 output, matched = direct_read_until_any(channel, ["y/n", ">"], timeout=15)
                 if matched and "y/n" in matched.lower():
-                    print("⚠️  Existing session detected during reconnect, taking over...")
+                    print("âš ï¸  Existing session detected during reconnect, taking over...")
                     if _session_log:
                         _session_log.log("Auto-taking over existing session during reconnect")
                         _session_log.log_sent("y")
@@ -24834,12 +24867,12 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     _reinit_t0 = time.monotonic()
                     _reinit_label = sp_host or ""
                     _pfx = _node_pfx()
-                    print(f"\n🛑 {_pfx}AUTOBOOT detected! Sending Ctrl+C to interrupt...{_elapsed_str()}")
-                    _slog("AUTOBOOT detected – sending Ctrl+C to interrupt")
+                    print(f"\nðŸ›‘ {_pfx}AUTOBOOT detected! Sending Ctrl+C to interrupt...{_elapsed_str()}")
+                    _slog("AUTOBOOT detected â€“ sending Ctrl+C to interrupt")
                     for _ in range(5):
                         channel.send("\x03")
                         time.sleep(0.3)
-                    print(f"✅ {_pfx}Ctrl+C sent.{_elapsed_str()}")
+                    print(f"âœ… {_pfx}Ctrl+C sent.{_elapsed_str()}")
                     _slog("Ctrl+C sent to interrupt AUTOBOOT")
                     output_buffer = ""
 
@@ -24854,12 +24887,12 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     output_buffer = output_buffer[-4096:]
 
             elif time.monotonic() - _last_data > _BMC_IDLE_TIMEOUT:
-                # No console data for 60s — BMC session may have gone stale.
+                # No console data for 60s â€” BMC session may have gone stale.
                 _idle_s = int(time.monotonic() - _last_data)
                 _emit_reconnect_notice_with_suppression(
                     _monitor_reconnect_notice_state,
                     sp_host or "primary",
-                    console_msg=f"\n⚠️  [{sp_host}] No console data for {_idle_s}s — reconnecting to BMC...",
+                    console_msg=f"\nâš ï¸  [{sp_host}] No console data for {_idle_s}s â€” reconnecting to BMC...",
                     log_msg=f"[{sp_host}] no console data for {_idle_s}s; reconnecting",
                     log_prefix="WARN",
                     log_writer=_log_monitor_reconnect_notice,
@@ -24883,7 +24916,7 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     )
                     channel = _open_shell(client)
                     if not _reach_bmc_prompt(channel, timeout=15):
-                        print(f"   ⚠️  [{sp_host}] BMC prompt not seen after reconnect; continuing...")
+                        print(f"   âš ï¸  [{sp_host}] BMC prompt not seen after reconnect; continuing...")
                     channel.send("system console\r")
                     _sc_out, _sc_matched = direct_read_until_any(
                         channel,
@@ -24897,13 +24930,13 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     output_buffer = ""
                     _last_data = time.monotonic()
                     _reset_reconnect_notice_suppression(_monitor_reconnect_notice_state)
-                    print(f"   ✅ [{sp_host}] Reconnected to BMC (60s idle); resuming boot monitoring...")
+                    print(f"   âœ… [{sp_host}] Reconnected to BMC (60s idle); resuming boot monitoring...")
                     _slog(f"[{sp_host}] BMC reconnect successful; boot monitoring resumed")
                 except Exception as _idle_err:
                     _emit_reconnect_notice_with_suppression(
                         _monitor_reconnect_notice_state,
                         sp_host or "primary",
-                        console_msg=f"   ❌ [{sp_host}] Reconnect failed: {_idle_err}",
+                        console_msg=f"   âŒ [{sp_host}] Reconnect failed: {_idle_err}",
                         log_msg=f"[{sp_host}] BMC reconnect failed: {_idle_err}",
                         log_prefix="ERROR",
                         log_writer=_log_monitor_reconnect_notice,
@@ -24913,10 +24946,10 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
             time.sleep(0.1)
 
     except KeyboardInterrupt:
-        print("\n👋 User interrupted. Exiting...")
+        print("\nðŸ‘‹ User interrupted. Exiting...")
         _slog("User interrupted during monitoring (Ctrl+C)")
     except (OSError, EOFError, paramiko.SSHException) as e:
-        print(f"\n⚠️  Connection error during monitoring: {e}")
+        print(f"\nâš ï¸  Connection error during monitoring: {e}")
         _slog(f"Connection error during monitoring: {e}", prefix="ERROR")
         print("Press Ctrl+C to exit...")
         while not _shutdown_event.is_set():
@@ -24945,13 +24978,13 @@ def _make_session_log(label: str) -> "SessionLogger":
     flushed and closed on normal process exit, log *label*, and return the
     new logger.
 
-    Replaces the 5× near-identical boilerplate blocks that previously
+    Replaces the 5Ã— near-identical boilerplate blocks that previously
     appeared inline in each mode section of ``main()``.
     """
     global _session_log
     _session_log = SessionLogger(bg_mode=_bg_mode)
     _banner = _version_banner_line()
-    print(f"\n🚀 {_banner}")
+    print(f"\nðŸš€ {_banner}")
 
     def _atexit_close():
         if _session_log and not _session_log._file.closed:
@@ -25312,7 +25345,7 @@ def _get_cluster_node_mgmt_ips(channel, cluster_name=None):
     are found.
     """
     result = {}
-    # ── 1. Get node names from cluster show ──────────────────────────────
+    # â”€â”€ 1. Get node names from cluster show â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     with _primary_shell_lock:
         with _suppress_console():
             cs_out = _run_cluster_command(channel, "cluster show", timeout=30)
@@ -25341,14 +25374,14 @@ def _get_cluster_node_mgmt_ips(channel, cluster_name=None):
             if tokens:
                 node_names.append(tokens[0])
 
-    # ── 2. Derive cluster name from prompt if not supplied ────────────────
+    # â”€â”€ 2. Derive cluster name from prompt if not supplied â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # The ONTAP prompt embedded in cs_out looks like  "clustername::> "
     if not cluster_name:
         _prompt_m = re.search(r'(\S+)::\*?>', cs_out)
         if _prompt_m:
             cluster_name = _prompt_m.group(1)
 
-    # ── 3. Query node-mgmt interfaces (prefer 'network interface show') ────
+    # â”€â”€ 3. Query node-mgmt interfaces (prefer 'network interface show') â”€â”€â”€â”€
     _cmds = [
         "network interface show -role node-mgmt -fields home-node,address",
         "net int show -role node-mgmt -fields home-node,address",
@@ -25481,7 +25514,7 @@ def _get_cluster_role_ips(channel):
 
 def _run_cluster_ip_manifest_mode():
     """Mode 5l: fetch cluster-role IPs from cluster shell and write manifest."""
-    _print_banner("🧭 5l: Build cluster IP manifest (EXPERIMENTAL/IN PROGRESS)")
+    _print_banner("ðŸ§­ 5l: Build cluster IP manifest (EXPERIMENTAL/IN PROGRESS)")
     _make_session_log("Mode 5l: cluster IP manifest")
 
     _cluster_cfg = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
@@ -25512,7 +25545,7 @@ def _run_cluster_ip_manifest_mode():
     else:
         _mgmt_ip = _prompt("  Cluster management IP address: ").strip()
     if not _mgmt_ip:
-        print("  ❌ Cluster management IP is required.")
+        print("  âŒ Cluster management IP is required.")
         return
 
     _u_in = _prompt(f"  Cluster admin username [{_admin_user}]: ", "").strip()
@@ -25537,11 +25570,11 @@ def _run_cluster_ip_manifest_mode():
         )
         _ch = _open_shell(_client)
         if not _login_primary_cluster_shell(_ch, _admin_pw):
-            print("  ❌ Could not reach cluster shell (::>).")
+            print("  âŒ Could not reach cluster shell (::>).")
             return
         _rows = _get_cluster_role_ips(_ch)
         if not _rows:
-            print("  ⚠️  No cluster-role interface IPs were parsed.")
+            print("  âš ï¸  No cluster-role interface IPs were parsed.")
             return
 
         _entries = []
@@ -25554,10 +25587,10 @@ def _run_cluster_ip_manifest_mode():
             })
         _path = _write_cluster_ip_manifest_entries(_entries, reason="mode 5l")
         if not _path:
-            print("  ❌ Could not write cluster_IP.json.")
+            print("  âŒ Could not write cluster_IP.json.")
             return
 
-        print(f"\n  ✅ Wrote cluster IP manifest: {_path}")
+        print(f"\n  âœ… Wrote cluster IP manifest: {_path}")
         print("  Entries:")
         for _idx, _e in enumerate(_entries, 1):
             _node = _e["node_name"] or "unknown-node"
@@ -25583,9 +25616,9 @@ def _run_2c_resume():
     Returns True on success, False on abort or hard failure.
     """
     _make_session_log("Mode 2c: resume node additions")
-    _print_banner("↩️   2c: Resume node additions")
+    _print_banner("â†©ï¸   2c: Resume node additions")
 
-    # ── 1. Locate manifest ────────────────────────────────────────────────
+    # â”€â”€ 1. Locate manifest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
     except NameError:
@@ -25640,9 +25673,9 @@ def _run_2c_resume():
                 if _ms.isdigit() and 1 <= int(_ms) <= _show_n:
                     manifest_path = manifest_candidates[int(_ms) - 1]
                     break
-                print("  ⚠️  Invalid selection.")
+                print("  âš ï¸  Invalid selection.")
 
-    # ── Config-file fallback ──────────────────────────────────────────────
+    # â”€â”€ Config-file fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # When no manifest file was found or selected, synthesize node list from
     # the loaded reinit config (secondary_nodes / legacy nodes[1:]).
     # The user is only prompted for a manual path if neither source works.
@@ -25653,16 +25686,16 @@ def _run_2c_resume():
     _manifest_source: str        = ""   # for display only
 
     if manifest_path:
-        # ── 2a. Load chosen file (manifest or reconfig JSON) ───────────────
+        # â”€â”€ 2a. Load chosen file (manifest or reconfig JSON) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         try:
             with open(manifest_path, "r", encoding="utf-8") as _mf:
                 _mdata = json.load(_mf)
         except Exception as _me:
-            print(f"  ❌ Could not read file: {_me}")
+            print(f"  âŒ Could not read file: {_me}")
             return False
 
         if "nodes" in _mdata and isinstance(_mdata["nodes"], list):
-            # ── Standard node-add manifest ──────────────────────────────
+            # â”€â”€ Standard node-add manifest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             manifest_nodes         = _mdata.get("nodes") or []
             cluster_mgmt_ip        = _mdata.get("cluster_mgmt_ip") or ""
             cluster_admin_user     = _mdata.get("cluster_admin_user") or "admin"
@@ -25671,7 +25704,7 @@ def _run_2c_resume():
             print(f"\n  Manifest : {manifest_path}")
             print(f"  Created  : {_mdata.get('created_at', 'unknown')}")
         else:
-            # ── Reinit config JSON (secondary_nodes / primary_node) ──────
+            # â”€â”€ Reinit config JSON (secondary_nodes / primary_node) â”€â”€â”€â”€â”€â”€
             _rc_cluster  = _mdata.get("cluster") or {}
             _rc_sec      = _mdata.get("secondary_nodes") or []
             manifest_nodes = [
@@ -25693,14 +25726,14 @@ def _run_2c_resume():
             _manifest_source       = f"{manifest_path} (reconfig)"
             print(f"\n  Config   : {manifest_path}")
     else:
-        # ── 2b. Try config-file secondary nodes ────────────────────────────
+        # â”€â”€ 2b. Try config-file secondary nodes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         _cfg_secondary = _config_secondary_nodes()
         _cfg_cluster   = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
         _cfg_mgmt_ip   = (_cluster_config.get("mgmt_ip")
                           or _cfg_cluster.get("clus_mgmt_address")
                           or _cfg_cluster.get("mgmt_ip") or "")
         if _cfg_secondary:
-            print("\n  ℹ️  No manifest file found – using secondary nodes from the")
+            print("\n  â„¹ï¸  No manifest file found â€“ using secondary nodes from the")
             print("       loaded config file as the node-add list.")
             manifest_nodes = [
                 dict(
@@ -25721,19 +25754,19 @@ def _run_2c_resume():
                                       or _cfg_cluster.get("password") or "")
             _manifest_source       = "(config file)"
         else:
-            # ── 2c. Last resort: ask operator for a path ───────────────────
+            # â”€â”€ 2c. Last resort: ask operator for a path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             print("\n  No manifest file or config secondary nodes were found.")
             print("  Enter the path to a node-add manifest (created by option 3)")
             print("  or to the reinit config JSON file used during the original run.")
             manifest_path = _prompt("  Path: ")
             if not manifest_path or not os.path.isfile(manifest_path):
-                print("  ❌ No manifest file and no secondary nodes in config. Aborting.")
+                print("  âŒ No manifest file and no secondary nodes in config. Aborting.")
                 return False
             try:
                 with open(manifest_path, "r", encoding="utf-8") as _mf:
                     _mdata = json.load(_mf)
             except Exception as _me:
-                print(f"  ❌ Could not read file: {_me}")
+                print(f"  âŒ Could not read file: {_me}")
                 return False
             if "nodes" in _mdata and isinstance(_mdata["nodes"], list):
                 # Standard node-add manifest
@@ -25768,7 +25801,7 @@ def _run_2c_resume():
                 print(f"\n  Config   : {manifest_path}")
 
     if not manifest_nodes:
-        print("  ❌ No nodes found in manifest or config. Aborting.")
+        print("  âŒ No nodes found in manifest or config. Aborting.")
         return False
 
     _cp2c = CheckpointManager()
@@ -25776,7 +25809,7 @@ def _run_2c_resume():
     _cp2c_joined = set(_cp2c.nodes_done_for("peer_joined")) if _cp2c_loaded else set()
     _cp2c_opt4 = set(_cp2c.nodes_done_for("peer_option4_done")) if _cp2c_loaded else set()
     if _cp2c_loaded and (_cp2c_joined or _cp2c_opt4):
-        print("\n  🔖 Checkpoint resume state:")
+        print("\n  ðŸ”– Checkpoint resume state:")
         if _cp2c_opt4:
             print(f"    peer_option4_done : {', '.join(sorted(_cp2c_opt4))}")
         if _cp2c_joined:
@@ -25784,7 +25817,7 @@ def _run_2c_resume():
         if _cp2c.log_dir:
             print(f"    prior log_dir     : {_cp2c.log_dir}")
 
-    # ── 2. Display node list ──────────────────────────────────────────────
+    # â”€â”€ 2. Display node list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print(f"  Source   : {_manifest_source}")
     print(f"  Nodes    : {len(manifest_nodes)}")
     for _n in manifest_nodes:
@@ -25792,7 +25825,7 @@ def _run_2c_resume():
         _nip = _n.get("node_mgmt_ip") or "(unknown)"
         print(f"    - BMC {_bmc}  node-mgmt IP {_nip}")
 
-    # ── 3. Connect to cluster management ─────────────────────────────────
+    # â”€â”€ 3. Connect to cluster management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if not cluster_mgmt_ip:
         # Last-chance fallback 1: in-memory config data.
         _raw_cfg_cl = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
@@ -25810,7 +25843,7 @@ def _run_2c_resume():
                     _ip2 = (_cj2.get("cluster") or {}).get("clus_mgmt_address") or ""
                     if _ip2:
                         cluster_mgmt_ip = _ip2
-                        print(f"  ℹ️  Cluster mgmt IP {_ip2} read from {_cp2}")
+                        print(f"  â„¹ï¸  Cluster mgmt IP {_ip2} read from {_cp2}")
                         break
                 except Exception:
                     pass
@@ -25821,7 +25854,7 @@ def _run_2c_resume():
             "\n  Cluster management IP: "
         )
     if not cluster_mgmt_ip:
-        print("  ❌ No cluster management IP provided. Aborting.")
+        print("  âŒ No cluster management IP provided. Aborting.")
         return False
 
     if not cluster_admin_password:
@@ -25833,7 +25866,7 @@ def _run_2c_resume():
         except (EOFError, KeyboardInterrupt):
             cluster_admin_password = ""
 
-    print(f"\n  🔌 Connecting to cluster {cluster_mgmt_ip}...")
+    print(f"\n  ðŸ”Œ Connecting to cluster {cluster_mgmt_ip}...")
     primary_client  = None
     primary_channel = None
     cluster_node_ips: dict = {}   # {node_name: mgmt_ip}
@@ -25852,12 +25885,12 @@ def _run_2c_resume():
             _pch = _open_shell(primary_client)
             if _login_primary_cluster_shell(_pch, cluster_admin_password):
                 primary_channel = _pch
-                print("  ✅ Connected to cluster shell.")
+                print("  âœ… Connected to cluster shell.")
                 _session_log.log(f"2c: cluster shell connected to {cluster_mgmt_ip}")
             else:
                 primary_client.close()
                 primary_client = None
-                print("  ⚠️  Cluster shell login failed.")
+                print("  âš ï¸  Cluster shell login failed.")
                 _session_log.log("2c: cluster shell login failed", prefix="WARN")
                 _ask_skip = _prompt(
                     "  Continue without cluster comparison (retry all nodes)? [y/N]: "
@@ -25866,7 +25899,7 @@ def _run_2c_resume():
                     return False
             break
         except paramiko.AuthenticationException:
-            print(f"  ❌ Authentication failed for {cluster_admin_user}@{cluster_mgmt_ip}.")
+            print(f"  âŒ Authentication failed for {cluster_admin_user}@{cluster_mgmt_ip}.")
             _session_log.log(
                 f"2c: auth failed for {cluster_admin_user}@{cluster_mgmt_ip}",
                 prefix="WARN",
@@ -25886,17 +25919,17 @@ def _run_2c_resume():
             except (EOFError, KeyboardInterrupt):
                 cluster_admin_password = ""
             if not cluster_admin_password:
-                print("  Aborting — no credentials provided.")
+                print("  Aborting â€” no credentials provided.")
                 return False
         except Exception as _ce:
-            print(f"  ❌ Connection failed: {_ce}")
+            print(f"  âŒ Connection failed: {_ce}")
             _session_log.log(f"2c: connection to {cluster_mgmt_ip} failed: {_ce}",
                              prefix="ERROR")
             return False
 
-    # ── 4. Determine which nodes are already in the cluster ───────────────
+    # â”€â”€ 4. Determine which nodes are already in the cluster â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if primary_channel:
-        print("\n  🔍 Querying cluster for node-mgmt IPs...")
+        print("\n  ðŸ” Querying cluster for node-mgmt IPs...")
         # Derive cluster name from config data so the single net int show
         # command can use it as the vserver filter.
         _c_name = ((_config_data.get("cluster") or {}).get("name")
@@ -25906,15 +25939,15 @@ def _run_2c_resume():
         if cluster_node_ips:
             print(f"  Found {len(cluster_node_ips)} node(s) in cluster:")
             for _nn, _nip in sorted(cluster_node_ips.items()):
-                print(f"    ✅ {_nn}: {_nip}")
+                print(f"    âœ… {_nn}: {_nip}")
             _session_log.log(
                 f"2c: cluster nodes: {dict(cluster_node_ips)}"
             )
         else:
-            print("  ⚠️  No node-mgmt IPs found in cluster.")
+            print("  âš ï¸  No node-mgmt IPs found in cluster.")
             _session_log.log("2c: net int show returned no node-mgmt IPs", prefix="WARN")
 
-    # ── 5. Compare manifest vs cluster ───────────────────────────────────
+    # â”€â”€ 5. Compare manifest vs cluster â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     already_joined_ips = set(cluster_node_ips.values())
     nodes_to_retry  = []
     nodes_already   = []
@@ -25932,16 +25965,16 @@ def _run_2c_resume():
     if nodes_already:
         print(f"  Already joined ({len(nodes_already)}):")
         for _nd in nodes_already:
-            print(f"    ✅ BMC {_nd.get('bmc')}  "
+            print(f"    âœ… BMC {_nd.get('bmc')}  "
                   f"(node-mgmt {_nd.get('node_mgmt_ip') or '?'})")
     if nodes_to_retry:
         print(f"\n  To retry ({len(nodes_to_retry)}):")
         for _nd in nodes_to_retry:
-            print(f"    ⏳ BMC {_nd.get('bmc')}  "
+            print(f"    â³ BMC {_nd.get('bmc')}  "
                   f"(node-mgmt {_nd.get('node_mgmt_ip') or '?'})")
 
     if not nodes_to_retry:
-        print("\n  ✅ All manifest nodes are already in the cluster. Nothing to do.")
+        print("\n  âœ… All manifest nodes are already in the cluster. Nothing to do.")
         _session_log.log("2c: all manifest nodes already joined; nothing to retry")
         if primary_client:
             try:
@@ -25951,7 +25984,7 @@ def _run_2c_resume():
         _session_log.set_outcome("PASS", "all nodes already in cluster")
         return True
 
-    # ── 6. Confirm ────────────────────────────────────────────────────────
+    # â”€â”€ 6. Confirm â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _ans_retry = _prompt(
         f"\n  Proceed with retrying {len(nodes_to_retry)} node(s)? [y/N]: "
     , "n").lower()
@@ -25965,8 +25998,8 @@ def _run_2c_resume():
                 pass
         return False
 
-    # ── 7. Reuse checkpoint/manifest state when possible, then launch only
-    #        the peers that still need destructive reinit replay. ───────────
+    # â”€â”€ 7. Reuse checkpoint/manifest state when possible, then launch only
+    #        the peers that still need destructive reinit replay. â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _saved_cluster_entries = _load_cluster_ip_manifest_entries()
     _saved_cluster_by_bmc = {
         str(_e.get("bmc") or "").strip(): _e
@@ -26028,9 +26061,9 @@ def _run_2c_resume():
             _saved_ip = str(_nd.get("cluster_ip") or _saved.get("cluster_ip") or "?").strip()
             _saved_node = str(_nd.get("node_name") or _saved.get("node_name") or "").strip()
             _label = _saved_node or _bmc
-            print(f"    ✅ {_label}: {_saved_ip}")
+            print(f"    âœ… {_label}: {_saved_ip}")
 
-    # ── 8. Seed in-memory state from manifest and launch threads ──────────
+    # â”€â”€ 8. Seed in-memory state from manifest and launch threads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Populate credential + node-mgmt caches so _add_peer_node_thread can
     # look up the same data it would have from a fresh 2b run.
     _cluster_config["mgmt_ip"]          = cluster_mgmt_ip
@@ -26078,7 +26111,7 @@ def _run_2c_resume():
         _session_log.log(f"2c: will retry BMC {_bmc} (user={_bu})")
 
     if not retry_bmc_list and not _2c_cluster_ips_out:
-        print("  ❌ No valid BMC IPs to retry. Aborting.")
+        print("  âŒ No valid BMC IPs to retry. Aborting.")
         _session_log.log("2c: no valid BMCs to retry", prefix="ERROR")
         if primary_client:
             try:
@@ -26092,7 +26125,7 @@ def _run_2c_resume():
     _2c_peer_timings: "dict[str, dict]" = {}
     _2c_timings_lock = threading.Lock()
 
-    _session_log.start_phase("2c – Resume Node Add")
+    _session_log.start_phase("2c â€“ Resume Node Add")
     threads = []
     for _idx, _bmc in enumerate(retry_bmc_list):
         _creds = _peer_bmc_creds.get(_bmc) or {}
@@ -26115,15 +26148,15 @@ def _run_2c_resume():
         )
         _t.start()
         threads.append(_t)
-        print(f"  ▶️  [{_bmc}] Thread started.")
+        print(f"  â–¶ï¸  [{_bmc}] Thread started.")
 
     if _n2c:
-        print(f"\n  ⏳ Waiting for {_n2c} node(s) to complete...")
+        print(f"\n  â³ Waiting for {_n2c} node(s) to complete...")
         if not _join_threads_with_deadline(threads, label="mode 2c", log=_session_log):
             return False
         _raise_pending_checkpoint_failure()
     else:
-        print("\n  ✅ No nodes need option 4 replay; using checkpointed cluster IPs directly.")
+        print("\n  âœ… No nodes need option 4 replay; using checkpointed cluster IPs directly.")
 
     # Bulk add via cluster add-node
     _2c_add_node_timings: "dict[str, float]" = {}
@@ -26139,18 +26172,18 @@ def _run_2c_resume():
         _cluster_add_nodes_bulk(primary_channel, _2c_ips, log=_session_log,
                                 node_timings_out=_2c_add_node_timings)
     elif not _2c_ips:
-        print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
+        print("\n  âš ï¸  No cluster IPs collected; skipping cluster add-node.")
         _session_log.log("2c: no cluster IPs collected; skipping cluster add-node",
                          prefix="WARN")
 
     # Per-node detailed timing breakdown.
-    _2C_PHASE = "2c – Resume Node Add"
+    _2C_PHASE = "2c â€“ Resume Node Add"
     for _bmc in retry_bmc_list:
         _t = _2c_peer_timings.get(_bmc)
         if not _t:
             continue
         _nm = _t.get("node_name") or ""
-        _ok = "✅" if _t.get("ok") else "❌"
+        _ok = "âœ…" if _t.get("ok") else "âŒ"
         _pfx = f"{_ok} {_nm} ({_bmc})" if _nm else f"{_ok} {_bmc}"
         for _label, _key in [
             ("LOADER reached",    "t_loader"),
@@ -26161,14 +26194,14 @@ def _run_2c_resume():
         ]:
             _ts = _t.get(_key, 0.0)
             if _ts:
-                _session_log.add_phase_subtiming(_2C_PHASE, f"  {_pfx} → {_label}", _ts)
+                _session_log.add_phase_subtiming(_2C_PHASE, f"  {_pfx} â†’ {_label}", _ts)
     if _2c_add_node_timings:
         for _ip, _elapsed in sorted(_2c_add_node_timings.items(), key=lambda x: x[1]):
             _session_log.add_phase_subtiming(
-                _2C_PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
+                _2C_PHASE, f"  cluster add-node [{_ip}] â†’ success", _elapsed)
 
     _session_log.end_phase()
-    print("\n  ✅ 2c resume complete.")
+    print("\n  âœ… 2c resume complete.")
     _session_log.log("2c resume: all threads finished")
     _session_log.set_outcome("PASS", "2c resume complete")
 
@@ -26212,7 +26245,7 @@ def main():
     setup_logging(args.debug)
     _debug_console = args.debug
     if _debug_console:
-        print("🔍 Debug mode enabled: all console output will be shown on screen.")
+        print("ðŸ” Debug mode enabled: all console output will be shown on screen.")
 
     if args.config_example:
         print(_CONFIG_FILE_EXAMPLE)
@@ -26241,12 +26274,12 @@ def main():
     _bg_mode = args.bg
     _auto_clear_stale_bmc = args.auto_clear_stale_bmc
     if _auto_clear_stale_bmc:
-        print("🧹 --auto-clear-stale-bmc enabled: banner retries will SIGTERM "
+        print("ðŸ§¹ --auto-clear-stale-bmc enabled: banner retries will SIGTERM "
               "stale prior-run python PIDs holding sockets to <bmc>:22.")
 
     _diag_mode = args.diag
     if _diag_mode:
-        print("🔬 --diag mode enabled: custom LOADER bootargs will be applied.")
+        print("ðŸ”¬ --diag mode enabled: custom LOADER bootargs will be applied.")
         # Bootarg collection is deferred: for modes 1/2/3 it happens inside
         # select_operation_mode() after physical zeroing; for mode 4b it
         # happens in the 4b upfront config phase. We just initialise the
@@ -26273,7 +26306,7 @@ def main():
     if hasattr(signal, "SIGURG"):
         signal.signal(signal.SIGURG, manual_checkpoint_signal_handler)
 
-    # ── --resume: auto-dispatch from checkpoint, skip the start menu ──────
+    # â”€â”€ --resume: auto-dispatch from checkpoint, skip the start menu â”€â”€â”€â”€â”€â”€
     # When --resume is explicit and a valid checkpoint exists, infer the
     # operation mode from the checkpoint and bypass select_operation_mode()
     # so the operator does not have to re-pick the same menu option.
@@ -26289,51 +26322,51 @@ def main():
                 _auto_setup = False
                 _auto_add = False
                 _resume_autodispatch = True
-                print(f"\n  🔖 --resume (EXPERIMENTAL): auto-dispatching to mode 4b "
+                print(f"\n  ðŸ”– --resume (EXPERIMENTAL): auto-dispatching to mode 4b "
                       f"from checkpoint (mode={_cp_mode}).")
             else:
-                print(f"\n  ⚠️  --resume (EXPERIMENTAL): checkpoint mode {_cp_mode!r} cannot "
+                print(f"\n  âš ï¸  --resume (EXPERIMENTAL): checkpoint mode {_cp_mode!r} cannot "
                       "be auto-dispatched; falling back to the start menu.")
                 _resume_cp = None
         else:
-            print(f"\n  ⚠️  --resume (EXPERIMENTAL): no valid checkpoint found at "
+            print(f"\n  âš ï¸  --resume (EXPERIMENTAL): no valid checkpoint found at "
                   f"{_resume_cp._path}; falling back to the start menu.")
             _resume_cp = None
 
     while True:  # main menu return loop
         try:
             if not _resume_autodispatch:
-                # ── Mode shortcut flags: bypass the interactive menu ──────────────
+                # â”€â”€ Mode shortcut flags: bypass the interactive menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 _shortcut_mode = None
                 _shortcut_auto_setup = False
                 _shortcut_auto_add = False
                 if args.first_node:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 1, True, False
-                    print("\n  ⚡ --first-node: launching mode 1b (automated first-node init).")
+                    print("\n  âš¡ --first-node: launching mode 1b (automated first-node init).")
                 elif args.add_nodes:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 2, False, True
-                    print("\n  ⚡ --add-nodes: launching mode 2b (automated node add).")
+                    print("\n  âš¡ --add-nodes: launching mode 2b (automated node add).")
                 elif args.reinit:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 3, True, True
-                    print("\n  ⚡ --reinit: launching mode 3 (end-to-end automated reinit).")
+                    print("\n  âš¡ --reinit: launching mode 3 (end-to-end automated reinit).")
                 elif args.netboot_install:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 42, False, False
-                    print("\n  ⚡ --netboot-install: launching mode 4b (netboot and install ONTAP).")
+                    print("\n  âš¡ --netboot-install: launching mode 4b (netboot and install ONTAP).")
                 elif args.add_lic:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 44, False, False
-                    print("\n  ⚡ --add-lic: launching mode 5a (install license).")
+                    print("\n  âš¡ --add-lic: launching mode 5a (install license).")
                 elif args.passwordless:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 45, False, False
-                    print("\n  ⚡ --passwordless: launching mode 4d (passwordless SSH setup).")
+                    print("\n  âš¡ --passwordless: launching mode 4d (passwordless SSH setup).")
                 elif args.backup:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 46, False, False
-                    print("\n  ⚡ --backup: launching mode 4e (config backup).")
+                    print("\n  âš¡ --backup: launching mode 4e (config backup).")
                 elif args.verify:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 47, False, False
-                    print("\n  ⚡ --verify: launching mode 5d (BMC auth verify).")
+                    print("\n  âš¡ --verify: launching mode 5d (BMC auth verify).")
                 elif args.loader:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 48, False, False
-                    print("\n  ⚡ --loader: launching mode 5z (reset all nodes to LOADER).")
+                    print("\n  âš¡ --loader: launching mode 5z (reset all nodes to LOADER).")
 
                 if _shortcut_mode is not None:
                     _operation_mode = _shortcut_mode
@@ -26347,12 +26380,12 @@ def main():
                 pass  # _resume_autodispatch already set _operation_mode above
             _configure_checkpoint_test_for_mode(_operation_mode, args.test)
             # Remember the mode the operator explicitly chose at startup.  Mid-run
-            # transitions (e.g. 1b → add nodes) change _operation_mode but leave
+            # transitions (e.g. 1b â†’ add nodes) change _operation_mode but leave
             # _initial_operation_mode intact so mode-specific up-front prompts only
             # fire when the operator actually started in that mode.
             _initial_operation_mode = _operation_mode
 
-            # ── RunContext: snapshot current globals into a single state object ──
+            # â”€â”€ RunContext: snapshot current globals into a single state object â”€â”€
             # Phase 2 of the RunContext refactor. The context is the migration
             # target for the heavy globals listed in _RUN_CONTEXT_FIELD_TO_GLOBAL;
             # legacy code paths still read/write the globals directly. Container
@@ -26368,17 +26401,17 @@ def main():
                 print("  Please check back in a future release.")
                 sys.exit(0)
 
-            # ── Mode 26 (2c): Resume interrupted node additions ───────────────────
+            # â”€â”€ Mode 26 (2c): Resume interrupted node additions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 26:
                 ok = _run_2c_resume()
                 if _session_log:
                     _session_log.record_completion(normal_exit=ok)
-                    print(f"\n📝 Session log saved to: {_session_log.log_file}")
+                    print(f"\nðŸ“ Session log saved to: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
-            # ── Mode 42 (4b): Netboot and install ONTAP ────────────────────────────
+            # â”€â”€ Mode 42 (4b): Netboot and install ONTAP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 42:
-                # ── Resume detection ──────────────────────────────────────────────
+                # â”€â”€ Resume detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 # Reuse the checkpoint already loaded by the --resume auto-dispatch
                 # path so we do not re-read the file or re-prompt for confirmation.
                 _cp = _resume_cp or CheckpointManager()
@@ -26388,14 +26421,14 @@ def main():
                     # resume directly. Operator already opted in via the CLI flag.
                     _resuming = True
                     _checkpoint = _cp
-                    print("\n  ✅ Resuming from EXPERIMENTAL checkpoint (--resume).")
+                    print("\n  âœ… Resuming from EXPERIMENTAL checkpoint (--resume).")
                 elif _resume_from_start_menu:
                     if _cp.load():
                         _resuming = True
                         _checkpoint = _cp
-                        print("\n  ✅ Resuming from EXPERIMENTAL checkpoint (startup menu prompt).")
+                        print("\n  âœ… Resuming from EXPERIMENTAL checkpoint (startup menu prompt).")
                     else:
-                        print("\n  ⚠️  Startup-selected checkpoint is no longer available; "
+                        print("\n  âš ï¸  Startup-selected checkpoint is no longer available; "
                               "starting fresh.")
                 elif args.resume or (not args.resume and _cp.load()):
                     # If --resume was explicit, or a checkpoint file auto-detected,
@@ -26413,7 +26446,7 @@ def main():
                         _opt4_done_ips    = _cp.nodes_done_for("peer_option4_done")
                         _joined_ips       = _cp.nodes_done_for("peer_joined")
                         print("\n" + "=" * 60)
-                        print("  🔖 Checkpoint found" + _cp_age + " (EXPERIMENTAL)")
+                        print("  ðŸ”– Checkpoint found" + _cp_age + " (EXPERIMENTAL)")
                         print(f"     Mode    : {_format_checkpoint_mode(_cp.mode)}")
                         print(f"     BMC IPs : {', '.join(_cp.bmc_ips)}")
                         print(f"     Log dir : {_cp.log_dir}")
@@ -26427,15 +26460,15 @@ def main():
                         if _joined_ips:
                             print(f"     peer_joined           : {', '.join(_joined_ips)}")
                         if _cp.is_done("primary_bootmenu_done"):
-                            print("     primary_bootmenu_done : ✅")
+                            print("     primary_bootmenu_done : âœ…")
                         if _cp.is_done("primary_node_mgmt_done"):
-                            print("     primary_node_mgmt_done: ✅")
+                            print("     primary_node_mgmt_done: âœ…")
                         if _cp.is_done("cluster_formed"):
-                            print("     cluster_formed        : ✅")
+                            print("     cluster_formed        : âœ…")
                         if _cp.is_done("primary_setup_done"):
-                            print("     primary_setup_done    : ✅")
+                            print("     primary_setup_done    : âœ…")
                         if _cp.is_done("option3_complete"):
-                            print("     option3_complete      : ✅")
+                            print("     option3_complete      : âœ…")
                         print("=" * 60)
                         _resume_ans = _prompt(
                             "\n  Resume from EXPERIMENTAL checkpoint? [Y/n]: "
@@ -26443,10 +26476,10 @@ def main():
                         if _resume_ans != "n":
                             _resuming = True
                             _checkpoint = _cp
-                            print("  ✅ Resuming from EXPERIMENTAL checkpoint.")
+                            print("  âœ… Resuming from EXPERIMENTAL checkpoint.")
                         else:
                             _cp.clear()
-                            print("  ℹ️  Starting fresh run.")
+                            print("  â„¹ï¸  Starting fresh run.")
                 if not _resuming:
                     _checkpoint = CheckpointManager()
 
@@ -26469,7 +26502,7 @@ def main():
                 print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
-            # ── Mode 43 (4c): Netboot/install image only (no reinit) ──────────────
+            # â”€â”€ Mode 43 (4c): Netboot/install image only (no reinit) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 43:
                 _make_session_log("Mode 43: netboot and install image only (4c)")
                 ok = _run_4b_standalone(_session_log, resuming=False, install_only=True)
@@ -26479,7 +26512,7 @@ def main():
                 print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
-            # ── Mode 41 (4a): ONTAP upgrade ────────────────────────────────────────
+            # â”€â”€ Mode 41 (4a): ONTAP upgrade â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 41:
                 _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
                 ok = _run_ontap_upgrade(_session_log)
@@ -26491,7 +26524,7 @@ def main():
                     print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
                     sys.exit(0 if ok else 1)
 
-            # ── Mode 44 (5a): standalone license-only install ──────────────────────
+            # â”€â”€ Mode 44 (5a): standalone license-only install â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 44:
                 _collect_license_config(_run_context)
                 if not _license_mode:
@@ -26590,8 +26623,8 @@ def main():
                 print(f"\n\U0001f4dd Full session log saved to: {_session_log.log_file}")
                 raise _ReturnToMenu
 
-            # ── Pre-check: offer 4e when mode 1/3 finds no config files ───────────
-            # Checked here — before the mode 46 block — so that changing
+            # â”€â”€ Pre-check: offer 4e when mode 1/3 finds no config files â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            # Checked here â€” before the mode 46 block â€” so that changing
             # _operation_mode to 46 causes the 4e block immediately below to run.
             if _operation_mode in (1, 3) and not args.config:
                 _precheck_dirs = _default_config_search_dirs()
@@ -26604,7 +26637,7 @@ def main():
                 )
                 if not _precheck_configs and not _bmc_ip_exists:
                     print(
-                        "\n⚠️  No reinit-config or BMC_IP files were detected in the "
+                        "\nâš ï¸  No reinit-config or BMC_IP files were detected in the "
                         "search paths."
                     )
                     try:
@@ -26617,21 +26650,21 @@ def main():
                     if _gen_ans != "n":
                         _operation_mode = 46
 
-            # ── Mode 46 (4e): create backup cluster configuration ──────────────────
+            # â”€â”€ Mode 46 (4e): create backup cluster configuration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 46:
                 _print_banner("\U0001f4be 5c: Create backup cluster configuration")
                 print("")
                 _make_session_log("Mode 5c: backup cluster configuration")
                 _cluster_ip_rows46 = []
 
-                # Resolve output dir early — needed throughout.
+                # Resolve output dir early â€” needed throughout.
                 try:
                     _snap_dir46 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
                 except NameError:
                     _snap_dir46 = os.path.join(os.getcwd(), "configs")
                 os.makedirs(_snap_dir46, exist_ok=True)
 
-                # ── Top-level: gather from cluster vs. build manually ─────────────
+                # â”€â”€ Top-level: gather from cluster vs. build manually â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 print("  How would you like to build the configuration file?\n")
                 print("    gather  - Connect to an existing cluster and read its config")
                 print("    build   - Enter the configuration manually\n")
@@ -26639,13 +26672,13 @@ def main():
                     _mode46 = _prompt("  Your choice [gather/build]: ").lower()
                     if _mode46 in ("gather", "build"):
                         break
-                    print("  ⚠️  Please enter 'gather' or 'build'.")
+                    print("  âš ï¸  Please enter 'gather' or 'build'.")
                 _session_log.log(f"4e choice: {_mode46}")
 
-                # ── GATHER PATH: connect to cluster via BMC or cluster mgmt IP ──────
+                # â”€â”€ GATHER PATH: connect to cluster via BMC or cluster mgmt IP â”€â”€â”€â”€â”€â”€
                 if _mode46 == "gather":
                     print("")
-                    print("  ⚠️  Backup configuration will only work on a cluster")
+                    print("  âš ï¸  Backup configuration will only work on a cluster")
                     print("       that has an existing configuration.")
                     print("")
 
@@ -26681,11 +26714,11 @@ def main():
                                 "  Cluster interface (BMC, cluster management IP or hostname): "
                             ).strip()
                             if not sp_host46:
-                                print("  ⚠️  A host address is required.")
+                                print("  âš ï¸  A host address is required.")
                                 continue
                             if _check_bmc_reachable(sp_host46):
                                 break
-                            print("  ⚠️  Host not reachable. Please check the address and try again.")
+                            print("  âš ï¸  Host not reachable. Please check the address and try again.")
                     if not sp_host46:
                         print("  No address entered. Exiting.")
                         sys.exit(0)
@@ -26701,7 +26734,7 @@ def main():
 
                     _session_log.log(f"4e gather: target={sp_host46} (user={sp_user46})")
 
-                    # Connect via SSH – works for both BMC and cluster mgmt endpoints.
+                    # Connect via SSH â€“ works for both BMC and cluster mgmt endpoints.
                     _session_log.start_phase("SSH Connection")
                     try:
                         _client46, sp_user46, sp_pass46 = _ssh_connect_with_retry(
@@ -26742,11 +26775,11 @@ def main():
                         # Direct cluster-mgmt SSH: already at cluster shell or login
                         # prompt. Authenticate if needed, then run inventory commands.
                         _session_log.log("5c: direct cluster SSH detected; skipping BMC console path")
-                        print("  ✅ Cluster management SSH detected.")
+                        print("  âœ… Cluster management SSH detected.")
                         if "login:" in _probe46.lower() and "::>" not in _probe46:
                             # Genuine login: prompt (not just banner text like "Last login:")
                             if not _attempt_console_cluster_login(_ch46):
-                                print("  ❌ Cluster login failed. Exiting.")
+                                print("  âŒ Cluster login failed. Exiting.")
                                 _session_log.set_outcome("FAIL", "cluster login failed")
                                 _session_log.close()
                                 sys.exit(1)
@@ -26761,7 +26794,7 @@ def main():
                             _ch46, ["::>", "::*>"], timeout=10,
                         )
                         if "::>" not in _confirm46 and "::*>" not in _confirm46:
-                            print("  ❌ Could not confirm cluster shell prompt. Exiting.")
+                            print("  âŒ Could not confirm cluster shell prompt. Exiting.")
                             _session_log.set_outcome("FAIL", "cluster shell prompt not confirmed")
                             _session_log.close()
                             sys.exit(1)
@@ -26773,7 +26806,7 @@ def main():
                         _session_log.log("5c: BMC connection detected; entering system console")
                         _bmc_prompt_in_probe = ">" in _probe46
                         if _bmc_prompt_in_probe:
-                            print("  ✅ BMC prompt detected.")
+                            print("  âœ… BMC prompt detected.")
                             _session_log.log(
                                 "5c: BMC prompt already consumed by probe; skipping wait"
                             )
@@ -26822,7 +26855,7 @@ def main():
                     _sp_ips46 = list(_peers46) if _peers46 else []
 
                     # When we connected via cluster mgmt (not BMC), sp_host46 is a
-                    # mgmt IP/hostname — not a real BMC address. Resolve the primary
+                    # mgmt IP/hostname â€” not a real BMC address. Resolve the primary
                     # node's actual BMC IP from the SP list by:
                     #   1. Matching the SP's node-mgmt IP against config's primary_node.node_mgmt_ip
                     #   2. Picking the SP whose ONTAP node name ends in "-01" (primary convention)
@@ -26840,7 +26873,7 @@ def main():
                                 if _mgmt.get("ip") == _cfg_primary_node_mgmt_ip:
                                     _matched_bmc = _sp
                                     break
-                        # Strategy 2: use SP→node name map; primary is conventionally *-01
+                        # Strategy 2: use SPâ†’node name map; primary is conventionally *-01
                         if not _matched_bmc and _retained_sp_to_node:
                             _sp_node_pairs = [
                                 (sp, _retained_sp_to_node.get(sp, ""))
@@ -26857,12 +26890,12 @@ def main():
                                 )
                         if _matched_bmc:
                             _primary_bmc46 = _matched_bmc
-                            print(f"  ℹ️  Resolved primary BMC from SP list: {_primary_bmc46}")
+                            print(f"  â„¹ï¸  Resolved primary BMC from SP list: {_primary_bmc46}")
                             _session_log.log(f"5c: primary BMC resolved from SP list: {_primary_bmc46}")
                         else:
                             # Final fallback: first SP IP
                             _primary_bmc46 = _sp_ips46[0]
-                            print(f"  ⚠️  Could not match primary BMC from SP list; using first: {_primary_bmc46}")
+                            print(f"  âš ï¸  Could not match primary BMC from SP list; using first: {_primary_bmc46}")
                             _session_log.log(f"5c: primary BMC fallback to first SP IP: {_primary_bmc46}",
                                              prefix="WARN")
                         # Update the primary_node bmc field in config so it's saved correctly.
@@ -26876,7 +26909,7 @@ def main():
                         print(f"  \U0001f4cb SP/BMC addresses from cluster: {', '.join(_sp_ips46)}")
                         _session_log.log(f"SP IPs from cluster: {_sp_ips46}")
 
-                # ── BUILD PATH: manual entry ─────────────────────────────────────
+                # â”€â”€ BUILD PATH: manual entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 else:
                     print("")
                     print("  Create a new cluster configuration or add nodes to an existing one?\n")
@@ -26886,16 +26919,16 @@ def main():
                         _build46 = _prompt("  Your choice [create/add]: ").lower()
                         if _build46 in ("create", "add"):
                             break
-                        print("  ⚠️  Please enter 'create' or 'add'.")
+                        print("  âš ï¸  Please enter 'create' or 'add'.")
                     _session_log.log(f"4e build sub-choice: {_build46}")
 
                     _config_data = {}
 
                     if _build46 == "create":
-                        # ── Cluster-level details ──────────────────────────────────
-                        print("\n" + "─" * 60)
+                        # â”€â”€ Cluster-level details â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                        print("\n" + "â”€" * 60)
                         print("  Cluster configuration")
-                        print("─" * 60)
+                        print("â”€" * 60)
                         _b_name  = input("  Cluster name: ").strip()
                         _b_mport = input("  Cluster management interface port [e0M]: ").strip() or "e0M"
                         _b_mip   = input("  Cluster management IP address: ").strip()
@@ -26918,10 +26951,10 @@ def main():
                             "password": _b_pw,
                         }
 
-                        # ── Primary node ───────────────────────────────────────────
-                        print("\n" + "─" * 60)
+                        # â”€â”€ Primary node â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                        print("\n" + "â”€" * 60)
                         print("  Primary node BMC")
-                        print("─" * 60)
+                        print("â”€" * 60)
                         _b_pbmc = _prompt_bmc_host()
                         _b_puser = input("  BMC username [admin]: ").strip() or "admin"
                         _b_ppw   = getpass.getpass("  BMC password (blank = none): ")
@@ -26943,7 +26976,7 @@ def main():
                         _sp_ips46 = []  # No cluster shell in create path; no SP addresses available.
 
                     else:
-                        # ── ADD PATH ─────────────────────────────────────────────
+                        # â”€â”€ ADD PATH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                         # Goal: patch cluster_network_ip into an existing config file
                         # and append the new nodes to secondary_nodes so the file can
                         # immediately drive option 2a/2b.
@@ -26973,7 +27006,7 @@ def main():
                             print("  \u2139\ufe0f  No existing config file found. A new one will be created.")
 
                         # Start _config_data from whatever was loaded (preserves all
-                        # existing sections: cluster, primary_node, secondary_nodes …).
+                        # existing sections: cluster, primary_node, secondary_nodes â€¦).
                         _config_data = dict(_cfg46_add)
                         _ctx_sync_from_globals()
 
@@ -26984,9 +27017,9 @@ def main():
                                         if isinstance(_config_data.get("nodes"), list)
                                         else None)) or {}
 
-                        print("\n" + "─" * 60)
+                        print("\n" + "â”€" * 60)
                         print("  Primary node BMC  (existing cluster)")
-                        print("─" * 60)
+                        print("â”€" * 60)
                         _b_pbmc_default = _cfg_str(_pn46a.get("bmc"))
                         if _b_pbmc_default:
                             print(f"  \U0001f4c4 BMC from config: {_b_pbmc_default}")
@@ -27095,7 +27128,7 @@ def main():
                         except Exception:
                             pass
 
-                        # 4. Patch cluster_network_ip into primary_node — preserve all
+                        # 4. Patch cluster_network_ip into primary_node â€” preserve all
                         #    other existing fields; create a minimal stub only if needed.
                         if not isinstance(_config_data.get("primary_node"), dict):
                             _config_data["primary_node"] = {}
@@ -27103,10 +27136,10 @@ def main():
                             _config_data["primary_node"]["cluster_network_ip"] = _clus_ip46
 
                         # 5. Prompt for new node BMC addresses (nodes to be joined).
-                        print("\n" + "─" * 60)
+                        print("\n" + "â”€" * 60)
                         print("  Nodes to join to the cluster (not yet joined)")
                         print("  Enter BMC details for each new node; blank BMC IP to finish.")
-                        print("─" * 60)
+                        print("â”€" * 60)
                         if not isinstance(_config_data.get("secondary_nodes"), list):
                             _config_data["secondary_nodes"] = []
                         _nadd_idx46 = 1
@@ -27121,7 +27154,7 @@ def main():
                                     val = input(f"  {label}: ").strip()
                                     if val:
                                         return val
-                                    print("    ⚠️  Value cannot be blank. Press Ctrl+C to cancel this node.")
+                                    print("    âš ï¸  Value cannot be blank. Press Ctrl+C to cancel this node.")
                             try:
                                 _nadd_user46 = input(f"  Node {_nadd_idx46} BMC username [admin]: ").strip() or "admin"
                                 _nadd_pw46   = getpass.getpass(f"  Node {_nadd_idx46} BMC password (blank = none): ")
@@ -27130,7 +27163,7 @@ def main():
                                 _nadd_mask46 = _prompt_ip46(f"Node {_nadd_idx46} mgmt netmask")
                                 _nadd_gw46   = _prompt_ip46(f"Node {_nadd_idx46} mgmt gateway")
                             except (EOFError, KeyboardInterrupt):
-                                print("\n  ↩️  Node entry cancelled.")
+                                print("\n  â†©ï¸  Node entry cancelled.")
                                 break
                             _nadd_entry46 = {
                                 "bmc": _nadd_bmc46,
@@ -27148,15 +27181,15 @@ def main():
                         _session_log.log(f"4e build/add: {_nadd_idx46-1} secondary node(s) entered")
                         _sp_ips46 = []  # SP IPs not queried in add path (no service-processor show needed)
 
-                # ══════════════════════════════════════════════════════════════════
+                # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 # COMMON TAIL: optional "add extra nodes" (gather/create paths),
                 # BMC_IP.json, write config
-                # ══════════════════════════════════════════════════════════════════
+                # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 _skip_extra_nodes = (_mode46 == "build" and _build46 == "add")
                 if not _skip_extra_nodes:
-                    # ── Prompt to add additional nodes ──────────────────────────────
+                    # â”€â”€ Prompt to add additional nodes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                     print("")
-                    print("  " + "─" * 58)
+                    print("  " + "â”€" * 58)
                     _add_nodes46 = _prompt(
                         "  Add additional nodes to the configuration? [y/N]: "
                     , "n").lower()
@@ -27184,7 +27217,7 @@ def main():
                                     val = input(f"  {label}: ").strip()
                                     if val:
                                         return val
-                                    print("    ⚠️  Value cannot be blank. Press Ctrl+C to cancel this node.")
+                                    print("    âš ï¸  Value cannot be blank. Press Ctrl+C to cancel this node.")
                             try:
                                 _nuser46 = input(
                                     f"  Node {_node_idx46} BMC username [admin]: "
@@ -27199,7 +27232,7 @@ def main():
                                 _nmask46 = _prompt_req46(f"Node {_node_idx46} management netmask")
                                 _ngw46   = _prompt_req46(f"Node {_node_idx46} management gateway")
                             except (EOFError, KeyboardInterrupt):
-                                print("\n  ↩️  Node entry cancelled.")
+                                print("\n  â†©ï¸  Node entry cancelled.")
                                 break
 
                             _nentry46 = {
@@ -27213,23 +27246,23 @@ def main():
                             }
 
                             _config_data["secondary_nodes"].append(_nentry46)
-                            print(f"  ✅ Node {_node_idx46} ({_nbmc46}) added.\n")
+                            print(f"  âœ… Node {_node_idx46} ({_nbmc46}) added.\n")
                             _node_idx46 += 1
 
                         print(f"  {_node_idx46 - 1} node(s) added to configuration.")
 
-                # ── Optionally create BMC_IP.json from SP addresses ─────────────
+                # â”€â”€ Optionally create BMC_IP.json from SP addresses â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 print("")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 if _sp_ips46:
                     print(f"  SP/BMC addresses gathered from 'service-processor show' ({len(_sp_ips46)}):")
                     for _sip46 in _sp_ips46:
-                        print(f"    • {_sip46}")
+                        print(f"    â€¢ {_sip46}")
                     _bmc_ip_ans = _prompt(
                         "  Write these to BMC_IP.json? [Y/n]: "
                     , "y").lower()
                 else:
-                    print("  ℹ️  No SP/BMC addresses were collected from the cluster shell.")
+                    print("  â„¹ï¸  No SP/BMC addresses were collected from the cluster shell.")
                     _bmc_ip_ans = "n"
 
                 if _bmc_ip_ans in ("", "y", "yes"):
@@ -27257,7 +27290,7 @@ def main():
                     else:
                         print("  \u26a0\ufe0f  No BMC addresses collected; BMC_IP.json not written.")
 
-                # ── Always write cluster_IP.json when gather/build captured rows ─────
+                # â”€â”€ Always write cluster_IP.json when gather/build captured rows â”€â”€â”€â”€â”€
                 if _cluster_ip_rows46:
                     _cluster_entries46 = []
                     for _row46 in _cluster_ip_rows46:
@@ -27272,13 +27305,13 @@ def main():
                         reason="mode 5c gather/build",
                     )
                     if _cluster_path46:
-                        print(f"  ✅ cluster_IP.json written to: {_cluster_path46}")
+                        print(f"  âœ… cluster_IP.json written to: {_cluster_path46}")
                         _session_log.log(
                             f"cluster_IP.json written: {_cluster_path46} "
                             f"({len(_cluster_entries46)} entries)"
                         )
                     else:
-                        print("  ⚠️  Could not write cluster_IP.json.")
+                        print("  âš ï¸  Could not write cluster_IP.json.")
                         _session_log.log("cluster_IP.json write failed", prefix="WARN")
 
                 # Determine output path.
@@ -27329,12 +27362,12 @@ def main():
                 else:
                     raise _ReturnToMenu
 
-            # ── Mode 47 (5d): verify BMC authentication ────────────────────────────
+            # â”€â”€ Mode 47 (5d): verify BMC authentication â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 47:
                 _print_banner("\U0001f50d 5d: Verify BMC authentication")
                 print("")
 
-                # ── Locate BMC IP list ────────────────────────────────────────────
+                # â”€â”€ Locate BMC IP list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 # Search for BMC_IP.json or a full reinit-config that has node BMC IPs.
                 _bmc_ips47 = []
                 _found_file47 = None
@@ -27407,21 +27440,21 @@ def main():
                             break
                         _bad47 = [p for p in _parts47 if not p.isdigit()]
                         if _bad47:
-                            print(f"  ⚠️  Invalid entry: {', '.join(_bad47)}. Use numbers like: 1,3")
+                            print(f"  âš ï¸  Invalid entry: {', '.join(_bad47)}. Use numbers like: 1,3")
                             continue
                         _idxs47 = sorted(set(int(p) for p in _parts47))
                         _oor47 = [str(i) for i in _idxs47 if i < 1 or i > len(_candidate_ips47)]
                         if _oor47:
-                            print(f"  ⚠️  Out of range: {', '.join(_oor47)} (valid: 1-{len(_candidate_ips47)})")
+                            print(f"  âš ï¸  Out of range: {', '.join(_oor47)} (valid: 1-{len(_candidate_ips47)})")
                             continue
                         _selected47 = [_candidate_ips47[i - 1] for i in _idxs47]
                         break
-                    print(f"  ✅ Selected {len(_selected47)} BMC(s): {', '.join(_selected47)}")
+                    print(f"  âœ… Selected {len(_selected47)} BMC(s): {', '.join(_selected47)}")
                     return _selected47
 
                 _bmc_ips47 = _select_bmc_targets47(_all_bmc_ips47)
 
-                # ── Credentials ──────────────────────────────────────────────────
+                # â”€â”€ Credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 print("")
                 _creds47 = {}   # ip -> (user, password)
 
@@ -27470,13 +27503,13 @@ def main():
                     "n",
                 ).strip().lower() in ("y", "yes")
                 if _blank_fallback47:
-                    print("  ℹ️  Blank-password fallback is enabled for this 5d test run.")
+                    print("  â„¹ï¸  Blank-password fallback is enabled for this 5d test run.")
                 print("")
 
                 while True:
-                    # ── Test each BMC concurrently ────────────────────────────────
-                    print("  " + "─" * 58)
-                    print(f"  Testing {len(_bmc_ips47)} BMC(s)…\n")
+                    # â”€â”€ Test each BMC concurrently â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                    print("  " + "â”€" * 58)
+                    print(f"  Testing {len(_bmc_ips47)} BMC(s)â€¦\n")
 
                     _results47 = {}   # ip -> {"status": "PASS"|"FAIL", "detail": str}
                     _results_lock47 = threading.Lock()
@@ -27618,10 +27651,10 @@ def main():
 
                     _run_parallel(_bmc_ips47, _test_bmc47, join_timeout=60)
 
-                    # ── Results table ─────────────────────────────────────────────
-                    print("\n  " + "─" * 58)
+                    # â”€â”€ Results table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                    print("\n  " + "â”€" * 58)
                     print(f"  {'BMC IP':<22}  {'Result':<6}  Detail")
-                    print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
+                    print(f"  {'â”€'*22}  {'â”€'*6}  {'â”€'*30}")
                     _pass_count47 = 0
                     _fail_count47 = 0
                     for _ip47 in _bmc_ips47:
@@ -27632,10 +27665,10 @@ def main():
                             _pass_count47 += 1
                         else:
                             _fail_count47 += 1
-                    print(f"  {'─'*22}  {'─'*6}  {'─'*30}")
+                    print(f"  {'â”€'*22}  {'â”€'*6}  {'â”€'*30}")
                     print(f"\n  {_pass_count47} PASS  /  {_fail_count47} FAIL  (of {len(_bmc_ips47)} tested)\n")
 
-                    # ── Offer SSH diagnostic for any failing BMC(s) ──────────────
+                    # â”€â”€ Offer SSH diagnostic for any failing BMC(s) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                     # Reuses the same helper as the netboot-BMC verification flow so
                     # an operator can identify stale local SSH sockets (and optionally
                     # clean them) without leaving 4f.
@@ -27691,12 +27724,12 @@ def main():
                     pass
                 raise _ReturnToMenu
 
-            # ── Mode 48 (5z): reset all nodes to LOADER prompt ─────────────────────
+            # â”€â”€ Mode 48 (5z): reset all nodes to LOADER prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 48:
                 _print_banner("\U0001f504 5z: Reset all nodes to LOADER prompt")
                 print("")
 
-                # ── Locate BMC IP list (same logic as mode 47) ───────────────────
+                # â”€â”€ Locate BMC IP list (same logic as mode 47) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 _bmc_ips48 = []
                 _found_file48 = None
                 for _p48 in _find_config_files(
@@ -27761,18 +27794,18 @@ def main():
                         break
                     _bad48 = [p for p in _parts48 if not p.isdigit()]
                     if _bad48:
-                        print(f"  ⚠️  Invalid entry: {', '.join(_bad48)}. Use numbers like: 1,3")
+                        print(f"  âš ï¸  Invalid entry: {', '.join(_bad48)}. Use numbers like: 1,3")
                         continue
                     _idxs48 = sorted(set(int(p) for p in _parts48))
                     _oor48 = [str(i) for i in _idxs48 if i < 1 or i > len(_bmc_ips48)]
                     if _oor48:
-                        print(f"  ⚠️  Out of range: {', '.join(_oor48)} (valid: 1-{len(_bmc_ips48)})")
+                        print(f"  âš ï¸  Out of range: {', '.join(_oor48)} (valid: 1-{len(_bmc_ips48)})")
                         continue
                     _bmc_ips48 = [_bmc_ips48[i - 1] for i in _idxs48]
                     break
-                print(f"  ✅ Selected {len(_bmc_ips48)} BMC(s): {', '.join(_bmc_ips48)}")
+                print(f"  âœ… Selected {len(_bmc_ips48)} BMC(s): {', '.join(_bmc_ips48)}")
 
-                # ── Credentials ──────────────────────────────────────────────────
+                # â”€â”€ Credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 print("")
                 _creds48 = {}   # ip -> (user, password)
                 if len(_bmc_ips48) == 1:
@@ -27807,7 +27840,7 @@ def main():
 
                 _make_session_log("5z: reset all nodes to LOADER")
 
-                # ── Reset each node to LOADER in parallel ────────────────────────
+                # â”€â”€ Reset each node to LOADER in parallel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 _print_banner(f"\U0001f504 Resetting {len(_bmc_ips48)} node(s) to LOADER prompt")
                 print(f"  Nodes: {', '.join(_bmc_ips48)}\n")
                 _session_log.start_phase("Reset to LOADER")
@@ -27838,28 +27871,28 @@ def main():
 
                 _run_parallel(_bmc_ips48, _loader_worker48)
 
-                # Retry loop — keep asking until all nodes reach LOADER or
+                # Retry loop â€” keep asking until all nodes reach LOADER or
                 # operator declines.
                 while True:
                     _failed48 = [ip for ip in _bmc_ips48
                                  if not _results48.get(ip, False)]
                     if not _failed48:
                         break
-                    print(f"\n  ⚠️  {len(_failed48)} node(s) did not reach LOADER: "
+                    print(f"\n  âš ï¸  {len(_failed48)} node(s) did not reach LOADER: "
                           f"{', '.join(_failed48)}")
                     _retry_ans48 = _prompt(
                         "  Retry failed node(s)? [Y/n]: ", "y"
                     ).strip().lower()
                     if _retry_ans48 in ("n", "no"):
                         break
-                    print(f"\n  🔁 Retrying {len(_failed48)} node(s)...")
+                    print(f"\n  ðŸ” Retrying {len(_failed48)} node(s)...")
                     _session_log.log(f"Retrying LOADER reset for: {_failed48}")
                     for _ip48r in _failed48:
                         try:
                             _nf48r = _node_log_open(_ip48r, _log_dir48,
                                                     prefix="mode5z_loader_retry")
                             _node_logs48[_ip48r] = _nf48r
-                            print(f"  📝 [{_ip48r}] Retry log → {_nf48r.name}")
+                            print(f"  ðŸ“ [{_ip48r}] Retry log â†’ {_nf48r.name}")
                         except Exception:
                             _node_logs48[_ip48r] = None
                     _run_parallel(_failed48, _loader_worker48)
@@ -27871,7 +27904,7 @@ def main():
                         except Exception:
                             pass
 
-                # ── Optional env backup ───────────────────────────────────────────
+                # â”€â”€ Optional env backup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 _successful48 = [ip for ip in _bmc_ips48 if _results48.get(ip, False)]
                 if _successful48:
                     _bkp_ans48 = _prompt(
@@ -27880,7 +27913,7 @@ def main():
                     ).strip().lower()
                     if _bkp_ans48 not in ("n", "no"):
                         _bkp_log_dir48 = _session_log.log_dir if _session_log else os.getcwd()
-                        print(f"\n  💾 Backing up LOADER env for {len(_successful48)} node(s)...")
+                        print(f"\n  ðŸ’¾ Backing up LOADER env for {len(_successful48)} node(s)...")
 
                         def _bkp_worker48(ip):
                             _u48b, _p48b = _creds48.get(ip, ("admin", ""))
@@ -27891,12 +27924,12 @@ def main():
                                     max_attempts=3, interactive=False,
                                 )
                             except Exception as _e48b:
-                                print(f"  ❌ [{ip}] SSH failed for env backup: {_e48b}")
+                                print(f"  âŒ [{ip}] SSH failed for env backup: {_e48b}")
                                 return
                             try:
                                 _ch48b = _open_shell(_cl48b)
                                 if not _reach_bmc_prompt(_ch48b, timeout=15):
-                                    print(f"  ❌ [{ip}] BMC prompt not reached for env backup.")
+                                    print(f"  âŒ [{ip}] BMC prompt not reached for env backup.")
                                     return
                                 _ch48b.send("system console\r")
                                 direct_read_until_any(
@@ -27912,11 +27945,11 @@ def main():
                                     prefix="5z_loader_env_backup",
                                 )
                                 if _env_path48b:
-                                    print(f"  ✅ [{ip}] Env saved → {_env_path48b}")
+                                    print(f"  âœ… [{ip}] Env saved â†’ {_env_path48b}")
                                 else:
-                                    print(f"  ⚠️  [{ip}] Env capture empty or save failed.")
+                                    print(f"  âš ï¸  [{ip}] Env capture empty or save failed.")
                             except Exception as _e48b2:
-                                print(f"  ❌ [{ip}] Env backup error: {_e48b2}")
+                                print(f"  âŒ [{ip}] Env backup error: {_e48b2}")
                             finally:
                                 try:
                                     _ch48b.close()
@@ -27929,10 +27962,10 @@ def main():
 
                         _run_parallel(_successful48, _bkp_worker48)
 
-                # ── Results summary ───────────────────────────────────────────────
-                print("\n  " + "─" * 58)
+                # â”€â”€ Results summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                print("\n  " + "â”€" * 58)
                 print(f"  {'BMC IP':<24}  Result")
-                print(f"  {'─'*24}  {'─'*20}")
+                print(f"  {'â”€'*24}  {'â”€'*20}")
                 _pass48 = _fail48 = 0
                 for _ip48 in _bmc_ips48:
                     _ok48 = _results48.get(_ip48, False)
@@ -27943,7 +27976,7 @@ def main():
                         _pass48 += 1
                     else:
                         _fail48 += 1
-                print(f"  {'─'*24}  {'─'*20}")
+                print(f"  {'â”€'*24}  {'â”€'*20}")
                 print(f"\n  {_pass48} reached LOADER  /  {_fail48} failed  (of {len(_bmc_ips48)} nodes)\n")
 
                 _session_log.end_phase()
@@ -27955,13 +27988,13 @@ def main():
                     pass
                 raise _ReturnToMenu
 
-            # ── Mode 49 (5g): cluster health and version check ─────────────────────
+            # â”€â”€ Mode 49 (5g): cluster health and version check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 49:
                 _print_banner("\U0001f4ca 5g: Cluster health and version check")
                 _make_session_log("Mode 5g: cluster health and version check")
                 print("")
 
-                # ── Gather connection details ────────────────────────────────────
+                # â”€â”€ Gather connection details â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 _ch49_ip = None
                 _ch49_user = "admin"
                 _ch49_pass = ""
@@ -27990,7 +28023,7 @@ def main():
                                 or _cluster_config.get("mgmt_ip"))
                     _ch49_user = ((_config_data.get("cluster") or {}).get("username") or "admin")
 
-                # 2. No config found — offer to gather one or ask for IP.
+                # 2. No config found â€” offer to gather one or ask for IP.
                 if not _ch49_ip and not _49_cfg_files:
                     print("\n  \u26a0\ufe0f  No reinit-config.json found on disk.")
                     print("     Option 5c can connect to your existing cluster and generate one automatically.")
@@ -27999,7 +28032,7 @@ def main():
                         _5f_pending_after_4e = True
                         _operation_mode = 46  # noqa: F841  (module-level var, reassigned here)
                         return
-                    # User said no — fall through to manual IP prompt.
+                    # User said no â€” fall through to manual IP prompt.
 
                 if not _ch49_ip:
                     _ch49_ip = input("  Cluster management LIF IP: ").strip()
@@ -28016,7 +28049,7 @@ def main():
                     _ch49_user = _ch49_user_in
                 _ch49_pass = _gp49.getpass(f"  Cluster admin password for {_ch49_user}@{_ch49_ip}: ")
 
-                # ── Connect ──────────────────────────────────────────────────────
+                # â”€â”€ Connect â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 print(f"\n  \U0001f50c Connecting to {_ch49_ip} as {_ch49_user}...")
                 try:
                     _cl49, _, _ = _ssh_connect_with_retry(
@@ -28061,7 +28094,7 @@ def main():
                 print(f"  \u2705 Connected to {_ch49_ip}")
                 _session_log.log(f"5g: connected to {_ch49_ip}")
 
-                # ── Health check ─────────────────────────────────────────────────
+                # â”€â”€ Health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 print("\n  \U0001f50d Running cluster health check...")
 
                 # Run cluster show and storage failover show and display raw output.
@@ -28124,17 +28157,17 @@ def main():
 
                 _ports49_ok = bool(_ports49_rows) and not _ports49_bad
                 if not _ports49_rows:
-                    print("  ⚠️  Could not parse any cluster ports from network port output.")
+                    print("  âš ï¸  Could not parse any cluster ports from network port output.")
                     _session_log.log("5g: no cluster ports parsed from network port show",
                                      prefix="WARN")
                 elif _ports49_bad:
-                    print("\n  ⚠️  Cluster port health check FAILED:")
+                    print("\n  âš ï¸  Cluster port health check FAILED:")
                     for _bp49 in _ports49_bad:
                         _bn49 = _bp49.get("node") or "<unknown-node>"
                         _pp49 = _bp49.get("port") or "<unknown-port>"
                         _lk49 = _bp49.get("link") or "<missing>"
                         _hs49 = _bp49.get("health") or "<missing>"
-                        print(f"    • {_bn49}:{_pp49}  link={_lk49}  health={_hs49}")
+                        print(f"    â€¢ {_bn49}:{_pp49}  link={_lk49}  health={_hs49}")
                     _session_log.log(
                         "5g: cluster port health failures: " +
                         "; ".join(
@@ -28145,12 +28178,12 @@ def main():
                         prefix="WARN",
                     )
                 else:
-                    print("  ✅ Cluster port health check passed (all cluster ports link=up, health=healthy).")
+                    print("  âœ… Cluster port health check passed (all cluster ports link=up, health=healthy).")
                     _session_log.log("5g: cluster port health check passed")
 
                 _healthy49 = bool(_healthy49 and _ports49_ok)
 
-                # ── Version check ────────────────────────────────────────────────
+                # â”€â”€ Version check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 print("\n  \U0001f50d Checking ONTAP version...")
                 _ver49_snapshot = _collect_ontap_version_snapshot(_ch49)
                 _img49_out = _ver49_snapshot["image_output"]
@@ -28179,7 +28212,7 @@ def main():
                         after_by_node=_per_node_49,
                     )
 
-                # ── Cleanup & exit ───────────────────────────────────────────────
+                # â”€â”€ Cleanup & exit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 try:
                     _ch49.close()
                 except Exception:
@@ -28204,13 +28237,13 @@ def main():
                     pass
                 raise _ReturnToMenu
 
-            # ── Mode 50 (5h): list and clean up stale BMC SSH sessions ────────────
+            # â”€â”€ Mode 50 (5h): list and clean up stale BMC SSH sessions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 50:
                 _print_banner("\U0001f9f9 5h: List and clean up stale BMC SSH sessions")
                 _make_session_log("Mode 5h: stale BMC SSH session cleanup")
                 print("")
 
-                # ── Load BMC IPs from config (same logic as modes 47/48) ─────────
+                # â”€â”€ Load BMC IPs from config (same logic as modes 47/48) â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 _bmc_ips50 = []
                 _found_file50 = None
                 _cfg_data50 = None
@@ -28261,7 +28294,7 @@ def main():
                     print("  No BMC addresses specified. Returning to menu.")
                     raise _ReturnToMenu
 
-                # ── Credentials ──────────────────────────────────────────────────
+                # â”€â”€ Credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 print("")
                 _creds50 = {}
                 if len(_bmc_ips50) == 1:
@@ -28295,7 +28328,7 @@ def main():
                                 _p50pw = getpass.getpass("    Password (blank = none): ")
                             _creds50[_ip50] = (_u50, _p50pw)
 
-                # ── Interactive loop ──────────────────────────────────────────────
+                # â”€â”€ Interactive loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 while True:
                     print("\n  What would you like to do?")
                     print("    1) List stale SSH sessions (all BMCs or one IP)")
@@ -28345,10 +28378,10 @@ def main():
                         print("")
                         for _ip50 in _targets50:
                             _u50, _p50pw = _creds50.get(_ip50, ("admin", ""))
-                            print(f"\n  🔧 Running ipmitool sol deactivate for {_ip50}...")
+                            print(f"\n  ðŸ”§ Running ipmitool sol deactivate for {_ip50}...")
                             with suppress(Exception):
                                 _ipmi_sol_deactivate(_ip50, _u50, _p50pw, log=_session_log)
-                        print("\n  ✅ ipmitool pass complete.")
+                        print("\n  âœ… ipmitool pass complete.")
                     elif _act50 == "4":
                         _targets50 = _prompt_bmc_target_scope(
                             _bmc_ips50, scope_label="known_hosts cleanup", prompt_prefix="  ",
@@ -28359,10 +28392,10 @@ def main():
                             continue
                         print("")
                         for _ip50 in _targets50:
-                            print(f"\n  🗑️  Removing known_hosts entry for {_ip50}...")
+                            print(f"\n  ðŸ—‘ï¸  Removing known_hosts entry for {_ip50}...")
                             with suppress(Exception):
                                 _remove_bmc_from_known_hosts(_ip50, log=_session_log)
-                        print("\n  ✅ known_hosts cleanup complete.")
+                        print("\n  âœ… known_hosts cleanup complete.")
                     elif _act50 in ("5", ""):
                         break
                     else:
@@ -28371,13 +28404,13 @@ def main():
                 print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
-            # ── Mode 51 (5f): check node status (LOADER / cluster prompt) ──────────
+            # â”€â”€ Mode 51 (5f): check node status (LOADER / cluster prompt) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 51:
-                _print_banner("🔍 5f: Check node status")
+                _print_banner("ðŸ” 5f: Check node status")
                 _make_session_log("Mode 5f: node status check")
                 print("")
 
-                # ── Load BMC IPs (same pattern as modes 47/48/50) ────────────────
+                # â”€â”€ Load BMC IPs (same pattern as modes 47/48/50) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 _bmc_ips51 = []
                 _found_file51 = None
                 for _p51 in _find_config_files(
@@ -28408,11 +28441,11 @@ def main():
                         break
 
                 if _found_file51:
-                    print(f"  📄 Loaded {len(_bmc_ips51)} BMC address(es) from: {_found_file51}")
+                    print(f"  ðŸ“„ Loaded {len(_bmc_ips51)} BMC address(es) from: {_found_file51}")
                     for _ip51 in _bmc_ips51:
-                        print(f"     • {_ip51}")
+                        print(f"     â€¢ {_ip51}")
                 else:
-                    print("  ℹ️  No BMC IP file found. Enter BMC addresses manually.")
+                    print("  â„¹ï¸  No BMC IP file found. Enter BMC addresses manually.")
                     print("  (Leave blank and press Enter when done.)\n")
                     _idx51 = 1
                     while True:
@@ -28426,7 +28459,7 @@ def main():
                     print("  No BMC addresses entered. Returning to menu.")
                     raise _ReturnToMenu
 
-                # ── Credentials ──────────────────────────────────────────────────
+                # â”€â”€ Credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 print("")
                 _same_creds51 = input("  Use the same username/password for all BMCs? [Y/n]: ").strip().lower()
                 _creds51 = {}
@@ -28450,7 +28483,7 @@ def main():
                             _p51pw = getpass.getpass(f"  Password for {_ip51}: ")
                         _creds51[_ip51] = (_u51, _p51pw)
 
-                # ── Probe each node in parallel ───────────────────────────────────
+                # â”€â”€ Probe each node in parallel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 _STATUS_LOADER    = "LOADER prompt"
                 _STATUS_ONTAP     = "ONTAP shell (::>)"
                 _STATUS_LOGIN     = "Login prompt"
@@ -28485,7 +28518,7 @@ def main():
                         except Exception:
                             pass
 
-                        # Reach BMC prompt — route output to log, not terminal.
+                        # Reach BMC prompt â€” route output to log, not terminal.
                         if not _reach_bmc_prompt(ch51, node_log=_nf51):
                             status = _STATUS_ERROR
                         else:
@@ -28533,7 +28566,7 @@ def main():
                                 status = _STATUS_LOGIN
                             elif ("selection" in combined or "boot menu" in combined
                                   or "boot loader" in combined
-                                  or re.search(r'\(\s*1[-–]\d+\s*\)', combined)):
+                                  or re.search(r'\(\s*1[-â€“]\d+\s*\)', combined)):
                                 status = _STATUS_BOOTMENU
                             elif "autoboot" in combined:
                                 status = _STATUS_BOOTMENU
@@ -28559,34 +28592,34 @@ def main():
                         _results51[ip] = status
                     _session_log.log(f"[{ip}] node status: {status}")
 
-                print("\n  🔍 Probing nodes in parallel...\n")
+                print("\n  ðŸ” Probing nodes in parallel...\n")
                 _run_parallel(_bmc_ips51, _status_worker51)
 
-                # ── Results table ─────────────────────────────────────────────────
+                # â”€â”€ Results table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 _STATUS_ICONS = {
-                    _STATUS_LOADER:   "🟢",
-                    _STATUS_ONTAP:    "🔵",
-                    _STATUS_LOGIN:    "🔵",
-                    _STATUS_BOOTMENU: "🟡",
-                    _STATUS_UNKNOWN:  "⚪",
-                    _STATUS_ERROR:    "🔴",
+                    _STATUS_LOADER:   "ðŸŸ¢",
+                    _STATUS_ONTAP:    "ðŸ”µ",
+                    _STATUS_LOGIN:    "ðŸ”µ",
+                    _STATUS_BOOTMENU: "ðŸŸ¡",
+                    _STATUS_UNKNOWN:  "âšª",
+                    _STATUS_ERROR:    "ðŸ”´",
                 }
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
                 print(f"  {'BMC IP':<24}  Status")
-                print(f"  {'─'*24}  {'─'*30}")
+                print(f"  {'â”€'*24}  {'â”€'*30}")
                 for _ip51 in _bmc_ips51:
                     _st = _results51.get(_ip51, _STATUS_ERROR)
                     _icon = next(
                         (v for k, v in _STATUS_ICONS.items() if _st.startswith(k)),
-                        "⚪"
+                        "âšª"
                     )
                     print(f"  {_ip51:<24}  {_icon} {_st}")
-                print("  " + "─" * 58)
+                print("  " + "â”€" * 58)
 
-                print(f"\n📝 Session log: {_session_log.log_file}")
+                print(f"\nðŸ“ Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
-            # ── Mode 52 (5i): Backup LOADER environment variables ─────────────────
+            # â”€â”€ Mode 52 (5i): Backup LOADER environment variables â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 52:
                 _print_banner("\U0001f4be 5i: Backup LOADER environment variables")
                 _make_session_log("Mode 5i: LOADER env backup")
@@ -28700,14 +28733,14 @@ def main():
                         if "loader-" not in _nudge52.lower():
                             print(f"  \u26a0\ufe0f  [{_ip52}] Node not at LOADER prompt; skipping.")
                             continue
-                        print(f"  \U0001f4be [{_ip52}] At LOADER – capturing printenv...")
+                        print(f"  \U0001f4be [{_ip52}] At LOADER â€“ capturing printenv...")
                         _env52 = _loader_env_capture(_ch52, node_log=_nf52)
                         _fpath52 = _loader_env_save_to_file(
                             _env52, _ip52, _ld52_log_dir, prefix="loader_env_backup"
                         )
                         if _fpath52:
                             _saved_files52.append((_ip52, _fpath52))
-                            print(f"  \u2705 [{_ip52}] Saved {len(_env52)} vars → {_fpath52}")
+                            print(f"  \u2705 [{_ip52}] Saved {len(_env52)} vars â†’ {_fpath52}")
                         else:
                             print(f"  \u274c [{_ip52}] Could not save env file.")
                     except Exception as _e52:
@@ -28725,7 +28758,7 @@ def main():
                             except Exception:
                                 pass
 
-                print("\n  " + "─" * 58)
+                print("\n  " + "â”€" * 58)
                 print("  Backup complete.")
                 for _bip52, _bfp52 in _saved_files52:
                     print(f"  \U0001f4c4 [{_bip52}] {_bfp52}")
@@ -28733,7 +28766,7 @@ def main():
                     print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
-            # ── Mode 53 (5j): Compare LOADER env to defaults (diff) ──────────────
+            # â”€â”€ Mode 53 (5j): Compare LOADER env to defaults (diff) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 53:
                 _print_banner("\U0001f50d 5j: Compare LOADER env to defaults (diff)")
                 _make_session_log("Mode 5j: LOADER env diff")
@@ -28846,7 +28879,7 @@ def main():
                         if "loader-" not in _nudge53.lower():
                             print(f"  \u26a0\ufe0f  [{_ip53}] Node not at LOADER prompt; skipping.")
                             continue
-                        print(f"  \U0001f50d [{_ip53}] At LOADER – running env capture + set-defaults diff...")
+                        print(f"  \U0001f50d [{_ip53}] At LOADER â€“ running env capture + set-defaults diff...")
                         _restore53 = _loader_env_pre_post_prompt(
                             _ch53, _ip53, _ld53_log_dir,
                             node_log=_nf53, interactive=True,
@@ -28876,13 +28909,13 @@ def main():
                             except Exception:
                                 pass
 
-                print("\n  " + "─" * 58)
+                print("\n  " + "â”€" * 58)
                 print("  Diff/restore complete.")
                 if _session_log:
                     print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
-            # ── Mode 54 (5k): Check boot DNA ───────────────────────────────────────
+            # â”€â”€ Mode 54 (5k): Check boot DNA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 54:
                 _print_banner("\U0001f9ec 5k: Check boot DNA")
                 _make_session_log("Mode 5k: boot DNA check")
@@ -28890,12 +28923,12 @@ def main():
                 _run_boot_dna_check_mode()
                 raise _ReturnToMenu
 
-            # ── Mode 55 (5l): Build cluster_IP manifest ───────────────────────────
+            # â”€â”€ Mode 55 (5l): Build cluster_IP manifest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 55:
                 _run_cluster_ip_manifest_mode()
                 raise _ReturnToMenu
 
-            # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
+            # â”€â”€ Mode 45 (4d): set up passwordless SSH to cluster management â”€â”€â”€â”€â”€â”€â”€â”€
             if _operation_mode == 45:
                 import pathlib
 
@@ -28985,9 +29018,9 @@ def main():
                 _session_log.end_phase()
 
                 # Read the initial banner/prompt after shell open.  We watch for:
-                #   ::>  / ::*>   – already at the cluster shell (console passthrough)
-                #   y/n           – existing BMC session takeover prompt
-                #   >             – plain BMC prompt (SP> or similar)
+                #   ::>  / ::*>   â€“ already at the cluster shell (console passthrough)
+                #   y/n           â€“ existing BMC session takeover prompt
+                #   >             â€“ plain BMC prompt (SP> or similar)
                 # We do NOT call wait_for_bmc_prompt() because it consumes the ::>
                 # and then the probe below can't see it.
                 _session_log.start_phase("Cluster Shell Login")
@@ -28998,7 +29031,7 @@ def main():
                 )
                 _already_at_cluster = False
                 if _init_match and ("::>" in _init_match or "::*>" in _init_match):
-                    # Console is already in passthrough mode — no need for system console.
+                    # Console is already in passthrough mode â€” no need for system console.
                     _already_at_cluster = True
                     print("  \u2705 Cluster shell prompt detected directly.")
                 elif _init_match and "y/n" in _init_match.lower():
@@ -29032,7 +29065,7 @@ def main():
                         sys.exit(1)
                 _session_log.end_phase()
 
-                # Get cluster name from the shell prompt itself — the ONTAP prompt
+                # Get cluster name from the shell prompt itself â€” the ONTAP prompt
                 # is "<clustername>::>" so this is more reliable than parsing command
                 # output (which has column headers like "cluster" that look like data).
                 ch_45.send("\r")
@@ -29053,7 +29086,7 @@ def main():
                     ).strip()
 
                 # Check whether the user has an SSH/publickey login entry.
-                # Always check — even for admin — because the ssh application entry
+                # Always check â€” even for admin â€” because the ssh application entry
                 # may not exist even if the account does.
                 print(f"\n  \U0001f50d Checking if '{ssh_user}' has an ssh/publickey login entry...")
                 show_out = _run_cluster_command(
@@ -29086,7 +29119,7 @@ def main():
                 )
                 print("  \u2705 Public key installed on cluster.")
 
-                # Close the BMC session — no longer needed.
+                # Close the BMC session â€” no longer needed.
                 try:
                     ch_45.close()
                 except Exception:
@@ -29113,7 +29146,7 @@ def main():
                             prefix="WARN",
                         )
 
-                # Test passwordless login from this host — open an interactive shell
+                # Test passwordless login from this host â€” open an interactive shell
                 # and wait for the cluster prompt (::>) without a password prompt.
                 print(f"\n  \U0001f50e Testing ssh {ssh_user}@{mgmt_ip}...")
                 try:
@@ -29142,14 +29175,14 @@ def main():
                         _slog(f"Passwordless SSH verified: {ssh_user}@{mgmt_ip}")
                     else:
                         print(
-                            f"  \u26a0\ufe0f  Cluster prompted for a password — "
+                            f"  \u26a0\ufe0f  Cluster prompted for a password â€” "
                             f"key may need a moment to activate.\n"
                             f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
                         )
                         _slog("SSH test: password prompt appeared", prefix="WARN")
                 except paramiko.AuthenticationException:
                     print(
-                        f"  \u26a0\ufe0f  Authentication failed — public key not accepted yet.\n"
+                        f"  \u26a0\ufe0f  Authentication failed â€” public key not accepted yet.\n"
                         f"     Test manually with: ssh {ssh_user}@{mgmt_ip}"
                     )
                     _slog("SSH test: AuthenticationException", prefix="WARN")
@@ -29192,7 +29225,7 @@ def main():
             if config_path:
                 # CLI-supplied path: validate before continuing.
                 if not os.path.isfile(config_path):
-                    print(f"❌ --config path is not a file: {config_path}")
+                    print(f"âŒ --config path is not a file: {config_path}")
                     sys.exit(1)
             else:
                 # Offer the auto-detected default(s) first.
@@ -29201,12 +29234,12 @@ def main():
                 # the join wizard can be fully automated without manual prompts.
                 if detected_configs:
                     config_path = _select_config_path_interactive(
-                        detected_configs, indent="", header_emoji="📄"
+                        detected_configs, indent="", header_emoji="ðŸ“„"
                     )
                 else:
-                    # Nothing auto-detected — tell the user where we looked so they
+                    # Nothing auto-detected â€” tell the user where we looked so they
                     # can spot a wrong directory or filename quickly.
-                    print("\nℹ️  No config file auto-detected. Searched:")
+                    print("\nâ„¹ï¸  No config file auto-detected. Searched:")
                     for d in search_dirs:
                         print(f"     {d}")
                     print(f"     (looking for: {', '.join(_DEFAULT_CONFIG_FILENAMES)})")
@@ -29228,7 +29261,7 @@ def main():
                             ans = ans[1:-1]
                         expanded = os.path.expanduser(os.path.expandvars(ans))
                         if not os.path.isfile(expanded):
-                            print(f"  ⚠️  Not a valid file path: {ans}")
+                            print(f"  âš ï¸  Not a valid file path: {ans}")
                             print("     Enter an existing file, '?' for example, "
                                   "or blank to skip.")
                             continue
@@ -29247,15 +29280,15 @@ def main():
             if config_path:
                 try:
                     _config_data = load_config_file(config_path)
-                    print(f"📄 Loaded config: {config_path}")
-                    # Config file supplies all cluster values — no need to pull them
+                    print(f"ðŸ“„ Loaded config: {config_path}")
+                    # Config file supplies all cluster values â€” no need to pull them
                     # from a running cluster later. Mark retain as "no" so the
                     # mid-run retain prompt is suppressed.
                     _run_context.config_data = _config_data
                     _run_context.retain_preselected = (False, False, False)
                     _run_context.apply_to_globals()
 
-                    # ── Mode 2: show nodes-to-add list and let operator add more ──
+                    # â”€â”€ Mode 2: show nodes-to-add list and let operator add more â”€â”€
                     if _operation_mode == 2 and isinstance(_config_data, dict):
                         _sn_list = _config_data.get("secondary_nodes") or []
                         _sn_list = [n for n in _sn_list if isinstance(n, dict)]
@@ -29280,7 +29313,7 @@ def main():
                             _extra_num = 1
                             while True:
                                 _ex_bmc = _prompt(
-                                    f"\n    Extra node {_extra_num} — BMC IP/hostname (blank to finish): "
+                                    f"\n    Extra node {_extra_num} â€” BMC IP/hostname (blank to finish): "
                                 ).strip()
                                 if not _ex_bmc:
                                     break
@@ -29316,19 +29349,19 @@ def main():
                                 _config_data["secondary_nodes"].append(_ex_entry)
                                 _run_context.config_data = _config_data
                                 _run_context.apply_to_globals()
-                                print(f"    ✅ Added: {_ex_bmc}")
+                                print(f"    âœ… Added: {_ex_bmc}")
                                 _extra_num += 1
                             if _extra_num > 1:
-                                print(f"\n  ✅ {_extra_num - 1} additional node(s) added.")
+                                print(f"\n  âœ… {_extra_num - 1} additional node(s) added.")
 
                 except ValueError as e:
-                    print(f"⚠️  {e}")
+                    print(f"âš ï¸  {e}")
                     print("   Continuing without a config file (manual prompts).")
                     _config_data = {}
                     _run_context.config_data = _config_data
                     _run_context.apply_to_globals()
 
-            # ── Mode 3 checkpoint resume detection: skip pre-reset if at finalization stage
+            # â”€â”€ Mode 3 checkpoint resume detection: skip pre-reset if at finalization stage
             # If resuming at "Cluster create complete; peer add finalization", we've
             # already created the cluster and just need to add nodes (no reset phase).
             _mode3_skip_presets = False
@@ -29341,11 +29374,11 @@ def main():
                 if _cp_check.load():
                     if _cp_check.is_done("option3_complete") or _cp_check.is_done("cluster_formed"):
                         _mode3_skip_presets = True
-                        print("\n  🔖 Resuming mode 3 at peer-add finalization stage.")
+                        print("\n  ðŸ”– Resuming mode 3 at peer-add finalization stage.")
                         print("     Skipping pre-reset prompts (already completed).")
 
             if not config_path and _operation_mode in (1, 3) and not _mode3_skip_presets:
-                _print_banner("💾 No config file in use — reuse existing cluster config?")
+                _print_banner("ðŸ’¾ No config file in use â€” reuse existing cluster config?")
                 print("\n  If this BMC's node is part of a running cluster, the script")
                 print("  can pull the existing cluster name and management/network IPs")
                 print("  from it and use them as the new configuration so you don't")
@@ -29370,11 +29403,11 @@ def main():
                 _run_context.retain_preselected = (retain_name, retain_network, retain_creds)
                 _run_context.apply_to_globals()
                 if retain_name or retain_network or retain_creds:
-                    print("\n  ↩️  Will pull the requested values from the running cluster")
+                    print("\n  â†©ï¸  Will pull the requested values from the running cluster")
                     print("     (and/or reuse BMC credentials) after connecting to the BMC,")
                     print("     then build the runtime config from them.")
                 else:
-                    print("\n  ↩️  Will not retain any existing cluster configuration.")
+                    print("\n  â†©ï¸  Will not retain any existing cluster configuration.")
             elif _mode3_skip_presets:
                 # Mode 3 finalization resume: skip retain capture, use defaults
                 retain_name = False
@@ -29383,13 +29416,13 @@ def main():
                 _run_context.retain_preselected = (False, False, False)
                 _run_context.apply_to_globals()
 
-            # ── Pre-reinit prompts: physical zeroing, diagnostic bootargs, and
-            #    firmware auto-update behavior ───────────────────────────────────
-            # Asked here — right after config/retain selection, before any BMC
-            # connection — so all up-front questions are grouped together.
+            # â”€â”€ Pre-reinit prompts: physical zeroing, diagnostic bootargs, and
+            #    firmware auto-update behavior â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            # Asked here â€” right after config/retain selection, before any BMC
+            # connection â€” so all up-front questions are grouped together.
             # Skip if resuming mode 3 at peer-add finalization stage (cluster already created).
             if _operation_mode in (1, 3) and not _mode3_skip_presets:
-                print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
+                print("\n  â„¹ï¸   Physical zeroing can help ensure consistency in throughput results.")
                 try:
                     while True:
                         _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
@@ -29400,7 +29433,7 @@ def main():
                     _pz_ans = ""
                 _physical_zeroing = (_pz_ans == "y")
                 if _physical_zeroing:
-                    print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+                    print("  â„¹ï¸   Physical disk zeroing enabled (raid.use-physical-zeroing).")
                 if _diag_mode:
                     _diag_bootargs = _load_diag_bootargs()
             elif _operation_mode == 2 and _diag_mode:
@@ -29413,9 +29446,9 @@ def main():
                 ).lower()
                 _prevent_bios_fw_update = (_fw_ans not in ("n", "no"))
                 if _prevent_bios_fw_update:
-                    print("  ℹ️   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
+                    print("  â„¹ï¸   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
                 else:
-                    print("  ℹ️   BIOS firmware auto-update prevention disabled.")
+                    print("  â„¹ï¸   BIOS firmware auto-update prevention disabled.")
 
             # License: collect key(s) or validate the license file path now, before
             # the BMC session starts, so the operator can fix issues early.
@@ -29451,12 +29484,12 @@ def main():
                 mode_desc = "Add node to existing cluster (2a, option 4, interactive)"
             _session_log.log(
                 f"Operation mode: {_operation_mode} (auto_setup={_auto_setup}, "
-                f"auto_add={_auto_add}) – {mode_desc}"
+                f"auto_add={_auto_add}) â€“ {mode_desc}"
             )
 
             # Primary BMC: the node this script will connect to and operate on.
             # For modes 1/3/4x: prefer "primary_node" (new format) or nodes[0] (legacy).
-            # For mode 2 (add node): the target is a *secondary* node — use nodes[]
+            # For mode 2 (add node): the target is a *secondary* node â€” use nodes[]
             #   (new or legacy), NOT primary_node (which is the existing cluster node
             #   that must never be reinitialised).
             primary_node = {}
@@ -29509,11 +29542,11 @@ def main():
             sp_pass = _cfg_get_or_prompt("bmc_password", "Enter BMC password: ", hidden=True)
             if primary_node.get("bmc"):
                 _pn_src = "primary_node" if isinstance(_config_data.get("primary_node"), dict) else "nodes[0]"
-                print(f"📄 Using primary BMC from config {_pn_src}: {sp_host} (user={sp_user})")
+                print(f"ðŸ“„ Using primary BMC from config {_pn_src}: {sp_host} (user={sp_user})")
                 if "bmc_password" in primary_node and not (
                         isinstance(primary_node["bmc_password"], str)
                         and primary_node["bmc_password"].strip()):
-                    print("📄 Primary BMC password from config is blank "
+                    print("ðŸ“„ Primary BMC password from config is blank "
                           "(will attempt SSH with no password).")
 
             _session_log.log(f"Target BMC: {sp_host}")
@@ -29544,33 +29577,33 @@ def main():
             drain_channel(channel, seconds=1)
             output = direct_send_and_wait(channel, "bmc status", ">", timeout=15)
             if sp_host in output:
-                print(f"\n✅ BMC validation successful – found '{sp_host}' in status output.")
-                _session_log.log(f"BMC validation successful – found '{sp_host}'")
+                print(f"\nâœ… BMC validation successful â€“ found '{sp_host}' in status output.")
+                _session_log.log(f"BMC validation successful â€“ found '{sp_host}'")
             else:
-                print(f"\n⚠️  Warning: '{sp_host}' not found verbatim in bmc status output.")
+                print(f"\nâš ï¸  Warning: '{sp_host}' not found verbatim in bmc status output.")
                 print(f"   Output received:\n{output}")
-                _session_log.log(f"BMC validation warning – '{sp_host}' not found", prefix="WARN")
+                _session_log.log(f"BMC validation warning â€“ '{sp_host}' not found", prefix="WARN")
                 answer = input("\n   Does this look like the correct BMC? [Y/N]: ").strip().lower()
                 _session_log.log_user_input(f"BMC validation confirmation: {answer}")
                 if answer != "y":
-                    print("❌ BMC validation rejected. Exiting.")
+                    print("âŒ BMC validation rejected. Exiting.")
                     _session_log.log("BMC validation rejected", prefix="ERROR")
                     _session_log.set_outcome("FAIL", "BMC validation rejected by operator")
                     _session_log.close()
                     sys.exit(1)
-                print("✅ BMC validation confirmed by user.")
+                print("âœ… BMC validation confirmed by user.")
                 _session_log.log("BMC validation confirmed by user")
             _session_log.end_phase()
 
             # Mode 1 / 3: ask retain prompts, then ALWAYS attempt peer-BMC discovery
             # (even if the user answered 'n' to both retain prompts, and regardless
             # of whether retain captures succeed or fail). Discovery may itself fail
-            # if the node is already down – in that case we proceed with no peer
+            # if the node is already down â€“ in that case we proceed with no peer
             # reset / peer add.
             if _operation_mode in (1, 3):
                 if _retain_preselected is not None:
                     retain_name, retain_network, retain_creds = _retain_preselected
-                    # When a config file was loaded all three are False — just note
+                    # When a config file was loaded all three are False â€” just note
                     # that retain is not needed and move on without extra output.
                     if not (retain_name or retain_network or retain_creds):
                         _session_log.log(
@@ -29591,7 +29624,7 @@ def main():
                             f"creds={retain_creds}"
                         )
                 else:
-                    _print_banner("💾 Retain Existing Cluster Configuration?")
+                    _print_banner("ðŸ’¾ Retain Existing Cluster Configuration?")
                     ans1 = input("\n  Do you want to retain the cluster name? [Y/N]: ").strip().lower()
                     _session_log.log_user_input(f"Retain cluster name? {ans1}")
                     retain_name = (ans1 == "y")
@@ -29628,18 +29661,18 @@ def main():
                             "Reused BMC admin user/password as cluster admin "
                             "credentials in runtime config"
                         )
-                        print("\n  🔐 Cluster admin user/password will reuse the BMC "
+                        print("\n  ðŸ” Cluster admin user/password will reuse the BMC "
                               "login credentials.")
 
                 if not (retain_name or retain_network):
-                    print("\n  ↩️  Skipping retain capture; will still discover peer BMC")
+                    print("\n  â†©ï¸  Skipping retain capture; will still discover peer BMC")
                     print("     addresses so peer nodes can be reset to LOADER.")
                     _session_log.log("User declined retain; proceeding with peer SP discovery only")
 
                 # If peer BMC addresses are already present in the config file we can
                 # skip the cluster-shell login entirely (no need to probe the console).
                 # Also skip entirely when a config file was loaded (_retain_preselected
-                # is the (False, False, False) sentinel) — the config is the source of
+                # is the (False, False, False) sentinel) â€” the config is the source of
                 # truth; no cluster-shell probing is needed.
                 _cfg_has_peers = False
                 if isinstance(_config_data, dict):
@@ -29657,9 +29690,9 @@ def main():
 
                 if not (retain_name or retain_network) and (_cfg_has_peers or _config_file_loaded):
                     if _config_file_loaded:
-                        print("\n  📄 Config file in use — skipping cluster-shell discovery.")
+                        print("\n  ðŸ“„ Config file in use â€” skipping cluster-shell discovery.")
                     else:
-                        print("\n  📄 Peer BMC addresses already available in config file.")
+                        print("\n  ðŸ“„ Peer BMC addresses already available in config file.")
                         print("     Skipping cluster-shell discovery.")
                     _session_log.log("Skipping collect_retain_data: config file supplied peer BMCs")
                     peer_addresses = []
@@ -29729,7 +29762,7 @@ def main():
                     else:
                         # Legacy format: walk ALL nodes[] entries. The primary is
                         # filtered out below via the `bmc == sp_host` check, so
-                        # nodes[0] is included here — it may be a peer when the
+                        # nodes[0] is included here â€” it may be a peer when the
                         # actual primary BMC was entered manually and doesn't match
                         # any config entry.
                         _all_nodes = _config_data.get("nodes") or []
@@ -29756,7 +29789,7 @@ def main():
                     cfg_peer_added.append(bmc)
 
                 if cfg_peer_added:
-                    print(f"\n  📄 Added {len(cfg_peer_added)} peer BMC(s) from config: "
+                    print(f"\n  ðŸ“„ Added {len(cfg_peer_added)} peer BMC(s) from config: "
                           f"{', '.join(cfg_peer_added)}")
                     _session_log.log(f"Peers added from config nodes[]: {cfg_peer_added}")
 
@@ -29764,7 +29797,7 @@ def main():
                 # node, node already down, or capture failed), look for JSON files in
                 # the configs/ directory before falling back to manual entry.
                 if not other_sps:
-                    print("\n  ℹ️  No peer service-processor addresses discovered")
+                    print("\n  â„¹ï¸  No peer service-processor addresses discovered")
                     print("     (single-node cluster, node already down, or capture failed).")
                     _session_log.log("No peer SP addresses auto-discovered; checking configs dir")
 
@@ -29826,11 +29859,11 @@ def main():
                                 for _pb_ip in _pb_peers:
                                     seen_peers.add(_pb_ip)
                                     other_sps.append(_pb_ip)
-                                print(f"\n  ✅ Loaded {len(_pb_peers)} peer BMC(s): "
+                                print(f"\n  âœ… Loaded {len(_pb_peers)} peer BMC(s): "
                                       f"{', '.join(_pb_peers)}")
                                 _session_log.log(f"Peer BMCs loaded from file: {_pb_peers}")
                                 break
-                            print("  ⚠️  Invalid selection.")
+                            print("  âš ï¸  Invalid selection.")
 
                     if not other_sps:
                         # No files found or operator chose manual entry.
@@ -29845,21 +29878,21 @@ def main():
                             if not entry:
                                 break
                             if entry in seen_peers:
-                                print(f"  ⚠️  '{entry}' already added or is the primary BMC; skipping.")
+                                print(f"  âš ï¸  '{entry}' already added or is the primary BMC; skipping.")
                                 _session_log.log(f"Duplicate/primary peer BMC entry skipped: {entry}")
                                 continue
                             seen_peers.add(entry)
                             other_sps.append(entry)
-                            print(f"  ✅ Added peer BMC: {entry}")
+                            print(f"  âœ… Added peer BMC: {entry}")
                             _session_log.log(f"Manually added peer BMC: {entry}")
                             i += 1
 
                     if other_sps:
-                        print(f"\n  ✅ Will reset {len(other_sps)} peer BMC(s) to LOADER: "
+                        print(f"\n  âœ… Will reset {len(other_sps)} peer BMC(s) to LOADER: "
                               f"{', '.join(other_sps)}")
                         _session_log.log(f"Peer BMCs to reset: {other_sps}")
                     else:
-                        print("\n  ↩️  No peer BMCs entered; proceeding with reset of this node only.")
+                        print("\n  â†©ï¸  No peer BMCs entered; proceeding with reset of this node only.")
                         _session_log.log("User entered no peer BMCs manually")
 
                 # ---- Confirm the discovered peer count, with the option to add
@@ -29874,21 +29907,21 @@ def main():
                     return val or (default or "")
 
                 if _operation_mode == 1:
-                    # Mode 1a/1b only touches the first node — skip the summary/confirm loop
+                    # Mode 1a/1b only touches the first node â€” skip the summary/confirm loop
                     global _initial_node_count
                     _initial_node_count = 1
                     if other_sps:
                         ignored_list = ", ".join(other_sps)
-                        print(f"\n  ℹ️  Secondary nodes [{ignored_list}] ignored")
-                    _session_log.log(f"Mode 1 — initial node count set to 1; peers ignored: {other_sps}")
+                        print(f"\n  â„¹ï¸  Secondary nodes [{ignored_list}] ignored")
+                    _session_log.log(f"Mode 1 â€” initial node count set to 1; peers ignored: {other_sps}")
                 elif _mode3_skip_presets:
                     # Mode 3 resume at finalization: we already know the nodes, no need to re-confirm.
                     _initial_node_count = 1 + len(other_sps)
-                    print(f"\n  ✅ Confirmed {_initial_node_count} nodes from prior run (no re-confirm needed).")
+                    print(f"\n  âœ… Confirmed {_initial_node_count} nodes from prior run (no re-confirm needed).")
                     _session_log.log(f"Mode 3 finalization resume: node count pre-set to {_initial_node_count}")
                 else:
                   while True:
-                    _print_banner("📋 Cluster node summary")
+                    _print_banner("ðŸ“‹ Cluster node summary")
                     print(f"  BMC of first node in the cluster : {sp_host} (user={sp_user})")
                     if other_sps:
                         print(f"  Nodes to add after cluster init  ({len(other_sps)}):")
@@ -29904,7 +29937,7 @@ def main():
                         _session_log.log(f"Initial node count confirmed: {_initial_node_count}")
                         break
 
-                    print("\n  ➕ Add one or more additional peer node(s). Enter the same")
+                    print("\n  âž• Add one or more additional peer node(s). Enter the same")
                     print("     fields used by the JSON config file. Blank BMC ends entry.")
                     added_this_round = 0
                     while True:
@@ -29912,7 +29945,7 @@ def main():
                         if not new_bmc:
                             break
                         if new_bmc == sp_host or new_bmc in seen_peers:
-                            print(f"    ⚠️  '{new_bmc}' is already the primary or a known peer; skipping.")
+                            print(f"    âš ï¸  '{new_bmc}' is already the primary or a known peer; skipping.")
                             _session_log.log(f"Duplicate add-peer entry skipped: {new_bmc}")
                             continue
                         new_user = _prompt_with_default(f"BMC username for {new_bmc}", sp_user)
@@ -29953,7 +29986,7 @@ def main():
                         seen_peers.add(new_bmc)
                         other_sps.append(new_bmc)
                         added_this_round += 1
-                        print(f"    ✅ Added peer BMC: {new_bmc}")
+                        print(f"    âœ… Added peer BMC: {new_bmc}")
                         _session_log.log(
                             f"Operator added peer BMC at confirmation step: {new_bmc} "
                             f"(user={new_user}, port={new_port}, ip={new_ip})"
@@ -29975,7 +30008,7 @@ def main():
                     collect_cluster_config()
 
                 if other_sps and _operation_mode != 1:
-                    _print_banner("🔐 Peer BMC SSH Credentials")
+                    _print_banner("ðŸ” Peer BMC SSH Credentials")
                     print("\n  Provide SSH credentials for each peer BMC. Press Enter")
                     print(f"  to reuse the primary BMC username '{sp_user}'.")
                     print("  For passwords, blank means no password; enter PRIMARY to")
@@ -30030,13 +30063,13 @@ def main():
                             u = sp_user
                             p = sp_pass
                         else:
-                            print(f"\n  ── Peer BMC {addr} ──")
+                            print(f"\n  â”€â”€ Peer BMC {addr} â”€â”€")
                             # Resolve username/password.
                             if pass_in_cfg:
                                 if user_in_cfg:
                                     u = node_cfg["bmc_user"].strip() or sp_user
                                     if not node_cfg["bmc_user"].strip():
-                                        print(f"    📄 Username blank in config for {addr}; "
+                                        print(f"    ðŸ“„ Username blank in config for {addr}; "
                                               f"reusing primary user '{sp_user}'.")
                                 else:
                                     try:
@@ -30048,9 +30081,9 @@ def main():
                                         u = sp_user
                                 p = node_cfg["bmc_password"]
                                 if p:
-                                    print(f"    📄 Using config credentials for {addr} (user={u})")
+                                    print(f"    ðŸ“„ Using config credentials for {addr} (user={u})")
                                 else:
-                                    print(f"    📄 Password blank in config for {addr}; "
+                                    print(f"    ðŸ“„ Password blank in config for {addr}; "
                                           "will attempt SSH with no password.")
                             elif _group_creds_peer is not None and addr in _group_creds_peer:
                                 u, p = _group_creds_peer[addr]
@@ -30058,7 +30091,7 @@ def main():
                                 if user_in_cfg:
                                     u = node_cfg["bmc_user"].strip() or sp_user
                                     if not node_cfg["bmc_user"].strip():
-                                        print(f"    📄 Username blank in config for {addr}; "
+                                        print(f"    ðŸ“„ Username blank in config for {addr}; "
                                               f"reusing primary user '{sp_user}'.")
                                 else:
                                     try:
@@ -30089,7 +30122,7 @@ def main():
                             f"password={pw_desc})"
                         )
                     if _same_creds_all:
-                        print(f"  ✅ Using primary credentials (user={sp_user}) for all"
+                        print(f"  âœ… Using primary credentials (user={sp_user}) for all"
                               f" {len(other_sps)} peer node(s).")
 
                 # Mode 3: collect cluster setup answers after peer-credential handling
@@ -30108,7 +30141,7 @@ def main():
                     _run_context.peer_bmc_list = list(other_sps)
                     _run_context.apply_to_globals()
                     if other_sps:
-                        print(f"\n  🧩 Mode 3: {len(other_sps)} peer node(s) will be"
+                        print(f"\n  ðŸ§© Mode 3: {len(other_sps)} peer node(s) will be"
                               " auto-added in parallel after primary cluster is up:")
                         print(f"     {', '.join(other_sps)}")
                         _session_log.log(f"Mode 3 peer add list: {other_sps}")
@@ -30121,10 +30154,10 @@ def main():
 
                 # Reset every peer BMC to LOADER up-front (mode 3 needs peers parked at
                 # LOADER before the parallel auto-add kicks in). Mode 1 (1a/1b) only
-                # operates on the first node — skip peer resets entirely.
+                # operates on the first node â€” skip peer resets entirely.
                 # Mode 3 at peer-add finalization: peers were already reset in prior run.
                 if other_sps and _operation_mode == 3 and not _mode3_skip_presets:
-                    _print_banner(f"🔁 Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
+                    _print_banner(f"ðŸ” Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
                     print(f"  Peer BMCs: {', '.join(other_sps)}")
                     _session_log.start_phase("Peer Node Reset to LOADER")
                     _session_log.log(f"Peer BMCs to reset: {other_sps}")
@@ -30137,11 +30170,11 @@ def main():
                         try:
                             _pr_nf = _node_log_open(addr, _pr_log_dir, prefix="peer_reset")
                             _pr_node_logs[addr] = _pr_nf
-                            print(f"  📝 [{addr}] Reset log → {_pr_nf.name}")
+                            print(f"  ðŸ“ [{addr}] Reset log â†’ {_pr_nf.name}")
                             _session_log.log(f"[{addr}] reset log: {_pr_nf.name}")
                         except Exception as _pr_e:
                             _pr_node_logs[addr] = None
-                            print(f"  ⚠️  [{addr}] Could not open reset log: {_pr_e}")
+                            print(f"  âš ï¸  [{addr}] Could not open reset log: {_pr_e}")
 
                     _pr_results: dict = {}
                     _pr_lock = threading.Lock()
@@ -30173,21 +30206,21 @@ def main():
 
                     _primary_thread.join()
 
-                    # Retry loop — keep asking until all peers reach LOADER or
+                    # Retry loop â€” keep asking until all peers reach LOADER or
                     # operator declines to retry.
                     while True:
                         _failed_peers = [a for a in other_sps
                                          if not _pr_results.get(a, False)]
                         if not _failed_peers:
                             break
-                        print(f"\n  ⚠️  {len(_failed_peers)} peer(s) did not reach LOADER: "
+                        print(f"\n  âš ï¸  {len(_failed_peers)} peer(s) did not reach LOADER: "
                               f"{', '.join(_failed_peers)}")
                         _retry_ans = _prompt(
                             "  Retry failed peer(s)? [Y/n]: ", "y"
                         ).strip().lower()
                         if _retry_ans in ("n", "no"):
                             break
-                        print(f"\n  🔁 Retrying {len(_failed_peers)} peer(s)...")
+                        print(f"\n  ðŸ” Retrying {len(_failed_peers)} peer(s)...")
                         _session_log.log(
                             f"Retrying LOADER reset for: {_failed_peers}"
                         )
@@ -30198,7 +30231,7 @@ def main():
                                                         prefix="peer_reset_retry",
                                                         previous_log=_pr_node_logs.get(addr))
                                 _pr_node_logs[addr] = _pr_nf
-                                print(f"  📝 [{addr}] Retry log → {_pr_nf.name}")
+                                print(f"  ðŸ“ [{addr}] Retry log â†’ {_pr_nf.name}")
                             except Exception as _pr_e:
                                 _pr_node_logs[addr] = None
                         _run_parallel(_failed_peers, _pr_worker)
@@ -30213,7 +30246,7 @@ def main():
                     print("")
                     for addr in other_sps:
                         ok = _pr_results.get(addr, False)
-                        sym = "✅" if ok else "⚠️ "
+                        sym = "âœ…" if ok else "âš ï¸ "
                         _session_log.log(
                             f"[{addr}] peer reset {'reached LOADER' if ok else 'did NOT reach LOADER'}"
                         )
@@ -30227,7 +30260,7 @@ def main():
             # it won't be auto-applied.
             if _operation_mode == 2:
                 # Ensure the cluster management IP is known before the join wizard
-                # runs — avoids the mid-session prompt inside _fetch_existing_cluster_ip.
+                # runs â€” avoids the mid-session prompt inside _fetch_existing_cluster_ip.
                 # Only prompt when mode 2 was the original selection; mid-run
                 # transitions (e.g. after 1b) already have mgmt_ip populated.
                 if _initial_operation_mode == 2 and not _cluster_config.get("mgmt_ip"):
@@ -30236,7 +30269,7 @@ def main():
                     if not _pre_mgmt_ip:
                         _print_banner("\U0001f4e1 Existing Cluster Details")
                         try:
-                            print("  " + "─" * 58)
+                            print("  " + "â”€" * 58)
                             _pre_mgmt_ip = input(
                                 "\n  Cluster management IP (needed to look up the "
                                 "cluster-network IP): "
@@ -30303,10 +30336,10 @@ def main():
 
                 collect_node_mgmt_per_bmc(sp_host, [])
 
-            # ── Mode 2b multi-node: run parallel add when config has >1 secondary ──
+            # â”€â”€ Mode 2b multi-node: run parallel add when config has >1 secondary â”€â”€
             # If the config file lists multiple secondary nodes AND the operator
             # chose 2b (auto_add), collect all peers, confirm, and run every node
-            # through LOADER → option 4 → join in parallel (joins serialized).
+            # through LOADER â†’ option 4 â†’ join in parallel (joins serialized).
             # Single-node 2b falls through to the existing sequential path below.
             if _operation_mode == 2 and _auto_add:
                 _2b_extra_peers = []
@@ -30359,10 +30392,10 @@ def main():
                             _session_log.log_dir, reason="2b: parallel add success"
                         )
                     _session_log.record_completion(normal_exit=ok)
-                    print(f"\n📝 Session log: {_session_log.log_file}")
+                    print(f"\nðŸ“ Session log: {_session_log.log_file}")
                     sys.exit(0 if ok else 1)
 
-            # ── Mode 2a: parallel add with interactive broker ───────────────────────
+            # â”€â”€ Mode 2a: parallel add with interactive broker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # Mode 2a always uses the parallel thread infrastructure (same as 2b) so
             # that multi-node configs are handled correctly, but threads pause and ask
             # the operator whenever a confirmation is required rather than
@@ -30413,7 +30446,7 @@ def main():
                     _session_log,
                 )
                 _session_log.record_completion(normal_exit=ok)
-                print(f"\n📝 Session log: {_session_log.log_file}")
+                print(f"\nðŸ“ Session log: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
             # If we captured retain data from an existing cluster (and the operator
@@ -30440,17 +30473,17 @@ def main():
                 snap_path = os.path.join(snap_dir, "reinit-config.json")
                 write_config_snapshot(snap_path)
 
-            # ── Option 1 checkpoint init (before destructive ops) ────────────────
+            # â”€â”€ Option 1 checkpoint init (before destructive ops) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # Detect prior option-1 runs and warn about destructive operations.
             if _operation_mode == 1 and _checkpoint is None:
                 _option1_init_checkpoint(_run_context, sp_host, config_path)
 
-            # ── Option 2 checkpoint init (before destructive ops) ────────────────
+            # â”€â”€ Option 2 checkpoint init (before destructive ops) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # Detect prior option-2 runs and warn about destructive operations.
             if _operation_mode == 2 and _checkpoint is None:
                 _option2_init_checkpoint(_run_context, sp_host, config_path)
 
-            # ── Option 3 checkpoint init (before destructive ops) ────────────────
+            # â”€â”€ Option 3 checkpoint init (before destructive ops) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # The actual primary-setup phases are not skipped on resume (re-running
             # system-reset on a primary whose cluster is already up would be
             # destructive); on resume we detect primary_setup_done and steer the
@@ -30488,20 +30521,20 @@ def main():
                 else _already_at_loader(channel, label=sp_host)
             )
             if _at_loader:
-                # Node is already sitting at LOADER — nothing to reset.
-                _session_log.log("Already at LOADER – system reset skipped")
+                # Node is already sitting at LOADER â€” nothing to reset.
+                _session_log.log("Already at LOADER â€“ system reset skipped")
                 _session_log.end_phase()
-                # Skip "Enter System Console" — we're already in the console.
+                # Skip "Enter System Console" â€” we're already in the console.
                 _session_log.start_phase("Enter System Console")
                 _session_log.log("Already in console (LOADER detected before reset)")
                 _session_log.end_phase()
             else:
-                print("\n🔄 Sending 'system reset' command...")
+                print("\nðŸ”„ Sending 'system reset' command...")
                 _session_log.log("Sending 'system reset' command")
                 direct_send_and_wait(channel, "system reset", "y/n", timeout=15, auto_respond="y")
 
-                print("\n⏳ System reset in process. Script may appear hung, but be"
-                      " patient — reboot will happen soon.")
+                print("\nâ³ System reset in process. Script may appear hung, but be"
+                      " patient â€” reboot will happen soon.")
                 _session_log.log("System reset issued; waiting for reboot")
                 time.sleep(3)
 
@@ -30509,14 +30542,14 @@ def main():
                 _session_log.log("Waiting for BMC prompt after reset")
                 output = direct_read_until(channel, ">", timeout=15)
                 if ">" in output:
-                    print("✅ BMC prompt returned.")
+                    print("âœ… BMC prompt returned.")
                     _session_log.log("BMC prompt returned after reset")
                 else:
-                    print("⚠️  BMC prompt not seen — attempting to reconnect...")
+                    print("âš ï¸  BMC prompt not seen â€” attempting to reconnect...")
                     _session_log.log("BMC prompt not seen after reset; reconnecting", prefix="WARN")
                     _bmc_reconnect_ok = False
                     for _rc_attempt in range(1, 6):
-                        print(f"   🔌 [reconnect] connecting to {sp_host} as {sp_user} "
+                        print(f"   ðŸ”Œ [reconnect] connecting to {sp_host} as {sp_user} "
                               f"(attempt {_rc_attempt}/5)...")
                         _session_log.log(f"BMC reconnect attempt {_rc_attempt}/5")
                         try:
@@ -30531,14 +30564,14 @@ def main():
                             )
                             channel = _open_shell(_rc_client)
                             _bmc_reconnect_ok = True
-                            print("✅ Reconnected to BMC.")
+                            print("âœ… Reconnected to BMC.")
                             _session_log.log("BMC reconnect successful")
                             break
                         except Exception as _rc_e:
                             _session_log.log(f"Reconnect attempt {_rc_attempt} failed: {_rc_e}",
                                              prefix="WARN")
                     if not _bmc_reconnect_ok:
-                        print("❌ Could not reconnect to BMC after 5 attempts.")
+                        print("âŒ Could not reconnect to BMC after 5 attempts.")
                         _session_log.log("BMC reconnect failed after 5 attempts", prefix="ERROR")
                 _session_log.end_phase()
 
@@ -30551,7 +30584,7 @@ def main():
 
             # Install per-node log writer so detailed boot/init output goes to a
             # dedicated file instead of flooding the terminal.  Milestone lines
-            # (✅ / ⚠️ / 🤖 etc.) are still echoed to the screen.  Raw console
+            # (âœ… / âš ï¸ / ðŸ¤– etc.) are still echoed to the screen.  Raw console
             # output (hardware boot, LOADER prompts, kernel loading, etc.) is
             # always suppressed from the terminal; InteractiveSession.run()
             # re-enables pass-through when the operator needs a live shell.
@@ -30564,7 +30597,7 @@ def main():
             _nlw = _NodeLogWriter(_nlw_node_file, interactive=False)
             sys.stdout = _nlw
             _real_stdout.write(
-                f"\n  📝 [{sp_host}] Detailed node output → {_nlw_node_file.name}\n"
+                f"\n  ðŸ“ [{sp_host}] Detailed node output â†’ {_nlw_node_file.name}\n"
             )
             _real_stdout.flush()
 
@@ -30581,7 +30614,7 @@ def main():
                 _add_another_node_request = None
                 _shutdown_event.clear()
 
-                _print_banner(f"▶️  Adding next node: {next_host}")
+                _print_banner(f"â–¶ï¸  Adding next node: {next_host}")
                 _slog(f"Switching to next node: {next_host}")
 
                 try:
@@ -30606,7 +30639,7 @@ def main():
 
                 _session_log.start_phase(f"BMC Prompt ({sp_host})")
                 if not wait_for_bmc_prompt(channel):
-                    print(f"⚠️  Could not reach BMC prompt on {sp_host}; aborting.")
+                    print(f"âš ï¸  Could not reach BMC prompt on {sp_host}; aborting.")
                     _session_log.log(f"BMC prompt timeout on {sp_host}; aborting next-node",
                                      prefix="ERROR")
                     _session_log.end_phase()
@@ -30619,18 +30652,18 @@ def main():
 
                 _session_log.start_phase(f"System Reset ({sp_host})")
                 if _already_at_loader(channel, label=sp_host):
-                    _session_log.log(f"[{sp_host}] Already at LOADER – system reset skipped")
+                    _session_log.log(f"[{sp_host}] Already at LOADER â€“ system reset skipped")
                     _session_log.end_phase()
                     _session_log.start_phase(f"Enter System Console ({sp_host})")
                     _session_log.log(f"[{sp_host}] Already in console (LOADER before reset)")
                     _session_log.end_phase()
                 else:
-                    print("\n🔄 Sending 'system reset' command...")
+                    print("\nðŸ”„ Sending 'system reset' command...")
                     _session_log.log("Sending 'system reset' command")
                     direct_send_and_wait(channel, "system reset", "y/n", timeout=15,
                                          auto_respond="y")
-                    print("\n⏳ System reset in process. Script may appear hung, but"
-                          " be patient — reboot will happen soon.")
+                    print("\nâ³ System reset in process. Script may appear hung, but"
+                          " be patient â€” reboot will happen soon.")
                     _session_log.log("System reset issued; waiting for reboot")
                     time.sleep(3)
                     direct_read_until(channel, ">", timeout=15)
@@ -30662,7 +30695,7 @@ def main():
                 _nlw2 = _NodeLogWriter(_nlw_node_file2, interactive=False)
                 sys.stdout = _nlw2
                 _real_stdout.write(
-                    f"\n  📝 [{sp_host}] Detailed node output → {_nlw_node_file2.name}\n"
+                    f"\n  ðŸ“ [{sp_host}] Detailed node output â†’ {_nlw_node_file2.name}\n"
                 )
                 _real_stdout.flush()
 
@@ -30679,7 +30712,7 @@ def main():
 
             # Cleanup
             _shutdown_event.set()
-            print("⏳ Cleaning up... (press Ctrl+C again to force exit)")
+            print("â³ Cleaning up... (press Ctrl+C again to force exit)")
             if _session_log:
                 _session_log.end_phase()
                 _session_log.log("Shutting down")
@@ -30693,11 +30726,11 @@ def main():
             except Exception:
                 pass
 
-            print("🔒 SSH session closed.")
+            print("ðŸ”’ SSH session closed.")
             if _session_log:
                 _session_log.log("SSH session closed")
                 _session_log.record_completion(normal_exit=True)
-                print(f"\n📝 Full session log saved to: {_session_log.log_file}")
+                print(f"\nðŸ“ Full session log saved to: {_session_log.log_file}")
 
         except _ReturnToMenu:
             print("\n  \u21a9\ufe0f  Returning to main menu...\n")
@@ -30722,7 +30755,7 @@ if __name__ == "__main__":
                 _session_log.set_outcome("FAIL", "unhandled exception")
                 _session_log.close()
         print(
-            f"\n💥 Unhandled exception. Full traceback written to: {_crash_log_path}",
+            f"\nðŸ’¥ Unhandled exception. Full traceback written to: {_crash_log_path}",
             file=sys.stderr,
         )
         sys.exit(1)
