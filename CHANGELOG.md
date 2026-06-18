@@ -9,6 +9,12 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Startup completion now has built-in install/print helpers.**
+  Added `--install-completion` to install `argcomplete` (if missing) and write
+  shell hook blocks to `~/.bashrc` and `~/.zshrc`, plus
+  `--print-completion-hook` to output the exact hook command without modifying
+  files. Interactive startup now emits a one-time warning when completion setup
+  is incomplete.
 - **Checkpoint creation now displayed on screen with resume instructions.**
   When a checkpoint is created (at the start of 4b/4c/4b+reinit workflows),
   a message is printed to the console and logged showing:

@@ -587,12 +587,24 @@ python3 AFX_reinit.py [OPTIONS]
 | `--resume` | | Mode 4b only. Resume the previous 4b run from its saved checkpoint (`afx_checkpoint.json`). Skips phases already completed so you do not have to restart from scratch after a failure or Ctrl+C. See **Checkpoint & Resume** below. |
 | `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, current phase, age, BMC IPs, completed global phases, completed per-node phases — then exit. Does not modify the checkpoint file. |
 | `--last-status` | | Read and display the summary file from the most recent AFX_reinit run, then exit. The summary file is created at run start and updated as phases progress, so this flag can show live in-progress status (including phases not yet completed). |
+| `--install-completion` | | Install startup option tab-completion support: installs Python `argcomplete` (if missing) and writes hook entries to `~/.bashrc` and `~/.zshrc`. |
+| `--print-completion-hook` | | Print the shell hook command used to enable startup option completion, then exit. |
 | `--auto-clear-stale-bmc` | | On banner-timeout retries, scan for `ESTABLISHED` TCP sockets to each BMC's port 22 owned by other Python processes on this host and `SIGTERM` them. The "always-on" cleanup (close own SSH clients + `ipmitool sol deactivate`) runs regardless of this flag. See [BMC SSH Stale Session Diagnostics](#bmc-ssh-stale-session-diagnostics). |
 | `--diag` | | Enable diagnostic bootarg injection. Loads `bootargs.txt` or `bootargs` from `configs/` or the script directory (one `option_name value` entry per line; lines starting with `#` are comments) or prompts interactively. After loading, all entries are printed and must be confirmed before proceeding. Bootargs are set via `setenv` after `set-defaults` and before `saveenv` at the LOADER stage on all nodes. See [Diagnostic Bootargs (`--diag`)](#diagnostic-bootargs---diag). |
 | `--help` / `-h` | | Show a short man page about the script's options. |
 | `--version` | | Print script version and last update timestamp, then exit. |
 
-**Startup command completion:** If `argcomplete` is installed and your shell is configured for it, Tab can complete the startup flags above (for example `--reinit`, `--config`, `--screen`) before the script starts. See the `argcomplete` docs for the shell hook setup.
+**Startup command completion:** Tab-complete startup flags (for example `--reinit`, `--config`, `--screen`) with:
+
+```bash
+python3 AFX_reinit.py --install-completion
+```
+
+For manual shell setup only:
+
+```bash
+python3 AFX_reinit.py --print-completion-hook
+```
 
 ### Mode Shortcut Flags
 
@@ -633,6 +645,12 @@ python3 AFX_reinit.py --add-lic --config configs/reinit-config.json
 
 # Check the result of the most recent run
 python3 AFX_reinit.py --last-status
+
+# Install startup option tab-completion support
+python3 AFX_reinit.py --install-completion
+
+# Print just the shell hook command
+python3 AFX_reinit.py --print-completion-hook
 ```
 
 ### Interactive Features

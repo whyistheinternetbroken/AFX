@@ -35,6 +35,7 @@ import signal
 import argparse
 import platform
 import socket
+import shlex
 import textwrap
 import traceback
 from datetime import datetime
@@ -54,6 +55,10 @@ try:
     HAS_ARGCOMPLETE = True
 except ImportError:
     HAS_ARGCOMPLETE = False
+
+_COMPLETION_BLOCK_START = "# >>> AFX_reinit argcomplete >>>"
+_COMPLETION_BLOCK_END = "# <<< AFX_reinit argcomplete <<<"
+_completion_startup_warning_shown = False
 
 SCRIPT_VERSION = "1.1.1"
 
@@ -438,10 +443,10 @@ class CheckpointManager:
             if _cur_ts:
                 _cur_parts.append(f"as of {_cur_ts}")
             lines.append(f"Current phase   : {', '.join(_cur_parts)}")
-            lines.append(f"Next phase      : {_next_phase}")
+            lines.append(f"Next expected phase: {_next_phase}")
         else:
             lines.append("Current phase   : (not recorded)")
-            lines.append("Next phase      : (not recorded)")
+            lines.append("Next expected phase: (not recorded)")
 
         phases = self._data.get("phases") or {}
         lines.append("")
@@ -5956,8 +5961,8 @@ OPTIONS
     --checkpoint-status
         EXPERIMENTAL. Print a summary of the saved checkpoint (checkpoints/afx_checkpoint.json)
         and exit.  Shows the absolute file path, run mode, created /
-        updated timestamps, current phase, age in minutes, log directory, config
-        path, BMC IPs, every completed global phase, and every per-node
+        updated timestamps, current phase, next expected phase, age in minutes,
+        log directory, config path, BMC IPs, every completed global phase, and every per-node
         phase keyed by BMC IP.  Does not modify the checkpoint file.
 
     --last-status
@@ -5967,6 +5972,15 @@ OPTIONS
         status (including phases not yet completed). The summary shows
         overall result, phase timing, step timing, error/warning count,
         and runtime duration.
+
+    --install-completion
+        Install startup option tab-completion support:
+          1) Installs Python module 'argcomplete' when missing.
+          2) Adds completion hook blocks to ~/.bashrc and ~/.zshrc.
+        Prints the exact hook command to run immediately in the current shell.
+
+    --print-completion-hook
+        Print the completion hook command only (no file changes), then exit.
 
     --auto-clear-stale-bmc
         On BMC SSH banner-timeout retries, scan for ESTABLISHED sockets to
@@ -5982,6 +5996,10 @@ OPTIONS
     Startup flag completion
         Startup CLI flags can be Tab-completed when argcomplete is installed
         and your shell has its completion hook enabled.
+        You can set this up with:
+            python3 AFX_reinit.py --install-completion
+        Or print just the hook command with:
+            python3 AFX_reinit.py --print-completion-hook
 
     Mode shortcut flags (bypass interactive menu):
         --first-node      Run mode 1b directly
@@ -6056,6 +6074,12 @@ EXAMPLES
 
     Print script version metadata:
         python3 AFX_reinit.py --version
+
+    Install startup option tab-completion:
+        python3 AFX_reinit.py --install-completion
+
+    Print completion hook command only:
+        python3 AFX_reinit.py --print-completion-hook
 
 FILES
     reinit-config.json
@@ -6139,6 +6163,146 @@ def _version_banner_line() -> str:
     return f"AFX_reinit.py v{SCRIPT_VERSION} (last update: {_script_last_update_timestamp()})"
 
 
+def _script_path_for_completion() -> str:
+    try:
+        return os.path.abspath(__file__)
+    except NameError:
+        return os.path.abspath(sys.argv[0] or "AFX_reinit.py")
+
+
+def _completion_hook_line(script_path: str | None = None) -> str:
+    _path = script_path or _script_path_for_completion()
+    return f'eval "$(register-python-argcomplete {shlex.quote(_path)})"'
+
+
+def _completion_rc_paths() -> "list[str]":
+    _home = os.path.expanduser("~")
+    return [os.path.join(_home, ".bashrc"), os.path.join(_home, ".zshrc")]
+
+
+def _completion_hook_present(script_path: str | None = None) -> bool:
+    _script = script_path or _script_path_for_completion()
+    _script_base = os.path.basename(_script)
+    for _rc in _completion_rc_paths():
+        try:
+            if not os.path.isfile(_rc):
+                continue
+            with open(_rc, "r", encoding="utf-8", errors="ignore") as _f:
+                _txt = _f.read()
+            if _COMPLETION_BLOCK_START in _txt and _COMPLETION_BLOCK_END in _txt:
+                return True
+            for _line in _txt.splitlines():
+                _l = _line.strip()
+                if "register-python-argcomplete" not in _l:
+                    continue
+                if _script in _l or _script_base in _l:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _ensure_argcomplete_installed() -> bool:
+    global HAS_ARGCOMPLETE, argcomplete
+    if HAS_ARGCOMPLETE:
+        return True
+    print("📦 Installing Python module 'argcomplete'...")
+    try:
+        _proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "argcomplete"],
+            check=False,
+        )
+    except Exception as _e:
+        print(f"❌ Failed to run pip install for argcomplete: {_e}")
+        return False
+    if _proc.returncode != 0:
+        print("❌ Could not install argcomplete.")
+        return False
+    try:
+        importlib.invalidate_caches()
+        argcomplete = importlib.import_module("argcomplete")
+        HAS_ARGCOMPLETE = True
+        print("✅ argcomplete installed.")
+        return True
+    except Exception as _e:
+        print(f"❌ argcomplete installed but import failed: {_e}")
+        return False
+
+
+def _install_completion_hook_block(rc_path: str, hook_line: str) -> bool:
+    try:
+        _existing = ""
+        if os.path.isfile(rc_path):
+            with open(rc_path, "r", encoding="utf-8", errors="ignore") as _f:
+                _existing = _f.read()
+        _block = (
+            f"{_COMPLETION_BLOCK_START}\n"
+            f"# Added by AFX_reinit.py --install-completion\n"
+            f"{hook_line}\n"
+            f"{_COMPLETION_BLOCK_END}\n"
+        )
+        if _COMPLETION_BLOCK_START in _existing and _COMPLETION_BLOCK_END in _existing:
+            _start = _existing.index(_COMPLETION_BLOCK_START)
+            _end = _existing.index(_COMPLETION_BLOCK_END, _start)
+            _end += len(_COMPLETION_BLOCK_END)
+            if _end < len(_existing) and _existing[_end:_end + 1] == "\n":
+                _end += 1
+            _updated = _existing[:_start] + _block + _existing[_end:]
+        elif hook_line in _existing:
+            _updated = _existing
+        else:
+            _sep = "" if not _existing or _existing.endswith("\n") else "\n"
+            _updated = _existing + _sep + _block
+        if _updated != _existing:
+            with open(rc_path, "w", encoding="utf-8") as _f:
+                _f.write(_updated)
+        return True
+    except Exception as _e:
+        print(f"❌ Could not update {rc_path}: {_e}")
+        return False
+
+
+def _install_completion_support() -> int:
+    _script = _script_path_for_completion()
+    _hook = _completion_hook_line(_script)
+    if not _ensure_argcomplete_installed():
+        return 1
+    _ok = True
+    for _rc in _completion_rc_paths():
+        if _install_completion_hook_block(_rc, _hook):
+            print(f"✅ Completion hook installed in {_rc}")
+        else:
+            _ok = False
+    print("\nRun this now (or open a new shell):")
+    print(f"  {_hook}")
+    return 0 if _ok else 1
+
+
+def _maybe_warn_missing_completion_setup(args) -> None:
+    global _completion_startup_warning_shown
+    if _completion_startup_warning_shown:
+        return
+    if not (sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty()):
+        return
+    if (args.help or args.version or args.config_example
+            or args.checkpoint_status or args.last_status
+            or args.install_completion or args.print_completion_hook):
+        return
+    _script = _script_path_for_completion()
+    _missing_module = not HAS_ARGCOMPLETE
+    _missing_hook = not _completion_hook_present(_script)
+    if not (_missing_module or _missing_hook):
+        return
+    print("\nℹ️  Startup option tab-completion is not fully configured.")
+    if _missing_module:
+        print("   Missing Python module: argcomplete")
+    if _missing_hook:
+        print("   Shell hook not found in ~/.bashrc or ~/.zshrc")
+    print("   Run: python3 AFX_reinit.py --install-completion")
+    print("   Or print just the hook: python3 AFX_reinit.py --print-completion-hook")
+    _completion_startup_warning_shown = True
+
+
 def parse_args():
     # Disable argparse's built-in -h/--help so we can provide a man-page
     # style replacement instead.
@@ -6177,13 +6341,20 @@ def parse_args():
                              "from scratch after a failure.")
     parser.add_argument("--checkpoint-status", action="store_true", default=False,
                         help="EXPERIMENTAL: Print a summary of the saved checkpoint "
-                             "(checkpoints/afx_checkpoint.json) showing current phase and where the "
+                             "(checkpoints/afx_checkpoint.json) showing current and next expected phase, and where the "
                              "last run left off, then exit. Does not modify "
                              "the checkpoint file.")
     parser.add_argument("--last-status", action="store_true", default=False,
                         help="Read and display the summary file from the most recent "
                              "AFX_reinit run, then exit. Useful for checking the "
                              "result of a previous job without scrolling through logs.")
+    parser.add_argument("--install-completion", action="store_true", default=False,
+                        help="Install startup option tab-completion support: "
+                             "installs Python module argcomplete (if missing) "
+                             "and adds shell hook entries to ~/.bashrc and ~/.zshrc.")
+    parser.add_argument("--print-completion-hook", action="store_true", default=False,
+                        help="Print the shell hook command used to enable startup "
+                             "option tab-completion, then exit.")
     parser.add_argument("--auto-clear-stale-bmc", action="store_true",
                         default=False,
                         help="When a BMC SSH banner timeout is hit, scan for "
@@ -25286,6 +25457,15 @@ def main():
     # --screen: re-exec inside a GNU screen session for connection resilience.
     if args.screen and _relaunch_in_screen():
         sys.exit(0)
+
+    if args.print_completion_hook:
+        print(_completion_hook_line())
+        sys.exit(0)
+
+    if args.install_completion:
+        sys.exit(_install_completion_support())
+
+    _maybe_warn_missing_completion_setup(args)
 
     setup_logging(args.debug)
     _debug_console = args.debug
