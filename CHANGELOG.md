@@ -9,6 +9,16 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Checkpoint status now labels node roles and mirrors primary-only milestones.**
+  `--checkpoint-status` now labels per-node blocks as `primary` or numbered
+  `secondary-0N` roles, echoes primary-only milestones such as
+  `primary_bootmenu_done` and `primary_node_mgmt_done` under the primary node's
+  `done` list, and shows peer nodes waiting on primary cluster setup during
+  4b+3 wizard progress.
+- **Checkpoint and summary docs now explain timing bucket meanings.**
+  Documentation and help text now clarify `startup / inter-phase transition`
+  as default non-phase time between tracked phases and `runtime pause wait` as
+  explicit operator/runtime pause time rather than peer-node barrier time.
 - **Startup completion now has built-in install/print helpers.**
   Added `--install-completion` to install `argcomplete` (if missing) and write
   shell hook blocks to `~/.bashrc` and `~/.zshrc`, plus

@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/17/2026
+**Updated:** 6/18/2026
 
 ---
 
@@ -375,9 +375,25 @@ python3 AFX_reinit.py --checkpoint-status
 ```
 
 This prints the absolute checkpoint path, the run mode (e.g. `4b-3`),
-the current phase, created/updated timestamps, age in minutes, log
-directory, config path, BMC IPs, every completed global phase, and every
-per-node phase keyed by BMC IP — then exits without modifying the file.
+the current phase, next expected phase, created/updated timestamps, age
+in minutes, log directory, config path, BMC IPs, every completed global
+phase, and every per-node phase keyed by BMC IP — then exits without
+modifying the file.
+
+Per-node checkpoint blocks are labeled with node roles when known:
+
+- `primary | <ip>` for the first/primary node
+- `secondary-01 | <ip>`, `secondary-02 | <ip>`, etc. for peer nodes
+
+Primary-only milestones such as `primary_bootmenu_done`,
+`primary_node_mgmt_done`, and `primary_setup_done` are also echoed in the
+primary node's `done` list so checkpoint status is easier to scan without
+cross-referencing the global section.
+
+During `4b+3` runs, checkpoint status may also show peer nodes as
+`(waiting on primary cluster setup)` while the primary is still in the
+cluster setup wizard, with the next expected phase set to
+`2b – Parallel Node Add`.
 
 The same summary is also printed automatically at startup whenever a
 valid checkpoint is found, immediately before the resume / discard
@@ -585,8 +601,8 @@ python3 AFX_reinit.py [OPTIONS]
 | `--bg` | | Background mode: handle SIGHUP so the log is closed cleanly when the terminal closes. Use with `nohup` or `screen`. |
 | `--screen` | | Re-launch the script inside a detached GNU screen session. Keeps the run alive if your SSH connection drops or times out. Implies `--bg`. Use `screen -r afx-reinit` to reattach. No-op if already running inside screen. |
 | `--resume` | | Mode 4b only. Resume the previous 4b run from its saved checkpoint (`afx_checkpoint.json`). Skips phases already completed so you do not have to restart from scratch after a failure or Ctrl+C. See **Checkpoint & Resume** below. |
-| `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, current phase, age, BMC IPs, completed global phases, completed per-node phases — then exit. Does not modify the checkpoint file. |
-| `--last-status` | | Read and display the summary file from the most recent AFX_reinit run, then exit. The summary file is created at run start and updated as phases progress, so this flag can show live in-progress status (including phases not yet completed). |
+| `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, current phase, next expected phase, age, BMC IPs, completed global phases, and role-labeled per-node phases — then exit. Does not modify the checkpoint file. |
+| `--last-status` | | Read and display the summary file from the most recent AFX_reinit run, then exit. The summary file is created at run start and updated as phases progress, so this flag can show live in-progress status (including phases not yet completed) and classified non-phase timing such as prompt waits, explicit pause waits, and startup/inter-phase gaps. |
 | `--install-completion` | | Install startup option tab-completion support: installs Python `argcomplete` (if missing) and writes hook entries to `~/.bashrc` and `~/.zshrc`. |
 | `--print-completion-hook` | | Print the shell hook command used to enable startup option completion, then exit. |
 | `--auto-clear-stale-bmc` | | On banner-timeout retries, scan for `ESTABLISHED` TCP sockets to each BMC's port 22 owned by other Python processes on this host and `SIGTERM` them. The "always-on" cleanup (close own SSH clients + `ipmitool sol deactivate`) runs regardless of this flag. See [BMC SSH Stale Session Diagnostics](#bmc-ssh-stale-session-diagnostics). |
@@ -832,6 +848,10 @@ The summary file contains (and is updated during the run):
 - **Phase Timing:** duration of each named phase (e.g., "BMC Connect", "LOADER", "Wizard", "Auto Join"). Active or incomplete phases are explicitly labeled as not yet completed. Includes:
   - **Indented sub-rows** for phases that support per-node breakdown (e.g., `[node] image download` and `[node] image install` under the netboot install phase).
   - **`Pause wait (xN)` row** showing aggregate operator-pause time (total seconds held, pause count, and a `longest single pause` sub-line with context label) when the run was paused at least once.
+- **Non-phase time (classified):** time outside named phases, broken down by reason. Common buckets include:
+  - **`startup / inter-phase transition`** — default non-phase time before the first phase starts or in short gaps between phases.
+  - **`operator prompt wait`** — time spent waiting at interactive prompts.
+  - **`runtime pause wait`** — time spent in an explicit runtime pause (`.afx_pause`, `SIGUSR1`, etc.); this is **not** peer-node waiting on the primary.
 - **Step Timing:** duration of individual steps within each phase
 - **Warnings (N):** grouped by source log file; each block starts with the log file path, followed by timestamped warning messages
 - **Errors (N):** timestamp and message for each error logged during the run

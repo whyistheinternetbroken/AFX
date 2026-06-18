@@ -6147,8 +6147,9 @@ OPTIONS
         EXPERIMENTAL. Print a summary of the saved checkpoint (checkpoints/afx_checkpoint.json)
         and exit.  Shows the absolute file path, run mode, created /
         updated timestamps, current phase, next expected phase, age in minutes,
-        log directory, config path, BMC IPs, every completed global phase, and every per-node
-        phase keyed by BMC IP.  Does not modify the checkpoint file.
+        log directory, config path, BMC IPs, every completed global phase, and
+        role-labeled per-node phase blocks (primary / secondary-0N). Does not
+        modify the checkpoint file.
 
     --last-status
         Read and display the summary file from the most recent AFX_reinit
@@ -6156,7 +6157,8 @@ OPTIONS
         refreshed as phases progress, so this can show live in-progress
         status (including phases not yet completed). The summary shows
         overall result, phase timing, step timing, error/warning count,
-        and runtime duration.
+        runtime duration, and classified non-phase timing such as
+        startup/inter-phase gaps, prompt waits, and explicit pause waits.
 
     --install-completion
         Install startup option tab-completion support:
@@ -6526,13 +6528,15 @@ def parse_args():
                              "from scratch after a failure.")
     parser.add_argument("--checkpoint-status", action="store_true", default=False,
                         help="EXPERIMENTAL: Print a summary of the saved checkpoint "
-                             "(checkpoints/afx_checkpoint.json) showing current and next expected phase, and where the "
-                             "last run left off, then exit. Does not modify "
-                             "the checkpoint file.")
+                             "(checkpoints/afx_checkpoint.json) showing current "
+                             "and next expected phase, where the last run left "
+                             "off, and role-labeled per-node progress, then "
+                             "exit. Does not modify the checkpoint file.")
     parser.add_argument("--last-status", action="store_true", default=False,
                         help="Read and display the summary file from the most recent "
                              "AFX_reinit run, then exit. Useful for checking the "
-                             "result of a previous job without scrolling through logs.")
+                             "result of a previous job without scrolling through "
+                             "logs, including classified non-phase timing.")
     parser.add_argument("--install-completion", action="store_true", default=False,
                         help="Install startup option tab-completion support: "
                              "installs Python module argcomplete (if missing) "
