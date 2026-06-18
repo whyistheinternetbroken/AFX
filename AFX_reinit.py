@@ -20507,7 +20507,29 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                 pass
         sys.exit(1)
 
-    # Mode 1 (1a/1b) only initialises the first node â€” exit cleanly here.
+    # Mode 1b (1b only): launch parallel auto-add for peer BMCs if configured.
+    # Mode 1a: skip peer setup entirely (single-node mode).
+    if _operation_mode == 1 and _peer_bmc_list and _auto_add:
+        print("\n-- Launching mode 1b peer initialization (parallel option 4)...")
+        _mode1b_ok = add_peer_nodes_parallel(
+            channel, _peer_bmc_list, cc.get("admin_password"),
+            primary_bmc=primary_bmc,
+        )
+        if not _mode1b_ok:
+            print("\nâŒ Mode 1b did not complete: one or more peer nodes failed to initialize.")
+            if _session_log:
+                _session_log.log(
+                    "Mode 1b: peer initialization did not complete",
+                    prefix="ERROR",
+                )
+                _session_log.set_outcome("FAIL", "peer add did not complete")
+                try:
+                    _session_log.close()
+                except Exception:
+                    pass
+            sys.exit(1)
+
+    # Mode 1 (1a/1b) initialization complete â€" exit cleanly here.
     if _operation_mode == 1:
         mgmt_ip = cc.get("mgmt_ip") or "<cluster-management-ip>"
         _print_banner("âœ… Configuration complete.")
