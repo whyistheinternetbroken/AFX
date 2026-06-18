@@ -435,10 +435,12 @@ class CheckpointManager:
         _cur_name = ""
         _cur_state = ""
         _next_phase = ""
+        _created_str = self._data.get("created", "")
+        _updated_str = self._data.get("updated", "")
+         
         if _cur:
             _cur_name = str(_cur.get("name") or "").strip() or "(unknown)"
             _cur_state = str(_cur.get("state") or "").strip() or "in_progress"
-            _next_phase = str(_cur.get("next_phase") or "").strip() or "(not recorded)"
             _cur_node = str(_cur.get("node_ip") or "").strip()
             _cur_ts = str(_cur.get("ts") or "").strip()
             _cur_parts = [f"{_cur_name} [{_cur_state}]"]
@@ -447,7 +449,25 @@ class CheckpointManager:
             if _cur_ts:
                 _cur_parts.append(f"as of {_cur_ts}")
             lines.append(f"Current phase   : {', '.join(_cur_parts)}")
+             
+            # Use predictive logic for next phase
+            _next_phase = _predict_next_phase(_cur_name, _cur_state, _mode_raw)
             lines.append(f"Next expected phase: {_next_phase}")
+             
+            # Add time estimation if we have timestamps
+            if _created_str and _updated_str:
+                try:
+                    _created_dt = datetime.fromisoformat(_created_str)
+                    _updated_dt = datetime.fromisoformat(_updated_str)
+                    _elapsed = (_updated_dt - _created_dt).total_seconds()
+                    _estimate = _estimate_remaining_time(_cur_name, _elapsed, _mode_raw)
+                    if _estimate:
+                        _opt_secs, _pess_secs = _estimate
+                        _opt_min = int(_opt_secs / 60)
+                        _pess_min = int(_pess_secs / 60)
+                        lines.append(f"Est. time remaining: {_opt_min}–{_pess_min} min")
+                except Exception:
+                    pass
         else:
             lines.append("Current phase   : (not recorded)")
             lines.append("Next expected phase: (not recorded)")
@@ -705,6 +725,215 @@ _BMC_PROMPT_RE = re.compile(
     r'(?:^|\r|\n)\s*[\w][\w\-\.]*>\s*(?:\r|\n|$)',
     re.MULTILINE,
 )
+
+
+# ---------------------------------------------------------------------------
+# Phase Sequences & Metadata (for predictive next-phase logic)
+# ---------------------------------------------------------------------------
+
+# Define phase sequences for each operation mode
+_PHASE_SEQUENCES = {
+    "4b": [
+        "4b – Package Selection",
+        "Collect Node Mgmt per BMC",
+        "Collect Cluster Setup Config",
+        "4b – BMC SSH Connections",
+        "4b – Reset to LOADER",
+        "4b – HTTP Server",
+        "4b – Netboot Install",
+        "4b – Reinit Reconnect to LOADER",
+        "4b – Boot Menu Selection",
+        "4b – Cluster Initialization (primary)",
+        "Auto Cluster Init (1b)",
+        "Cluster Setup Wizard (1b)",
+        "NTP Configuration",
+    ],
+    "1b": [
+        "Collect Node Mgmt per BMC",
+        "Collect Cluster Setup Config",
+        "4b – BMC SSH Connections",
+        "4b – Reset to LOADER",
+        "4b – Boot Menu Selection",
+        "Auto Cluster Init (1b)",
+        "Cluster Setup Wizard (1b)",
+        "NTP Configuration",
+    ],
+    "1a": [
+        "4b – Package Selection",
+        "Collect Cluster Setup Config",
+        "Auto Cluster Init (1b)",
+        "Cluster Setup Wizard (1b)",
+        "NTP Configuration",
+    ],
+}
+
+# Phase metadata: typical duration (seconds), whether interactive, etc.
+_PHASE_METADATA = {
+    "4b – Package Selection": {
+        "typical_duration": 10,
+        "interactive": False,
+    },
+    "Collect Node Mgmt per BMC": {
+        "typical_duration": 5,
+        "interactive": False,
+    },
+    "Collect Cluster Setup Config": {
+        "typical_duration": 30,
+        "interactive": True,
+        "prompt": "Cluster name, admin password, management IP...",
+    },
+    "4b – BMC SSH Connections": {
+        "typical_duration": 5,
+        "interactive": False,
+    },
+    "4b – Reset to LOADER": {
+        "typical_duration": 120,
+        "interactive": False,
+    },
+    "4b – HTTP Server": {
+        "typical_duration": 5,
+        "interactive": False,
+    },
+    "4b – Netboot Install": {
+        "typical_duration": 600,
+        "interactive": False,
+    },
+    "4b – Reinit Reconnect to LOADER": {
+        "typical_duration": 300,
+        "interactive": False,
+    },
+    "4b – Boot Menu Selection": {
+        "typical_duration": 120,
+        "interactive": False,
+    },
+    "4b – Cluster Initialization (primary)": {
+        "typical_duration": 30,
+        "interactive": False,
+    },
+    "Auto Cluster Init (1b)": {
+        "typical_duration": 900,
+        "interactive": False,
+    },
+    "Cluster Setup Wizard (1b)": {
+        "typical_duration": 600,
+        "interactive": True,
+        "prompt": "Cluster name, admin password, create/join cluster...",
+    },
+    "NTP Configuration": {
+        "typical_duration": 10,
+        "interactive": False,
+    },
+}
+
+
+def _predict_next_phase(current_phase_name: str, current_state: str, 
+                        mode: str = "4b") -> str:
+    """Predict the next expected phase based on current phase and state.
+    
+    Args:
+        current_phase_name: Name of currently running phase
+        current_state: State of current phase ("in_progress", "complete", "blocked", etc.)
+        mode: Operation mode (4b, 1b, etc.) to determine sequence
+    
+    Returns:
+        Name of next expected phase, or diagnostic message if at end or blocked
+    """
+    # Normalize mode to find sequence
+    mode_lower = str(mode or "").lower()
+    mode_key = None
+    for key in _PHASE_SEQUENCES.keys():
+        if key in mode_lower or mode_lower.startswith(key):
+            mode_key = key
+            break
+    if not mode_key:
+        mode_key = "4b"  # default
+    
+    sequence = _PHASE_SEQUENCES.get(mode_key, [])
+    
+    # Find current phase in sequence (try exact match first, then partial)
+    idx = -1
+    for i, phase in enumerate(sequence):
+        if phase == current_phase_name:
+            idx = i
+            break
+    
+    if idx == -1:
+        # Try partial match
+        for i, phase in enumerate(sequence):
+            if current_phase_name in phase or phase in current_phase_name:
+                idx = i
+                break
+    
+    if idx == -1:
+        return "(unknown phase – not in sequence)"
+    
+    # Current state determines next phase
+    if current_state in ("complete", "done", "passed"):
+        # Move to next phase
+        if idx + 1 < len(sequence):
+            next_phase = sequence[idx + 1]
+            meta = _PHASE_METADATA.get(next_phase, {})
+            if meta.get("interactive"):
+                return f"{next_phase} (interactive – awaiting input)"
+            return next_phase
+        else:
+            return "(final phase complete)"
+    
+    elif current_state in ("in_progress", "running"):
+        # Still in current phase
+        meta = _PHASE_METADATA.get(current_phase_name, {})
+        if meta.get("interactive"):
+            prompt = meta.get("prompt", "operator input")
+            return f"{current_phase_name} (interactive – waiting for {prompt})"
+        return f"{current_phase_name} (in progress)"
+    
+    elif current_state == "blocked":
+        # Cannot proceed
+        return f"(BLOCKED: {current_phase_name} failed or waiting)"
+    
+    else:
+        return "(state unknown)"
+
+
+def _estimate_remaining_time(current_phase: str, elapsed_seconds: float,
+                             mode: str = "4b") -> "tuple[int, int] | None":
+    """Estimate remaining time to completion based on phase and historical data.
+    
+    Returns:
+        Tuple (optimistic_seconds, pessimistic_seconds) or None if cannot estimate
+    """
+    mode_lower = str(mode or "").lower()
+    mode_key = None
+    for key in _PHASE_SEQUENCES.keys():
+        if key in mode_lower or mode_lower.startswith(key):
+            mode_key = key
+            break
+    if not mode_key:
+        mode_key = "4b"
+    
+    sequence = _PHASE_SEQUENCES.get(mode_key, [])
+    
+    # Find current phase index
+    idx = -1
+    for i, phase in enumerate(sequence):
+        if phase == current_phase or current_phase in phase or phase in current_phase:
+            idx = i
+            break
+    
+    if idx == -1:
+        return None
+    
+    # Sum typical durations for remaining phases
+    remaining_time = 0
+    for i in range(idx, len(sequence)):
+        meta = _PHASE_METADATA.get(sequence[i], {})
+        remaining_time += meta.get("typical_duration", 60)
+    
+    # Return with 20% variance for optimistic/pessimistic estimates
+    optimistic = int(remaining_time * 0.8)
+    pessimistic = int(remaining_time * 1.2)
+    
+    return (optimistic, pessimistic)
 
 
 def _looks_like_bmc_drop(chunk: str) -> bool:
