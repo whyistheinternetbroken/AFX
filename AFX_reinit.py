@@ -753,15 +753,49 @@ def _normalize_mojibake_text(value: object) -> str:
         ("â€“", "-"),
         ("â€”", "-"),
         ("â†’", "->"),
+        ("â€¢", "-"),
         ("âœ…", "[OK]"),
         ("âŒ", "[FAIL]"),
         ("â³", "[WAIT]"),
         ("âš ï¸", "[WARN]"),
         ("â„¹ï¸", "[INFO]"),
+        ("ðŸ–¥ï¸", "[INFO]"),
+        ("ðŸ–¥", "[INFO]"),
+        ("ðŸ”„", "[INFO]"),
+        ("ðŸ”", "[INFO]"),
+        ("ðŸ”Ž", "[INFO]"),
+        ("ðŸ“¡", "[INFO]"),
+        ("ðŸ“", "[INFO]"),
+        ("ðŸš€", "[INFO]"),
+        ("ðŸ§µ", "[INFO]"),
     )
     for bad, good in replacements:
         text = text.replace(bad, good)
     return text
+
+
+_RAW_PRINT = print
+
+
+def _print_normalized(*args, **kwargs):
+    """Print wrapper that normalizes mojibake in user-facing output."""
+    _args = [
+        _normalize_mojibake_text(a) if isinstance(a, str) else a
+        for a in args
+    ]
+    if "sep" in kwargs and isinstance(kwargs.get("sep"), str):
+        kwargs = dict(kwargs)
+        kwargs["sep"] = _normalize_mojibake_text(kwargs["sep"])
+    if "end" in kwargs and isinstance(kwargs.get("end"), str):
+        kwargs = dict(kwargs)
+        kwargs["end"] = _normalize_mojibake_text(kwargs["end"])
+    return _RAW_PRINT(*_args, **kwargs)
+
+
+if str(os.environ.get("AFX_NORMALIZE_PRINT", "1")).strip().lower() not in {
+    "0", "false", "no"
+}:
+    print = _print_normalized
 
 
 # Boot-menu detection signatures shared by all wait-for-boot-menu callers.
@@ -7199,7 +7233,7 @@ def _relaunch_in_screen():
 
     screen_bin = shutil.which("screen")
     if not screen_bin:
-        print("âŒ  'screen' is not installed or not found in PATH.")
+        print("[ERROR] 'screen' is not installed or not found in PATH.")
         print("    Install it first:")
         print("      Ubuntu/Debian : sudo apt install screen")
         print("      RHEL/Fedora   : sudo dnf install screen")
@@ -7219,14 +7253,14 @@ def _relaunch_in_screen():
     cmd = [screen_bin, "-dmS", session_name,
            sys.executable, script_path] + fwd_args
 
-    print(f"ðŸ–¥ï¸   Launching inside screen session '{session_name}'...")
+    print(f"[INFO] Launching inside screen session '{session_name}'...")
     try:
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as exc:
-        print(f"âŒ  screen exited with code {exc.returncode}.")
+        print(f"[ERROR] screen exited with code {exc.returncode}.")
         sys.exit(exc.returncode)
 
-    print("\nâœ…  Script is running in the background.")
+    print("\n[OK] Script is running in the background.")
     print(f"    Reattach with : screen -r {session_name}")
     print("    List sessions : screen -ls")
     return True
