@@ -430,7 +430,11 @@ class CheckpointManager:
         bmc_ips = self._data.get("bmc_ips") or []
         if bmc_ips:
             lines.append(f"BMC IPs         : {', '.join(bmc_ips)}")
+        _mode_raw = str(self._data.get("mode") or "").strip().lower()
         _cur = self._data.get("current_phase") or {}
+        _cur_name = ""
+        _cur_state = ""
+        _next_phase = ""
         if _cur:
             _cur_name = str(_cur.get("name") or "").strip() or "(unknown)"
             _cur_state = str(_cur.get("state") or "").strip() or "in_progress"
@@ -484,13 +488,33 @@ class CheckpointManager:
                 ]
                 for _phase in phase_names
             }
+            _primary_ip = bmc_ips[0] if bmc_ips else ""
+            _wizard_waiting_mode3 = (
+                _mode_raw == "4b-3"
+                and _cur_state == "in_progress"
+                and _cur_name in {
+                    "Cluster Setup Wizard (1b)",
+                    "4b – Cluster Initialization (primary)",
+                    "4b – Cluster Initialization (primary resume)",
+                }
+                and bool(phases.get("primary_node_mgmt_done", {}).get("done"))
+                and not bool(phases.get("cluster_formed", {}).get("done"))
+            )
             for ip in all_ips:
                 completed = [
                     p for p in phase_names
                     if node_phases.get(p, {}).get(ip, {}).get("done")
                 ]
                 pending = [p for p in phase_names if p not in completed]
-                if pending:
+                _all_known_node_phases_done = bool(phase_names) and not pending
+                if (_wizard_waiting_mode3 and _all_known_node_phases_done
+                        and "reinit_loader" in completed):
+                    if ip == _primary_ip:
+                        node_current = _cur_name
+                    else:
+                        node_current = "(waiting on primary cluster setup)"
+                    node_next = _next_phase or "2b – Parallel Node Add"
+                elif pending:
                     _pending_phase = pending[0]
                     _peer_progress_on_pending = _phase_done_counts.get(_pending_phase, 0) > 0
                     if not completed and _peer_progress_on_pending:
@@ -15109,10 +15133,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 and not _vldb_timeout_nodes
                 and not _nvram_mismatch_nodes):
             _ver_str = None
+            _ver_nodes = {}
             _ver_ch = loader_channels.get(first_ip)
             if _ver_ch is not None:
                 try:
-                    import re as _re
                     _admin_pw = (_cluster_config.get("admin_password")
                                  if isinstance(_cluster_config, dict) else None)
                     # Refresh login prompt.
@@ -15149,28 +15173,19 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                     break
                             time.sleep(0.1)
                         if "::" in _vbuf3:
-                            _ver_ch.send("version\r")
-                            time.sleep(2)
-                            _vbuf4 = ""
-                            _vt4 = time.monotonic()
-                            while time.monotonic() - _vt4 < 15:
-                                if _ver_ch.recv_ready():
-                                    _vbuf4 += _ver_ch.recv(4096).decode("utf-8", errors="replace")
-                                    if "::" in _vbuf4:
-                                        break
-                                time.sleep(0.1)
+                            _ver_snapshot = _collect_ontap_version_snapshot(_ver_ch)
                             _ver_ch.send("exit\r")
-                            _vm = _re.search(r"NetApp Release\s+(\S+)", _vbuf4)
-                            if _vm:
-                                _ver_str = _vm.group(1)
-                            else:
-                                for _vl in _vbuf4.splitlines():
-                                    _vl = _vl.strip()
-                                    if _vl and "::" not in _vl:
-                                        _ver_str = _vl
-                                        break
+                            _ver_str = _ver_snapshot.get("running_version")
+                            _ver_nodes = _ver_snapshot.get("current_by_node") or {}
                 except Exception:
                     pass
+
+            if log and (_ver_str or _ver_nodes):
+                log.set_ontap_versions(
+                    before=_ver_str or "",
+                    source="pre-reinit cluster shell",
+                    before_by_node=_ver_nodes,
+                )
 
             with _stdout_lock:
                 if _ver_str:
@@ -16134,6 +16149,20 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         f"found {len(_expected_nodes)}",
                         prefix="ERROR",
                     )
+            if log:
+                try:
+                    _ver4b_snapshot = _collect_ontap_version_snapshot(_4b_pch)
+                    _after4b = _ver4b_snapshot.get("running_version") or ""
+                    _after4b_nodes = _ver4b_snapshot.get("current_by_node") or {}
+                    if _after4b or _after4b_nodes:
+                        log.set_ontap_versions(
+                            after=_after4b,
+                            source="post-reinit final health",
+                            after_by_node=_after4b_nodes,
+                        )
+                except Exception as _ver4b_exc:
+                    log.log(f"4b mode 3: ONTAP version capture failed: {_ver4b_exc}",
+                            prefix="WARN")
             try:
                 _4b_pch.close()
             except Exception:
@@ -16553,6 +16582,44 @@ def _parse_image_versions(output: str) -> dict:
             "isdefault": isdefault,
         })
     return result
+
+
+def _collect_ontap_version_snapshot(channel, *, version_timeout=30,
+                                    image_timeout=60) -> dict:
+    """Collect running and per-node ONTAP versions from an authenticated shell."""
+    with _suppress_console():
+        out_ver = _run_cluster_command(channel, "version", timeout=version_timeout)
+        out_img = _run_cluster_command(
+            channel,
+            "set advanced -c off; system image show -fields version,iscurrent,isdefault",
+            timeout=image_timeout,
+        )
+
+    out_ver = _ANSI_RE.sub("", out_ver).replace("\r\n", "\n").replace("\r", "\n")
+    out_img = _ANSI_RE.sub("", out_img).replace("\r\n", "\n").replace("\r", "\n")
+
+    ver_match = re.search(r"NetApp Release\s+(\S+)", out_ver, re.IGNORECASE)
+    running_ver = ver_match.group(1).rstrip(":.;") if ver_match else None
+
+    image_data = _parse_image_versions(out_img)
+    current_by_node = {}
+    default_by_node = {}
+    for _node, _rows in image_data.items():
+        _cur = next((e["version"] for e in _rows if e.get("iscurrent")), None)
+        _default = next((e["version"] for e in _rows if e.get("isdefault")), None)
+        if _cur:
+            current_by_node[str(_node)] = str(_cur).strip()
+        if _default:
+            default_by_node[str(_node)] = str(_default).strip()
+
+    return {
+        "running_version": running_ver,
+        "image_data": image_data,
+        "current_by_node": current_by_node,
+        "default_by_node": default_by_node,
+        "version_output": out_ver,
+        "image_output": out_img,
+    }
 
 
 def _parse_failover_show(output):
@@ -19061,17 +19128,7 @@ def _run_ontap_upgrade(log):
                     _ver_client = None
 
         try:
-            with _suppress_console():
-                out_ver = _run_cluster_command(
-                    _ver_channel,
-                    "version",
-                    timeout=30,
-                )
-                out_img2 = _run_cluster_command(
-                    _ver_channel,
-                    "set advanced -c off; system image show -fields version,iscurrent,isdefault",
-                    timeout=60,
-                )
+            _ver_snapshot = _collect_ontap_version_snapshot(_ver_channel)
         finally:
             if _ver_client:
                 try:
@@ -19079,13 +19136,11 @@ def _run_ontap_upgrade(log):
                 except Exception:
                     pass
 
-        out_ver  = _ANSI_RE.sub("", out_ver ).replace("\r\n", "\n").replace("\r", "\n")
-        out_img2 = _ANSI_RE.sub("", out_img2).replace("\r\n", "\n").replace("\r", "\n")
+        out_ver = _ver_snapshot["version_output"]
+        out_img2 = _ver_snapshot["image_output"]
         _ver_elapsed = time.monotonic() - _t0_ver
 
-        # Extract running version from the 'version' command output.
-        ver_match = re.search(r"NetApp Release\s+([\S]+)", out_ver, re.IGNORECASE)
-        running_ver = ver_match.group(1).rstrip(":.;") if ver_match else None
+        running_ver = _ver_snapshot["running_version"]
 
         # Filter display lines to data rows only (skip headers/prompts/noise).
         img_ver_lines = [l.strip() for l in out_img2.splitlines()
@@ -19101,7 +19156,7 @@ def _run_ontap_upgrade(log):
             # - each node must have both iscurrent=true and isdefault=true rows
             # - those two versions must match on that node
             # - all nodes' active versions must match each other
-            _img_ver_data = _parse_image_versions(out_img2)
+            _img_ver_data = _ver_snapshot["image_data"]
             _node_issues = []
             _active_versions = {}
             for _vn, _vimgs in _img_ver_data.items():
@@ -19466,6 +19521,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         _session_log.start_phase("Cluster Setup Wizard (1b)")
         loggable = {k: ("<hidden>" if k == "admin_password" else v) for k, v in cc.items()}
         _session_log.log(f"Wizard inputs: {loggable}")
+    if _checkpoint and _operation_mode == 1 and _auto_add:
+        with suppress(Exception):
+            _checkpoint.set_current_phase(
+                "Cluster Setup Wizard (1b)",
+                state="in_progress",
+                next_phase="2b – Parallel Node Add",
+            )
 
     # Some ONTAP builds show "Press Enter to complete cluster setup" first;
     # others jump directly to the create/join question. Wait for whichever
@@ -27552,18 +27614,9 @@ def main():
 
                 # ── Version check ────────────────────────────────────────────────
                 print("\n  \U0001f50d Checking ONTAP version...")
-                with _suppress_console():
-                    _ver49_out = _run_cluster_command(_ch49, "version", timeout=30)
-                    _img49_out = _run_cluster_command(
-                        _ch49,
-                        "set advanced -c off; system image show -fields version,iscurrent,isdefault",
-                        timeout=60,
-                    )
-                _ver49_out = _ANSI_RE.sub("", _ver49_out).replace("\r\n", "\n").replace("\r", "\n")
-                _img49_out = _ANSI_RE.sub("", _img49_out).replace("\r\n", "\n").replace("\r", "\n")
-
-                _ver49_match = re.search(r"NetApp Release\s+(\S+)", _ver49_out, re.IGNORECASE)
-                _running49 = _ver49_match.group(1).rstrip(":.;") if _ver49_match else None
+                _ver49_snapshot = _collect_ontap_version_snapshot(_ch49)
+                _img49_out = _ver49_snapshot["image_output"]
+                _running49 = _ver49_snapshot["running_version"]
 
                 _img49_lines = [l.strip() for l in _img49_out.splitlines()
                                 if l.strip() and "::" not in l
@@ -27578,16 +27631,8 @@ def main():
                         print(f"    {_il49}")
 
                 _session_log.log(f"5g: running version={_running49}")
+                _per_node_49 = _ver49_snapshot["current_by_node"]
                 if _running49:
-                    _img49_data = _parse_image_versions(_img49_out)
-                    _per_node_49 = {}
-                    for _n49, _rows49 in _img49_data.items():
-                        _cur49 = next(
-                            (e["version"] for e in _rows49 if e.get("iscurrent")),
-                            None,
-                        )
-                        if _cur49:
-                            _per_node_49[str(_n49)] = str(_cur49).strip()
                     _session_log.set_ontap_versions(
                         before=_running49,
                         after=_running49,
