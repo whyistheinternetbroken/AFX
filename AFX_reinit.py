@@ -440,10 +440,11 @@ class CheckpointManager:
          
         if _cur:
             _cur_name = str(_cur.get("name") or "").strip() or "(unknown)"
+            _cur_name_display = _normalize_mojibake_text(_cur_name)
             _cur_state = str(_cur.get("state") or "").strip() or "in_progress"
             _cur_node = str(_cur.get("node_ip") or "").strip()
             _cur_ts = str(_cur.get("ts") or "").strip()
-            _cur_parts = [f"{_cur_name} [{_cur_state}]"]
+            _cur_parts = [f"{_cur_name_display} [{_cur_state}]"]
             if _cur_node:
                 _cur_parts.append(f"node={_cur_node}")
             if _cur_ts:
@@ -452,7 +453,8 @@ class CheckpointManager:
              
             # Use predictive logic for next phase
             _next_phase = _predict_next_phase(_cur_name, _cur_state, _mode_raw)
-            lines.append(f"Next expected phase: {_next_phase}")
+            _next_phase_display = _normalize_mojibake_text(_next_phase)
+            lines.append(f"Next expected phase: {_next_phase_display}")
              
             # Add time estimation if we have timestamps
             if _created_str and _updated_str:
@@ -465,7 +467,7 @@ class CheckpointManager:
                         _opt_secs, _pess_secs = _estimate
                         _opt_min = int(_opt_secs / 60)
                         _pess_min = int(_pess_secs / 60)
-                        lines.append(f"Est. time remaining: {_opt_min}â€“{_pess_min} min")
+                        lines.append(f"Est. time remaining: {_opt_min}-{_pess_min} min")
                 except Exception:
                     pass
         else:
@@ -476,12 +478,15 @@ class CheckpointManager:
         lines.append("")
         lines.append("Global phases:")
         if not phases:
-            lines.append("  (none recorded)")
+            if _cur and str(_cur.get("state") or "").strip() == "in_progress":
+                lines.append("  (none completed yet)")
+            else:
+                lines.append("  (none recorded)")
         else:
             for name, meta in phases.items():
-                mark = "âœ…" if meta.get("done") else "  "
+                mark = "[OK]" if meta.get("done") else "  "
                 ts = meta.get("ts", "")
-                lines.append(f"  {mark} {name}  {ts}")
+                lines.append(f"  {mark} {_normalize_mojibake_text(name)}  {ts}")
 
         node_phases = self._data.get("node_phases") or {}
         lines.append("")
@@ -547,10 +552,13 @@ class CheckpointManager:
                 if (_wizard_waiting_mode3 and _all_known_node_phases_done
                         and "reinit_loader" in completed):
                     if ip == _primary_ip:
-                        node_current = _cur_name
+                        node_current = _normalize_mojibake_text(_cur_name)
                     else:
                         node_current = "(waiting on primary cluster setup)"
-                    node_next = _next_phase or "2b â€“ Parallel Node Add"
+                    node_next = _normalize_mojibake_text(_next_phase or "2b - Parallel Node Add")
+                elif not phase_names and _cur_name and _cur_state == "in_progress":
+                    node_current = _normalize_mojibake_text(_cur_name)
+                    node_next = _normalize_mojibake_text(_next_phase or "(pending completion of current phase)")
                 elif pending:
                     _pending_phase = pending[0]
                     _peer_progress_on_pending = _phase_done_counts.get(_pending_phase, 0) > 0
@@ -561,15 +569,15 @@ class CheckpointManager:
                         ]
                         if _done_peers:
                             node_current = (
-                                f"(waiting on other nodes for {_pending_phase}: "
+                                f"(waiting on other nodes for {_normalize_mojibake_text(_pending_phase)}: "
                                 f"{', '.join(_done_peers)})"
                             )
                         else:
-                            node_current = f"(waiting on other nodes for {_pending_phase})"
-                        node_next = _pending_phase
+                            node_current = f"(waiting on other nodes for {_normalize_mojibake_text(_pending_phase)})"
+                        node_next = _normalize_mojibake_text(_pending_phase)
                     else:
-                        node_current = _pending_phase
-                        node_next = pending[1] if len(pending) > 1 else "(none)"
+                        node_current = _normalize_mojibake_text(_pending_phase)
+                        node_next = _normalize_mojibake_text(pending[1]) if len(pending) > 1 else "(none)"
                 elif completed:
                     # Check if peer nodes have pending phases while primary is done
                     if ip == _primary_ip:
@@ -621,9 +629,11 @@ class CheckpointManager:
                 lines.append(f"  [{_role_label} | {ip}]")
                 lines.append(f"      current : {node_current}")
                 lines.append(f"      next    : {node_next}")
-                lines.append(f"      done    : {', '.join(display_done) or '(none)'}")
+                _display_done = [_normalize_mojibake_text(_p) for _p in display_done]
+                lines.append(f"      done    : {', '.join(_display_done) or '(none)'}")
                 if pending:
-                    lines.append(f"      pending : {', '.join(pending)}")
+                    _pending_display = [_normalize_mojibake_text(_p) for _p in pending]
+                    lines.append(f"      pending : {', '.join(_pending_display)}")
                 if i < len(all_ips) - 1:  # Add blank line between nodes, not after last
                     lines.append("")
 
@@ -734,6 +744,24 @@ def _format_checkpoint_mode(mode: str) -> str:
 # Module-level checkpoint instance (initialised by _run_4b_standalone on each
 # run; may be loaded from disk on resume).
 _checkpoint: "CheckpointManager | None" = None
+
+
+def _normalize_mojibake_text(value: object) -> str:
+    """Normalize common mojibake sequences to ASCII-safe text."""
+    text = str(value or "")
+    replacements = (
+        ("â€“", "-"),
+        ("â€”", "-"),
+        ("â†’", "->"),
+        ("âœ…", "[OK]"),
+        ("âŒ", "[FAIL]"),
+        ("â³", "[WAIT]"),
+        ("âš ï¸", "[WARN]"),
+        ("â„¹ï¸", "[INFO]"),
+    )
+    for bad, good in replacements:
+        text = text.replace(bad, good)
+    return text
 
 
 # Boot-menu detection signatures shared by all wait-for-boot-menu callers.
@@ -3584,7 +3612,7 @@ def select_operation_mode():
     global _resume_from_start_menu
     _startup_checkpoint_prompt_done = False
     while True:
-        _print_banner("NetApp AFX BMC Console Automation ðŸ¤–")
+        _print_banner("NetApp AFX BMC Console Automation")
         print("\n  What do you want to do?\n")
         print("  1.  Initial cluster creation")
         print("    1a. Format first node in cluster. Use interactive configuration.")
@@ -3621,10 +3649,10 @@ def select_operation_mode():
         print("  6.  Script help and instructions")
         print("  7.  Exit")
         print("")
-        print("  " + "â”€" * 58)
+        print("  " + "-" * 58)
         print("  (type 'menu' at any prompt to return here)")
         print("")
-        print("  ðŸ’¡ Screen tips (--screen): Ctrl+A Esc=scroll, arrows/PgUp/PgDn navigate, q exits scroll mode, Ctrl+A d detaches, and 'screen -r afx-reinit' reattaches.")
+        print("  Screen tips (--screen): Ctrl+A Esc=scroll, arrows/PgUp/PgDn navigate, q exits scroll mode, Ctrl+A d detaches, and 'screen -r afx-reinit' reattaches.")
         print("")
         if not _startup_checkpoint_prompt_done:
             _startup_checkpoint_prompt_done = True
@@ -3641,7 +3669,7 @@ def select_operation_mode():
                 _menu_opt = _checkpoint_menu_option_label(_cp_mode)
                 _stage = _checkpoint_resume_stage_label(_cp_start)
                 print("=" * 60)
-                print(f"  ðŸ”– Existing checkpoint found{_cp_age} (EXPERIMENTAL)")
+                print(f"  Existing checkpoint found{_cp_age} (EXPERIMENTAL)")
                 print(f"     Last menu option : {_menu_opt}")
                 print(f"     Checkpoint mode  : {_format_checkpoint_mode(_cp_mode)}")
                 print(f"     Resume stage     : {_stage}")
@@ -3654,10 +3682,10 @@ def select_operation_mode():
                 if _resume_now == "y":
                     if _cp_mode.lower().startswith("4b"):
                         _resume_from_start_menu = True
-                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 4b.")
+                        print("\n  [OK] Resuming EXPERIMENTAL checkpoint via menu option 4b.")
                         return 42, False, False
                     if _cp_mode == "2":
-                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 2c.")
+                        print("\n  [OK] Resuming EXPERIMENTAL checkpoint via menu option 2c.")
                         return 26, False, False
                     if _cp_mode == "3":
                         _mode3_peer_opt4 = bool(_cp_start.nodes_done_for("peer_option4_done"))
@@ -3670,20 +3698,20 @@ def select_operation_mode():
                         )
                         if _mode3_replay_risk:
                             print(
-                                "\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 2c "
+                                "\n  [OK] Resuming EXPERIMENTAL checkpoint via menu option 2c "
                                 "(safe add-node continuation)."
                             )
                             return 26, False, False
-                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 3.")
+                        print("\n  [OK] Resuming EXPERIMENTAL checkpoint via menu option 3.")
                         return 3, True, True
                     if _cp_mode == "1":
-                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 1b.")
+                        print("\n  [OK] Resuming EXPERIMENTAL checkpoint via menu option 1b.")
                         return 1, True, False
-                    print("  âš ï¸  Checkpoint mode is not auto-routable from the start menu.")
-        choice = input("â¯â¯  Enter your choice from the menu above (ie, 1a, 2b, 3, etc.): ").strip().lower()
+                    print("  [WARN] Checkpoint mode is not auto-routable from the start menu.")
+        choice = input(">>  Enter your choice from the menu above (ie, 1a, 2b, 3, etc.): ").strip().lower()
 
         if choice == "1a":
-            _print_banner("âš ï¸  WARNING âš ï¸")
+            _print_banner("WARNING")
             print("")
             print("  You will be destroying the storage availability zone on")
             print("  this cluster, deleting all data and reinitializing the")
@@ -3695,7 +3723,7 @@ def select_operation_mode():
             print("  * INSTEAD TO JOIN A NEW NODE TO THE CLUSTER.            *")
             print("  " + "*" * 58)
             print("")
-            print("  " + "â”€" * 58)
+            print("  " + "-" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
                 while True:
@@ -4843,21 +4871,21 @@ def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
         _combined = ((_res.stdout or "") + "\n" + (_res.stderr or "")).strip().lower()
         if _res.returncode == 0:
             if "not found in" in _combined:
-                print(f"  â„¹ï¸  No known_hosts entry found for {host}.")
+                _ts_print(f"[INFO] No known_hosts entry found for {host}.")
                 if log is not None:
                     with suppress(Exception):
                         log.log(f"[{host}] known_hosts cleanup: no entry found")
                 _log_ssh_remediation_event(host, "known_hosts_remove", "skipped",
                                            "no entry found")
             else:
-                print(f"  ðŸ—‘ï¸  Removed known_hosts entry for {host}.")
+                _ts_print(f"[INFO] Removed known_hosts entry for {host}.")
                 if log is not None:
                     with suppress(Exception):
                         log.log(f"[{host}] known_hosts cleanup: entry removed")
                 _log_ssh_remediation_event(host, "known_hosts_remove", "ok",
                                            "entry removed")
             return True
-        print(f"  âš ï¸  ssh-keygen -R {host} returned rc={_res.returncode}.")
+        _ts_print(f"[WARN] ssh-keygen -R {host} returned rc={_res.returncode}.")
         if log is not None:
             with suppress(Exception):
                 log.log(
@@ -4868,7 +4896,7 @@ def _remove_bmc_from_known_hosts(host: str, log=None) -> bool:
                                    f"rc={_res.returncode}")
         return False
     except Exception as _kh_ex:
-        print(f"  âš ï¸  Failed to run ssh-keygen -R for {host}: {_kh_ex}")
+        _ts_print(f"[WARN] Failed to run ssh-keygen -R for {host}: {_kh_ex}")
         if log is not None:
             with suppress(Exception):
                 log.log(
@@ -4890,9 +4918,9 @@ def _preclean_bmc_known_hosts(host: str, log=None, context: str = "") -> bool:
             return False
         _known_hosts_precleaned_bmcs.add(_host)
     if context:
-        print(f"  ðŸ§¹ Proactive known_hosts cleanup for {_host} ({context})...")
+        _ts_print(f"[INFO] Proactive known_hosts cleanup for {_host} ({context})...")
     else:
-        print(f"  ðŸ§¹ Proactive known_hosts cleanup for {_host}...")
+        _ts_print(f"[INFO] Proactive known_hosts cleanup for {_host}...")
     return _remove_bmc_from_known_hosts(_host, log=log)
 
 
@@ -4917,7 +4945,7 @@ def _cleanup_known_hosts_after_boot_option(host: str, option: str, log=None) -> 
     _host = str(host or "").strip()
     if not _host:
         return False
-    print(f"   ðŸ§¹ Proactive known_hosts cleanup after option {option} on {_host}...")
+    _ts_print(f"[INFO] Proactive known_hosts cleanup after option {option} on {_host}...")
     return _remove_bmc_from_known_hosts(_host, log=log)
 
 
@@ -12223,7 +12251,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
 
     for _attempt in range(1, max_attempts + 1):
         if _attempt == 1:
-            print("\n  Verifying BMC IP addresses via 'bmc status'...")
+            _ts_print("Verifying BMC IP addresses via 'bmc status'...")
         else:
             # â”€â”€ Credential re-prompt for auth failures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             _auth_ips = [ip for ip in pending
@@ -12235,7 +12263,7 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                     # silently before re-prompting the operator.
                     if str(bmc_passwords.get(_ip, "") or "") == "":
                         continue
-                    print(f"    ðŸ” Trying blank-password fallback for {_ip} before re-prompt...")
+                    _ts_print(f"[RETRY] Trying blank-password fallback for {_ip} before re-prompt...")
                     _ok_blank, _, _reason_blank = _verify_bmc_ip(_ip, bmc_user, "")
                     if _ok_blank:
                         bmc_passwords[_ip] = ""
@@ -12246,18 +12274,17 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                     else:
                         last_reasons[_ip] = _reason_blank or last_reasons.get(_ip) or "unknown failure"
                 if _blank_recovered:
-                    print("    âœ… Fallback password succeeded.")
-                    print(
-                        f"    âœ… Blank-password fallback succeeded for: "
+                    _ts_print("[OK] Fallback password succeeded.")
+                    _ts_print(
+                        f"[OK] Blank-password fallback succeeded for: "
                         f"{', '.join(_blank_recovered)}"
                     )
                 _auth_ips = [ip for ip in pending
                              if _is_auth_reason(last_reasons.get(ip))]
             if _auth_ips:
-                print(
-                    f"\n  ðŸ” {len(_auth_ips)} BMC(s) failed with an "
-                    "auth/permission error. Re-enter credentials before "
-                    "retrying:"
+                _ts_print(
+                    f"[WARN] {len(_auth_ips)} BMC(s) failed with an "
+                    "auth/permission error. Re-enter credentials before retrying:"
                 )
                 # Offer to share a single new (user, password) across all
                 # the auth-failing BMCs to keep the prompt short.
@@ -12307,16 +12334,16 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
                         # Per-IP username override is not supported
                         # downstream; warn if the operator changes it.
                         if _u != bmc_user:
-                            print(
-                                f"      â„¹ï¸  Note: a single username is "
+                            _ts_print(
+                                f"[INFO] Note: a single username is "
                                 f"used for all BMCs. '{_u}' will replace "
                                 f"'{bmc_user}' for every BMC."
                             )
                             bmc_user = _u
                         if _p_raw != "":
                             bmc_passwords[_ip] = _p
-            print(
-                f"\n  â†» Retrying verification for {len(pending)} BMC(s) "
+            _ts_print(
+                f"[RETRY] Retrying verification for {len(pending)} BMC(s) "
                 f"(attempt {_attempt}/{max_attempts})..."
             )
             # Brief pause between attempts so a transient BMC blip can clear.
@@ -12327,16 +12354,16 @@ def _verify_bmc_list_with_retries(bmc_ips, bmc_user, bmc_passwords,
         for _ip in pending:
             ok, _, reason = _verify_bmc_ip(_ip, bmc_user, bmc_passwords[_ip])
             if ok:
-                print(f"  âœ… {_ip} verified.")
+                _ts_print(f"[OK] {_ip} verified.")
             else:
-                print(f"  âŒ {_ip} verification failed.")
+                _ts_print(f"[FAIL] {_ip} verification failed.")
                 next_pending.append(_ip)
                 last_reasons[_ip] = reason or "unknown failure"
         pending = next_pending
         if not pending:
             return True, bmc_user, []
-    print(
-        f"\n  âš ï¸  {len(pending)} BMC(s) still failed verification after "
+    _ts_print(
+        f"[WARN] {len(pending)} BMC(s) still failed verification after "
         f"{max_attempts} attempts: {', '.join(pending)}"
     )
     return False, bmc_user, list(pending)
@@ -12364,14 +12391,14 @@ def _verify_bmc_ip(ip, username, password):
             reported = m.group(1)
             if reported == ip:
                 return True, reported, None
-            print(f"    âš ï¸  IP mismatch: entered {ip}, BMC reports {reported}")
+            _ts_print(f"[WARN] IP mismatch: entered {ip}, BMC reports {reported}")
             return False, reported, f"IP mismatch (BMC reports {reported})"
-        print(f"    âš ï¸  'IP Address:' not found in 'bmc status' output for {ip}.")
+        _ts_print(f"[WARN] 'IP Address:' not found in 'bmc status' output for {ip}.")
         print(f"       Output snippet: {output[:300].strip()!r}")
         return False, None, "'IP Address:' not found in 'bmc status' output"
     except Exception as exc:
         _reason = _classify_auth_failure(exc)
-        print(f"    âš ï¸  Cannot reach {ip}: {_reason}")
+        _ts_print(f"[WARN] Cannot reach {ip}: {_reason}")
         if _session_log:
             _session_log.log(
                 f"[BMC verify] {ip} failed: {_reason} (raw: {exc})",
@@ -13757,13 +13784,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _physical_zeroing = _checkpoint.get_param("physical_zeroing")
             print(f"\n  ðŸ”– Resuming: physical zeroing={'enabled' if _physical_zeroing else 'disabled'}.")
         else:
-            print("\n  â„¹ï¸   Physical zeroing can help ensure consistency in throughput results.")
+            print("\n  [INFO] Physical zeroing can help ensure consistency in throughput results.")
             _pz_q = _prompt(
                 "  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: "
             , "n").lower()
             _physical_zeroing = (_pz_q == "y")
             if _physical_zeroing:
-                print("  â„¹ï¸   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+                print("  [INFO] Physical disk zeroing enabled (raid.use-physical-zeroing).")
         if log:
             log.log(f"4b: physical disk zeroing requested: {_physical_zeroing}")
 
@@ -13794,9 +13821,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             ).lower()
             _prevent_bios_fw_update = (_fw_q not in ("n", "no"))
         if _prevent_bios_fw_update:
-            print("  â„¹ï¸   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
+            print("  [INFO] BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
         else:
-            print("  â„¹ï¸   BIOS firmware auto-update prevention disabled.")
+            print("  [INFO] BIOS firmware auto-update prevention disabled.")
         if log:
             log.log(f"4b: prevent BIOS firmware update: {_prevent_bios_fw_update}")
 
@@ -14055,6 +14082,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 _status(f"  âœ… [{ip}] BMC shell ready.")
                 if log:
                     log.log(f"[{ip}] BMC shell ready")
+                if _checkpoint:
+                    with suppress(Exception):
+                        _checkpoint.mark_node_done("bmc_connected", ip)
             except Exception as exc:
                 with connect_lock:
                     connect_errors.append((ip, str(exc)))
@@ -14140,6 +14170,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _status(f"  âœ… [{ip}] At LOADER prompt.")
                     if log:
                         log.log(f"[{ip}] confirmed LOADER prompt (no reset needed)")
+                    if _checkpoint:
+                        with suppress(Exception):
+                            _checkpoint.mark_node_done("at_loader", ip)
                     return
 
                 # Monitor for AUTOBOOT/LOADER â€“ all raw output â†’ node file only.
@@ -14178,6 +14211,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _status(f"  âœ… [{ip}] At LOADER prompt.")
                     if log:
                         log.log(f"[{ip}] reached LOADER prompt")
+                    if _checkpoint:
+                        with suppress(Exception):
+                            _checkpoint.mark_node_done("at_loader", ip)
                 else:
                     with connect_lock:
                         loader_errors.append((ip, "LOADER prompt timeout"))
@@ -20959,6 +20995,9 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
                 _slog(f"[{label}] no ::> after admin login", prefix="WARN")
                 return None
 
+    print(f"   ✅ [{label}] Reached cluster shell (::>) after Ctrl+C; ready to wait for primary cluster create.")
+    _slog(f"[{label}] reached ::> after Ctrl+C; parked for primary cluster creation")
+
     def _capture_cluster_netint(_cmd):
         _slog(f"[{label}] running {_cmd}")
         ch.send(_cmd + "\r")
@@ -23785,31 +23824,6 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     _m3_pending = list(peer_bmcs)
 
     _mode3_ok = True
-    if _checkpoint and not _checkpoint.is_done("cluster_formed"):
-        print("\n  â³ Waiting for primary cluster creation before peer add-node...")
-        _wait_started = time.monotonic()
-        while not _shutdown_event.is_set():
-            if _checkpoint.is_done("cluster_formed"):
-                break
-            if time.monotonic() - _wait_started >= 7200:
-                print("  âŒ Timed out waiting for primary cluster creation.")
-                if _session_log:
-                    _session_log.log(
-                        "mode 3: timed out waiting for cluster_formed before peer add",
-                        prefix="ERROR",
-                    )
-                return False
-            time.sleep(5)
-
-    if not _login_primary_cluster_shell(primary_channel, admin_password):
-        print("âš ï¸  Could not log in to primary cluster shell; "
-              "cluster add-node will be skipped.")
-        if _session_log:
-            _session_log.log("Primary cluster shell login failed; "
-                             "cluster add-node will be skipped",
-                             prefix="WARN")
-        return False
-    _slog("Primary cluster shell ready for cluster add-node")
 
     while _m3_pending:
         _n3 = len(_m3_pending)
@@ -23868,6 +23882,48 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         _m3_pending = _m3_failed
 
     # â”€â”€ Bulk cluster join via cluster add-node â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    if _mode3_ok and _m3_cluster_ips_out:
+        print("\n  ⏸️  Peer nodes are prepared at ::> and waiting for primary cluster creation...")
+        if _session_log:
+            _session_log.log("mode 3: peers reached ::>; gating cluster add-node on primary cluster create")
+
+    if _checkpoint and not _checkpoint.is_done("cluster_formed"):
+        print("\n  â³ Waiting for primary cluster creation before peer add-node...")
+        _wait_started = time.monotonic()
+        while not _shutdown_event.is_set():
+            if _checkpoint.is_done("cluster_formed"):
+                break
+            if time.monotonic() - _wait_started >= 7200:
+                print("  âŒ Timed out waiting for primary cluster creation.")
+                if _session_log:
+                    _session_log.log(
+                        "mode 3: timed out waiting for cluster_formed before peer add",
+                        prefix="ERROR",
+                    )
+                return False
+            time.sleep(5)
+
+    _login_wait_started = time.monotonic()
+    while not _shutdown_event.is_set():
+        if _login_primary_cluster_shell(primary_channel, admin_password):
+            break
+        if time.monotonic() - _login_wait_started >= 7200:
+            print("  ❌ Timed out waiting for primary cluster shell before add-node.")
+            if _session_log:
+                _session_log.log(
+                    "mode 3: timed out waiting for primary cluster shell before cluster add-node",
+                    prefix="ERROR",
+                )
+            return False
+        if _session_log:
+            _session_log.log(
+                "mode 3: primary cluster shell not ready yet; peers remain parked at ::>",
+                prefix="WARN",
+            )
+        time.sleep(10)
+
+    _slog("Primary cluster shell ready for cluster add-node")
+
     _m3_collected_ips = _ordered_cluster_ips_for_add(
         _m3_cluster_ips_out, preferred_bmcs=peer_bmcs
     )
@@ -29422,7 +29478,7 @@ def main():
             # connection â€” so all up-front questions are grouped together.
             # Skip if resuming mode 3 at peer-add finalization stage (cluster already created).
             if _operation_mode in (1, 3) and not _mode3_skip_presets:
-                print("\n  â„¹ï¸   Physical zeroing can help ensure consistency in throughput results.")
+                print("\n  [INFO] Physical zeroing can help ensure consistency in throughput results.")
                 try:
                     while True:
                         _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
@@ -29433,7 +29489,7 @@ def main():
                     _pz_ans = ""
                 _physical_zeroing = (_pz_ans == "y")
                 if _physical_zeroing:
-                    print("  â„¹ï¸   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+                    print("  [INFO] Physical disk zeroing enabled (raid.use-physical-zeroing).")
                 if _diag_mode:
                     _diag_bootargs = _load_diag_bootargs()
             elif _operation_mode == 2 and _diag_mode:
@@ -29446,9 +29502,9 @@ def main():
                 ).lower()
                 _prevent_bios_fw_update = (_fw_ans not in ("n", "no"))
                 if _prevent_bios_fw_update:
-                    print("  â„¹ï¸   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
+                    print("  [INFO] BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
                 else:
-                    print("  â„¹ï¸   BIOS firmware auto-update prevention disabled.")
+                    print("  [INFO] BIOS firmware auto-update prevention disabled.")
 
             # License: collect key(s) or validate the license file path now, before
             # the BMC session starts, so the operator can fix issues early.
