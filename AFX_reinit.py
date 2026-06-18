@@ -3173,6 +3173,20 @@ def select_operation_mode():
                         print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2c.")
                         return 26, False, False
                     if _cp_mode == "3":
+                        _mode3_peer_opt4 = bool(_cp_start.nodes_done_for("peer_option4_done"))
+                        _mode3_replay_risk = bool(
+                            _cp_start.is_done("cluster_formed")
+                            or _cp_start.is_done("primary_setup_done")
+                            or _cp_start.is_done("primary_bootmenu_done")
+                            or _cp_start.is_done("primary_node_mgmt_done")
+                            or _mode3_peer_opt4
+                        )
+                        if _mode3_replay_risk:
+                            print(
+                                "\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2c "
+                                "(safe add-node continuation)."
+                            )
+                            return 26, False, False
                         print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 3.")
                         return 3, True, True
                     if _cp_mode == "1":
@@ -14868,6 +14882,21 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         _resume_cluster_already_created
         and _mode_sel == "3"
     )
+    _resume_peer_option4_pending = set()
+    if resuming and _skip_install and _mode_sel == "3" and _checkpoint:
+        for _peer_ip in bmc_ips[1:]:
+            if (_checkpoint.is_node_done("peer_option4_done", _peer_ip)
+                    and not _checkpoint.is_node_done("peer_joined", _peer_ip)):
+                _resume_peer_option4_pending.add(_peer_ip)
+    _resume_add_phase_inferred = bool(
+        _mode_sel == "3"
+        and not _resume_mode3_add_only
+        and _resume_peer_option4_pending
+    )
+    if _resume_add_phase_inferred:
+        # Harden resume safety: if any peer is already at peer_option4_done,
+        # treat this as add-node phase even when cluster_formed wasn't saved.
+        _resume_mode3_add_only = True
     _resume_ready_peer_ips = {}
     if resuming and _skip_install and _mode_sel == "3" and _checkpoint:
         for _peer_ip in bmc_ips[1:]:
@@ -14891,11 +14920,85 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     for _peer_ip in list(_resume_ready_peer_ips):
         if _peer_ip in _reconnect_targets:
             _reconnect_targets.remove(_peer_ip)
+    if resuming and _skip_install and _checkpoint and _reconnect_targets:
+        # Safety gate: once cluster is created on primary, never replay reinit
+        # unless the operator explicitly confirms.
+        if (first_ip in _reconnect_targets
+                and (_checkpoint.is_done("cluster_formed")
+                     or _checkpoint.is_done("primary_setup_done"))):
+            _ans_primary_reinit = _prompt_with_timeout(
+                "\n  ⚠️  Checkpoint shows primary cluster is already created. "
+                "Reinit/reset the primary anyway? [y/N]: ",
+                default="n",
+                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+            ).strip().lower()
+            if _ans_primary_reinit not in ("y", "yes"):
+                _reconnect_targets.remove(first_ip)
+                _status(
+                    f"  🔒 [{first_ip}] Primary reinit skipped by checkpoint safety policy."
+                )
+                if log:
+                    log.log(
+                        f"[{first_ip}] checkpoint safety: skipped primary reinit "
+                        "(cluster already created)"
+                    )
+            elif log:
+                log.log(
+                    f"[{first_ip}] operator confirmed primary reinit despite "
+                    "cluster_formed/primary_setup_done",
+                    prefix="WARN",
+                )
+
+        # Safety gate: once a peer cleared option 4, do not replay destructive
+        # reinit on that peer unless the operator explicitly confirms.
+        _protected_peers = [
+            _ip for _ip in list(_reconnect_targets)
+            if _ip != first_ip
+            and _checkpoint.is_node_done("peer_option4_done", _ip)
+            and not _checkpoint.is_node_done("peer_joined", _ip)
+        ]
+        if _protected_peers:
+            _peer_list = ", ".join(sorted(_protected_peers))
+            _ans_peer_reinit = _prompt_with_timeout(
+                "\n  ⚠️  Checkpoint shows these peers already passed option 4: "
+                f"{_peer_list}. Replay destructive reinit for them anyway? [y/N]: ",
+                default="n",
+                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+            ).strip().lower()
+            if _ans_peer_reinit not in ("y", "yes"):
+                for _ip in _protected_peers:
+                    if _ip in _reconnect_targets:
+                        _reconnect_targets.remove(_ip)
+                _status(
+                    "  🔒 Skipping peer reinit replay for option4-complete nodes "
+                    "(checkpoint safety policy)."
+                )
+                if log:
+                    log.log(
+                        "4b resume: skipped peer reinit replay for option4-complete peers "
+                        f"{sorted(_protected_peers)}"
+                    )
+            elif log:
+                log.log(
+                    "4b resume: operator confirmed peer reinit replay for option4-complete peers "
+                    f"{sorted(_protected_peers)}",
+                    prefix="WARN",
+                )
     if _resume_mode3_add_only:
-        print(
-            "\n  🔖 Resume checkpoint indicates cluster creation already completed; "
-            "skipping destructive reinit and resuming add-node phase."
-        )
+        if _resume_add_phase_inferred:
+            print(
+                "\n  🔖 Resume checkpoint indicates add-node progress "
+                "(peer_option4_done present); skipping destructive reinit and "
+                "resuming add-node phase."
+            )
+            print(
+                "     (cluster_formed flag not yet recorded in checkpoint)"
+            )
+        else:
+            print(
+                "\n  🔖 Resume checkpoint indicates cluster creation already completed; "
+                "skipping destructive reinit and resuming add-node phase."
+            )
     elif _resume_cluster_already_created:
         print(
             "\n  🔖 Resume checkpoint indicates primary cluster is already created; "
@@ -22030,10 +22133,23 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
             print("     option3_complete      : ✅")
         print("=" * 60)
 
-        if prior_primary and not prior_complete:
-            print("\n  ⚠️  The prior run created a cluster on the primary node.")
-            print("      Re-running option 3 will SYSTEM RESET that primary")
-            print("      and DESTROY the existing cluster.")
+        _prior_node_mgmt = prior.is_done("primary_node_mgmt_done")
+        _destructive_progress = bool(
+            not prior_complete and (
+                prior_primary
+                or prior_cluster
+                or prior_bootmenu
+                or _prior_node_mgmt
+                or prior_opt4
+                or prior_joined
+            )
+        )
+
+        if _destructive_progress:
+            print("\n  ⚠️  Prior checkpoint shows option 3 already passed destructive")
+            print("      reset/format/reboot stages.")
+            print("      Re-running option 3 may SYSTEM RESET the primary")
+            print("      and can DESTROY an existing cluster.")
             print("      To finish adding the remaining peer(s) without")
             print("      re-resetting the primary, exit now and run option 2c")
             print("      (Resume node additions) instead.")
@@ -22120,9 +22236,16 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
             print("     option1_complete      : ✅")
         print("=" * 60)
         
-        if prior_primary and not prior_complete:
-            print("\n  ⚠️  The cluster was already created in a prior run!")
-            print("  Running option 1 again will DESTROY THE CLUSTER and lose all data.")
+        _destructive_progress = bool(
+            not prior_complete and (
+                prior_primary or prior_format or prior_install or prior_bootmenu
+            )
+        )
+
+        if _destructive_progress:
+            print("\n  ⚠️  Prior checkpoint shows this run already passed destructive")
+            print("      install/format/reboot stages.")
+            print("  Running option 1 again can DESTROY THE CLUSTER and lose all data.")
             print("  The cluster is likely still running.\n")
             ans = _prompt_with_timeout(
                 "Continue anyway? [y/N]: ",
@@ -22192,9 +22315,14 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
             print("     option2_complete      : ✅")
         print("=" * 60)
         
-        if prior_joined and not prior_complete:
-            print("\n  ⚠️  The node was already added to the cluster in a prior run!")
-            print("  Running option 2 again may cause duplicate node entries.\n")
+        _destructive_progress = bool(
+            not prior_complete and (prior_joined or prior_format or prior_install)
+        )
+        if _destructive_progress:
+            print("\n  ⚠️  Prior checkpoint shows this node already passed destructive")
+            print("      install/format/reboot stages.")
+            print("  Running option 2 again may re-enter those phases or cause")
+            print("  duplicate node entries.\n")
             ans = _prompt_with_timeout(
                 "Continue anyway? [y/N]: ",
                 default="n",
