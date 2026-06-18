@@ -3584,7 +3584,7 @@ def select_operation_mode():
     global _resume_from_start_menu
     _startup_checkpoint_prompt_done = False
     while True:
-        _print_banner("NetApp AFX BMC Console Automation ðŸ¤–")
+        _print_banner("NetApp AFX BMC Console Automation")
         print("\n  What do you want to do?\n")
         print("  1.  Initial cluster creation")
         print("    1a. Format first node in cluster. Use interactive configuration.")
@@ -3621,10 +3621,10 @@ def select_operation_mode():
         print("  6.  Script help and instructions")
         print("  7.  Exit")
         print("")
-        print("  " + "â”€" * 58)
+        print("  " + "-" * 58)
         print("  (type 'menu' at any prompt to return here)")
         print("")
-        print("  ðŸ’¡ Screen tips (--screen): Ctrl+A Esc=scroll, arrows/PgUp/PgDn navigate, q exits scroll mode, Ctrl+A d detaches, and 'screen -r afx-reinit' reattaches.")
+        print("  Screen tips (--screen): Ctrl+A Esc=scroll, arrows/PgUp/PgDn navigate, q exits scroll mode, Ctrl+A d detaches, and 'screen -r afx-reinit' reattaches.")
         print("")
         if not _startup_checkpoint_prompt_done:
             _startup_checkpoint_prompt_done = True
@@ -3641,7 +3641,7 @@ def select_operation_mode():
                 _menu_opt = _checkpoint_menu_option_label(_cp_mode)
                 _stage = _checkpoint_resume_stage_label(_cp_start)
                 print("=" * 60)
-                print(f"  ðŸ”– Existing checkpoint found{_cp_age} (EXPERIMENTAL)")
+                print(f"  Existing checkpoint found{_cp_age} (EXPERIMENTAL)")
                 print(f"     Last menu option : {_menu_opt}")
                 print(f"     Checkpoint mode  : {_format_checkpoint_mode(_cp_mode)}")
                 print(f"     Resume stage     : {_stage}")
@@ -3654,10 +3654,10 @@ def select_operation_mode():
                 if _resume_now == "y":
                     if _cp_mode.lower().startswith("4b"):
                         _resume_from_start_menu = True
-                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 4b.")
+                        print("\n  [OK] Resuming EXPERIMENTAL checkpoint via menu option 4b.")
                         return 42, False, False
                     if _cp_mode == "2":
-                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 2c.")
+                        print("\n  [OK] Resuming EXPERIMENTAL checkpoint via menu option 2c.")
                         return 26, False, False
                     if _cp_mode == "3":
                         _mode3_peer_opt4 = bool(_cp_start.nodes_done_for("peer_option4_done"))
@@ -3670,20 +3670,20 @@ def select_operation_mode():
                         )
                         if _mode3_replay_risk:
                             print(
-                                "\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 2c "
+                                "\n  [OK] Resuming EXPERIMENTAL checkpoint via menu option 2c "
                                 "(safe add-node continuation)."
                             )
                             return 26, False, False
-                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 3.")
+                        print("\n  [OK] Resuming EXPERIMENTAL checkpoint via menu option 3.")
                         return 3, True, True
                     if _cp_mode == "1":
-                        print("\n  âœ… Resuming EXPERIMENTAL checkpoint via menu option 1b.")
+                        print("\n  [OK] Resuming EXPERIMENTAL checkpoint via menu option 1b.")
                         return 1, True, False
-                    print("  âš ï¸  Checkpoint mode is not auto-routable from the start menu.")
-        choice = input("â¯â¯  Enter your choice from the menu above (ie, 1a, 2b, 3, etc.): ").strip().lower()
+                    print("  [WARN] Checkpoint mode is not auto-routable from the start menu.")
+        choice = input(">>  Enter your choice from the menu above (ie, 1a, 2b, 3, etc.): ").strip().lower()
 
         if choice == "1a":
-            _print_banner("âš ï¸  WARNING âš ï¸")
+            _print_banner("WARNING")
             print("")
             print("  You will be destroying the storage availability zone on")
             print("  this cluster, deleting all data and reinitializing the")
@@ -3695,7 +3695,7 @@ def select_operation_mode():
             print("  * INSTEAD TO JOIN A NEW NODE TO THE CLUSTER.            *")
             print("  " + "*" * 58)
             print("")
-            print("  " + "â”€" * 58)
+            print("  " + "-" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
                 while True:
