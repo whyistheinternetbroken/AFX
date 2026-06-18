@@ -571,8 +571,28 @@ class CheckpointManager:
                         node_current = _pending_phase
                         node_next = pending[1] if len(pending) > 1 else "(none)"
                 elif completed:
-                    node_current = "(complete)"
-                    node_next = "(none)"
+                    # Check if peer nodes have pending phases while primary is done
+                    if ip == _primary_ip:
+                        _peer_pending_phases = {}
+                        for _peer_ip in all_ips:
+                            if _peer_ip != _primary_ip:
+                                _peer_pending = [
+                                    p for p in phase_names
+                                    if not node_phases.get(p, {}).get(_peer_ip, {}).get("done")
+                                ]
+                                if _peer_pending:
+                                    _peer_pending_phases[_peer_ip] = _peer_pending[0]
+                        if _peer_pending_phases:
+                            _pending_phase_name = next(iter(_peer_pending_phases.values()))
+                            _waiting_peers = ", ".join(sorted(_peer_pending_phases.keys()))
+                            node_current = f"(waiting for peers to complete {_pending_phase_name}: {_waiting_peers})"
+                            node_next = "(none)"
+                        else:
+                            node_current = "(complete)"
+                            node_next = "(none)"
+                    else:
+                        node_current = "(complete)"
+                        node_next = "(none)"
                 elif _synthetic_done_by_ip.get(ip):
                     node_current = "(complete)"
                     node_next = "(none)"
