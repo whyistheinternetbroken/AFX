@@ -12417,7 +12417,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             )
         if not _at_loader:
             # system reset (auto-confirm if prompted).
-            direct_send_and_wait(ch, "system reset", "y/n", timeout=15,
+            direct_send_and_wait(ch, "system reset", "y/n", timeout=10,
                                  auto_respond="y", node_log=node_log)
             print(f"  ⏳ [{host}] Node rebooting...")
             time.sleep(3)
@@ -12428,7 +12428,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             out2, matched2 = direct_read_until_any(
                 ch,
                 ["y/n", "ctrl-d", "serial console", "loader-", "autoboot"],
-                timeout=15,
+                timeout=10,
                 node_log=node_log,
             )
             if matched2 and "y/n" in matched2.lower():
@@ -12727,19 +12727,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     netboot_failed = False
     netboot_fail_reason = ""
 
-    # Discard the contents of NVRAM on the next boot so the netboot install
-    # starts from a clean slate (required for 4b reinit; safe to set as it
-    # only affects the next boot).
-    _status_ts(f"\n  [{node_label}] Setting LOADER env: setenv nvram_discard 1")
-    if log:
-        log.log(f"[{node_label}] setenv nvram_discard 1")
-    if nf:
-        _par_send(channel, nf, "setenv nvram_discard 1")
-        _par_recv_until(channel, nf, ["LOADER-", "loader-"], timeout=15)
-    else:
-        direct_send_and_wait(channel, "setenv nvram_discard 1", "LOADER-", timeout=15)
-
-    # Capture the full download span across all retry attempts.
+    # Netboot image download (physical zeroing option was already set above).
     _whole_dl_t0 = time.monotonic()
     for _nb_attempt in range(1, _NETBOOT_MAX_ATTEMPTS + 1):
         if _nb_attempt == 1:
@@ -15445,6 +15433,35 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     _reconnect_lock = threading.Lock()
     _primary_resume_buf = ""
 
+    # ── Pre-reconnect cleanup: clear known_hosts for all BMCs ─────────────
+    # Before attempting to reconnect via BMC SSH, pre-emptively refresh
+    # known_hosts to avoid stale host-key issues from the boot menu phase.
+    # Run in parallel threads to minimize delay.
+    def _cleanup_bmc_known_hosts(ip):
+        try:
+            subprocess.run(
+                ["ssh-keygen", "-R", ip],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+            if log:
+                log.log(f"[{ip}] pre-reconnect known_hosts cleanup done")
+        except Exception as e:
+            if log:
+                log.log(f"[{ip}] pre-reconnect known_hosts cleanup warning: {e}",
+                        prefix="WARN")
+
+    if _reconnect_targets:
+        _cleanup_threads = [
+            threading.Thread(target=_cleanup_bmc_known_hosts, args=(ip,), daemon=True)
+            for ip in _reconnect_targets
+        ]
+        for t in _cleanup_threads:
+            t.start()
+        for t in _cleanup_threads:
+            t.join(timeout=10)
+
     # Pre-open one unified per-BMC session log file for reinit phases
     # (reconnect-to-LOADER, boot menu, and init wizard).
     #   Primary node → bmc_session_reinit_primary_<ip>_<ts>.log
@@ -15500,7 +15517,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         # which can exhaust the BMC SSH daemon capacity and cause banner
         # timeout / auth errors on simultaneous handshakes.
         if stagger_idx > 0:
-            time.sleep(stagger_idx * 2)
+            time.sleep(stagger_idx * 0.5)  # Reduced from 2s to 0.5s per node
         # Use the pre-opened unified log; do not open or close it here.
         _rl_nf = _node_reinit_logs.get(ip)
         _fb = _bmc_fallback_passwords(ip, bmc_passwords)
@@ -15510,7 +15527,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         # whole reach-LOADER sequence a few times before giving up so a
         # single transient failure does not abort the reinit.
         _reach_max = 3
-        _reach_interval = 60  # seconds between attempts
+        _reach_interval = 30  # Reduced from 60s to 30s between attempts
         cl = ch = None
         _fail_reason = "ssh"  # default; updated by each _bmc_reach_loader call
         # Resume hardening: when install was already completed from checkpoint,
