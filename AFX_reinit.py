@@ -1357,10 +1357,19 @@ def _tracked_input(prompt=""):
     global _prompt_wait_seconds, _prompt_wait_count
     global _prompt_wait_max, _prompt_wait_max_label
     _start = time.monotonic()
+    _non_phase_token = None
+    if _session_log:
+        with suppress(Exception):
+            _non_phase_token = _session_log.push_non_phase_reason(
+                "operator prompt wait"
+            )
     try:
         return _orig_input(prompt)
     finally:
         _elapsed = time.monotonic() - _start
+        if _session_log:
+            with suppress(Exception):
+                _session_log.pop_non_phase_reason(_non_phase_token)
         # Strip ANSI/whitespace from the label so the summary stays readable.
         try:
             _label = re.sub(r"\x1b\[[0-9;]*m", "", str(prompt))
@@ -2125,6 +2134,7 @@ class SessionLogger:
     # operations are visible in the log file as time progresses, without
     # cluttering the console.
     _HEARTBEAT_INTERVAL = 15.0
+    _DEFAULT_NON_PHASE_REASON = "startup / inter-phase transition"
 
     def __init__(self, bg_mode: bool = False):
         try:
@@ -2167,6 +2177,8 @@ class SessionLogger:
         self._current_phase_start = None
         # Runtime spent outside any explicit start_phase/end_phase window.
         self._non_phase_seconds = 0.0
+        self._non_phase_buckets = {}
+        self._current_non_phase_reason = self._DEFAULT_NON_PHASE_REASON
         self._non_phase_anchor = self._start_time
 
         # Per-step timing. Steps are nested-allowed lightweight measurements
@@ -2388,9 +2400,7 @@ class SessionLogger:
                 elapsed = (now - self._current_phase_start).total_seconds()
                 self._phase_times[self._current_phase] = elapsed
             else:
-                self._non_phase_seconds += max(
-                    0.0, (now - self._non_phase_anchor).total_seconds()
-                )
+                self._record_non_phase_window_locked(now)
             self._current_phase = phase_name
             self._current_phase_start = now
             self._file.write(
@@ -2430,6 +2440,7 @@ class SessionLogger:
                 _ended_phase = self._current_phase
                 self._current_phase = None
                 self._current_phase_start = None
+                self._current_non_phase_reason = self._DEFAULT_NON_PHASE_REASON
                 self._non_phase_anchor = now
                 if _checkpoint:
                     with suppress(Exception):
@@ -2618,6 +2629,78 @@ class SessionLogger:
             _total += max(0.0, (_now - self._non_phase_anchor).total_seconds())
         return max(0.0, _total)
 
+    def _record_non_phase_window_locked(self, now: "datetime | None" = None) -> None:
+        """Roll the current non-phase window into its reason bucket.
+
+        Caller must hold ``self._lock``.
+        """
+        if self._current_phase is not None:
+            return
+        _now = now or datetime.now()
+        _elapsed = max(0.0, (_now - self._non_phase_anchor).total_seconds())
+        if _elapsed <= 0:
+            self._non_phase_anchor = _now
+            return
+        _reason = (
+            str(self._current_non_phase_reason or "").strip()
+            or self._DEFAULT_NON_PHASE_REASON
+        )
+        self._non_phase_buckets[_reason] = (
+            self._non_phase_buckets.get(_reason, 0.0) + _elapsed
+        )
+        self._non_phase_seconds += _elapsed
+        self._non_phase_anchor = _now
+
+    def push_non_phase_reason(self, reason: str) -> "str | None":
+        """Temporarily classify active non-phase time under *reason*.
+
+        Returns the previous reason when a non-phase window is active, otherwise
+        ``None`` (e.g. when called while a tracked phase is running).
+        """
+        with self._lock:
+            if self._closed or self._current_phase is not None:
+                return None
+            _now = datetime.now()
+            self._record_non_phase_window_locked(_now)
+            _prev = self._current_non_phase_reason
+            self._current_non_phase_reason = (
+                str(reason or "").strip() or self._DEFAULT_NON_PHASE_REASON
+            )
+            self._non_phase_anchor = _now
+            return _prev
+
+    def pop_non_phase_reason(self, previous_reason: "str | None") -> None:
+        """Restore a prior non-phase reason returned by push_non_phase_reason()."""
+        if previous_reason is None:
+            return
+        with self._lock:
+            if self._closed or self._current_phase is not None:
+                return
+            _now = datetime.now()
+            self._record_non_phase_window_locked(_now)
+            self._current_non_phase_reason = (
+                str(previous_reason or "").strip() or self._DEFAULT_NON_PHASE_REASON
+            )
+            self._non_phase_anchor = _now
+
+    def _non_phase_breakdown(self, now: "datetime | None" = None) -> "dict[str, float]":
+        """Return reason-coded non-phase time buckets including the active window."""
+        _now = now or datetime.now()
+        _out = {
+            str(_label): float(_elapsed)
+            for _label, _elapsed in self._non_phase_buckets.items()
+            if float(_elapsed) > 0
+        }
+        if self._current_phase is None:
+            _active = max(0.0, (_now - self._non_phase_anchor).total_seconds())
+            if _active > 0:
+                _label = (
+                    str(self._current_non_phase_reason or "").strip()
+                    or self._DEFAULT_NON_PHASE_REASON
+                )
+                _out[_label] = _out.get(_label, 0.0) + _active
+        return _out
+
     def record_completion(self, normal_exit: bool = True):
         """Convenience wrapper: sets outcome based on error/warn counters and
         calls close(). Intended to be the single call at the normal exit path
@@ -2687,6 +2770,8 @@ class SessionLogger:
             if self._current_phase and self._current_phase_start:
                 elapsed = (now - self._current_phase_start).total_seconds()
                 self._phase_times[self._current_phase] = elapsed
+            else:
+                self._record_non_phase_window_locked(now)
 
             # Flush any still-open steps so their partial duration shows up
             # in the summary instead of being silently dropped.
@@ -2771,15 +2856,15 @@ class SessionLogger:
                     )
             self._file.write(f"  {'─' * 55}\n")
             self._file.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
-            # Operator idle time at interactive prompts plus deliberate
-            # pause-wait time plus the unaccounted gap (anything not covered
-            # by tracked phases, prompt waits, or pause waits) so the
-            # wall-clock vs. phase-sum discrepancy is visible at a glance.
+            # Prompt/pause totals are informational. True "unaccounted" time is
+            # only the residual after tracked phases plus reason-coded
+            # non-phase buckets are removed from wall-clock runtime.
             _pw = float(_prompt_wait_seconds)
             _paw = float(_pause_wait_seconds)
             _phase_sum = sum(self._phase_times.values()) if self._phase_times else 0.0
-            _unaccounted = max(0.0, total_elapsed - _phase_sum - _pw)
-            _non_phase = self._non_phase_elapsed(now)
+            _non_phase_breakdown = self._non_phase_breakdown(now)
+            _non_phase_total = sum(_non_phase_breakdown.values()) if _non_phase_breakdown else 0.0
+            _unaccounted = max(0.0, total_elapsed - _phase_sum - _non_phase_total)
             self._file.write(
                 f"  {'Time waiting for prompts (x' + str(_prompt_wait_count) + ')':<45} "
                 f"{_pw:>7.1f}s ({_pw/60:.1f}m)\n"
@@ -2806,12 +2891,16 @@ class SessionLogger:
                     f"({_pause_wait_max/60:.1f}m) context: {_plbl}\n"
                 )
             self._file.write(
-                f"  {'Unaccounted time':<45} {_unaccounted:>7.1f}s ({_unaccounted/60:.1f}m)\n"
+                f"  {'Non-phase time (classified)':<45} {_non_phase_total:>7.1f}s ({_non_phase_total/60:.1f}m)\n"
             )
+            for _np_label, _np_elapsed in _non_phase_breakdown.items():
+                self._file.write(
+                    f"     - {_np_label:<39} {_np_elapsed:>7.1f}s ({_np_elapsed/60:.1f}m)\n"
+                )
+            _residual = _unaccounted
             self._file.write(
-                f"     - {'outside tracked phases':<39} {_non_phase:>7.1f}s ({_non_phase/60:.1f}m)\n"
+                f"  {'Unaccounted time':<45} {_residual:>7.1f}s ({_residual/60:.1f}m)\n"
             )
-            _residual = max(0.0, _unaccounted - _non_phase)
             self._file.write(
                 f"     - {'residual instrumentation gap':<39} {_residual:>7.1f}s ({_residual/60:.1f}m)\n"
             )
@@ -2945,8 +3034,11 @@ class SessionLogger:
                 sf.write(f"  {'TOTAL':<45} {total_elapsed:>7.1f}s ({total_elapsed/60:.1f}m)\n")
                 _pw = float(_prompt_wait_seconds)
                 _paw = float(_pause_wait_seconds)
-                _unaccounted = max(0.0, total_elapsed - _phase_total_for_accounting - _pw)
-                _non_phase = self._non_phase_elapsed(now)
+                _non_phase_breakdown = self._non_phase_breakdown(now)
+                _non_phase_total = sum(_non_phase_breakdown.values()) if _non_phase_breakdown else 0.0
+                _unaccounted = max(
+                    0.0, total_elapsed - _phase_total_for_accounting - _non_phase_total
+                )
                 sf.write(
                     f"  {'Time waiting for prompts (x' + str(_prompt_wait_count) + ')':<45} "
                     f"{_pw:>7.1f}s ({_pw/60:.1f}m)\n"
@@ -2973,12 +3065,16 @@ class SessionLogger:
                         f"({_pause_wait_max/60:.1f}m) context: {_plbl}\n"
                     )
                 sf.write(
-                    f"  {'Unaccounted time':<45} {_unaccounted:>7.1f}s ({_unaccounted/60:.1f}m)\n"
+                    f"  {'Non-phase time (classified)':<45} {_non_phase_total:>7.1f}s ({_non_phase_total/60:.1f}m)\n"
                 )
+                for _np_label, _np_elapsed in _non_phase_breakdown.items():
+                    sf.write(
+                        f"     - {_np_label:<39} {_np_elapsed:>7.1f}s ({_np_elapsed/60:.1f}m)\n"
+                    )
+                _residual = _unaccounted
                 sf.write(
-                    f"     - {'outside tracked phases':<39} {_non_phase:>7.1f}s ({_non_phase/60:.1f}m)\n"
+                    f"  {'Unaccounted time':<45} {_residual:>7.1f}s ({_residual/60:.1f}m)\n"
                 )
-                _residual = max(0.0, _unaccounted - _non_phase)
                 sf.write(
                     f"     - {'residual instrumentation gap':<39} {_residual:>7.1f}s ({_residual/60:.1f}m)\n"
                 )
@@ -4130,6 +4226,12 @@ def _wait_if_paused(context: str = "automation") -> None:
     _pause_started = time.monotonic()
     _next_reminder = _pause_started + 300
     _pause_was_active = False
+    _non_phase_token = None
+    if _session_log:
+        with suppress(Exception):
+            _non_phase_token = _session_log.push_non_phase_reason(
+                "runtime pause wait"
+            )
     while not _shutdown_event.is_set() and _pause_requested():
         _pause_was_active = True
         _process_runtime_requests(context)
@@ -4176,6 +4278,9 @@ def _wait_if_paused(context: str = "automation") -> None:
             if _pause_elapsed > _pause_wait_max:
                 _pause_wait_max = _pause_elapsed
                 _pause_wait_max_label = context
+    if _session_log:
+        with suppress(Exception):
+            _session_log.pop_non_phase_reason(_non_phase_token)
 
 
 def _pause_allows_reconnect(context: str = "reconnect") -> bool:
@@ -20446,6 +20551,13 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     """
     if not cluster_ips:
         return True
+
+    if _checkpoint:
+        with suppress(Exception):
+            _checkpoint.set_current_phase(
+                "Node join finalization",
+                state="in_progress",
+            )
 
     ips_str = ",".join(cluster_ips)
     print("\n  Fetching cluster network IP")
