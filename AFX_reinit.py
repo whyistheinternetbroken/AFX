@@ -12592,6 +12592,13 @@ def _peer_reinit_worker(ip, ctx):
             _elapsed = time.monotonic() - _start
             if time.monotonic() - _last_progress >= 120:
                 _status(f"  ⏳ [{ip}] Still waiting for boot menu... ({int(_elapsed)}s elapsed)")
+                try:
+                    _keepalive_ch = (_peer_rc_ctx.get("channel")
+                                     if (_peer_rc_ctx and _peer_rc_ctx.get("channel") is not None)
+                                     else peer_ch)
+                    _keepalive_ch.send("\r")
+                except Exception:
+                    pass
                 _last_progress = time.monotonic()
             _remaining = max(1, int(900 - _elapsed))
             _slice_timeout = min(30, _remaining)
@@ -22839,13 +22846,59 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
             except Exception:
                 pass
 
+    _rc = reconnect_ctx
+    if _rc is None and _primary_bmc_reconnect_ctx:
+        _rc = _primary_bmc_reconnect_ctx
+    if _rc is not None:
+        _rc["channel"] = channel
+
+    _already_in_wizard = False
+    _second_bootmenu_visible = False
+
     # 1) Storage availability zone warning -> "no"
     print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for storage-availability-zone warning (auto-answer 'no')...{_elapsed_str()}")
     _slog("Waiting for storage-availability-zone warning")
-    direct_send_and_wait(
-        channel, "", "storage availability zone will be destroyed",
-        timeout=1800, auto_respond="no", quiet=True, node_log=_boot_log,
+    _ch_init = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
+    _init_sigs = [
+        "storage availability zone will be destroyed",
+        "type yes to confirm and continue",
+        "welcome to the cluster setup wizard",
+        "selection (1-",
+        "selection (1-9)?",
+        "selection (1-11)?",
+        "selection (1-12)?",
+        "boot menu",
+    ]
+    _init_chunk, _init_matched = direct_read_until_any(
+        _ch_init,
+        _init_sigs,
+        timeout=1800,
+        node_log=_boot_log,
+        quiet=True,
+        check_bmc_drop=True,
+        reconnect_ctx=_rc,
     )
+    if _rc and _rc.get("channel") is not None:
+        channel = _rc["channel"]
+    _init_l = str(_init_matched or "").lower()
+    if "storage availability zone will be destroyed" in _init_l:
+        if _session_log:
+            _session_log.log("Storage availability zone warning detected; auto-responding 'no'")
+            _session_log.log_sent("no")
+        try:
+            channel.send("no\r")
+        except Exception:
+            pass
+    elif ("type yes to confirm and continue" in _init_l
+          or "welcome to the cluster setup wizard" in _init_l):
+        _already_in_wizard = True
+        print(f"   ℹ️  {_node_pfx(bmc_host)}Cluster setup wizard already active; skipping second boot-menu wait.")
+        _slog(f"[{bmc_host}] cluster setup wizard detected before second boot menu")
+    elif any(_sig in _init_l for _sig in (
+        "selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu"
+    )):
+        _second_bootmenu_visible = True
+        _slog(f"[{bmc_host}] second boot menu already visible after option 9")
 
     # 2) Wait for the *second* boot menu and select option 4.
     print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for second boot menu (auto-select option 4)...{_elapsed_str()}")
@@ -22864,11 +22917,9 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
     found = False
     loader_recovery_attempted = False
     boot_wait_extension = 0
-    _rc = reconnect_ctx
-    if _rc is None and _primary_bmc_reconnect_ctx:
-        _rc = _primary_bmc_reconnect_ctx
-    if _rc is not None:
-        _rc["channel"] = channel
+    _skip_option4 = _already_in_wizard
+    if _already_in_wizard or _second_bootmenu_visible:
+        found = True
     while time.monotonic() - start < (2400 + boot_wait_extension):
         if _shutdown_event.is_set():
             return
@@ -22948,14 +22999,19 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         _close_boot_log()
         return
 
-    drain_channel(channel, seconds=1)
-    print(f"🔢 {_node_pfx(bmc_host)}Selecting option 4 (Initialize and configure)...{_elapsed_str()}")
-    if _session_log:
-        _session_log.log("2nd boot menu detected; auto-selecting option 4")
-        _session_log.log_sent("4")
-    channel.send("4\r")
-    _cleanup_known_hosts_after_boot_option(bmc_host or "primary", "4", log=_session_log)
-    time.sleep(2)
+    if _skip_option4:
+        print(f"ℹ️  {_node_pfx(bmc_host)}Skipping option 4 because cluster setup wizard is already active.")
+        if _session_log:
+            _session_log.log("Cluster setup wizard already active; skipping option 4 selection")
+    else:
+        drain_channel(channel, seconds=1)
+        print(f"🔢 {_node_pfx(bmc_host)}Selecting option 4 (Initialize and configure)...{_elapsed_str()}")
+        if _session_log:
+            _session_log.log("2nd boot menu detected; auto-selecting option 4")
+            _session_log.log_sent("4")
+        channel.send("4\r")
+        _cleanup_known_hosts_after_boot_option(bmc_host or "primary", "4", log=_session_log)
+        time.sleep(2)
 
     # 3) Yes confirmations.
     _auto_answer_disk_erase_prompts(channel, label=bmc_host or "",
