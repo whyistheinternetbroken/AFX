@@ -13959,10 +13959,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
         # Always run option 6 first: this updates flash from backup config and
         # boots every node to the login prompt, confirming the install succeeded.
         # If reinit was requested we reconnect via BMC afterwards (Step 6b).
-        print("\n  Selecting boot menu option 6 (Update flash from backup config) on all nodes"
-              " to complete the netboot/install...")
-        if log:
-            log.log(f"4b: running option 6 on all nodes to finish install (do_reinit={_do_reinit})")
+        # NOTE: 4d mode skips option 6 and proceeds directly to reinit with option 9.
+        if not _is_4d:
+           print("\n  Selecting boot menu option 6 (Update flash from backup config) on all nodes"
+                 " to complete the netboot/install...")
+           if log:
+               log.log(f"4b: running option 6 on all nodes to finish install (do_reinit={_do_reinit})")
 
         _menu_sigs_lower = [
                 "selection (1-", "(1-9)?", "(1-11)?", "(1-12)?",
@@ -15161,7 +15163,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                 daemon=True,
             )
             for ip in _install_bmc_ips
-        ]
+        ] if not _is_4d else []
         for t in opt6_threads:
             t.start()
         for t in opt6_threads:
@@ -15172,7 +15174,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
         # Per-node marks are already written inside _select_option6 as soon
         # as each node reaches login, so a kill mid-run preserves progress.
         # This post-join sweep is a belt-and-suspenders idempotent backstop.
-        if _checkpoint:
+        if _checkpoint and not _is_4d:
             for _ip_ok in _opt6_login_nodes:
                 if _checkpoint.is_node_done("install_done", _ip_ok):
                     continue
@@ -15191,7 +15193,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
         # and let the operator confirm before wiping everything.
         # Skip this block when VLDB timeout caused nodes to be marked as
         # "login" — those nodes are NOT actually at a login prompt.
-        if (_opt6_login_nodes == set(_install_bmc_ips)
+        # NOTE: 4d mode skips this check since it does not run option 6.
+        if (not _is_4d
+                and _opt6_login_nodes == set(_install_bmc_ips)
                 and not _vldb_timeout_nodes
                 and not _nvram_mismatch_nodes):
             _ver_str = None
