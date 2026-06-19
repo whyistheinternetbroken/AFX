@@ -13291,6 +13291,11 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
             _do_reinit = _cp_do_reinit
             _mode_sel  = _cp_mode_sel
             print(f"\n  🔖 Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
+        elif _is_4d:
+            # For 4d hidden mode, automatically use mode 3 (end-to-end auto initialize)
+            print("\n  ✅ Package selected. 4d mode: proceeding with end-to-end initialization (mode 3).")
+            _do_reinit = True
+            _mode_sel = "3"
         else:
             print("\n  ✅ Package selected. Now collecting all setup information upfront.")
             while True:
