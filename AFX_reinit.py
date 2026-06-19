@@ -6689,7 +6689,7 @@ def _run_4d_hidden_post_install(
                 raise RuntimeError("no peer cluster IP detected")
             with peer_lock:
                 peer_cluster_ips[ip] = _cip
-            status_cb(f"  ✅ [{ip}] Peer ready at ::> (cluster IP { _cip }).")
+            status_cb(f"  ✅ [{ip}] Peer ready at ::> (cluster IP {_cip}).")
         except Exception as exc:
             with peer_lock:
                 peer_failures.append((ip, str(exc)))
@@ -6803,9 +6803,9 @@ def _run_4b_standalone(log, hidden_mode_4d=False):
         if _is_4d:
             _m = re.search(r"\[([^\]]+)\]", stripped)
             _node = _m.group(1) if _m else "4d"
-            _txt = re.sub(r"^[^A-Za-z0-9\[]*", "", stripped)
+            _txt = re.sub(r"^.*?\]\s*", "", stripped)
             _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            stripped = f"[{_node}] | [{_ts}] | [{prefix}] {_txt}"
+            stripped = f"[{_node}] | {_ts} | {prefix} {_txt}"
         with _stdout_lock:
             print(stripped)
         # Mirror to the session log so the log file is a complete record.
