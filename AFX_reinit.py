@@ -4172,6 +4172,9 @@ _loader_env_stage_enabled: "bool | None" = None
 _force_autoboot_true: "bool | None" = None
 _force_autoboot_lock = threading.Lock()
 
+# Tracks whether hidden 4d mode is active in the current run.
+_is_4d = False
+
 _shutdown_event = threading.Event()
 _fatal_boot_dna_event = threading.Event()
 _fatal_boot_dna_lock = threading.Lock()
@@ -12730,6 +12733,17 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         if "loader-" not in output.lower():
             _status_ts(f"  ⚠️  [{node_label}] LOADER prompt not seen after ifconfig; continuing...")
 
+    # ── Boot DNA check (Phase 1: verify platform before netboot) ────────────────
+    _status_ts(f"\n  {_format_status_line(node_label, '🧬 Verifying boot DNA (bootarg.init.dna)...', 'INFO')}")
+    if log:
+        log.log(f"[{node_label}] verifying boot DNA via printenv")
+    if not _verify_boot_dna(channel, node_log=log, node_label=node_label):
+        _status_ts(f"  ❌ [{node_label}] Unsupported boot DNA detected; aborting netboot install.")
+        if log:
+            log.log(f"[{node_label}] boot DNA check failed; aborting netboot", prefix="ERROR")
+        return False
+    _status_ts(f"  ✅ {_format_status_line(node_label, 'Boot DNA verified; proceeding with netboot.', 'SUCCESS')}")
+
     # ── 2+3. netboot + wait for boot menu (retry on download failure) ────────
     _NETBOOT_MAX_ATTEMPTS = 3
     menu_sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
@@ -13028,6 +13042,8 @@ def _peer_reinit_worker(ip, ctx):
     _status           = ctx["status"]
     _node_reinit_logs = ctx.get("node_reinit_logs") or {}
     cluster_ips_out   = ctx.get("cluster_ips_out")
+    _primary_ready_event = ctx.get("primary_option9_done_event")
+    _primary_node_ip = ctx.get("primary_node_ip")
 
     peer_ch = loader_channels.get(ip)
     peer_cl = loader_clients.get(ip)
@@ -13050,8 +13066,23 @@ def _peer_reinit_worker(ip, ctx):
         sys.stdout = _peer_nlw
 
     try:
+        if _primary_ready_event is not None and ip != _primary_node_ip:
+            _status(
+                f"  ⏳ {_format_status_line(ip, 'Waiting for primary option 9 completion before peer option 4.', 'INFO')}"
+            )
+            if not _primary_ready_event.wait(timeout=3600):
+                _status(
+                    f"  ⚠️  {_format_status_line(ip, 'Timed out waiting for primary option 9 completion.', 'WARN')}"
+                )
+                with peer_lock:
+                    peer_errors.append((ip, "primary option 9 wait timeout"))
+                return
+            _status(
+                f"  ✅ {_format_status_line(ip, 'Primary option 9 complete; proceeding with peer option 4.', 'SUCCESS')}"
+            )
+
         # Wait for boot menu, then send option 4.
-        _status(f"  ⏳ [{ip}] Waiting for boot menu (peer)...")
+        _status(f"  ⏳ {_format_status_line(ip, 'Waiting for boot menu (peer)...', 'INFO')}")
         _buf_lower = ""
         _start = time.monotonic()
         _found = False
@@ -13061,7 +13092,9 @@ def _peer_reinit_worker(ip, ctx):
                 break
             _elapsed = time.monotonic() - _start
             if time.monotonic() - _last_progress >= 120:
-                _status(f"  ⏳ [{ip}] Still waiting for boot menu... ({int(_elapsed)}s elapsed)")
+                _status(
+                    f"  ⏳ {_format_status_line(ip, f'Still waiting for boot menu... ({int(_elapsed)}s elapsed)', 'INFO')}"
+                )
                 try:
                     _keepalive_ch = (_peer_rc_ctx.get("channel")
                                      if (_peer_rc_ctx and _peer_rc_ctx.get("channel") is not None)
@@ -13103,7 +13136,9 @@ def _peer_reinit_worker(ip, ctx):
             return
 
         time.sleep(1)
-        _status(f"  ✅ [{ip}] Boot menu detected – selecting option 4...")
+        _status(
+            f"  ✅ {_format_status_line(ip, 'Boot menu detected – selecting option 4...', 'SUCCESS')}"
+        )
         if log:
             log.log(f"[{ip}] boot menu detected – sending option 4")
         if _pnf:
@@ -13131,7 +13166,9 @@ def _peer_reinit_worker(ip, ctx):
             with peer_lock:
                 peer_errors.append((ip, "cluster IP capture failed"))
         else:
-            _status(f"  ✅ [{ip}] Ready for cluster add-node (IP: {_cluster_ip}).")
+            _status(
+                f"  ✅ {_format_status_line(ip, f'Ready for cluster add-node (IP: {_cluster_ip}).', 'SUCCESS')}"
+            )
     finally:
         # Restore stdout; log file is closed after all workers finish.
         sys.stdout = _prev_stdout
@@ -13159,11 +13196,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
     If *resuming* is True the module-level ``_checkpoint`` is used to skip
     already-completed phases. Returns True on success.
     """
-    global _peer_log_paths, _checkpoint, _loader_env_stage_enabled, _bootarg_check_enabled
+    global _peer_log_paths, _checkpoint, _loader_env_stage_enabled, _bootarg_check_enabled, _is_4d
     _peer_log_paths = {}  # reset for this run
     _loader_env_stage_enabled = None
     _bootarg_check_enabled = None
-    _is_4d = hidden_mode_4d  # Local flag for 4d-specific branches
+    _is_4d = hidden_mode_4d  # 4d-specific branches (shared with helper guards)
+    _4d_primary_option9_done = threading.Event()
+    _4d_primary_node_ip = None
 
     # ── Shared state ───────────────────────────────────────────────────────
     # Serializes the brief status lines printed to the console by parallel
@@ -13232,6 +13271,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
             return False
         if log:
             log.log(f"4b: {len(bmc_ips)} node(s): {bmc_ips}")
+    _4d_primary_node_ip = bmc_ips[0] if (_is_4d and bmc_ips) else None
 
     # If any BMC password was left empty, ask for the cluster admin password
     # now so it is available when the cluster setup wizard runs later.
@@ -14659,7 +14699,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                     _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
                 except OSError:
                     pass
-                _status(f"  ⏳ [{ip}] Option 4 sent – auto-answering disk erase prompts...")
+                _status(
+                    f"  ⏳ {_format_status_line(ip, 'Option 4 sent – auto-answering disk erase prompts...', 'INFO')}"
+                )
                 if log:
                     log.log(f"[{ip}] option 4 sent after unexpected boot menu; answering disk erase prompts")
 
@@ -15156,6 +15198,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                 except Exception:
                     pass
 
+        # 4d mode skips option 6 entirely; peers proceed via option 4 after primary option 9.
         opt6_threads = [
             threading.Thread(
                 target=_select_option6,
@@ -15825,12 +15868,105 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
     first_ch = loader_channels.get(first_ip)
     first_cl = loader_clients.get(first_ip)
     _peers_for_reinit = bmc_ips[1:] if _mode_sel == "3" else []
+    _peer_errors = []
+    _peer_lock = threading.Lock()
+    _4b_cluster_ips_out = {}  # peer_bmc -> cluster interface IP
+    _peer_ctx = None
+    _peer_threads = []
+    _peer_replay_targets = []
+    _4b_admin_pw = ""
 
     if first_ch is None and not (_resume_mode3_add_only or _resume_cluster_already_created):
         print("\n  ❌ No channel available for first node. Cannot start reinit.")
         if log:
             log.log("4b: no channel for primary reinit after reconnect", prefix="ERROR")
         return False
+
+    if _mode_sel == "3" and _peers_for_reinit:
+        print(f"\n  Mode 3: auto-joining {len(_peers_for_reinit)} peer node(s) in parallel...")
+        if log:
+            log.log(f"4b: mode 3 peer auto-join for {_peers_for_reinit}")
+
+        _menu_sigs_lower = [
+            "selection (1-", "(1-9)?", "(1-11)?", "(1-12)?",
+            # Shown after netboot install when boot device has changed:
+            "use option (6) to restore the system configuration",
+            "normal boot is prohibited",
+        ]
+
+        # admin_password for logging into nodes after wizard abort
+        _4b_admin_pw = (
+            _cluster_config.get("admin_password")
+            or ((_config_data.get("cluster") or {}).get("password")
+                if isinstance(_config_data, dict) else None)
+            or ""
+        )
+
+        _peer_ctx = {
+            "loader_channels":  loader_channels,
+            "loader_clients":   loader_clients,
+            "bmc_user":         bmc_user,
+            "bmc_passwords":    bmc_passwords,
+            "admin_password":   _4b_admin_pw,
+            "log":              log,
+            "peer_errors":      _peer_errors,
+            "peer_lock":        _peer_lock,
+            "menu_sigs_lower":  _menu_sigs_lower,
+            "status":           _status,
+            "node_reinit_logs": _node_reinit_logs,
+            "cluster_ips_out":  _4b_cluster_ips_out,
+            "primary_option9_done_event": (_4d_primary_option9_done if _is_4d else None),
+            "primary_node_ip":  _4d_primary_node_ip,
+        }
+
+        if _resume_ready_peer_ips:
+            _4b_cluster_ips_out.update(_resume_ready_peer_ips)
+            print(
+                "\n  🔖 Checkpoint: skipping peer LOADER replay for "
+                f"{len(_resume_ready_peer_ips)} node(s) already past node configuration:"
+            )
+            for _peer_ip, _cluster_ip in sorted(_resume_ready_peer_ips.items()):
+                print(f"     [{_peer_ip}] cluster IP { _cluster_ip }")
+            if log:
+                log.log(
+                    "4b resume: reusing peer_option4_done state for peers: "
+                    f"{sorted(_resume_ready_peer_ips)}"
+                )
+
+        # Write node-add manifest so option 2c can resume if interrupted.
+        _write_node_add_manifest(
+            nodes=[
+                dict(
+                    bmc=_pip,
+                    bmc_user=bmc_user,
+                    bmc_password=bmc_passwords.get(_pip, ""),
+                    **{k: v for k, v in (_node_mgmt_by_bmc.get(_pip) or {}).items()
+                       if k in ("node_mgmt_ip", "node_mgmt_port",
+                                "node_mgmt_netmask", "node_mgmt_gateway")},
+                )
+                for _pip in _peers_for_reinit
+            ],
+            cluster_mgmt_ip=_cluster_config.get("mgmt_ip") or "",
+            cluster_admin_user=(_cluster_config.get("admin_user") or "admin"),
+            cluster_admin_password=(_cluster_config.get("admin_password") or ""),
+        )
+
+        _peer_replay_targets = [
+            _pip for _pip in _peers_for_reinit if _pip not in _resume_ready_peer_ips
+        ]
+
+    def _launch_peer_threads_if_needed():
+        nonlocal _peer_threads
+        if _peer_threads or not _peer_ctx or not _peer_replay_targets:
+            return
+        _peer_threads = [
+            threading.Thread(
+                target=_peer_reinit_worker, args=(ip, _peer_ctx), daemon=True
+            )
+            for ip in _peer_replay_targets
+        ]
+        for _t in _peer_threads:
+            _t.start()
 
     # ── Wait for post-install boot menu on primary, select 9 (modes 1/3) ──
     # Reuse the unified log already opened for the primary node.
@@ -15853,8 +15989,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
             channel=first_ch,
             label=f"4b/bootmenu/{first_ip}",
         )
-        if not wait_for_boot_menu_and_select(
-                first_ch, node_log=_pnf_primary, reconnect_ctx=_first_rc_ctx):
+        _primary_option9_selected = wait_for_boot_menu_and_select(
+            first_ch, node_log=_pnf_primary, reconnect_ctx=_first_rc_ctx
+        )
+        if not _primary_option9_selected:
             print(f"  ⚠️  [{first_ip}] Boot menu not detected; operator may need to intervene.")
             if log:
                 log.log(f"[{first_ip}] boot menu not seen for primary reinit", prefix="WARN")
@@ -15875,6 +16013,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                 raise
             except Exception:
                 pass
+        if _is_4d and _mode_sel == "3" and _peers_for_reinit and _primary_option9_selected:
+            _4d_primary_option9_done.set()
+            _status(
+                f"  ✅ {_format_status_line(first_ip, 'Primary option 9 complete; 4d peers may proceed to option 4.', 'SUCCESS')}"
+            )
+            _launch_peer_threads_if_needed()
     elif log:
         log.log(f"[{first_ip}] resume: skipping boot-menu replay because wizard is already active")
 
@@ -15992,78 +16136,6 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
 
     # ── Mode 3: auto-join peer nodes ───────────────────────────────────────
     if _mode_sel == "3" and _peers_for_reinit:
-        print(f"\n  Mode 3: auto-joining {len(_peers_for_reinit)} peer node(s) in parallel...")
-        if log:
-            log.log(f"4b: mode 3 peer auto-join for {_peers_for_reinit}")
-
-        _peer_errors = []
-        _peer_lock = threading.Lock()
-        _4b_cluster_ips_out = {}  # peer_bmc -> cluster interface IP
-        _menu_sigs_lower = [
-            "selection (1-", "(1-9)?", "(1-11)?", "(1-12)?",
-            # Shown after netboot install when boot device has changed:
-            "use option (6) to restore the system configuration",
-            "normal boot is prohibited",
-        ]
-
-        # admin_password for logging into nodes after wizard abort
-        _4b_admin_pw = (
-            _cluster_config.get("admin_password")
-            or ((_config_data.get("cluster") or {}).get("password")
-                if isinstance(_config_data, dict) else None)
-            or ""
-        )
-
-        _peer_ctx = {
-            "loader_channels":  loader_channels,
-            "loader_clients":   loader_clients,
-            "bmc_user":         bmc_user,
-            "bmc_passwords":    bmc_passwords,
-            "admin_password":   _4b_admin_pw,
-            "log":              log,
-            "peer_errors":      _peer_errors,
-            "peer_lock":        _peer_lock,
-            "menu_sigs_lower":  _menu_sigs_lower,
-            "status":           _status,
-            "node_reinit_logs": _node_reinit_logs,
-            "cluster_ips_out":  _4b_cluster_ips_out,
-        }
-
-        if _resume_ready_peer_ips:
-            _4b_cluster_ips_out.update(_resume_ready_peer_ips)
-            print(
-                "\n  🔖 Checkpoint: skipping peer LOADER replay for "
-                f"{len(_resume_ready_peer_ips)} node(s) already past node configuration:"
-            )
-            for _peer_ip, _cluster_ip in sorted(_resume_ready_peer_ips.items()):
-                print(f"     [{_peer_ip}] cluster IP { _cluster_ip }")
-            if log:
-                log.log(
-                    "4b resume: reusing peer_option4_done state for peers: "
-                    f"{sorted(_resume_ready_peer_ips)}"
-                )
-
-        # Write node-add manifest so option 2c can resume if interrupted.
-        _write_node_add_manifest(
-            nodes=[
-                dict(
-                    bmc=_pip,
-                    bmc_user=bmc_user,
-                    bmc_password=bmc_passwords.get(_pip, ""),
-                    **{k: v for k, v in (_node_mgmt_by_bmc.get(_pip) or {}).items()
-                       if k in ("node_mgmt_ip", "node_mgmt_port",
-                                "node_mgmt_netmask", "node_mgmt_gateway")},
-                )
-                for _pip in _peers_for_reinit
-            ],
-            cluster_mgmt_ip=_cluster_config.get("mgmt_ip") or "",
-            cluster_admin_user=(_cluster_config.get("admin_user") or "admin"),
-            cluster_admin_password=(_cluster_config.get("admin_password") or ""),
-        )
-
-        _peer_replay_targets = [
-            _pip for _pip in _peers_for_reinit if _pip not in _resume_ready_peer_ips
-        ]
         if _resume_mode3_add_only and _peer_replay_targets:
             _status(
                 "\n  🔎 Resume add-node phase: probing remaining peer nodes "
@@ -16092,15 +16164,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                     with _peer_lock:
                         _peer_errors.append((_pip, _why))
 
-        peer_threads = [
-            threading.Thread(
-                target=_peer_reinit_worker, args=(ip, _peer_ctx), daemon=True
-            )
-            for ip in _peer_replay_targets
-        ]
-        for t in peer_threads:
-            t.start()
-        for t in peer_threads:
+        if not _peer_threads and _peer_replay_targets:
+            _launch_peer_threads_if_needed()
+        for t in _peer_threads:
             t.join()
         _raise_pending_checkpoint_failure()
 
@@ -23702,7 +23768,10 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
             _session_log.log("Cluster setup wizard already active; skipping option 4 selection")
     else:
         drain_channel(channel, seconds=1)
-        print(f"🔢 {_node_pfx(bmc_host)}Selecting option 4 (Initialize and configure)...{_elapsed_str()}")
+        _opt4_status_node = _display_node_label(bmc_host, mode=42) if bmc_host else "primary"
+        print(
+            f"🔢 {_format_status_line(_opt4_status_node, 'Selecting option 4 (Initialize and configure)...', 'INFO')}{_elapsed_str()}"
+        )
         if _session_log:
             _session_log.log("2nd boot menu detected; auto-selecting option 4")
             _session_log.log_sent("4")
@@ -23871,7 +23940,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
                              timeout=15, node_log=_env_log)
 
         _slog("bootarg.init.dna verification required; running automatically")
-        if not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
+        if (not _is_4d) and not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
             _mark_fatal_boot_dna(label)
             if _close_env_log and _env_log:
                 with suppress(Exception):
@@ -23902,7 +23971,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
     # Verify boot DNA (required in all modes).
     _slog("bootarg.init.dna verification required; running automatically")
-    if not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
+    if (not _is_4d) and not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
         _mark_fatal_boot_dna(label)
         if _close_env_log and _env_log:
             with suppress(Exception):
