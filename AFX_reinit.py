@@ -20509,7 +20509,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
 
     # Mode 1b (1b only): launch parallel auto-add for peer BMCs if configured.
     # Mode 1a: skip peer setup entirely (single-node mode).
-    if _operation_mode == 1 and _peer_bmc_list and _auto_add:
+    if _operation_mode == 1 and _peer_bmc_list and _auto_setup:
         print("\n-- Launching mode 1b peer initialization (parallel option 4)...")
         _mode1b_ok = add_peer_nodes_parallel(
             channel, _peer_bmc_list, cc.get("admin_password"),
@@ -20537,7 +20537,10 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         print(f"  browser to access https://{mgmt_ip}")
         print("=" * 60)
         if _session_log:
-            _session_log.log("Mode 1 complete; exiting (peer nodes not touched)")
+            if _peer_bmc_list and _auto_setup:
+                _session_log.log("Mode 1b complete; exiting after peer initialization")
+            else:
+                _session_log.log("Mode 1 complete; exiting (peer nodes not touched)")
             _session_log.log(f"SSH to {mgmt_ip} or https://{mgmt_ip}")
             _session_log.set_outcome("PASS", "cluster setup complete (mode 1)")
             try:
