@@ -12750,12 +12750,11 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     _whole_dl_t0 = time.monotonic()
     for _nb_attempt in range(1, _NETBOOT_MAX_ATTEMPTS + 1):
         if _nb_attempt == 1:
-            _status_ts(f"\n  [{node_label}] Starting netboot: {pkg_url}")
+            _status_ts(f"\n  {_format_status_line(node_label, f'Starting netboot: {pkg_url}', 'INFO')}")
             if log:                log.log(f"[{node_label}] netboot {pkg_url}")
         else:
             _status_ts(
-                f"\n  [{node_label}] Retrying netboot "
-                f"(attempt {_nb_attempt}/{_NETBOOT_MAX_ATTEMPTS}): {pkg_url}"
+                f"\n  {_format_status_line(node_label, f'Retrying netboot (attempt {_nb_attempt}/{_NETBOOT_MAX_ATTEMPTS}): {pkg_url}', 'INFO')}"
             )
             if log:
                 log.log(
@@ -12763,7 +12762,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                     f"{_nb_attempt}/{_NETBOOT_MAX_ATTEMPTS}: {pkg_url}"
                 )
         _send_raw(f"netboot {pkg_url}")
-        _status_ts(f"\n  [{node_label}] 📥 Downloading ONTAP image — this may take several minutes...")
+        _status_ts(f"\n  {_format_status_line(node_label, '📥 Downloading ONTAP image — this may take several minutes...', 'INFO')}")
 
         # Download-phase progress thread: emits a status line every 30 s so
         # the terminal doesn't look hung while the image transfers.
@@ -12772,7 +12771,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         def _dl_progress(_ev=_dl_stop, _t0=_dl_t0):
             while not _ev.wait(30):
                 elapsed = time.monotonic() - _t0
-                _status_ts(f"  ⏳ [{node_label}] Image downloading... ({elapsed:.0f}s elapsed)")
+                _status_ts(f"  ⏳ {_format_status_line(node_label, f'Image downloading... ({elapsed:.0f}s elapsed)', 'INFO')}")
         _dl_thread = threading.Thread(target=_dl_progress, daemon=True)
         _dl_thread.start()
 
@@ -12868,8 +12867,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     time.sleep(1)  # let the selection prompt fully render
     _whole_dl_elapsed = time.monotonic() - _whole_dl_t0  # GAP-2: download span
     _inst_t0 = time.monotonic()                          # GAP-3: install span start
-    _status_ts(f"\n  ✅ [{node_label}] Download complete — boot menu detected.")
-    _status_ts(f"  [{node_label}] 💿 Installing ONTAP image (selecting option 7)...")
+    _status_ts(f"\n  ✅ {_format_status_line(node_label, 'Download complete — boot menu detected.', 'SUCCESS')}")
+    _status_ts(f"  {_format_status_line(node_label, '💿 Installing ONTAP image (selecting option 7)...', 'INFO')}")
     if log:
         log.log(f"[{node_label}] boot menu detected – sending option 7")
     _send_raw("7")
@@ -12883,7 +12882,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     )
     if m and "selection (1-" in m.lower():
         # menu re-appeared — option 7 wasn't registered; retry once
-        _status_ts(f"  ↻ [{node_label}] Resending option 7...")
+        _status_ts(f"  ↻ {_format_status_line(node_label, 'Resending option 7...', 'INFO')}")
         if log:
             log.log(f"[{node_label}] resending boot menu option 7")
         _send_raw("7")
@@ -12892,12 +12891,13 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             timeout=120,
         )
     if m and "do you want to continue" in m.lower():
-        _status_ts(f"  [{node_label}] Answering 'do you want to continue?' → y")
+        msg = "Answering 'do you want to continue?' → y"
+        _status_ts(f"  {_format_status_line(node_label, msg, 'INFO')}")
         _send_raw("y")
     elif m and "url for the package" in m.lower():
         pass  # ONTAP skipped the first question; fall through
     else:
-        _status_ts(f"  ⚠️  [{node_label}] Did not see continuation prompt; continuing anyway...")
+        _status_ts(f"  ⚠️  {_format_status_line(node_label, 'Did not see continuation prompt; continuing anyway...', 'WARN')}")
 
     # Prompt 2: "What is the URL for the package?"
     out, m = _recv(
@@ -12905,7 +12905,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         timeout=120,
     )
     if m and "url for the package" in m.lower():
-        _status_ts(f"  [{node_label}] Entering package URL: {pkg_url}")
+        _status_ts(f"  {_format_status_line(node_label, f'Entering package URL: {pkg_url}', 'INFO')}")
         if log:
             log.log(f"[{node_label}] sending package URL")
         _send_raw(pkg_url)
@@ -12926,7 +12926,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
             log.add_phase_subtiming(phase_name, f"  [{node_label}] image download", _whole_dl_elapsed)
             log.add_phase_subtiming(phase_name, f"  [{node_label}] image install", _inst_e)
         _send_raw("y")
-        _status_ts(f"\n  ✅ [{node_label}] Image installed — 🔄 node rebooting...")
+        _status_ts(f"\n  ✅ {_format_status_line(node_label, 'Image installed — 🔄 node rebooting...', 'SUCCESS')}")
         if log:
             log.log(f"[{node_label}] reboot triggered; install complete")
         return True
@@ -12937,9 +12937,9 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         timeout=300,
     )
     if m and "user name" in m.lower():
-        _status_ts(f"  [{node_label}] User name prompt → (blank)")
+        _status_ts(f"  {_format_status_line(node_label, 'User name prompt → (blank)', 'INFO')}")
         if nf and hasattr(nf, "name"):
-            _status_ts(f"  [{node_label}] 📝 Installing — log: {nf.name}")
+            _status_ts(f"  {_format_status_line(node_label, f'📝 Installing — log: {nf.name}', 'INFO')}")
         _send_raw("")
         # Start a periodic progress reporter so the terminal doesn't look hung.
         _ps = threading.Event()
@@ -12948,16 +12948,16 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         def _progress_reporter(_ev=_ps, _t0=_install_start):
             while not _ev.wait(30):
                 elapsed = time.monotonic() - _t0
-                _status_ts(f"  ⏳ [{node_label}] 💿 Image installing... ({elapsed:.0f}s elapsed)")
+                _status_ts(f"  ⏳ {_format_status_line(node_label, f'💿 Image installing... ({elapsed:.0f}s elapsed)', 'INFO')}")
         threading.Thread(target=_progress_reporter, daemon=True).start()
         # Fall through to prompt 4.
     elif m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
         # ONTAP skipped both username and backup prompts.
-        _status_ts(f"  [{node_label}] Reboot prompt (early, username+backup skipped) → y")
+        _status_ts(f"  {_format_status_line(node_label, 'Reboot prompt (early, username+backup skipped) → y', 'INFO')}")
         return _do_reboot()
     elif m and "restore the backup" in m.lower():
         # ONTAP skipped the username prompt; handle backup restore inline.
-        _status_ts(f"  [{node_label}] Restore backup prompt (username skipped) → n")
+        _status_ts(f"  {_format_status_line(node_label, 'Restore backup prompt (username skipped) → n', 'INFO')}")
         if log:
             log.log(f"[{node_label}] restore backup (username skipped) → n")
         _send_raw("n")
@@ -12965,8 +12965,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         out, m = _recv(["reboot now", "do you want to reboot"], timeout=180)
         if m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
             return _do_reboot()
-        _status_ts(f"  ⚠️  [{node_label}] Reboot prompt not seen; node may reboot automatically.")
-        _status_ts(f"  ✅ [{node_label}] Install complete.")
+        _status_ts(f"  ⚠️  {_format_status_line(node_label, 'Reboot prompt not seen; node may reboot automatically.', 'WARN')}")
+        _status_ts(f"  ✅ {_format_status_line(node_label, 'Install complete.', 'SUCCESS')}")
         if log:
             log.log(f"[{node_label}] install complete (reboot prompt not seen)")
         if log and phase_name:
@@ -12980,7 +12980,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         timeout=600,
     )
     if m and "restore the backup" in m.lower():
-        _status_ts(f"  [{node_label}] Restore backup prompt → n")
+        _status_ts(f"  {_format_status_line(node_label, 'Restore backup prompt → n', 'INFO')}")
         if log:
             log.log(f"[{node_label}] restore backup → n")
         _send_raw("n")
@@ -12988,7 +12988,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
 
     elif m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
         # ONTAP skipped the backup-restore step and jumped straight to reboot.
-        _status_ts(f"  [{node_label}] Reboot prompt (early, backup skipped) → y")
+        _status_ts(f"  {_format_status_line(node_label, 'Reboot prompt (early, backup skipped) → y', 'INFO')}")
         return _do_reboot()
 
     # Prompt 5: "Do you want to reboot now? {y|n}"
@@ -12997,8 +12997,8 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         return _do_reboot()
     if _progress_stop[0] is not None:
         _progress_stop[0].set()
-    _status_ts(f"  ⚠️  [{node_label}] Reboot prompt not seen; node may reboot automatically.")
-    _status_ts(f"  ✅ [{node_label}] Install complete.")
+    _status_ts(f"  ⚠️  {_format_status_line(node_label, 'Reboot prompt not seen; node may reboot automatically.', 'WARN')}")
+    _status_ts(f"  ✅ {_format_status_line(node_label, 'Install complete.', 'SUCCESS')}")
     if log:
         log.log(f"[{node_label}] install complete (reboot prompt not seen)")
     if log and phase_name:
@@ -13411,6 +13411,11 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                 print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
         if log:
             log.log(f"4b: physical disk zeroing requested: {_physical_zeroing}")
+
+        # ────────────────────────────────────────────────────────────────────
+        # Node pre-configuration
+        # ────────────────────────────────────────────────────────────────────
+        _print_banner("Node pre-configuration")
 
         # Diagnostic bootargs: if --diag was passed, load/prompt for bootargs now.
         global _diag_mode, _diag_bootargs, _prevent_bios_fw_update
