@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # PYTHON_ARGCOMPLETE_OK
 
 # OPT (phase 2): PEP 563 deferred evaluation of annotations. Lets us add
@@ -20529,7 +20529,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                     pass
             sys.exit(1)
 
-    # Mode 1 (1a/1b) initialization complete â€" exit cleanly here.
+    # Mode 1 (1a/1b) initialization complete - exit cleanly here.
     if _operation_mode == 1:
         mgmt_ip = cc.get("mgmt_ip") or "<cluster-management-ip>"
         _print_banner("âœ… Configuration complete.")
