@@ -101,6 +101,9 @@ _peer_bmc_list = []
 # _run_cluster_setup_wizard to display log paths at the node-add transition.
 _peer_log_paths: dict = {}
 
+# Captured from LOADER via `printenv last-OS-booted-ver` for 4d hidden mode.
+_previous_ontap_version: str = ""
+
 # Mode 2b: tracks BMC hosts that have already been added in the current run so
 # they are not offered again when prompting for the next node to add.
 _2b_processed_bmcs: set = set()
@@ -975,6 +978,8 @@ class SessionLogger:
                 sf.write(f"  {'Started':<25} {self._start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 sf.write(f"  {'Ended':<25} {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 sf.write(f"  {'Total runtime':<25} {total_elapsed:.1f}s ({total_elapsed/60:.1f}m)\n")
+                if _previous_ontap_version:
+                    sf.write(f"  {'Previous ONTAP version:':<25} {_previous_ontap_version}\n")
 
                 # ---- Phase Timing ----
                 if self._phase_times:
@@ -1090,13 +1095,12 @@ def select_operation_mode():
         print("    4a. Upgrade ONTAP (rolling takeover/giveback)")
         print("    4b. Netboot and install ONTAP")
         print("    4c. Install license file only")
-        print("    4d. Set up passwordless SSH to cluster management")
         print("    4e. Create backup cluster configuration")
         print("    4f. Verify BMC authentication")
         print("  5.  Exit")
         print("")
         print("  " + "─" * 58)
-        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4f, or 5): ").strip().lower()
+        choice = input("  Enter your choice (1a, 1b, 2a, 2b, 2c, 3, 4a-4c/4e/4f, or 5): ").strip().lower()
 
         if choice == "1a":
             print("\n" + "=" * 60)
@@ -1267,7 +1271,7 @@ def select_operation_mode():
             print("\n  ↩️  Returning to menu...\n")
             continue
 
-        if choice in ("4", "4a", "4b", "4c", "4d", "4e", "4f"):
+        if choice in ("4", "4a", "4b", "4c", "4d", "4e", "4f", "4s", "4ssh"):
             if choice == "4":
                 # Show the sub-menu and re-prompt.
                 print("\n" + "=" * 60)
@@ -1276,12 +1280,11 @@ def select_operation_mode():
                 print("\n  4a. Upgrade ONTAP (rolling takeover/giveback)")
                 print("  4b. Netboot and install ONTAP")
                 print("  4c. Install license file only")
-                print("  4d. Set up passwordless SSH to cluster management")
                 print("  4e. Create backup cluster configuration")
                 print("  4f. Verify BMC authentication")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (4a, 4b, 4c, 4d, 4e, 4f) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (4a, 4b, 4c, 4e, 4f) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -1343,7 +1346,22 @@ def select_operation_mode():
 
             if choice == "4d":
                 print("\n" + "=" * 60)
-                print("  \U0001f511 4d: Set up passwordless SSH to cluster management")
+                print("  \U0001f512 4d: Hidden netboot + automated cluster reinit")
+                print("=" * 60)
+                print("")
+                print("  Hidden path for netboot + create/add-node automation.")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  \u2705 Confirmed. 4d: Hidden netboot + automated reinit\n")
+                    return 48, False, False
+                print("\n  \u21a9\ufe0f  Returning to menu...\n")
+                continue
+
+            if choice in ("4s", "4ssh"):
+                print("\n" + "=" * 60)
+                print("  \U0001f511 4s: Set up passwordless SSH to cluster management")
                 print("=" * 60)
                 print("")
                 print("  Generates an RSA-4096 key pair on this host (if needed),")
@@ -1353,7 +1371,7 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 4d: Set up passwordless SSH\n")
+                    print("\n  \u2705 Confirmed. 4s: Set up passwordless SSH\n")
                     return 45, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
@@ -1401,7 +1419,7 @@ def select_operation_mode():
 def get_loader_commands():
     # Mode 3 primary uses mode-1 LOADER commands (full cluster init); peers in
     # mode 3 are driven by their own threads with their own LOADER commands.
-    if _operation_mode in (1, 3):
+    if _operation_mode in (1, 3, 48):
         cmds = [
             "set-defaults",
             "setenv AUTO_FW_UPDATE false",
@@ -1421,7 +1439,7 @@ def get_loader_commands():
 
 
 def get_boot_menu_option():
-    if _operation_mode in (1, 3):
+    if _operation_mode in (1, 3, 48):
         return "9", "Initialize"
     else:
         return "4", "Initialize and configure system"
@@ -2255,7 +2273,6 @@ DESCRIPTION
       4a   ONTAP rolling upgrade (takeover / software update / giveback)
       4b   Netboot and install ONTAP image
       4c   Standalone license install
-      4d   Set up passwordless SSH to cluster management
       4e   Create / save cluster configuration backup (JSON)
       4f   Verify BMC SSH authentication for all nodes
 
@@ -6081,6 +6098,47 @@ def _node_log_open(ip, log_dir, prefix="node"):
     return open(path, "w", encoding="utf-8", buffering=1)
 
 
+def _get_last_os_booted_version(channel, node_log=None):
+    """Return `last-OS-booted-ver` from LOADER, or empty string when unknown."""
+    try:
+        out = direct_send_and_wait(
+            channel,
+            "printenv last-OS-booted-ver",
+            "LOADER",
+            timeout=20,
+            node_log=node_log,
+        ) or ""
+    except Exception:
+        return ""
+    m = re.search(r"last-OS-booted-ver\s*=\s*([^\s]+)", out, flags=re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def _wait_for_boot_menu_prompt_only(channel, timeout=1800, node_log=None):
+    """Wait for boot menu prompt without selecting any option."""
+    sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
+    out = ""
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        if _shutdown_event.is_set():
+            return False
+        if channel.recv_ready():
+            chunk = channel.recv(4096).decode("utf-8", errors="replace")
+            out += chunk.lower()
+            if node_log:
+                _par_write(node_log, chunk)
+            else:
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
+            if any(s in out for s in sigs):
+                return True
+            if len(out) > 16384:
+                out = out[-8192:]
+        else:
+            time.sleep(0.1)
+    return False
+
+
 def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                                   log=None, boot_menu_timeout=900,
                                   node_file=None, status_cb=None,
@@ -6498,13 +6556,237 @@ def _peer_reinit_worker(ip, ctx):
         sys.stdout = _prev_stdout
 
 
-def _run_4b_standalone(log):
+def _run_4d_hidden_reinit_mode3(log):
+    """Hidden 4d mode: reuse 4b pipeline with 4d-specific post-install flow."""
+    return _run_4b_standalone(log, hidden_mode_4d=True)
+
+
+def _run_4d_hidden_post_install(
+    *,
+    bmc_ips,
+    bmc_user,
+    bmc_passwords,
+    loader_channels,
+    loader_clients,
+    log_dir,
+    log,
+    status_cb,
+):
+    """4d hidden mode post-netboot orchestration (option-6 omitted)."""
+    first_ip = bmc_ips[0]
+    peer_ips = bmc_ips[1:]
+    admin_password = (_cluster_config.get("admin_password") or "")
+    cfg_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs")
+    os.makedirs(cfg_dir, exist_ok=True)
+
+    _node_logs = {}
+    for ip in bmc_ips:
+        try:
+            _node_logs[ip] = _node_log_open(ip, log_dir, prefix="node_reinit")
+            status_cb(f"  📝 [{ip}] Reinit log: {_node_logs[ip].name}")
+        except Exception as exc:
+            _node_logs[ip] = None
+            status_cb(f"  ⚠️  [{ip}] Could not open reinit log: {exc}")
+
+    def _wait_menu_with_reconnect(ip):
+        ch = loader_channels.get(ip)
+        if ch and _wait_for_boot_menu_prompt_only(ch, timeout=2400, node_log=_node_logs.get(ip)):
+            return True
+        status_cb(f"  ⚠️  [{ip}] Boot menu wait timed out; reconnecting to BMC.")
+        cl, ch2 = _bmc_reach_loader(
+            ip, bmc_user, bmc_passwords.get(ip, ""),
+            node_log=_node_logs.get(ip),
+            fallback_passwords=[admin_password] if admin_password else None,
+        )
+        if cl is None or ch2 is None:
+            return False
+        loader_clients[ip] = cl
+        loader_channels[ip] = ch2
+        return _wait_for_boot_menu_prompt_only(ch2, timeout=1800, node_log=_node_logs.get(ip))
+
+    status_cb("  ⏳ [4d] Waiting for boot menu on all nodes after option 7 install...")
+    for ip in bmc_ips:
+        if not _wait_menu_with_reconnect(ip):
+            status_cb(f"  ❌ [{ip}] Boot menu not reached.")
+            return False
+
+    primary_ch = loader_channels.get(first_ip)
+    if primary_ch is None:
+        status_cb(f"  ❌ [{first_ip}] No primary channel available.")
+        return False
+
+    status_cb(f"  ✅ [{first_ip}] Running option 9 on primary only.")
+    primary_ch.send("9\r")
+    time.sleep(1)
+    if not _wait_for_boot_menu_prompt_only(primary_ch, timeout=2400, node_log=_node_logs.get(first_ip)):
+        status_cb(f"  ❌ [{first_ip}] Second boot menu after option 9 not detected.")
+        return False
+
+    status_cb("  ⏳ [4d] Primary option 9 complete; selecting option 4 on all nodes.")
+    for ip in bmc_ips:
+        ch = loader_channels.get(ip)
+        if ch is None:
+            status_cb(f"  ❌ [{ip}] Missing channel before option 4.")
+            return False
+        ch.send("4\r")
+        time.sleep(0.3)
+
+    peer_cluster_ips = {}
+    peer_failures = []
+    peer_lock = threading.Lock()
+
+    def _collect_peer_cluster_ip(ip, ch):
+        direct_send_and_wait(ch, "", "::>", timeout=20, node_log=_node_logs.get(ip))
+        out = direct_send_and_wait(
+            ch,
+            "network interface show -role cluster -fields address",
+            "::>",
+            timeout=30,
+            node_log=_node_logs.get(ip),
+        )
+        ip_matches = re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", out or "")
+        if ip_matches:
+            return ip_matches[0]
+        return ""
+
+    def _peer_worker(ip):
+        ch = loader_channels.get(ip)
+        if ch is None:
+            with peer_lock:
+                peer_failures.append((ip, "missing channel"))
+            return
+        try:
+            _auto_answer_disk_erase_prompts(ch, node_log=_node_logs.get(ip), label=ip, is_node_add=True)
+            cfg = _resolve_node_mgmt_config(ip)
+            _auto_answer_node_mgmt(ch, cfg, node_log=_node_logs.get(ip))
+            trig = _wait_for_wizard_start(ch, timeout=2400, node_log=_node_logs.get(ip))
+            if trig and "press enter" in trig.lower():
+                ch.send("\r")
+                direct_send_and_wait(
+                    ch, "", "do you want to create a new cluster or join",
+                    timeout=600, node_log=_node_logs.get(ip)
+                )
+            elif not trig:
+                raise RuntimeError("wizard start not detected")
+            # create/join stage for peers: Ctrl+C then probe for cluster prompt.
+            ch.send("\x03\x03\x03")
+            _ok_prompt = False
+            _probe_buf = ""
+            for _ in range(10):
+                ch.send("\r")
+                time.sleep(1)
+                if ch.recv_ready():
+                    _pc = ch.recv(4096).decode("utf-8", errors="replace")
+                    _probe_buf += _pc
+                    _par_write(_node_logs.get(ip), _pc) if _node_logs.get(ip) else None
+                    if "::>" in _probe_buf or "::*>" in _probe_buf:
+                        _ok_prompt = True
+                        break
+            if not _ok_prompt:
+                raise RuntimeError("cluster prompt not reached after Ctrl+C")
+            _cip = _collect_peer_cluster_ip(ip, ch)
+            if not _cip:
+                raise RuntimeError("no peer cluster IP detected")
+            with peer_lock:
+                peer_cluster_ips[ip] = _cip
+            status_cb(f"  ✅ [{ip}] Peer ready at ::> (cluster IP { _cip }).")
+        except Exception as exc:
+            with peer_lock:
+                peer_failures.append((ip, str(exc)))
+            status_cb(f"  ❌ [{ip}] Peer preparation failed: {exc}")
+
+    peer_threads = [threading.Thread(target=_peer_worker, args=(ip,), daemon=True) for ip in peer_ips]
+    for t in peer_threads:
+        t.start()
+
+    status_cb(f"  ⏳ [{first_ip}] Driving create flow on primary.")
+    _auto_answer_disk_erase_prompts(primary_ch, node_log=_node_logs.get(first_ip), label=first_ip, is_node_add=False)
+    _auto_answer_node_mgmt(primary_ch, _resolve_node_mgmt_config(first_ip), node_log=_node_logs.get(first_ip))
+    if not _run_cluster_setup_wizard(primary_ch, stop_after_create=True):
+        status_cb(f"  ❌ [{first_ip}] Primary create flow failed.")
+        return False
+
+    for t in peer_threads:
+        t.join()
+    if peer_failures:
+        status_cb(f"  ❌ [4d] Peer failures: {peer_failures}")
+        return False
+
+    cluster_ips_path = os.path.join(cfg_dir, "cluster_IPs.json")
+    with open(cluster_ips_path, "w", encoding="utf-8") as f:
+        json.dump({"cluster_ips": peer_cluster_ips}, f, indent=2)
+    status_cb(f"  📝 [4d] cluster_IPs saved: {cluster_ips_path}")
+    _ckpt_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkpoints")
+    os.makedirs(_ckpt_dir, exist_ok=True)
+    _ckpt_path = os.path.join(
+        _ckpt_dir,
+        f"hidden_reinit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+    )
+    with open(_ckpt_path, "w", encoding="utf-8") as _cf:
+        json.dump(
+            {
+                "mode": "4d-hidden",
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "cluster_ips_path": cluster_ips_path,
+                "cluster_ips": peer_cluster_ips,
+            },
+            _cf,
+            indent=2,
+        )
+    status_cb(f"  🧭 [4d] Checkpoint created: {_ckpt_path}")
+
+    if not _login_primary_cluster_shell(primary_ch, admin_password):
+        status_cb(f"  ❌ [{first_ip}] Could not log in to cluster shell for add-node.")
+        return False
+
+    final_count = len(bmc_ips)
+    current_target = 2
+    for peer_bmc in peer_ips:
+        peer_cluster_ip = peer_cluster_ips.get(peer_bmc)
+        if not peer_cluster_ip:
+            continue
+        status_cb(f"  ⏳ [{first_ip}] cluster add-node using {peer_cluster_ip}...")
+        direct_send_and_wait(
+            primary_ch,
+            f"cluster add-node -cluster-ip-addrs {peer_cluster_ip}",
+            "y/n",
+            timeout=60,
+            auto_respond="y",
+            node_log=_node_logs.get(first_ip),
+        )
+        direct_send_and_wait(primary_ch, "", "::>", timeout=300, node_log=_node_logs.get(first_ip))
+        _ok = _wait_for_cluster_nodes_healthy(
+            primary_ch,
+            target_count=current_target,
+            total_timeout=1200,
+            poll_interval=120,
+            label=f"4d/{peer_bmc}",
+            final_count=final_count,
+        )
+        if not _ok:
+            status_cb(f"  ⚠️  [{peer_bmc}] Join health check timed out.")
+        current_target += 1
+
+    for ip, nf in _node_logs.items():
+        if nf:
+            try:
+                nf.close()
+                status_cb(f"  📝 [{ip}] Reinit log saved: {nf.name}")
+            except Exception:
+                pass
+    return True
+
+
+def _run_4b_standalone(log, hidden_mode_4d=False):
     """Full standalone 4b workflow: collect BMCs, reset to LOADER,
     netboot-install ONTAP, verify version.
     Returns True on success.
     """
-    global _peer_log_paths
+    global _peer_log_paths, _previous_ontap_version
+    global _operation_mode, _auto_setup, _auto_add, _setup_passwordless_ssh
+    global _cluster_config
     _peer_log_paths = {}  # reset for this run
+    _is_4d = bool(hidden_mode_4d or _operation_mode == 48)
 
     # ── Shared state ───────────────────────────────────────────────────────
     # Serializes the brief status lines printed to the console by parallel
@@ -6512,17 +6794,22 @@ def _run_4b_standalone(log):
     _stdout_lock = threading.Lock()
 
     def _status(msg):
+        stripped = msg.strip()
+        prefix = "INFO"
+        if "❌" in stripped:
+            prefix = "ERROR"
+        elif "⚠️" in stripped:
+            prefix = "WARN"
+        if _is_4d:
+            _m = re.search(r"\[([^\]]+)\]", stripped)
+            _node = _m.group(1) if _m else "4d"
+            _txt = re.sub(r"^[^A-Za-z0-9\[]*", "", stripped)
+            _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            stripped = f"[{_node}] | [{_ts}] | [{prefix}] {_txt}"
         with _stdout_lock:
-            print(msg)
+            print(stripped)
         # Mirror to the session log so the log file is a complete record.
         if log:
-            stripped = msg.strip()
-            if "❌" in stripped:
-                prefix = "ERROR"
-            elif "⚠️" in stripped:
-                prefix = "WARN"
-            else:
-                prefix = "INFO"
             log.log(stripped, prefix=prefix)
 
     # Determine log directory from the session logger when available.
@@ -6580,29 +6867,30 @@ def _run_4b_standalone(log):
 
     # ── Step 1c: Reinit questions (ask now, before operations begin) ───────
     print(f"\n  ✅ Package selected. Now collecting all setup information upfront.")
-    reinit_ans = input(
-        "\n  Would you like to reinit the cluster after the ONTAP installation? [y/N]: "
-    ).strip().lower()
-
-    _do_reinit = reinit_ans == "y"
-    _mode_sel = None
+    _do_reinit = _is_4d
+    _mode_sel = "3" if _is_4d else None
+    if not _is_4d:
+        reinit_ans = input(
+            "\n  Would you like to reinit the cluster after the ONTAP installation? [y/N]: "
+        ).strip().lower()
+        _do_reinit = reinit_ans == "y"
 
     if _do_reinit:
-        print("\n  Select reinit mode:")
-        print("    1a. Format first node (interactive)")
-        print("    1b. Format first node + cluster setup (automatic)")
-        print("     3. End-to-end auto initialize (1b + auto-add all peer nodes)")
-        print("")
-        while True:
-            try:
-                _mode_sel = input("  Enter 1a, 1b, or 3: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                _mode_sel = ""
-            if _mode_sel in ("1a", "1b", "3"):
-                break
-            print("  ⚠️  Invalid choice.")
+        if not _is_4d:
+            print("\n  Select reinit mode:")
+            print("    1a. Format first node (interactive)")
+            print("    1b. Format first node + cluster setup (automatic)")
+            print("     3. End-to-end auto initialize (1b + auto-add all peer nodes)")
+            print("")
+            while True:
+                try:
+                    _mode_sel = input("  Enter 1a, 1b, or 3: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    _mode_sel = ""
+                if _mode_sel in ("1a", "1b", "3"):
+                    break
+                print("  ⚠️  Invalid choice.")
 
-        global _operation_mode, _auto_setup, _auto_add
         if _mode_sel == "1a":
             _operation_mode = 1
             _auto_setup = False
@@ -6617,7 +6905,7 @@ def _run_4b_standalone(log):
             _auto_add = True
 
         if log:
-            log.log(f"4b: reinit mode selected: {_mode_sel}")
+            log.log(f"{'4d' if _is_4d else '4b'}: reinit mode selected: {_mode_sel}")
 
         # Discover and load a config file.
         print("\n  " + "─" * 58)
@@ -6640,8 +6928,7 @@ def _run_4b_standalone(log):
 
         # Ask about passwordless SSH for automatic modes (1b/3) up-front so
         # nothing needs to be asked mid-run.
-        if _auto_setup:
-            global _setup_passwordless_ssh
+        if _auto_setup and not _is_4d:
             try:
                 _ssh_q = input(
                     "\n  Set up passwordless SSH to cluster management after setup? [y/N]: "
@@ -6651,6 +6938,8 @@ def _run_4b_standalone(log):
             _setup_passwordless_ssh = (_ssh_q == "y")
             if log:
                 log.log(f"4b: passwordless SSH requested: {_setup_passwordless_ssh}")
+        elif _is_4d:
+            _setup_passwordless_ssh = False
 
     # ── Static vs DHCP ifconfig in LOADER ─────────────────────────────────
     global _netboot_static_ip
@@ -6696,7 +6985,8 @@ def _run_4b_standalone(log):
     # Open per-node log files.
     for ip in bmc_ips:
         try:
-            _node_files[ip] = _node_log_open(ip, _log_dir, prefix="4b_node")
+            _pfx = "node_install" if _is_4d else "4b_node"
+            _node_files[ip] = _node_log_open(ip, _log_dir, prefix=_pfx)
             print(f"  📝 [{ip}] Log: {_node_files[ip].name}")
         except Exception as exc:
             print(f"  ⚠️  [{ip}] Could not open node log: {exc}")
@@ -6883,6 +7173,41 @@ def _run_4b_standalone(log):
     if log:
         log.end_phase()
 
+    if _is_4d:
+        if log:
+            log.start_phase("4d – Boot DNA verification")
+        dna_failures = []
+        for ip in bmc_ips:
+            ch = loader_channels.get(ip)
+            if not ch:
+                dna_failures.append(ip)
+                _status(f"  ❌ [{ip}] Boot DNA check failed: LOADER channel unavailable.")
+                continue
+            _status(f"  🧬 [{ip}] Boot DNA check: verifying bootarg.init.dna...")
+            if _verify_boot_dna(ch):
+                _status(f"  ✅ [{ip}] Boot DNA check passed.")
+            else:
+                dna_failures.append(ip)
+                _status(f"  ❌ [{ip}] Boot DNA check failed.")
+        if log:
+            log.end_phase(
+                outcome=("FAIL" if dna_failures else "SUCCESS"),
+                note=(f"failed on {', '.join(dna_failures)}" if dna_failures else "all nodes passed"),
+            )
+        if dna_failures:
+            return False
+
+        _previous_ontap_version = _get_last_os_booted_version(
+            loader_channels.get(bmc_ips[0]),
+            node_log=_node_files.get(bmc_ips[0]),
+        )
+        if _previous_ontap_version:
+            _status(f"  [{bmc_ips[0]}] Previous ONTAP version: {_previous_ontap_version}")
+            if log:
+                log.log(f"Previous ONTAP version: {_previous_ontap_version}")
+        elif log:
+            log.log("Previous ONTAP version: unavailable", prefix="WARN")
+
     # ── Step 4: Start HTTP server if serving a local file ─────────────────
     if log:
         log.start_phase("4b – HTTP Server")
@@ -6964,6 +7289,26 @@ def _run_4b_standalone(log):
 
     print(f"\n  ✅ Netboot complete on all {len(bmc_ips)} node(s).")
     # (_do_reinit and _mode_sel were collected upfront before operations began)
+
+    if _is_4d:
+        for ip, nf in list(_node_files.items()):
+            if nf:
+                try:
+                    nf.close()
+                    _status(f"  📝 [{ip}] Install log saved: {nf.name}")
+                except Exception:
+                    pass
+        _node_files.clear()
+        return _run_4d_hidden_post_install(
+            bmc_ips=bmc_ips,
+            bmc_user=bmc_user,
+            bmc_passwords=bmc_passwords,
+            loader_channels=loader_channels,
+            loader_clients=loader_clients,
+            log_dir=_log_dir,
+            log=log,
+            status_cb=_status,
+        )
 
     # Close and log all node files now (before option 6 and init take over).
     for ip, nf in list(_node_files.items()):
@@ -9307,11 +9652,13 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
         _slog(f"SSH test exception: {_te}", prefix="WARN")
 
 
-def _run_cluster_setup_wizard(channel):
+def _run_cluster_setup_wizard(channel, stop_after_create=False):
     """Drive the post-node-mgmt cluster setup wizard non-interactively using
     values gathered in `_cluster_config`.
 
     Returns True on success, False on fatal failure (caller should exit).
+    When *stop_after_create* is True, return immediately after cluster
+    creation/license/SSH steps (skip node-add continuation prompts).
     """
     global _operation_mode, _auto_add
 
@@ -9585,6 +9932,11 @@ def _run_cluster_setup_wizard(channel):
             except Exception:
                 pass
         sys.exit(0)
+
+    if stop_after_create:
+        if _session_log:
+            _session_log.log("Cluster setup wizard stopping after create (requested)")
+        return True
 
     # Ask the operator whether to continue (e.g. into interactive add-node
     # flow) or stop the script with a friendly summary.
@@ -11181,7 +11533,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password):
     print("\n✅ Parallel peer auto-add complete.")
 
 
-def auto_complete_initialization(channel, bmc_host=None):
+def auto_complete_initialization(channel, bmc_host=None, stop_after_create=False):
     """Drive option-9 → option-4 cluster init non-interactively for mode 1b.
 
     Sequence:
@@ -11265,7 +11617,7 @@ def auto_complete_initialization(channel, bmc_host=None):
         _session_log.end_phase()
 
     # Drive the post-node-mgmt cluster setup wizard from gathered values.
-    wizard_ok = _run_cluster_setup_wizard(channel)
+    wizard_ok = _run_cluster_setup_wizard(channel, stop_after_create=stop_after_create)
     if wizard_ok is False:
         print("\n❌ Cluster setup wizard failed – cannot proceed. Exiting.")
         if _session_log:
@@ -12248,6 +12600,14 @@ def main():
         print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
         sys.exit(0 if ok else 1)
 
+    # ── Mode 48 (hidden 4d): netboot + automated reinit/add-node ───────────
+    if _operation_mode == 48:
+        _make_session_log("Mode 48: hidden netboot + automated cluster reinit")
+        ok = _run_4d_hidden_reinit_mode3(_session_log)
+        _session_log.record_completion(normal_exit=ok)
+        print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
+        sys.exit(0 if ok else 1)
+
     # ── Mode 41 (4a): ONTAP upgrade ────────────────────────────────────────
     if _operation_mode == 41:
         _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
@@ -13144,7 +13504,7 @@ def main():
         print(f"\n  {_pass_count47} PASS  /  {_fail_count47} FAIL  (of {len(_bmc_ips47)} tested)\n")
         sys.exit(0)
 
-    # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
+    # ── Mode 45 (4s/4ssh): set up passwordless SSH to cluster management ───
     if _operation_mode == 45:
         import pathlib
         import shutil
@@ -13621,8 +13981,10 @@ def main():
         mode_desc = "ONTAP upgrade - rolling takeover/giveback (4a)"
     elif _operation_mode == 44:
         mode_desc = "Install license file only (4c, standalone)"
+    elif _operation_mode == 48:
+        mode_desc = "Hidden netboot + automated cluster reinit/add-node (4d)"
     elif _operation_mode == 45:
-        mode_desc = "Set up passwordless SSH to cluster management (4d)"
+        mode_desc = "Set up passwordless SSH to cluster management (4s/4ssh)"
     elif _operation_mode == 46:
         mode_desc = "Create backup cluster configuration (4e, standalone)"
     elif _operation_mode == 2 and _auto_add:
