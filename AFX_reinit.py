@@ -146,11 +146,26 @@ def _node_pfx(label: str = "") -> str:
 
 def _print_wait_log_hint(*, node_log=None, log_path: str = "") -> None:
     """Print a standard 'for details' hint for long-running wait states."""
-    _path = str(log_path or "").strip()
+    def _sanitize_path(raw: object) -> str:
+        _text = str(raw or "")
+        if not _text:
+            return ""
+        _text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", _text)  # ANSI escapes
+        _text = _text.replace("\r", "\n")
+        _lines = [ln.strip() for ln in _text.splitlines() if ln.strip()]
+        _cands = list(reversed(_lines)) if _lines else [_text.strip()]
+        _rx = re.compile(r"([A-Za-z]:\\[^\s]+\.log|/[^\s]+\.log)")
+        for _cand in _cands:
+            _m = _rx.search(_cand)
+            if _m:
+                return _m.group(1)
+        return _cands[0] if _cands else ""
+
+    _path = _sanitize_path(log_path)
     if not _path and node_log is not None:
-        _path = str(getattr(node_log, "name", "") or "").strip()
+        _path = _sanitize_path(getattr(node_log, "name", ""))
     if not _path and _session_log:
-        _path = str(getattr(_session_log, "log_file", "") or "").strip()
+        _path = _sanitize_path(getattr(_session_log, "log_file", ""))
     if not _path:
         return
     print(f"   For details, see log at:\n   {_path}\n   (open in a separate SSH session)")
@@ -786,6 +801,13 @@ def _normalize_mojibake_text(value: object) -> str:
         ("ðŸ“", "[INFO]"),
         ("ðŸš€", "[INFO]"),
         ("ðŸ§µ", "[INFO]"),
+        ("💿", "[INFO]"),
+        ("ðŸ’¿", "[INFO]"),
+        ("🛑", "[INFO]"),
+        ("ðŸ›‘", "[INFO]"),
+        ("🌐", "[URL] "),
+        ("ðŸŒ", "[URL] "),
+        ("ðŸŒ", "[URL] "),
     )
     for bad, good in replacements:
         text = text.replace(bad, good)
@@ -1815,7 +1837,7 @@ def _print_banner(title: str, *, width: int = 60) -> None:
 
 def _print_autopilot_banner() -> None:
     """Print the 'no more admin interaction required' transition notice."""
-    _msg = "âœ… Autopilot engaged. Check back periodically for job completion."
+    _msg = "[OK] Autopilot engaged. Check back periodically for job completion."
     bar = "=" * max(60, len(_msg) + 4)
     _ts_print(bar)
     _ts_print(_msg)
@@ -2225,26 +2247,28 @@ def _display_node_label(bmc_host: str = "", mode=None) -> str:
     """Return a user-facing node label such as primary or secondary-01."""
     _mode = _operation_mode if mode is None else mode
     _host = str(bmc_host or "").strip()
+    def _role_with_host(role: str) -> str:
+        return f"{role}/{_host}" if _host else role
 
     if _mode == 1:
-        return "primary"
+        return _role_with_host("primary")
 
     if _mode in (2, 41, 42):
         _pn = _config_primary_node()
         if str(_pn.get("bmc") or "").strip() == _host:
-            return "primary"
+            return _role_with_host("primary")
         for _idx, _node in enumerate(_config_secondary_nodes(), start=1):
             if str(_node.get("bmc") or "").strip() == _host:
-                return f"secondary-{_idx:02d}"
-        return "secondary-01" if _mode == 2 else (_host or "node")
+                return _role_with_host(f"secondary-{_idx:02d}")
+        return _role_with_host("secondary-01") if _mode == 2 else (_host or "node")
 
     if _mode == 3:
         _pn = _config_primary_node()
         if str(_pn.get("bmc") or "").strip() == _host:
-            return "primary"
+            return _role_with_host("primary")
         for _idx, _node in enumerate(_config_secondary_nodes(), start=1):
             if str(_node.get("bmc") or "").strip() == _host:
-                return f"secondary-{_idx:02d}"
+                return _role_with_host(f"secondary-{_idx:02d}")
         return "primary" if not _host else _host
 
     return _host or "node"
@@ -3350,17 +3374,24 @@ class SessionLogger:
         the raw console output â€” so it is fast to read after a run.
         """
         summary_path = self.summary_file
+        def _clean_inline(value: object) -> str:
+            _txt = str(value or "")
+            _txt = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", _txt)
+            _txt = _txt.replace("\r", " ").replace("\n", " ")
+            return " ".join(_txt.split())
+
         _status_icon = {"PASS": "âœ…", "FAIL": "âŒ", "PASSED (WITH ERRORS)": "âš ï¸"}.get(outcome_status, "â“")
         if not final:
             _status_icon = "â³"
         try:
-            with open(summary_path, "w", encoding="utf-8") as sf:
+            _tmp_summary = f"{summary_path}.tmp"
+            with open(_tmp_summary, "w", encoding="utf-8") as sf:
                 sf.write("=" * 70 + "\n")
                 if final:
                     sf.write("Run Summary\n")
                 else:
                     sf.write("Run Summary (LIVE - IN PROGRESS)\n")
-                sf.write(f"Full log: {self.log_file}\n")
+                sf.write(f"Full log: {_clean_inline(self.log_file)}\n")
                 sf.write("=" * 70 + "\n\n")
 
                 # ---- Operation ----
@@ -3368,7 +3399,7 @@ class SessionLogger:
                     sf.write("â”€" * 70 + "\n")
                     sf.write("Operation\n")
                     sf.write("â”€" * 70 + "\n")
-                    sf.write(f"  {self._operation_label}\n")
+                    sf.write(f"  {_clean_inline(self._operation_label)}\n")
 
                 # ---- Result ----
                 sf.write("â”€" * 70 + "\n")
@@ -3376,9 +3407,9 @@ class SessionLogger:
                 sf.write("â”€" * 70 + "\n")
                 sf.write(f"  {'Overall Result':<25} {_status_icon} {outcome_status}\n")
                 if outcome_note:
-                    sf.write(f"  {'Detail':<25} {outcome_note}\n")
+                    sf.write(f"  {'Detail':<25} {_clean_inline(outcome_note)}\n")
                 if failure_stage:
-                    sf.write(f"  {'Failure stage':<25} {failure_stage}\n")
+                    sf.write(f"  {'Failure stage':<25} {_clean_inline(failure_stage)}\n")
                 sf.write(f"  {'Errors logged':<25} {self._error_count}\n")
                 sf.write(f"  {'Warnings logged':<25} {self._warn_count}\n")
                 self._write_ontap_version_lines(sf)
@@ -3415,7 +3446,9 @@ class SessionLogger:
                         _phase_total_for_accounting += elapsed
                         minutes = elapsed / 60
                         ph_col = f"  {ph_icon} {ph_status}"
-                        sf.write(f"  {phase:<45} {elapsed:>7.1f}s ({minutes:.1f}m){ph_col}\n")
+                        _phase_label = _clean_inline(phase)
+                        _ph_col = _clean_inline(ph_col)
+                        sf.write(f"  {_phase_label:<45} {elapsed:>7.1f}s ({minutes:.1f}m){_ph_col}\n")
                         _prev_node_elapsed = None
                         for sub_label, sub_elapsed in self._phase_subtimings.get(phase, []):
                             if sub_label.startswith("Node [") and _prev_node_elapsed is not None:
@@ -3427,8 +3460,9 @@ class SessionLogger:
                                 _prev_node_elapsed = sub_elapsed
                             else:
                                 _time_str = f"({sub_elapsed/60:.1f}m)"
+                            _sub_label = _clean_inline(sub_label)
                             sf.write(
-                                f"     - {sub_label:<41} {sub_elapsed:>7.1f}s "
+                                f"     - {_sub_label:<41} {sub_elapsed:>7.1f}s "
                                 f"{_time_str}\n"
                             )
                 else:
@@ -3450,12 +3484,12 @@ class SessionLogger:
                     _lbl = _prompt_wait_max_label or "(no label)"
                     sf.write(
                         f"     - longest single wait: {_prompt_wait_max:.1f}s "
-                        f"({_prompt_wait_max/60:.1f}m) at: {_lbl}\n"
+                        f"({_prompt_wait_max/60:.1f}m) at: {_clean_inline(_lbl)}\n"
                     )
                 for _ext_lbl, _ext_sec in _prompt_wait_extended:
                     sf.write(
                         f"     - extended wait {_ext_sec:>6.1f}s "
-                        f"({_ext_sec/60:.1f}m) at: {_ext_lbl or '(no label)'}\n"
+                        f"({_ext_sec/60:.1f}m) at: {_clean_inline(_ext_lbl or '(no label)')}\n"
                     )
                 sf.write(
                     f"  {'Pause wait (x' + str(_pause_wait_count) + ')':<45} "
@@ -3465,12 +3499,13 @@ class SessionLogger:
                     _plbl = _pause_wait_max_label or "(no label)"
                     sf.write(
                         f"     - longest single pause: {_pause_wait_max:.1f}s "
-                        f"({_pause_wait_max/60:.1f}m) context: {_plbl}\n"
+                        f"({_pause_wait_max/60:.1f}m) context: {_clean_inline(_plbl)}\n"
                     )
                 sf.write(
                     f"  {'Non-phase time (classified)':<45} {_non_phase_total:>7.1f}s ({_non_phase_total/60:.1f}m)\n"
                 )
                 for _np_label, _np_elapsed in _non_phase_breakdown.items():
+                    _np_label = _clean_inline(_np_label)
                     sf.write(
                         f"     - {_np_label:<39} {_np_elapsed:>7.1f}s ({_np_elapsed/60:.1f}m)\n"
                     )
@@ -3490,7 +3525,7 @@ class SessionLogger:
                     for name, elapsed in self._step_times.items():
                         count = self._step_counts.get(name, 1)
                         avg = elapsed / count if count else elapsed
-                        label = f"{name} (x{count})" if count > 1 else name
+                        label = _clean_inline(f"{name} (x{count})" if count > 1 else name)
                         sf.write(f"  {label:<45} {elapsed:>7.1f}s  avg {avg:>5.1f}s\n")
 
                 # ---- Warnings ----
@@ -3509,12 +3544,12 @@ class SessionLogger:
                             _warn_groups[_msg_key] = []
                             _warn_order.append(_msg_key)
                         _warn_groups[_msg_key].append(ts)
-                    sf.write(f"  Log file: {self.log_file}\n")
+                    sf.write(f"  Log file: {_clean_inline(self.log_file)}\n")
                     for _idx, _msg_key in enumerate(_warn_order):
                         if _idx > 0:
                             sf.write("\n")
                         for _ts in _warn_groups.get(_msg_key, []):
-                            sf.write(f"    [{_ts}] {_msg_key}\n")
+                            sf.write(f"    [{_ts}] {_clean_inline(_msg_key)}\n")
 
                 # ---- Errors ----
                 if self._errors:
@@ -3522,9 +3557,10 @@ class SessionLogger:
                     sf.write(f"Errors ({len(self._errors)})\n")
                     sf.write("â”€" * 70 + "\n")
                     for ts, msg in self._errors:
-                        sf.write(f"  [{ts}] {msg}\n")
+                        sf.write(f"  [{ts}] {_clean_inline(msg)}\n")
 
                 sf.write("\n" + "=" * 70 + "\n")
+            os.replace(_tmp_summary, summary_path)
 
             if final:
                 print(f"ðŸ“‹ Summary log: {summary_path}")
@@ -3977,14 +4013,18 @@ def select_operation_mode():
                     if _nb_ans in ("y", "n", ""):
                         break
                     print("  Please enter y or N.")
-                if _nb_ans == "y":
-                    _netboot_before_reinit = False
-                    _netboot_pkg_preselected = None
-                    input("\n  Use the install options in the menu to install a new version of ONTAP. Hit enter to return to menu.")
-                    print("\n  â†©ï¸  Returning to menu...\n")
-                    continue
-                _netboot_before_reinit = False
+                _netboot_before_reinit = (_nb_ans == "y")
                 _netboot_pkg_preselected = None
+                if _netboot_before_reinit:
+                    print("  â„¹ï¸   Netboot-install will run from the primary node and fan out to peers.")
+                    while True:
+                        _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
+                        if _sip_ans in ("y", "n", ""):
+                            break
+                        print("  Please enter y or N.")
+                    _netboot_static_ip = (_sip_ans == "y")
+                else:
+                    _netboot_static_ip = False
                 while True:
                     _m3_skip_env = input(
                         "  Skip LOADER backup/printenv capture for option 3 nodes? [Y/n]: "
@@ -4315,6 +4355,7 @@ def get_loader_commands():
     if _operation_mode in (1, 3):
         cmds = [
             "set-defaults",
+            "setenv nvram_discard 1",
             "setenv bootarg.destroy.all.storage.pods true",
         ] + _fw_cmds + _autoboot_cmds
         if _physical_zeroing:
@@ -4329,6 +4370,7 @@ def get_loader_commands():
     else:
         cmds = [
             "set-defaults",
+            "setenv nvram_discard 1",
         ] + _fw_cmds + _autoboot_cmds
         # Physical zeroing is a per-node LOADER setting; apply it to
         # peers too when the operator opted in so the whole cluster ends
@@ -13497,7 +13539,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     _whole_dl_elapsed = time.monotonic() - _whole_dl_t0  # GAP-2: download span
     _inst_t0 = time.monotonic()                          # GAP-3: install span start
     _status_ts(f"\n  âœ… [{node_label}] Download complete â€” boot menu detected.")
-    _status_ts(f"  [{node_label}] ðŸ’¿ Installing ONTAP image (selecting option 7)...")
+    _status_ts(f"  [{node_label}] [INFO] Installing ONTAP image (selecting option 7)...")
     if log:
         log.log(f"[{node_label}] boot menu detected â€“ sending option 7")
     _send_raw("7")
@@ -13576,7 +13618,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         def _progress_reporter(_ev=_ps, _t0=_install_start):
             while not _ev.wait(30):
                 elapsed = time.monotonic() - _t0
-                _status_ts(f"  â³ [{node_label}] ðŸ’¿ Image installing... ({elapsed:.0f}s elapsed)")
+                _status_ts(f"  [WAIT] [{node_label}] [INFO] Image installing... ({elapsed:.0f}s elapsed)")
         threading.Thread(target=_progress_reporter, daemon=True).start()
         # Fall through to prompt 4.
     elif m and ("reboot now" in m.lower() or "do you want to reboot" in m.lower()):
@@ -14431,7 +14473,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         if nf:
                             _par_write(nf, chunk)
                         if "starting autoboot press ctrl-c to abort" in buf.lower():
-                            _status(f"  ðŸ›‘ [{ip}] Interrupting AUTOBOOT...")
+                            _status(f"  [INFO] [{ip}] Interrupting AUTOBOOT...")
                             if log:
                                 log.log(f"[{ip}] AUTOBOOT detected â€“ sending Ctrl+C")
                             if nf:
@@ -14529,12 +14571,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         httpd = None
         if src_type == "file":
             _ht, pkg_url, httpd = _start_http_server(src_value)
-            print(f"  ðŸŒ HTTP server started: {pkg_url}")
+            print(f"  [URL] HTTP server started: {pkg_url}")
             if log:
                 log.log(f"HTTP server URL: {pkg_url}")
         else:
             pkg_url = src_value
-            print(f"  ðŸŒ Using URL: {pkg_url}")
+            print(f"  [URL] Using URL: {pkg_url}")
         if log:
             log.end_phase()
 
@@ -24073,7 +24115,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         _nb_src_type, _nb_src_value = _netboot_pkg_preselected
         if _nb_src_type == "file":
             _nb_t, _peer_nb_pkg_url, _nb_httpd = _start_http_server(_nb_src_value)
-            print(f"\n  ðŸŒ Peer netboot server: {_peer_nb_pkg_url}")
+            print(f"\n  [URL] Peer netboot server: {_peer_nb_pkg_url}")
             _peer_nb_version = _extract_version_from_package_path(_nb_src_value)
         else:
             _peer_nb_pkg_url = _nb_src_value
@@ -24902,7 +24944,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             continue
         # When netboot-before-reinit is active, skip boot_ontap menu â€“ the
         # node will boot into the menu naturally after the netboot install.
-        if command == "boot_ontap menu" and _netboot_before_reinit and _operation_mode != 3:
+        if command == "boot_ontap menu" and _netboot_before_reinit:
             _slog("Skipping 'boot_ontap menu' â€“ netboot will handle boot")
             print("\n  â„¹ï¸  Skipping 'boot_ontap menu' (netboot-install requested).")
             continue
@@ -24932,11 +24974,11 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             time.sleep(1)
 
     # â”€â”€ Netboot-before-reinit hook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    # When the operator answered 'y' to the 1a/1b ONTAP-version prompt, skip
-    # boot_ontap menu and instead do ifconfig + netboot on the primary node.
+    # When the operator requested pre-reinit ONTAP install, skip boot_ontap
+    # menu and instead do ifconfig + netboot on the primary node.
     # After the install completes and the node reboots, the normal boot-menu
     # selection below will pick up the new ONTAP boot menu (option 9 â†’ init).
-    if _netboot_before_reinit and _operation_mode != 3:
+    if _netboot_before_reinit:
         if _session_log:
             _session_log.end_phase()  # End LOADER Commands
             _session_log.start_phase("Netboot ONTAP Install")
@@ -24944,13 +24986,13 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         src_value = None
         if _netboot_pkg_preselected is not None:
             src_type, src_value = _netboot_pkg_preselected
-            print("\n  ðŸŒ Netboot-before-reinit: using package selected at menu time.")
+            print("\n  [URL] Netboot-before-reinit: using package selected at menu time.")
         else:
             # Temporarily restore real stdout so _find_upgrade_package() prompts
             # appear on screen (sys.stdout may be a _NodeLogWriter at this point).
             _prev_stdout_nb = sys.stdout
             sys.stdout = _real_stdout
-            print("\n  ðŸŒ Netboot-before-reinit: selecting ONTAP package...")
+            print("\n  [URL] Netboot-before-reinit: selecting ONTAP package...")
             src_type, src_value = _find_upgrade_package()
             sys.stdout = _prev_stdout_nb
         _netboot_pkg_preselected = None
@@ -24965,7 +25007,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         _nb_httpd = None
         if src_type == "file":
             _nb_t, _nb_pkg_url, _nb_httpd = _start_http_server(src_value)
-            print(f"  ðŸŒ HTTP server started: {_nb_pkg_url}")
+            print(f"  [URL] HTTP server started: {_nb_pkg_url}")
         else:
             _nb_pkg_url = src_value
 
@@ -29746,9 +29788,7 @@ def main():
             # already created the cluster and just need to add nodes (no reset phase).
             _mode3_skip_presets = False
             if _operation_mode == 3:
-                # Option 3 no longer runs ONTAP image installs; always disable any
-                # carried-over netboot-install state from prior runs/checkpoints.
-                _netboot_before_reinit = False
+                # Reset stale menu-time package cache between runs/checkpoints.
                 _netboot_pkg_preselected = None
                 _cp_check = CheckpointManager()
                 if _cp_check.load():
