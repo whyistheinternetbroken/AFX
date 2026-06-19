@@ -749,11 +749,29 @@ _checkpoint: "CheckpointManager | None" = None
 def _normalize_mojibake_text(value: object) -> str:
     """Normalize common mojibake sequences to ASCII-safe text."""
     text = str(value or "")
+    # Best-effort mojibake repair for strings that were UTF-8-decoded as Latin-1.
+    # Keep the repaired text only when it reduces typical mojibake markers.
+    try:
+        repaired = text.encode("latin-1").decode("utf-8")
+        bad_markers = ("â", "ðŸ", "Ã", "Â", "ï¸")
+        if sum(text.count(m) for m in bad_markers) > sum(repaired.count(m) for m in bad_markers):
+            text = repaired
+    except Exception:
+        pass
+
     replacements = (
+        ("─", "-"),
         ("â€“", "-"),
         ("â€”", "-"),
+        ("â”€", "-"),
         ("â†’", "->"),
         ("â€¢", "-"),
+        ("📄", "[FILE]"),
+        ("ðŸ“„", "[FILE]"),
+        ("🔖", "[INFO]"),
+        ("ðŸ”–", "[INFO]"),
+        ("🔌", "[INFO]"),
+        ("ðŸ”Œ", "[INFO]"),
         ("âœ…", "[OK]"),
         ("âŒ", "[FAIL]"),
         ("â³", "[WAIT]"),
@@ -5473,33 +5491,44 @@ def _capture_ontap_version_from_loader(channel) -> "tuple[str, str] | tuple[None
     try:
         if not channel:
             return None, None
-        
-        # Send the printenv command to the LOADER prompt
-        channel.send("printenv last-OS-booted-ver\r")
-        time.sleep(1)
-        
-        # Read output
-        output = ""
-        while True:
-            try:
-                chunk = channel.recv(1024)
-                if not chunk:
-                    break
-                output += chunk.decode("utf-8", errors="ignore")
-            except:
-                break
-        
-        # Parse output - look for the version (usually a line like "9.11.1" or "10.0.1")
-        lines = output.split("\n")
-        for line in lines:
-            line = line.strip()
-            if line and re.match(r"^\d+\.\d+\.\d+", line):
-                return line, "LOADER (last-OS-booted-ver)"
+
+        output = direct_send_and_wait(
+            channel, "printenv last-OS-booted-ver", "LOADER-", timeout=15
+        )
+        version = _extract_last_os_booted_ver(output)
+        if version:
+            return version, "LOADER (last-OS-booted-ver)"
         
         return None, None
     except Exception as e:
         _slog(f"Could not capture ONTAP version from LOADER: {e}", prefix="DEBUG")
         return None, None
+
+
+def _extract_last_os_booted_ver(output: str) -> "str | None":
+    """Extract ONTAP version from LOADER 'printenv last-OS-booted-ver' output."""
+    for raw_line in (output or "").splitlines():
+        line = _ANSI_RE.sub("", raw_line).strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if "last-os-booted-ver" not in lower:
+            continue
+        if lower.startswith("printenv last-os-booted-ver"):
+            continue
+
+        match = re.search(
+            r"last-OS-booted-ver\s*(?:=|:)?\s*([^\s,;]+)",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            continue
+
+        token = match.group(1).strip().strip("'\"")
+        if re.search(r"\d+\.\d+", token):
+            return token
+    return None
 
 
 def _ssh_connect_with_retry(host: str, username: str, password: str,
@@ -9066,6 +9095,56 @@ class InteractiveSession:
 # Boot menu handler
 # ---------------------------------------------------------------------------
 
+def _send_boot_menu_option_with_confirmation(
+    channel,
+    option: str,
+    *,
+    menu_sigs: "list[str] | None" = None,
+    progress_sigs: "list[str] | None" = None,
+    node_log=None,
+    label: str = "",
+    max_attempts: int = 3,
+) -> bool:
+    """Send a boot-menu option and confirm the selection actually landed."""
+    _menu_sigs = [s.lower() for s in (menu_sigs or ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"])]
+    _progress_sigs = [s.lower() for s in (progress_sigs or [])]
+    _payloads = [option + "\r", option + "\r\n", "\r" + option + "\r"]
+    _attempts = max(1, min(max_attempts, len(_payloads)))
+
+    def _menu_visible(text: str) -> bool:
+        _t = str(text or "").lower()
+        return any(s in _t for s in _menu_sigs)
+
+    for _idx in range(_attempts):
+        with suppress(Exception):
+            channel.send(_payloads[_idx])
+        time.sleep(1)
+        _post = drain_channel(channel, seconds=2, node_log=node_log).lower()
+
+        if _progress_sigs and any(sig in _post for sig in _progress_sigs) and not _menu_visible(_post):
+            return True
+
+        _probe_out, _probe_match = direct_read_until_any(
+            channel,
+            _menu_sigs + _progress_sigs + ["loader-", "autoboot", "login:", "::>", "::*>"],
+            timeout=8,
+            node_log=node_log,
+            quiet=True,
+        )
+        _buf = (_post + "\n" + (_probe_out or "")).lower()
+        if _progress_sigs and any(sig in _buf for sig in _progress_sigs) and not _menu_visible(_buf):
+            return True
+        if not _menu_visible(_buf) and any(k in _buf for k in ["autoboot", "login:", "loader-", "::>"]):
+            return True
+
+        if _session_log:
+            _session_log.log(
+                f"[{label or 'node'}] boot menu still visible after option {option} attempt {_idx + 1}",
+                prefix="WARN",
+            )
+
+    return False
+
 def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_label="",
                                   reconnect_ctx=None):
     """Wait for the ONTAP boot menu then auto-select the configured option.
@@ -9314,39 +9393,88 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
             )
         return False
 
-    # Brief drain to let the trailing whitespace after "Selection (1-N)?" land.
-    drain_channel(channel, seconds=1, node_log=node_log)
+    def _menu_still_visible(text: str) -> bool:
+        _t = str(text or "").lower()
+        return any(s in _t for s in sig_lower)
 
-    if _operation_mode == 2:
-        print(f"\nâœ… {_pfx}Boot menu detected! Option {option} selected. Node reinitializing to be added to cluster.{_elapsed_str()}")
-    else:
-        print(f"\nâœ… {_pfx}Boot menu detected! Option {option} selected. Node reinitializing and Storage Availability Zone being destroyed.{_elapsed_str()}")
+    _progress_sigs = [
+        "storage availability zone will be destroyed",
+        "do you want to continue",
+        "zero disks were found",
+        "this will erase all the data on the disks",
+        "welcome to the cluster setup wizard",
+        "cluster setup wizard",
+        "node reinitializing",
+        "normal boot is prohibited",
+    ]
+
+    # Brief drain to let trailing menu text land before we send a selection.
+    drain_channel(channel, seconds=1, node_log=node_log)
+    print(f"\nðŸ”¢ {_pfx}Selecting option {option} ({description})...{_elapsed_str()}")
     if _session_log:
-        _session_log.log(f"Boot menu detected â€“ auto-selecting option {option} ({description})")
+        _session_log.log(f"Boot menu detected; selecting option {option} ({description})")
         _session_log.log_sent(option)
 
-    channel.send(option + "\r")
+    _send_variants = [
+        option + "\r",
+        option + "\r\n",
+        "\r" + option + "\r",
+    ]
+    _selected_ok = False
+    for _idx, _payload in enumerate(_send_variants, 1):
+        channel.send(_payload)
+        time.sleep(1)
+        _post = drain_channel(channel, seconds=2, node_log=node_log).lower()
+
+        # If immediate output shows progress and not a repeated menu prompt,
+        # the selection landed.
+        if any(sig in _post for sig in _progress_sigs) and not _menu_still_visible(_post):
+            _selected_ok = True
+            break
+
+        # Probe briefly for either menu reappearance or progress text.
+        _probe_out, _probe_match = direct_read_until_any(
+            channel,
+            sig_lower + _progress_sigs + ["loader-", "autoboot", "login:", "::>", "::*>"],
+            timeout=8,
+            node_log=node_log,
+            quiet=True,
+        )
+        _probe_buf = (_post + "\n" + (_probe_out or "")).lower()
+        if any(sig in _probe_buf for sig in _progress_sigs) and not _menu_still_visible(_probe_buf):
+            _selected_ok = True
+            break
+        if not _menu_still_visible(_probe_buf) and any(k in _probe_buf for k in ["autoboot", "login:", "loader-", "::>"]):
+            _selected_ok = True
+            break
+
+        if _session_log:
+            _session_log.log(
+                f"Boot menu still visible after option send attempt {_idx}; retrying",
+                prefix="WARN",
+            )
+        print(f"   â†» {_pfx}Boot menu still visible; retrying option {option} (attempt {_idx + 1}/{len(_send_variants)})...")
+
+    if not _selected_ok:
+        print(f"âš ï¸  {_pfx}Failed to confirm option {option} selection; boot menu is still visible.")
+        if _session_log:
+            _session_log.log(
+                f"[{node_label or 'primary'}] failed to confirm boot menu option {option} selection",
+                prefix="ERROR",
+            )
+        return False
+
     _boot_host = (
         (reconnect_ctx.get("host") if isinstance(reconnect_ctx, dict) else "")
         or node_label
     )
     if option in ("9", "4"):
         _cleanup_known_hosts_after_boot_option(_boot_host, option, log=_session_log)
-    time.sleep(2)
 
-    # Check whether the menu is still sitting at "Selection (1-N)?" â€” if so,
-    # the keystroke didn't land (slow console, race), so resend once.
-    post = drain_channel(channel, seconds=2, node_log=node_log).lower()
-    if any(s in post for s in sig_lower):
-        if _session_log:
-            _session_log.log(
-                "Boot menu prompt still present after first send; retrying option",
-                prefix="WARN",
-            )
-        print(f"   â†» Menu prompt still visible; resending option {option}...")
-        channel.send(option + "\r\n")
-        time.sleep(2)
-
+    if _operation_mode == 2:
+        print(f"\nâœ… {_pfx}Boot menu detected! Option {option} selected. Node reinitializing to be added to cluster.{_elapsed_str()}")
+    else:
+        print(f"\nâœ… {_pfx}Boot menu detected! Option {option} selected. Node reinitializing and Storage Availability Zone being destroyed.{_elapsed_str()}")
     return True
 
 
@@ -9526,6 +9654,30 @@ def _verify_boot_dna(channel, node_log=None, node_label=""):
 
     records = _extract_boot_dna_records(output)
     dna_value = records[-1][1] if records else None
+
+    # Capture ONTAP version from LOADER boot env while we are evaluating DNA.
+    last_os_ver = _extract_last_os_booted_ver(output)
+    if not last_os_ver:
+        _ver_out = direct_send_and_wait(
+            channel, "printenv last-OS-booted-ver", "LOADER-", timeout=15, node_log=node_log
+        )
+        last_os_ver = _extract_last_os_booted_ver(_ver_out)
+    if last_os_ver:
+        _ver_source = "LOADER (last-OS-booted-ver)"
+        _slog(f"Captured ONTAP version from LOADER: {last_os_ver}")
+        if _session_log:
+            _node_key = str(node_label or "").strip()
+            if _node_key:
+                _session_log.set_ontap_versions(
+                    before=last_os_ver,
+                    source=_ver_source,
+                    before_by_node={_node_key: last_os_ver},
+                )
+            else:
+                _session_log.set_ontap_versions(
+                    before=last_os_ver,
+                    source=_ver_source,
+                )
 
     # Also validate AUTOBOOT posture while we are reviewing boot DNA.
     autoboot_value = _extract_autoboot_value(output)
@@ -9792,6 +9944,23 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
             _result54["records"] = list(_boot54_records or [])
             _result54["ok"] = bool(_boot54_records)
             _print_boot_dna_records(_boot54_records, source_label=_source54)
+            _ver54_out = direct_send_and_wait(
+                _ch54,
+                "printenv last-OS-booted-ver",
+                "LOADER-",
+                timeout=20,
+                node_log=_nf54,
+            )
+            _ver54 = _extract_last_os_booted_ver(_ver54_out)
+            if _ver54:
+                _result54["last_os_booted_ver"] = _ver54
+                print(f"  [INFO] last-OS-booted-ver: {_ver54}")
+                if _session_log:
+                    _session_log.set_ontap_versions(
+                        before=_ver54,
+                        source="LOADER (last-OS-booted-ver)",
+                        before_by_node={str(_target54): _ver54},
+                    )
         return _result54
     finally:
         if _nf54:
@@ -11222,7 +11391,24 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     if _resend_count <= 3:
                         _slog("Boot menu still visible; resending option 4")
                         with suppress(Exception):
-                            channel.send("4\r")
+                            _opt4_ok = _send_boot_menu_option_with_confirmation(
+                                channel,
+                                "4",
+                                menu_sigs=menu_sigs_lower,
+                                progress_sigs=[
+                                    "zero disks were found",
+                                    "this node may not have been properly unjoined",
+                                    "this will erase all the data on the disks",
+                                    "type yes to confirm and continue",
+                                    "do you want to continue",
+                                ],
+                                node_log=node_log,
+                                label=ip,
+                            )
+                            if not _opt4_ok:
+                                if _session_log:
+                                    _session_log.log(f"[{ip}] failed to confirm second-boot-menu option 4 selection", prefix="ERROR")
+                                return False
                         if _session_log:
                             _session_log.log_sent("4")
                         _cleanup_known_hosts_after_boot_option(label or "node", "4", log=_session_log)
@@ -13118,7 +13304,13 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     nf = node_file
     _status = status_cb if callable(status_cb) else print
     def _status_ts(msg: str):
-        _status(f"{msg} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _m = re.match(r"^(\s*)(\[[^\]]+\])(\s*)(.*)$", str(msg))
+        if _m:
+            _lead, _node, _gap, _tail = _m.groups()
+            _status(f"{_lead}{_node} | {_ts}{_gap}{_tail}")
+            return
+        _status(f"{msg} | {_ts}")
 
     def _recv(look_for_list, timeout=30):
         if nf:
@@ -13544,9 +13736,26 @@ def _peer_reinit_worker(ip, ctx):
             log.log(f"[{ip}] boot menu detected â€“ sending option 4")
         if _pnf:
             _par_write(_pnf, "\n>>> sending option 4\n")
-        peer_ch.send("4\r")
+        _opt4_ok = _send_boot_menu_option_with_confirmation(
+            peer_ch,
+            "4",
+            menu_sigs=menu_sigs_lower,
+            progress_sigs=[
+                "zero disks were found",
+                "this node may not have been properly unjoined",
+                "this will erase all the data on the disks",
+                "type yes to confirm and continue",
+                "do you want to continue",
+            ],
+            node_log=_pnf,
+            label=ip,
+        )
+        if not _opt4_ok:
+            _status(f"  ⚠️  [{ip}] Option 4 selection could not be confirmed; aborting peer flow.")
+            with peer_lock:
+                peer_errors.append((ip, "option 4 selection not confirmed"))
+            return
         _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
-        time.sleep(2)
 
         # Auto-answer disk-erase and node-mgmt prompts (same as mode 2b).
         _auto_answer_disk_erase_prompts(
@@ -15139,14 +15348,32 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 time.sleep(1)
                 if _nf6:
                     _par_write(_nf6, "\n>>> sending option 4\n")
-                try:
-                    ch.send("4\r")
-                    _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
-                except OSError:
-                    pass
-                _status(f"  â³ [{ip}] Option 4 sent â€“ auto-answering disk erase prompts...")
+                _opt4_ok = _send_boot_menu_option_with_confirmation(
+                    ch,
+                    "4",
+                    menu_sigs=["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"],
+                    progress_sigs=_opt4_progress_sigs + [
+                        "zero disks were found",
+                        "this node may not have been properly unjoined",
+                        "this will erase all the data on the disks",
+                        "type yes to confirm and continue",
+                        "do you want to continue",
+                    ],
+                    node_log=_nf6,
+                    label=ip,
+                )
+                if not _opt4_ok:
+                    _status(f"  ⚠️  [{ip}] Option 4 selection could not be confirmed after option 6 fallback.")
+                    if log:
+                        log.log(f"[{ip}] option 4 selection not confirmed after option 6 fallback", prefix="ERROR")
+                    if _nf6:
+                        with suppress(Exception):
+                            _nf6.close()
+                    return
+                _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
+                _status(f"  ⏳ [{ip}] Option 4 confirmed – auto-answering disk erase prompts...")
                 if log:
-                    log.log(f"[{ip}] option 4 sent after unexpected boot menu; answering disk erase prompts")
+                    log.log(f"[{ip}] option 4 confirmed after unexpected boot menu; answering disk erase prompts")
 
                 # Option 4 shows several confirmation prompts before booting.
                 # Prompts may appear in different orders or be skipped entirely,
@@ -22226,7 +22453,25 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         if not seen_menu:
             print(f"   âš ï¸  [{label}] boot menu not detected; aborting.")
             return False
-        ch.send("4\r"); time.sleep(2)
+        _opt4_ok = _send_boot_menu_option_with_confirmation(
+            ch,
+            "4",
+            menu_sigs=sig_lower,
+            progress_sigs=[
+                "zero disks were found",
+                "this node may not have been properly unjoined",
+                "this will erase all the data on the disks",
+                "type yes to confirm and continue",
+                "do you want to continue",
+            ],
+            node_log=node_file,
+            label=label,
+        )
+        if not _opt4_ok:
+            print(f"   ⚠️  [{label}] Failed to confirm option 4 selection; aborting.")
+            if _session_log:
+                _session_log.log(f"[{label}] option 4 selection not confirmed", prefix="ERROR")
+            return False
         _cleanup_known_hosts_after_boot_option(peer_bmc, "4", log=_session_log)
         _t_option4_sent = time.monotonic()
         print(f"   â±ï¸  [{label}] Option 4 sent at +{_t_option4_sent - _t_thread_start:.1f}s")
@@ -24251,7 +24496,27 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         if _session_log:
             _session_log.log("2nd boot menu detected; auto-selecting option 4")
             _session_log.log_sent("4")
-        channel.send("4\r")
+        _opt4_ok = _send_boot_menu_option_with_confirmation(
+            channel,
+            "4",
+            menu_sigs=menu_sigs_lower,
+            progress_sigs=[
+                "zero disks were found",
+                "this node may not have been properly unjoined",
+                "this will erase all the data on the disks",
+                "type yes to confirm and continue",
+                "do you want to continue",
+            ],
+            node_log=node_log,
+            label=bmc_host or "primary",
+        )
+        if not _opt4_ok:
+            print(f"❌ {_node_pfx(bmc_host)}Failed to confirm option 4 selection on second boot menu.")
+            if _session_log:
+                _session_log.log("2nd boot menu option 4 selection not confirmed", prefix="ERROR")
+                _session_log.end_phase()
+            _close_boot_log()
+            return
         _cleanup_known_hosts_after_boot_option(bmc_host or "primary", "4", log=_session_log)
         time.sleep(2)
 
