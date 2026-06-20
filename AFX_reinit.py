@@ -10417,45 +10417,27 @@ def collect_cluster_config():
             admin_password = None
         print(f"\n  \u2139\uFE0F  {pw_rule_msg}")
         bmc_pw_available = bool(_primary_bmc_password)
-        if bmc_pw_available and _password_ok(_primary_bmc_password):
+        if bmc_pw_available:
             _reuse_bmc_pw = _prompt(
                 "  Reuse the BMC login password as the cluster admin password? [Y/n]: ",
                 "y",
             ).strip().lower()
             if _reuse_bmc_pw not in ("n", "no"):
-                admin_password = _primary_bmc_password
-                print("    \u2705 Reusing BMC login password as cluster admin password (hidden).")
-                if _session_log:
-                    _session_log.log(
-                        "Operator reused BMC login password as cluster admin password"
-                    )
-        elif bmc_pw_available:
-            print("  \u2139\uFE0F  The BMC login password you already entered "
-                  "does not meet the ONTAP rule above, so it cannot be "
-                  "reused here.")
+                if _password_ok(_primary_bmc_password):
+                    admin_password = _primary_bmc_password
+                    print("    \u2705 Reusing BMC login password as cluster admin password (hidden).")
+                    if _session_log:
+                        _session_log.log(
+                            "Operator reused BMC login password as cluster admin password"
+                        )
+                else:
+                    print("    \u26A0\uFE0F  The BMC login password does not meet the ONTAP "
+                          "rule above, so it cannot be reused here.")
         if not (admin_password and _password_ok(admin_password)):
-            if bmc_pw_available and _password_ok(_primary_bmc_password):
-                print("  \U0001F4A1 Type 'bmc' to reuse the BMC login password "
-                      "you already entered.")
             while True:
                 admin_password = getpass.getpass("  Admin password to use for cluster: ")
                 if not admin_password:
                     print("    \u26A0\uFE0F  Password cannot be empty.")
-                    continue
-                if (bmc_pw_available
-                        and admin_password.strip().lower() == "bmc"):
-                    if _password_ok(_primary_bmc_password):
-                        admin_password = _primary_bmc_password
-                        print("    \u2705 Reusing BMC login password as cluster admin "
-                              "password (hidden).")
-                        if _session_log:
-                            _session_log.log(
-                                "Operator reused BMC login password as cluster "
-                                "admin password"
-                            )
-                        break
-                    print("    \u26A0\uFE0F  BMC password does not meet the ONTAP "
-                          "requirement; please enter a new password.")
                     continue
                 if not _password_ok(admin_password):
                     print(f"    \u26A0\uFE0F  Password does not meet requirements. "
@@ -12703,7 +12685,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     _status = status_cb if callable(status_cb) else print
     def _status_ts(msg: str):
         # Avoid duplicate timestamps when the message already uses structured format.
-        if re.search(r"\|\s\[[A-Z]+\]\s", msg):
+        if re.search(r"\|\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s\|\s\[[A-Z]+\]\s", msg):
             _status(msg)
         else:
             _status(f"{msg} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -13079,13 +13061,6 @@ def _peer_reinit_worker(ip, ctx):
         client=peer_cl, channel=peer_ch, label=f"peer/{ip}",
     )
 
-    # Redirect stdout for this thread to the per-node log writer so
-    # all output goes to the file and only milestone lines reach the terminal.
-    _peer_nlw = _NodeLogWriter(_pnf, interactive=False) if _pnf else None
-    _prev_stdout = sys.stdout
-    if _peer_nlw:
-        sys.stdout = _peer_nlw
-
     try:
         if _primary_ready_event is not None and ip != _primary_node_ip:
             _status(
@@ -13191,8 +13166,7 @@ def _peer_reinit_worker(ip, ctx):
                 f"  ✅ {_format_status_line(ip, f'Ready for cluster add-node (IP: {_cluster_ip}).', 'SUCCESS')}"
             )
     finally:
-        # Restore stdout; log file is closed after all workers finish.
-        sys.stdout = _prev_stdout
+        pass
 
 
 def _format_status_line(node=None, message="", level="INFO"):
@@ -13481,9 +13455,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
         # ────────────────────────────────────────────────────────────────────
         # Node pre-configuration
         # ────────────────────────────────────────────────────────────────────
-        print("\n==================")
-        print("Node pre-config")
-        print("==================")
+        _print_banner("Node pre-config")
 
         # Physical disk zeroing applies to every reinit sub-mode (1a/1b/3);
         # it is set by the LOADER stage on the primary node. The direct
@@ -20644,6 +20616,18 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
 
     Returns the cluster IP string, or None on failure.
     """
+    _existing_ip = ""
+    if isinstance(cluster_ips_out, dict) and peer_bmc in cluster_ips_out:
+        _existing_entry = cluster_ips_out.get(peer_bmc)
+        if isinstance(_existing_entry, dict):
+            _existing_ip = str(_existing_entry.get("cluster_ip") or "").strip()
+        else:
+            _existing_ip = str(_existing_entry or "").strip()
+    if _is_valid_ipv4(_existing_ip):
+        print(f"\n✅ [{label}] Reusing previously captured cluster interface IP: {_existing_ip}")
+        _slog(f"[{label}] reusing existing cluster IP: {_existing_ip}")
+        return _existing_ip
+
     print(f"\n🛑 [{label}] Aborting cluster wizard (Ctrl+C)...")
     _slog(f"[{label}] sending Ctrl+C to abort cluster wizard")
     for _ in range(5):
@@ -29113,9 +29097,7 @@ def main():
             # connection — so all up-front questions are grouped together.
             # Skip if resuming mode 3 at peer-add finalization stage (cluster already created).
             if _operation_mode in (1, 3) and not _mode3_skip_presets:
-                print("\n==================")
-                print("Node pre-config")
-                print("==================")
+                _print_banner("Node pre-config")
                 print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
                 try:
                     while True:
