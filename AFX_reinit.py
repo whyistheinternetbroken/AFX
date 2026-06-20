@@ -140,7 +140,7 @@ def _elapsed_str() -> str:
 
 def _node_pfx(label: str = "") -> str:
     """Return '[label] ' using *label* if given, else _reinit_label."""
-    lbl = label or _reinit_label
+    lbl = _augment_role_label_with_ip(str(label or _reinit_label or "").strip(), mode=_operation_mode)
     return f"[{lbl}] " if lbl else ""
 
 
@@ -1895,6 +1895,29 @@ def _display_node_label(bmc_host: str = "", mode=None) -> str:
         return "primary" if not _host else _host
 
     return _host or "node"
+
+
+def _augment_role_label_with_ip(label: str = "", mode=None) -> str:
+    """Expand role labels to include BMC IP (e.g. primary -> primary/10.x.x.x)."""
+    _mode = _operation_mode if mode is None else mode
+    _lbl = str(label or "").strip()
+    if not _lbl or "/" in _lbl:
+        return _lbl
+    if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", _lbl):
+        _role = _display_node_label(_lbl, mode=_mode)
+        return f"{_role}/{_lbl}" if _role and _role != _lbl else _lbl
+    if _lbl == "primary":
+        _pn = _config_primary_node()
+        _ip = str(_pn.get("bmc") or "").strip()
+        return f"{_lbl}/{_ip}" if _ip else _lbl
+    _m = re.match(r"^secondary-(\d{2})$", _lbl)
+    if _m:
+        _idx = int(_m.group(1)) - 1
+        _secs = _config_secondary_nodes()
+        if 0 <= _idx < len(_secs):
+            _ip = str((_secs[_idx] or {}).get("bmc") or "").strip()
+            return f"{_lbl}/{_ip}" if _ip else _lbl
+    return _lbl
 
 
 def _display_ontap_node_label(nodename: str, node_mgmt_by_name: dict | None = None) -> str:
@@ -10576,9 +10599,6 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                 _buf += chunk
                 if node_log:
                     _par_write(node_log, chunk)
-                else:
-                    sys.stdout.write(chunk)
-                    sys.stdout.flush()
                 if _session_log:
                     _session_log.log_console(chunk)
             time.sleep(0.1)
@@ -10609,9 +10629,6 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                 _recheck += rc
                 if node_log:
                     _par_write(node_log, rc)
-                else:
-                    sys.stdout.write(rc)
-                    sys.stdout.flush()
                 if _session_log:
                     _session_log.log_console(rc)
             else:
@@ -10772,8 +10789,8 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
     ):
         if lbl == "type-yes confirmation":
             if _node_add:
-                _boot_action = "join the cluster"
-                _still_waiting_msg = "Still waiting for cluster join"
+                _boot_action = "get ready for node add"
+                _still_waiting_msg = "Still waiting for node add readiness"
             else:
                 _boot_action = "begin cluster creation"
                 _still_waiting_msg = "Still waiting for cluster creation"
@@ -12685,7 +12702,11 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     nf = node_file
     _status = status_cb if callable(status_cb) else print
     def _status_ts(msg: str):
-        _status(f"{msg} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        # Avoid duplicate timestamps when the message already uses structured format.
+        if re.search(r"\|\s\[[A-Z]+\]\s", msg):
+            _status(msg)
+        else:
+            _status(f"{msg} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     def _recv(look_for_list, timeout=30):
         if nf:
@@ -12778,12 +12799,12 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         _send_raw(f"netboot {pkg_url}")
         _status_ts(f"\n  {_format_status_line(node_label, '📥 Downloading ONTAP image — this may take several minutes...', 'INFO')}")
 
-        # Download-phase progress thread: emits a status line every 30 s so
+        # Download-phase progress thread: emits a status line every 60 s so
         # the terminal doesn't look hung while the image transfers.
         _dl_stop = threading.Event()
         _dl_t0 = time.monotonic()
         def _dl_progress(_ev=_dl_stop, _t0=_dl_t0):
-            while not _ev.wait(30):
+            while not _ev.wait(60):
                 elapsed = time.monotonic() - _t0
                 _status_ts(f"  ⏳ {_format_status_line(node_label, f'Image downloading... ({elapsed:.0f}s elapsed)', 'INFO')}")
         _dl_thread = threading.Thread(target=_dl_progress, daemon=True)
@@ -13177,14 +13198,15 @@ def _peer_reinit_worker(ip, ctx):
 def _format_status_line(node=None, message="", level="INFO"):
     """Format a status line with node/IP, timestamp, and log level.
     
-    Format: [node_or_time] | YYYY-MM-DD HH:MM:SS | LEVEL message
-    If node is None, format without node: [YYYY-MM-DD HH:MM:SS] LEVEL message
+    Format: [node_or_time] | YYYY-MM-DD HH:MM:SS | [LEVEL] message
+    If node is None, format without node: [YYYY-MM-DD HH:MM:SS] [LEVEL] message
     """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if node:
-        return f"[{node}] | {timestamp} | {level} {message}"
+        _node = _augment_role_label_with_ip(str(node).strip(), mode=_operation_mode)
+        return f"[{_node}] | {timestamp} | [{level}] {message}"
     else:
-        return f"[{timestamp}] {level} {message}"
+        return f"[{timestamp}] [{level}] {message}"
 
 
 def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, hidden_mode_4d: bool = False):
@@ -13212,16 +13234,39 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
     def _status(msg):
         for _ip in bmc_ips:
             _label = _display_node_label(_ip, mode=42)
-            msg = msg.replace(f"[{_ip}]", f"[{_label}]")
+            _role_ip = f"{_label}/{_ip}" if _label and _label != _ip else _ip
+            msg = msg.replace(f"[{_ip}]", f"[{_role_ip}]")
+            msg = msg.replace(f"[{_label}]", f"[{_role_ip}]")
+        stripped = msg.strip()
+        if _is_4d:
+            _already_structured = re.match(
+                r"^\[[^\]]+\]\s\|\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s\|\s\[[A-Z]+\]\s",
+                stripped,
+            )
+            if not _already_structured:
+                if "❌" in stripped:
+                    _lvl = "ERROR"
+                elif "⚠️" in stripped:
+                    _lvl = "WARN"
+                elif "✅" in stripped:
+                    _lvl = "SUCCESS"
+                else:
+                    _lvl = "INFO"
+                _m = re.search(r"\[([^\]]+)\]", stripped)
+                _node = _m.group(1) if _m else "4d"
+                _txt = re.sub(r"^.*?\]\s*", "", stripped)
+                _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                stripped = f"[{_node}] | {_ts} | [{_lvl}] {_txt}"
         with _stdout_lock:
-            print(msg)
+            print(stripped)
         # Mirror to the session log so the log file is a complete record.
         if log:
-            stripped = msg.strip()
             if "❌" in stripped:
                 prefix = "ERROR"
             elif "⚠️" in stripped:
                 prefix = "WARN"
+            elif "✅" in stripped:
+                prefix = "SUCCESS"
             else:
                 prefix = "INFO"
             log.log(stripped, prefix=prefix)
@@ -13433,6 +13478,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
             if log and _license_mode:
                 log.log(f"4b: ONTAP license configured (mode={_license_mode})")
 
+        # ────────────────────────────────────────────────────────────────────
+        # Node pre-configuration
+        # ────────────────────────────────────────────────────────────────────
+        print("\n==================")
+        print("Node pre-config")
+        print("==================")
+
         # Physical disk zeroing applies to every reinit sub-mode (1a/1b/3);
         # it is set by the LOADER stage on the primary node. The direct
         # mode 1/3 menu entries prompt for this up-front, so 4b's reinit
@@ -13451,11 +13503,6 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                 print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
         if log:
             log.log(f"4b: physical disk zeroing requested: {_physical_zeroing}")
-
-        # ────────────────────────────────────────────────────────────────────
-        # Node pre-configuration
-        # ────────────────────────────────────────────────────────────────────
-        _print_banner("Node pre-configuration")
 
         # Diagnostic bootargs: if --diag was passed, load/prompt for bootargs now.
         global _diag_mode, _diag_bootargs, _prevent_bios_fw_update
@@ -16043,7 +16090,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
             if log:
                 log.start_phase("4b – Cluster Initialization (primary resume)")
             _wizard_ok = _run_cluster_setup_wizard(
-                first_ch, primary_bmc=first_ip, initial_buf=_primary_resume_buf
+                first_ch, primary_bmc=first_ip, initial_buf=_primary_resume_buf,
+                node_log=_pnf_primary,
             )
             if log:
                 log.end_phase()
@@ -19631,7 +19679,8 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
             _slog(f"SSH test exception: {_te}", prefix="WARN")
 
 
-def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
+def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
+                              node_log=None):
     """Drive the post-node-mgmt cluster setup wizard non-interactively using
     values gathered in `_cluster_config`.
 
@@ -19695,7 +19744,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # comes first, sending CR every 15 s of silence to nudge the prompt.
     print("\n⏳ Waiting for cluster setup wizard to begin...")
     _slog("Waiting for wizard start (press-enter or create/join prompt)")
-    _which = _wait_for_wizard_start(channel, timeout=1800, initial_buf=initial_buf)
+    _which = _wait_for_wizard_start(
+        channel, timeout=1800, node_log=node_log, initial_buf=initial_buf
+    )
     if _which is None:
         print("\n❌ Timed out waiting for cluster setup wizard start.")
         if _session_log:
@@ -19758,6 +19809,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                 "{yes, no}",
             ],
             timeout=min(30, _remaining),
+            node_log=node_log,
+            quiet=bool(node_log),
             check_bmc_drop=True,
         )
         if _shutdown_event.is_set():
@@ -19815,13 +19868,17 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         time.sleep(0.5)
     else:
         _wait_and_send(channel, "{yes, no}", "yes",
-                       "Yes/no confirmation after create -> yes", timeout=600)
+                       "Yes/no confirmation after create -> yes",
+                       timeout=600, node_log=node_log, quiet=bool(node_log))
     _wait_and_send(channel, "enter the cluster administrator", cc["admin_password"],
-                   "Cluster administrator password", timeout=600, hide_in_log=True)
+                   "Cluster administrator password", timeout=600,
+                   hide_in_log=True, node_log=node_log, quiet=bool(node_log))
     _wait_and_send(channel, "retype the password", cc["admin_password"],
-                   "Retype cluster administrator password", timeout=600, hide_in_log=True)
+                   "Retype cluster administrator password", timeout=600,
+                   hide_in_log=True, node_log=node_log, quiet=bool(node_log))
     _wait_and_send(channel, "enter the cluster name", cc["name"],
-                   f"Cluster name -> {cc['name']}", timeout=600)
+                   f"Cluster name -> {cc['name']}", timeout=600,
+                   node_log=node_log, quiet=bool(node_log))
 
     # After cluster creation:
     print("\n⏳ Cluster creating...", end="", flush=True)
@@ -19833,17 +19890,21 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             sys.stdout.flush()
     threading.Thread(target=_dot_ticker, daemon=True).start()
     _wait_and_send(channel, "enter an additional license key", "",
-                   "Additional license key -> Enter", timeout=1800, quiet=True)
+                   "Additional license key -> Enter", timeout=1800,
+                   quiet=True, node_log=node_log)
     _dot_done.set()
     print()  # newline after dots
     _log_path = _session_log.log_file if _session_log else "the log file"
     print(f"\n⏳ Cluster creating. See log for details in a separate SSH session:\n   {_log_path}")
     _wait_and_send(channel, "cluster management interface port", cc["mgmt_port"],
-                   f"Cluster mgmt port -> {cc['mgmt_port']}", timeout=900)
+                   f"Cluster mgmt port -> {cc['mgmt_port']}", timeout=900,
+                   node_log=node_log, quiet=bool(node_log))
     _wait_and_send(channel, "cluster management interface ip address", cc["mgmt_ip"],
-                   f"Cluster mgmt IP -> {cc['mgmt_ip']}", timeout=600)
+                   f"Cluster mgmt IP -> {cc['mgmt_ip']}", timeout=600,
+                   node_log=node_log, quiet=bool(node_log))
     _wait_and_send(channel, "cluster management interface netmask", cc["mgmt_netmask"],
-                   f"Cluster mgmt netmask -> {cc['mgmt_netmask']}", timeout=600)
+                   f"Cluster mgmt netmask -> {cc['mgmt_netmask']}", timeout=600,
+                   node_log=node_log, quiet=bool(node_log))
     # Send the cluster-management gateway and re-prompt on rejection.
     # ONTAP prints "not a valid gateway address" when the supplied value is
     # outside the management interface's subnet.
@@ -19853,7 +19914,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
         _slog("Waiting for: cluster management interface default gateway")
         direct_send_and_wait(
             channel, "", "cluster management interface default gateway",
-            timeout=600, check_bmc_drop=True,
+            timeout=600, node_log=node_log, quiet=bool(node_log),
+            check_bmc_drop=True,
         )
         channel.send(_gw_to_send + "\r")
         if _session_log:
@@ -19866,8 +19928,11 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             if channel.recv_ready():
                 _gc = channel.recv(4096).decode("utf-8", errors="replace")
                 _gw_recheck += _gc
-                sys.stdout.write(_gc)
-                sys.stdout.flush()
+                if node_log:
+                    _par_write(node_log, _gc)
+                else:
+                    sys.stdout.write(_gc)
+                    sys.stdout.flush()
                 if _session_log:
                     _session_log.log_console(_gc)
             else:
@@ -19922,7 +19987,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             time.sleep(0.5)
         else:
             _wait_and_send(channel, trigger, response, label,
-                           timeout=timeout, hide_in_log=hide_in_log)
+                           timeout=timeout, hide_in_log=hide_in_log,
+                           node_log=node_log, quiet=bool(node_log))
     _wizard_step("dns domain name", cc["dns_domains"] or "",
                  f"DNS domain names -> {cc['dns_domains']}")
     _wizard_step("name server ip address", cc["dns_servers"] or "",
@@ -19948,6 +20014,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
             channel,
             ["creating root aggregate", "has been created", "login:"],
             timeout=_remaining_ms,
+            node_log=node_log,
+            quiet=bool(node_log),
             check_bmc_drop=True,
         )
         if _shutdown_event.is_set():
@@ -19987,7 +20055,10 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
     # If we exited the loop without seeing login: yet, wait for it now.
     if not _matched or "login:" not in _matched.lower():
         _slog("Waiting for login: prompt to confirm cluster creation")
-        direct_send_and_wait(channel, "", "login:", timeout=1800)
+        direct_send_and_wait(
+            channel, "", "login:", timeout=1800,
+            node_log=node_log, quiet=bool(node_log)
+        )
         if _shutdown_event.is_set():
             print("\n👋 Interrupted while waiting for login prompt; exiting wizard.")
             if _session_log:
@@ -20190,10 +20261,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = ""):
                 state="in_progress",
                 next_phase="Node join finalization",
             )
+    if _session_log and getattr(_session_log, "log_file", None):
+        print("  Primary cluster add-node activity log:\n")
+        print(f"    {_session_log.log_file}\n")
     if _peer_log_paths:
-        print("  Console log for node at:\n")
+        print("  Peer BMC console logs (prep steps before cluster add-node):\n")
         for _wn_idx, (_wn_ip, _wn_path) in enumerate(_peer_log_paths.items(), 1):
-            print(f"    Node being added BMC{_wn_idx} ({_wn_ip}): {_wn_path}")
+            print(f"    Peer BMC{_wn_idx} ({_wn_ip}): {_wn_path}")
         print("")
     if _session_log:
         _session_log.log(
@@ -20783,7 +20857,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             )
 
     ips_str = ",".join(cluster_ips)
-    print("\n  Fetching cluster network IP")
+    print("\n  Using previously collected cluster network IP(s)")
     print("  Running add-node command")
     print(f"     cluster add-node -cluster-ips {ips_str}")
     print(f"\n  ➕ Adding {len(cluster_ips)} node(s) to cluster...")
@@ -23768,7 +23842,11 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
             _session_log.log("Cluster setup wizard already active; skipping option 4 selection")
     else:
         drain_channel(channel, seconds=1)
-        _opt4_status_node = _display_node_label(bmc_host, mode=42) if bmc_host else "primary"
+        if bmc_host:
+            _opt4_role = _display_node_label(bmc_host, mode=42)
+            _opt4_status_node = f"{_opt4_role}/{bmc_host}" if _opt4_role and _opt4_role != bmc_host else bmc_host
+        else:
+            _opt4_status_node = "primary"
         print(
             f"🔢 {_format_status_line(_opt4_status_node, 'Selecting option 4 (Initialize and configure)...', 'INFO')}{_elapsed_str()}"
         )
@@ -23810,6 +23888,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         channel,
         primary_bmc=bmc_host,
         initial_buf=_mgmt_residual,
+        node_log=_boot_log,
     )
     if wizard_ok is False:
         print("\n❌ Cluster setup wizard failed – cannot proceed. Exiting.")
@@ -23863,10 +23942,12 @@ def _loader_env_capture(channel, node_log=None):
 
 def _loader_env_save_to_file(env_dict, label, log_dir, prefix="loader_env"):
     """Write env dict to a timestamped .txt file; return the file path."""
+    loader_env_dir = os.path.join(log_dir, "LOADER_ENV")
+    os.makedirs(loader_env_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = re.sub(r"[^\w.\-]", "_", label)
     filename = f"{prefix}_{safe_label}_{ts}.txt"
-    path = os.path.join(log_dir, filename)
+    path = os.path.join(loader_env_dir, filename)
     try:
         with open(path, "w", encoding="utf-8") as fh:
             for key in sorted(env_dict):
@@ -23907,9 +23988,11 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     global _loader_env_stage_enabled, _bootarg_check_enabled
     _env_log = node_log
     _close_env_log = False
+    _loader_env_dir = os.path.join(log_dir, "LOADER_ENV")
+    os.makedirs(_loader_env_dir, exist_ok=True)
     if _env_log is None and log_dir:
         try:
-            _env_log = _node_log_open(label, log_dir, prefix="loader_env")
+            _env_log = _node_log_open(label, _loader_env_dir, prefix="loader_env")
             _close_env_log = True
         except Exception:
             _env_log = None
@@ -24002,7 +24085,9 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     # Save diff summary
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = re.sub(r"[^\w.\-]", "_", label)
-    diff_path = os.path.join(log_dir, f"loader_env_diff_{safe_label}_{ts}.txt")
+    diff_path = os.path.join(
+        _loader_env_dir, f"loader_env_diff_{safe_label}_{ts}.txt"
+    )
     try:
         with open(diff_path, "w", encoding="utf-8") as fh:
             fh.write(f"LOADER env diff for {label} at {ts}\n")
@@ -29028,6 +29113,9 @@ def main():
             # connection — so all up-front questions are grouped together.
             # Skip if resuming mode 3 at peer-add finalization stage (cluster already created).
             if _operation_mode in (1, 3) and not _mode3_skip_presets:
+                print("\n==================")
+                print("Node pre-config")
+                print("==================")
                 print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
                 try:
                     while True:
