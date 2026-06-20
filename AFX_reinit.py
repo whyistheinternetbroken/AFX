@@ -2298,6 +2298,8 @@ class SessionLogger:
         self._ontap_version_after_source: str = ""
         self._ontap_before_by_node: "dict[str, str]" = {}
         self._ontap_after_by_node: "dict[str, str]" = {}
+        self._ontap_previous_version: str = ""
+        self._ontap_previous_source: str = ""
         # Optional indented sub-timing rows attached under a parent phase
         # in the summary tables. phase_name -> list[(label, elapsed_seconds)].
         self._phase_subtimings: "dict[str, list[tuple[str, float]]]" = {}
@@ -2645,6 +2647,54 @@ class SessionLogger:
 
     def _write_ontap_version_lines(self, out_fh) -> None:
         """Render ONTAP version summary rows into the provided file handle."""
+        def _loader_env_previous_version():
+            _loader_dir = os.path.join(self.log_dir, "LOADER_ENV")
+            if not os.path.isdir(_loader_dir):
+                return "", ""
+            _candidates = []
+            try:
+                for _name in os.listdir(_loader_dir):
+                    _lname = _name.lower()
+                    if not _lname.endswith(".txt"):
+                        continue
+                    if "loader_env" not in _lname:
+                        continue
+                    _path = os.path.join(_loader_dir, _name)
+                    if os.path.isfile(_path):
+                        _candidates.append(_path)
+            except Exception:
+                return "", ""
+            if not _candidates:
+                return "", ""
+            _candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            _pat = re.compile(
+                r"^\s*last-OS-booted-ver(?:\s*=\s*|\s+)(\S.*?)\s*$",
+                re.IGNORECASE,
+            )
+            for _path in _candidates:
+                try:
+                    with open(_path, "r", encoding="utf-8", errors="replace") as _fh:
+                        for _line in _fh:
+                            _m = _pat.match(_line)
+                            if not _m:
+                                continue
+                            _ver = str(_m.group(1) or "").strip()
+                            if _ver:
+                                return _ver, os.path.basename(_path)
+                except Exception:
+                    continue
+            return "", ""
+
+        _prev_ver, _prev_src = _loader_env_previous_version()
+        if _prev_ver:
+            self._ontap_previous_version = _prev_ver
+            self._ontap_previous_source = _prev_src
+
+        if self._ontap_previous_version:
+            _prev_lbl = self._ontap_previous_version
+            if self._ontap_previous_source:
+                _prev_lbl = f"{_prev_lbl} (LOADER_ENV/{self._ontap_previous_source})"
+            out_fh.write(f"  {'Previous ONTAP version':<25} {_prev_lbl}\n")
         if self._ontap_version_before:
             _before_lbl = self._ontap_version_before
             if self._ontap_version_before_source:
