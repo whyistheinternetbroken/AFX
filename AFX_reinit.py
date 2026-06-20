@@ -2657,7 +2657,7 @@ class SessionLogger:
                     _lname = _name.lower()
                     if not _lname.endswith(".txt"):
                         continue
-                    if "loader_env" not in _lname:
+                    if "loader_env_pre_" not in _lname:
                         continue
                     _path = os.path.join(_loader_dir, _name)
                     if os.path.isfile(_path):
