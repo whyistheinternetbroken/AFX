@@ -24,3 +24,10 @@ logs/*
 script_failures/*
 ONTAP/*
 !ONTAP/.gitkeep
+
+# Local-only artifacts (do not publish)
+.github/skills/
+docs/plan/
+IMPLEMENTATION_SUMMARY.md
+SUMMARY_FILE_IMPROVEMENTS.md
+test_phase_prediction.py
