@@ -778,6 +778,9 @@ _peer_bmc_creds = {}
 # created. Populated in main() and consumed at the tail of the cluster setup
 # wizard.
 _peer_bmc_list = []
+_mode3_staged_loader_channels = {}
+_mode3_staged_loader_clients = {}
+_mode3_pipeline_state = None
 
 # Peer node log paths: {ip: log_file_path} for nodes being added during
 # cluster setup.  Populated by _run_4b_standalone; read in
@@ -8345,7 +8348,8 @@ def collect_retain_data(channel, retain_name, retain_network, collect_peer_sps=F
 # Peer-node reset (mode 1): drive other BMCs to LOADER before option 9
 # ---------------------------------------------------------------------------
 
-def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
+def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
+                         session_store=None):
     """SSH to a peer BMC, run system reset, enter console, interrupt AUTOBOOT,
     and leave the node at the LOADER prompt. Returns True on success.
 
@@ -8403,7 +8407,14 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             if _already_at_loader(
                 ch, label=host, node_log=node_log,
             ):
-                _tprint(f"   ✅ [{host}] Already at LOADER prompt. Disconnecting...")
+                if session_store is not None:
+                    session_store["client"] = client
+                    session_store["channel"] = ch
+                    session_store["user"] = username
+                    session_store["password"] = password
+                    client = None
+                    ch = None
+                _tprint(f"   ✅ [{host}] Already at LOADER prompt.")
                 _slog(f"Peer {host} already at LOADER; skipping reset")
                 return True
         except RuntimeError as _probe_err:
@@ -8542,8 +8553,15 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             time.sleep(0.1)
 
         if loader_seen:
-            _tprint(f"   ✅ [{host}] At LOADER prompt. Disconnecting...")
-            _slog(f"Peer {host} reached LOADER; disconnecting SSH and moving on")
+            if session_store is not None:
+                session_store["client"] = client
+                session_store["channel"] = ch
+                session_store["user"] = username
+                session_store["password"] = password
+                client = None
+                ch = None
+            _tprint(f"   ✅ [{host}] At LOADER prompt.")
+            _slog(f"Peer {host} reached LOADER; continuing")
         else:
             _tprint(f"   ⚠️  [{host}] Did not reach LOADER within {timeout}s.")
             _slog(f"Peer {host} did not reach LOADER (timeout)", prefix="WARN")
@@ -13188,6 +13206,7 @@ def _peer_reinit_worker(ip, ctx):
     loader_clients    = ctx["loader_clients"]
     bmc_user          = ctx["bmc_user"]
     bmc_passwords     = ctx["bmc_passwords"]
+    bmc_users         = ctx.get("bmc_users") or {}
     admin_password    = ctx.get("admin_password") or ""
     log               = ctx["log"]
     peer_errors       = ctx["peer_errors"]
@@ -13198,6 +13217,17 @@ def _peer_reinit_worker(ip, ctx):
     cluster_ips_out   = ctx.get("cluster_ips_out")
     _primary_ready_event = ctx.get("primary_option9_done_event")
     _primary_node_ip = ctx.get("primary_node_ip")
+    _timings_record = ctx.get("timings_record")
+    _timings_lock = ctx.get("timings_lock")
+
+    _t_thread_start = time.monotonic()
+    _t_loader_seen = 0.0
+    _t_option4_sent = 0.0
+    _t_disk_erase_done = 0.0
+    _t_node_mgmt_done = 0.0
+    _t_cluster_ip_done = 0.0
+    _node_name = ""
+    _ok = False
 
     peer_ch = loader_channels.get(ip)
     peer_cl = loader_clients.get(ip)
@@ -13208,11 +13238,12 @@ def _peer_reinit_worker(ip, ctx):
     # Reuse the unified log already opened for this peer node.
     _pnf = _node_reinit_logs.get(ip)
     _peer_rc_ctx = _make_reconnect_ctx(
-        ip, bmc_user, bmc_passwords.get(ip, ""),
+        ip, bmc_users.get(ip) or bmc_user, bmc_passwords.get(ip, ""),
         client=peer_cl, channel=peer_ch, label=f"peer/{ip}",
     )
 
     try:
+        _t_loader_seen = time.monotonic() - _t_thread_start
         if _primary_ready_event is not None and ip != _primary_node_ip:
             _status(
                 f"  ⏳ {_format_status_line(ip, 'Waiting for primary option 9 completion before peer option 4.', 'INFO')}"
@@ -13291,6 +13322,7 @@ def _peer_reinit_worker(ip, ctx):
         if _pnf:
             _par_write(_pnf, "\n>>> sending option 4\n")
         peer_ch.send("4\r")
+        _t_option4_sent = time.monotonic() - _t_thread_start
         _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
         time.sleep(2)
 
@@ -13299,13 +13331,16 @@ def _peer_reinit_worker(ip, ctx):
             peer_ch, node_log=_pnf, label=ip, is_node_add=True,
             reconnect_ctx=_peer_rc_ctx,
         )
+        _t_disk_erase_done = time.monotonic() - _t_thread_start
         cfg = _resolve_node_mgmt_config(ip)
         _auto_answer_node_mgmt(peer_ch, cfg, node_log=_pnf)
+        _t_node_mgmt_done = time.monotonic() - _t_thread_start
 
         # Abort the cluster wizard with Ctrl+C, log in as admin, and
         # capture the node's cluster interface IP.
         _cluster_ip = _abort_wizard_get_cluster_ip(
             peer_ch, ip, admin_password, cluster_ips_out, ip, node_log=_pnf)
+        _t_cluster_ip_done = time.monotonic() - _t_thread_start
 
         if _cluster_ip is None:
             _status(f"  ⚠️  [{ip}] Could not capture cluster IP; "
@@ -13313,11 +13348,25 @@ def _peer_reinit_worker(ip, ctx):
             with peer_lock:
                 peer_errors.append((ip, "cluster IP capture failed"))
         else:
+            _cluster_entry = cluster_ips_out.get(ip) if isinstance(cluster_ips_out, dict) else {}
+            if isinstance(_cluster_entry, dict):
+                _node_name = str(_cluster_entry.get("node_name") or "")
+            _ok = True
             _status(
                 f"  ✅ {_format_status_line(ip, f'Ready for cluster add-node (IP: {_cluster_ip}).', 'SUCCESS')}"
             )
     finally:
-        pass
+        if _timings_record is not None and _timings_lock is not None:
+            with _timings_lock:
+                _timings_record[ip] = {
+                    "node_name": _node_name,
+                    "ok": _ok,
+                    "t_loader": _t_loader_seen,
+                    "t_option4": _t_option4_sent,
+                    "t_disk_erase": _t_disk_erase_done,
+                    "t_node_mgmt": _t_node_mgmt_done,
+                    "t_cluster_ip": _t_cluster_ip_done,
+                }
 
 
 def _format_status_line(node=None, message="", level="INFO"):
@@ -16313,8 +16362,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             with suppress(Exception):
                 _pcl.close()
 
+    _t_4b_post_cluster_auto_add_start = time.monotonic()
+    _4b_post_cluster_phase_name = "4b – Post-Cluster Auto Add (mode 3)"
+
     # ── Mode 3: auto-join peer nodes ───────────────────────────────────────
     if _mode_sel == "3" and _peers_for_reinit:
+        _4b_add_node_timings: "dict[str, float]" = {}
         if _resume_mode3_add_only and _peer_replay_targets:
             _status(
                 "\n  🔎 Resume add-node phase: probing remaining peer nodes "
@@ -16413,7 +16466,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _4b_filtered_ips_out, preferred_bmcs=_peers_for_reinit
                 )
                 if _4b_collected_ips:
-                    _add_ok = _cluster_add_nodes_bulk(_4b_pch, _4b_collected_ips, log=log)
+                    _add_ok = _cluster_add_nodes_bulk(
+                        _4b_pch, _4b_collected_ips, log=log,
+                        node_timings_out=_4b_add_node_timings,
+                    )
                 else:
                     _status("  ℹ️  No pending peers remain for cluster add-node.")
                     _add_ok = True
@@ -16512,6 +16568,24 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _4b_pcl.close()
             except Exception:
                 pass
+
+        if log:
+            _4b_post_cluster_elapsed = max(
+                0.0, time.monotonic() - _t_4b_post_cluster_auto_add_start
+            )
+            log.record_phase(
+                _4b_post_cluster_phase_name,
+                _4b_post_cluster_elapsed,
+                outcome=("PASS" if _run_ok else "FAIL"),
+            )
+            if _4b_add_node_timings:
+                for _ip, _elapsed in sorted(_4b_add_node_timings.items(),
+                                            key=lambda x: x[1]):
+                    log.add_phase_subtiming(
+                        _4b_post_cluster_phase_name,
+                        f"  cluster add-node [{_ip}] → success",
+                        _elapsed,
+                    )
 
     # Close all unified per-node reinit log files now that all workers are done.
     for _ip, _nf in _node_reinit_logs.items():
@@ -23526,6 +23600,29 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     if not peer_bmcs:
         return True
 
+    global _mode3_pipeline_state, _mode3_staged_loader_channels, _mode3_staged_loader_clients
+    _pipeline = _mode3_pipeline_state if isinstance(_mode3_pipeline_state, dict) else None
+
+    def _cleanup_mode3_pipeline():
+        global _mode3_pipeline_state, _mode3_staged_loader_channels, _mode3_staged_loader_clients
+        nonlocal _pipeline
+        if not _pipeline:
+            return
+        for _nf in (_pipeline.get("node_logs") or {}).values():
+            if _nf:
+                with suppress(Exception):
+                    _nf.close()
+        for _ch in (_pipeline.get("loader_channels") or {}).values():
+            with suppress(Exception):
+                _ch.close()
+        for _cl in (_pipeline.get("loader_clients") or {}).values():
+            with suppress(Exception):
+                _cl.close()
+        _mode3_staged_loader_channels = {}
+        _mode3_staged_loader_clients = {}
+        _mode3_pipeline_state = None
+        _pipeline = None
+
     # Safety: exclude any peer BMC that is (or resolves to) the primary.
     if primary_bmc:
         def _resolve(addr):
@@ -23580,6 +23677,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                 print("  ✅ All peers already joined per checkpoint; nothing to do.")
                 if _session_log:
                     _session_log.log("checkpoint resume: all peers already joined")
+                _cleanup_mode3_pipeline()
                 return True
 
     _print_banner(f"🚀 Mode 3: parallel auto-add for {len(peer_bmcs)} peer node(s)")
@@ -23607,6 +23705,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
             print("\n  ✅ All selected mode-3 peers are already in cluster. Nothing to add.")
             if _session_log:
                 _session_log.log("mode 3: all selected peers already joined; no-op")
+            _cleanup_mode3_pipeline()
             return True
 
     # Mode 3: If a netboot package was pre-selected and peers were not already
@@ -23667,13 +23766,47 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     )
 
     _m3_total = len(peer_bmcs)
-    _m3_peer_timings: "dict[str, dict]" = {}
-    _m3_timings_lock = threading.Lock()
-    _m3_cluster_ips_out = {}   # peer_bmc -> cluster interface IP
+    _t_post_cluster_auto_add_start = _t_mode3_start
+    _m3_peer_timings = (_pipeline.get("peer_timings")
+                        if _pipeline and isinstance(_pipeline.get("peer_timings"), dict)
+                        else {})
+    _m3_timings_lock = (_pipeline.get("timings_lock")
+                        if _pipeline and _pipeline.get("timings_lock") is not None
+                        else threading.Lock())
+    _m3_cluster_ips_out = (_pipeline.get("cluster_ips_out")
+                           if _pipeline and isinstance(_pipeline.get("cluster_ips_out"), dict)
+                           else {})
 
-    _m3_pending = list(peer_bmcs)
+    _m3_pending = list((_pipeline.get("pending_fallback_peers") or [])
+                       if _pipeline else peer_bmcs)
+    _m3_results = []
+    _pipeline_failed = []
 
     _mode3_ok = True
+    if _pipeline:
+        _pipeline_threads = _pipeline.get("threads") or []
+        if _pipeline_threads:
+            if not _join_threads_with_deadline(
+                _pipeline_threads, label="mode 3 pipelined peer add", log=_session_log
+            ):
+                _mode3_ok = False
+            _raise_pending_checkpoint_failure()
+            if _fatal_boot_dna_event.is_set():
+                _print_fatal_boot_dna_abort_message()
+                _cleanup_mode3_pipeline()
+                return False
+        _pipeline_failed = sorted({
+            _ip for _ip, _reason in (_pipeline.get("peer_errors") or [])
+        })
+        if _pipeline_failed:
+            print(f"\n⚠️  {len(_pipeline_failed)} staged node(s) did not complete: {', '.join(_pipeline_failed)}")
+            if _session_log:
+                _session_log.log(
+                    f"mode 3 pipelined peers failed and will fall back to standard add flow: {_pipeline_failed}",
+                    prefix="WARN",
+                )
+        _m3_pending = list(dict.fromkeys(_m3_pending + _pipeline_failed))
+
     while _m3_pending:
         _n3 = len(_m3_pending)
         _m3_results = [None] * _n3
@@ -23710,6 +23843,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
 
         if _fatal_boot_dna_event.is_set():
             _print_fatal_boot_dna_abort_message()
+            _cleanup_mode3_pipeline()
             return False
 
         _m3_failed = [_m3_pending[i] for i, r in enumerate(_m3_results) if not r]
@@ -23752,15 +23886,23 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
 
     if _session_log:
         _t_mode3_end = time.monotonic()
-        _option4_wall = max(0.0, _t_mode3_end - _t_mode3_start)
-        _any_failed = any(r is False for r in (_m3_results or []))
+        _phase_start = (_pipeline.get("phase_start")
+                        if _pipeline and _pipeline.get("phase_start") is not None
+                        else _t_mode3_start)
+        _option4_wall = max(0.0, _t_mode3_end - _phase_start)
+        _any_failed = bool(_pipeline_failed) or any(r is False for r in (_m3_results or []))
         _opt4_outcome = "PASSED (WITH ERRORS)" if _any_failed else "PASS"
 
         _session_log.record_phase(
             "Parallel Peer Option 4 (mode 3)", _option4_wall, outcome=_opt4_outcome,
         )
+        _post_cluster_elapsed = max(0.0, _t_mode3_end - _t_post_cluster_auto_add_start)
+        _session_log.record_phase(
+            "Post-Cluster Auto Add (mode 3)", _post_cluster_elapsed, outcome=_opt4_outcome,
+        )
         # Per-node detailed timing breakdown.
         _PHASE = "Parallel Peer Option 4 (mode 3)"
+        _POST_CLUSTER_PHASE = "Post-Cluster Auto Add (mode 3)"
         for _bmc in peer_bmcs:
             _t = _m3_peer_timings.get(_bmc)
             if not _t:
@@ -23786,6 +23928,10 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                                         key=lambda x: x[1]):
                 _session_log.add_phase_subtiming(
                     _PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
+                _session_log.add_phase_subtiming(
+                    _POST_CLUSTER_PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
+    if _pipeline:
+        _cleanup_mode3_pipeline()
     if _mode3_ok:
         print("\n✅ Parallel peer auto-add complete.")
     else:
@@ -23891,6 +24037,96 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         _slog(f"[{bmc_host}] second boot menu already visible after option 9")
 
     # 2) Wait for the *second* boot menu and select option 4.
+    global _mode3_pipeline_state, _mode3_staged_loader_channels, _mode3_staged_loader_clients
+
+    if (_operation_mode == 3 and _peer_bmc_list and not _mode3_pipeline_state
+            and _mode3_staged_loader_channels):
+        _pipeline_peers = [
+            _ip for _ip in _peer_bmc_list if _ip in _mode3_staged_loader_channels
+        ]
+        _fallback_peers = [
+            _ip for _ip in _peer_bmc_list if _ip not in _mode3_staged_loader_channels
+        ]
+        if _checkpoint:
+            _already_joined = set(_checkpoint.nodes_done_for("peer_joined"))
+            if _already_joined:
+                _pipeline_peers = [ip for ip in _pipeline_peers if ip not in _already_joined]
+                _fallback_peers = [ip for ip in _fallback_peers if ip not in _already_joined]
+        if _pipeline_peers:
+            print(f"\n  🚀 Mode 3: starting 4b-style peer pipeline for {len(_pipeline_peers)} staged node(s)...")
+            _mode3_peer_node_logs = {}
+            _mode3_peer_timings = {}
+            _mode3_timings_lock = threading.Lock()
+            _mode3_cluster_ips_out = {}
+            _mode3_peer_errors = []
+            _mode3_peer_lock = threading.Lock()
+            _mode3_menu_sigs_lower = [
+                "selection (1-", "(1-9)?", "(1-11)?", "(1-12)?",
+                "use option (6) to restore the system configuration",
+                "normal boot is prohibited",
+            ]
+            _mode3_log_dir = _session_log.log_dir if _session_log else os.getcwd()
+            for _peer_ip in _pipeline_peers:
+                try:
+                    _mode3_peer_node_logs[_peer_ip] = _node_log_open(
+                        _peer_ip, _mode3_log_dir, prefix="mode3_node"
+                    )
+                except Exception:
+                    _mode3_peer_node_logs[_peer_ip] = None
+            _mode3_peer_ctx = {
+                "loader_channels": _mode3_staged_loader_channels,
+                "loader_clients": _mode3_staged_loader_clients,
+                "bmc_user": "",
+                "bmc_users": {
+                    _ip: ((_peer_bmc_creds.get(_ip) or {}).get("user") or "admin")
+                    for _ip in _pipeline_peers
+                },
+                "bmc_passwords": {
+                    _ip: ((_peer_bmc_creds.get(_ip) or {}).get("password") or "")
+                    for _ip in _pipeline_peers
+                },
+                "admin_password": (
+                    _cluster_config.get("admin_password")
+                    or ((_config_data.get("cluster") or {}).get("password")
+                        if isinstance(_config_data, dict) else None)
+                    or ""
+                ),
+                "log": _session_log,
+                "peer_errors": _mode3_peer_errors,
+                "peer_lock": _mode3_peer_lock,
+                "menu_sigs_lower": _mode3_menu_sigs_lower,
+                "status": _ts_print,
+                "node_reinit_logs": _mode3_peer_node_logs,
+                "cluster_ips_out": _mode3_cluster_ips_out,
+                "timings_record": _mode3_peer_timings,
+                "timings_lock": _mode3_timings_lock,
+            }
+            _mode3_peer_threads = [
+                threading.Thread(
+                    target=_peer_reinit_worker, args=(_ip, _mode3_peer_ctx), daemon=True
+                )
+                for _ip in _pipeline_peers
+            ]
+            for _t in _mode3_peer_threads:
+                _t.start()
+            _mode3_pipeline_state = {
+                "phase_start": time.monotonic(),
+                "threads": _mode3_peer_threads,
+                "peer_errors": _mode3_peer_errors,
+                "cluster_ips_out": _mode3_cluster_ips_out,
+                "peer_timings": _mode3_peer_timings,
+                "timings_lock": _mode3_timings_lock,
+                "pending_fallback_peers": _fallback_peers,
+                "loader_channels": _mode3_staged_loader_channels,
+                "loader_clients": _mode3_staged_loader_clients,
+                "node_logs": _mode3_peer_node_logs,
+            }
+            if _session_log:
+                _session_log.log(
+                    f"Mode 3 launched pipelined peer workers for {_pipeline_peers}; "
+                    f"fallback peers: {_fallback_peers}"
+                )
+
     print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for second boot menu (auto-select option 4)...{_elapsed_str()}")
     _slog("Waiting for second boot menu (option 4)")
     sig_lower = [
@@ -29989,6 +30225,10 @@ def main():
                 # operates on the first node — skip peer resets entirely.
                 # Mode 3 at peer-add finalization: peers were already reset in prior run.
                 if other_sps and _operation_mode == 3 and not _mode3_skip_presets:
+                    global _mode3_staged_loader_channels, _mode3_staged_loader_clients, _mode3_pipeline_state
+                    _mode3_staged_loader_channels = {}
+                    _mode3_staged_loader_clients = {}
+                    _mode3_pipeline_state = None
                     _print_banner(f"🔁 Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
                     print(f"  Peer BMCs: {', '.join(other_sps)}")
                     _session_log.start_phase("Peer Node Reset to LOADER")
@@ -30013,12 +30253,21 @@ def main():
 
                     def _pr_worker(addr):
                         creds = _peer_bmc_creds.get(addr, {"user": sp_user, "password": sp_pass})
+                        _session_store = {}
                         ok = reset_peer_to_loader(
                             addr, creds["user"], creds["password"],
                             node_log=_pr_node_logs.get(addr),
+                            session_store=_session_store,
                         )
                         with _pr_lock:
                             _pr_results[addr] = ok
+                            if ok and _session_store.get("channel") is not None:
+                                _mode3_staged_loader_channels[addr] = _session_store.get("channel")
+                                _mode3_staged_loader_clients[addr] = _session_store.get("client")
+                                _peer_bmc_creds[addr] = {
+                                    "user": _session_store.get("user") or creds["user"],
+                                    "password": _session_store.get("password") or creds["password"],
+                                }
 
                     # Run peer resets and primary LOADER check simultaneously.
                     # The primary's SSH channel is independent from peer channels.
