@@ -10849,7 +10849,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             _resend_count = 0
             while time.monotonic() < _deadline and not _answered:
                 _remaining = max(1, int(_deadline - time.monotonic()))
-                _wait = min(60, _remaining)
+                _wait = min(90, _remaining)
                 _out, _matched = direct_read_until_any(
                     channel,
                     [trigger] + _menu_sigs,
