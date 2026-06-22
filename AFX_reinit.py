@@ -2474,6 +2474,11 @@ class SessionLogger:
             if self._current_phase and self._current_phase_start:
                 elapsed = (now - self._current_phase_start).total_seconds()
                 self._phase_times[self._current_phase] = elapsed
+                # If a new phase starts before end_phase() is called on the
+                # previous one, treat that previous phase as completed unless
+                # a specific outcome has already been set.
+                if self._current_phase not in self._phase_outcomes:
+                    self._phase_outcomes[self._current_phase] = ("PASS", "")
             else:
                 self._record_non_phase_window_locked(now)
             self._current_phase = phase_name
