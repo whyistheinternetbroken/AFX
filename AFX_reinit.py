@@ -3705,7 +3705,7 @@ def select_operation_mode():
                 if _nb_ans == "y":
                     _netboot_before_reinit = False
                     _netboot_pkg_preselected = None
-                    input("\n  Use the install options in the menu to install a new version of ONTAP. Hit enter to return to menu.")
+                    input("\n  Use the install options in the menu (options 4a/4b/4c) to install a new version of ONTAP. Hit enter to return to menu.")
                     print("\n  ↩️  Returning to menu...\n")
                     continue
                 _netboot_before_reinit = False
@@ -8393,12 +8393,49 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None):
             _session_log.log(f"[{host}] checking current node status before reset")
 
         # Check if already at LOADER before issuing system reset.
-        if _already_at_loader(
-            ch, label=host, node_log=node_log,
-        ):
-            _tprint(f"   ✅ [{host}] Already at LOADER prompt. Disconnecting...")
-            _slog(f"Peer {host} already at LOADER; skipping reset")
-            return True
+        try:
+            if _already_at_loader(
+                ch, label=host, node_log=node_log,
+            ):
+                _tprint(f"   ✅ [{host}] Already at LOADER prompt. Disconnecting...")
+                _slog(f"Peer {host} already at LOADER; skipping reset")
+                return True
+        except RuntimeError as _probe_err:
+            # Don't fail the peer immediately when console-exit probing is noisy.
+            # Reconnect to obtain a clean BMC prompt, then continue with reset.
+            _tprint(
+                f"   ⚠️  [{host}] LOADER probe could not return cleanly to BMC "
+                f"prompt ({_probe_err}); reconnecting and continuing with reset..."
+            )
+            _slog(
+                f"Peer {host} LOADER probe recovery: {_probe_err}; "
+                "reconnecting and continuing reset",
+                prefix="WARN",
+            )
+            try:
+                with suppress(Exception):
+                    ch.close()
+                with suppress(Exception):
+                    client.close()
+                _fb_recover = _bmc_fallback_passwords(host, {host: password})
+                client, username, password = _ssh_connect_with_retry(
+                    host, username, password, label=f"peer/{host}",
+                    max_attempts=3, interactive=False,
+                    fallback_passwords=_fb_recover,
+                )
+                _peer_bmc_creds[host] = {"user": username, "password": password}
+                ch = _open_shell(client)
+                if not _reach_bmc_prompt(
+                    ch, node_log=node_log,
+                    takeover_msg=f"[{host}] taking over existing BMC session after probe recovery",
+                ):
+                    _tprint(f"   ❌ [{host}] Could not reach BMC prompt after probe recovery.")
+                    return False
+            except Exception as _reconnect_err:
+                _tprint(f"   ❌ [{host}] Probe recovery reconnect failed: {_reconnect_err}")
+                _slog(f"Peer {host} probe recovery reconnect failed: {_reconnect_err}",
+                      prefix="ERROR")
+                return False
 
         def _reset_and_enter_console(reason: str = "initial"):
             _tprint(f"\n🔁 [{host}] Resetting to LOADER prompt...")
@@ -11037,8 +11074,20 @@ def _collect_license_config(ctx):
     if ans not in ("y", "yes"):
         return
 
+    def _skip_license_setup():
+        ctx.license_mode = None
+        ctx.license_keys = []
+        ctx.license_file_path = None
+        print("  ℹ️  Skipping ONTAP license setup and returning.")
+
     while True:
-        ltype = _prompt("  License key or file? [key/file]: ").lower()
+        ltype = _prompt(
+            "  License key or file? [key/file] (Enter to skip): "
+        ).strip().lower()
+        if not ltype:
+            _skip_license_setup()
+            ctx.apply_to_globals()
+            return
         if ltype in ("key", "file"):
             break
         print("  Please enter 'key' or 'file'.")
@@ -11067,43 +11116,56 @@ def _collect_license_config(ctx):
         ctx.license_mode = "file"
         script_dir = os.path.dirname(os.path.abspath(__file__))
         ontap_dir = os.path.join(script_dir, "ONTAP")
+        _VALID_LIC_EXTS = {".txt", ".nlf"}
 
         if not os.path.isdir(ontap_dir):
-            # Create folder and instruct the operator to copy the file in.
+            # Keep creating the standard ONTAP folder, but do not force exit.
+            # We can still use discovered .nlf files from other folders or a
+            # full path entered by the operator.
             try:
                 os.makedirs(ontap_dir, exist_ok=True)
                 print(f"\n  \U0001f4c1 Created folder: {ontap_dir}")
+                print("     You can place license files there for future runs.")
             except OSError as exc:
                 print(f"\n  \u274c Could not create ONTAP folder: {exc}")
                 ctx.license_mode = None
                 ctx.apply_to_globals()
                 return
-            print(
-                "     Please exit the script, copy your ONTAP license file to\n"
-                f"     that folder ({ontap_dir}),\n"
-                "     and then run the script again."
-            )
-            ctx.apply_to_globals()
-            sys.exit(0)
 
-        # Folder exists — look for .txt / .nlf files only.
-        _VALID_LIC_EXTS = {".txt", ".nlf"}
-        lic_candidates = sorted(
-            f for f in os.listdir(ontap_dir)
-            if os.path.isfile(os.path.join(ontap_dir, f))
-            and os.path.splitext(f)[1].lower() in _VALID_LIC_EXTS
-        )
+        def _discover_nlf_candidates():
+            """Find local .nlf files in common locations."""
+            _scan_dirs = [ontap_dir, script_dir, os.getcwd()]
+            _seen = set()
+            _candidates = []
+            for _dir in _scan_dirs:
+                if not os.path.isdir(_dir):
+                    continue
+                try:
+                    _entries = sorted(os.listdir(_dir))
+                except Exception:
+                    continue
+                for _fn in _entries:
+                    _full = os.path.join(_dir, _fn)
+                    if not os.path.isfile(_full):
+                        continue
+                    if os.path.splitext(_fn)[1].lower() != ".nlf":
+                        continue
+                    _key = os.path.normcase(os.path.normpath(_full))
+                    if _key in _seen:
+                        continue
+                    _seen.add(_key)
+                    _candidates.append(_full)
+            return _candidates
 
         def _prompt_custom_path():
-            """Ask the operator for a manual file path; loop until valid or exit."""
+            """Ask the operator for a manual file path; Enter skips this step."""
             while True:
                 custom = _prompt(
-                    "  Enter the path to a valid license file or hit enter to exit the script: "
+                    "  Enter the path to a valid license file or hit enter to skip license setup: "
                 )
                 if not custom:
-                    print("\n  Exiting script.")
-                    ctx.apply_to_globals()
-                    sys.exit(0)
+                    _skip_license_setup()
+                    return False
                 if not os.path.isfile(custom):
                     print(
                         f"  \u274c File not found: {custom}\n"
@@ -11120,34 +11182,66 @@ def _collect_license_config(ctx):
                     continue
                 ctx.license_file_path = custom
                 print(f"  \u2705 Using license file: {ctx.license_file_path}")
-                break
+                return True
 
+        lic_candidates = _discover_nlf_candidates()
         if lic_candidates:
             if len(lic_candidates) == 1:
-                ctx.license_file_path = os.path.join(ontap_dir, lic_candidates[0])
-                print(f"\n  \u2705 Found license file: {ctx.license_file_path}")
+                _single = lic_candidates[0]
+                print(f"\n  \u2705 Found .nlf file: {_single}")
+                _single_choice = _prompt(
+                    "  Use this file? [Y/n] (or enter full path to another file): ",
+                    "y",
+                ).strip()
+                if _single_choice.lower() in ("", "y", "yes"):
+                    ctx.license_file_path = _single
+                    print(f"  \u2705 Using license file: {ctx.license_file_path}")
+                elif os.path.isfile(_single_choice):
+                    _ext = os.path.splitext(_single_choice)[1].lower()
+                    if _ext in _VALID_LIC_EXTS:
+                        ctx.license_file_path = _single_choice
+                        print(f"  \u2705 Using license file: {ctx.license_file_path}")
+                    else:
+                        print(
+                            f"  \u274c '{os.path.basename(_single_choice)}' does not have a "
+                            "recognised license extension (.txt or .nlf)."
+                        )
+                        _prompt_custom_path()
+                else:
+                    _prompt_custom_path()
             else:
-                print(f"\n  Multiple files found in {ontap_dir}:")
-                for i, fn in enumerate(lic_candidates, 1):
-                    print(f"    {i}. {fn}")
+                print("\n  Found .nlf files:")
+                for i, full_path in enumerate(lic_candidates, 1):
+                    print(f"    {i}. {full_path}")
                 while True:
-                    choice = _prompt("  Select file number: ")
-                    try:
+                    choice = _prompt(
+                        "  Select file number, enter full path, or hit enter to skip: "
+                    ).strip()
+                    if not choice:
+                        _skip_license_setup()
+                        break
+                    if choice.isdigit():
                         n = int(choice)
                         if 1 <= n <= len(lic_candidates):
-                            ctx.license_file_path = os.path.join(
-                                ontap_dir, lic_candidates[n - 1]
-                            )
+                            ctx.license_file_path = lic_candidates[n - 1]
+                            print(f"  \u2705 Using license file: {ctx.license_file_path}")
                             break
-                    except ValueError:
-                        pass
-                    print("  Invalid selection; please try again.")
-                print(f"  \u2705 Using license file: {ctx.license_file_path}")
+                        print("  Invalid selection; please try again.")
+                        continue
+                    if os.path.isfile(choice):
+                        ext = os.path.splitext(choice)[1].lower()
+                        if ext in _VALID_LIC_EXTS:
+                            ctx.license_file_path = choice
+                            print(f"  \u2705 Using license file: {ctx.license_file_path}")
+                            break
+                        print(
+                            f"  \u274c '{os.path.basename(choice)}' does not have a "
+                            "recognised license extension (.txt or .nlf)."
+                        )
+                        continue
+                    print("  \u274c File not found. Enter a valid number or full file path.")
         else:
-            # No .txt / .nlf files in the ONTAP folder.
-            print(
-                "\n  \u274c No valid license file found."
-            )
+            print("\n  \u274c No .nlf license file found in ONTAP/script/current folders.")
             _prompt_custom_path()
 
     # Sync ctx writes back to the legacy globals so _apply_license and
@@ -23493,6 +23587,16 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                              prefix="WARN")
     else:
         _slog("Primary cluster shell ready for cluster add-node")
+        # Mirror option-2 behavior: don't touch peers already joined to this
+        # cluster when mode 3 is re-run.
+        peer_bmcs = _omit_already_joined_nodes(
+            peer_bmcs, primary_channel, mode_label="3", log=_session_log
+        )
+        if not peer_bmcs:
+            print("\n  ✅ All selected mode-3 peers are already in cluster. Nothing to add.")
+            if _session_log:
+                _session_log.log("mode 3: all selected peers already joined; no-op")
+            return True
 
     # Mode 3: If a netboot package was pre-selected and peers were not already
     # netboot-installed in parallel with the primary, do it now before option 4.
@@ -29923,23 +30027,24 @@ def main():
 
                     _primary_thread.join()
 
-                    # Retry loop — keep asking until all peers reach LOADER or
-                    # operator declines to retry.
+                    # Auto-retry failed peers without prompting.
+                    _loader_retry_budget = 3
+                    _loader_attempt = 1
                     while True:
                         _failed_peers = [a for a in other_sps
                                          if not _pr_results.get(a, False)]
                         if not _failed_peers:
                             break
+                        if _loader_attempt >= _loader_retry_budget:
+                            break
                         print(f"\n  ⚠️  {len(_failed_peers)} peer(s) did not reach LOADER: "
                               f"{', '.join(_failed_peers)}")
-                        _retry_ans = _prompt(
-                            "  Retry failed peer(s)? [Y/n]: ", "y"
-                        ).strip().lower()
-                        if _retry_ans in ("n", "no"):
-                            break
-                        print(f"\n  🔁 Retrying {len(_failed_peers)} peer(s)...")
+                        _loader_attempt += 1
+                        print(f"\n  🔁 Auto-retrying {len(_failed_peers)} peer(s) "
+                              f"(attempt {_loader_attempt}/{_loader_retry_budget})...")
                         _session_log.log(
-                            f"Retrying LOADER reset for: {_failed_peers}"
+                            f"Auto-retrying LOADER reset for {_failed_peers} "
+                            f"(attempt {_loader_attempt}/{_loader_retry_budget})"
                         )
                         # Re-open log files for the retried peers.
                         for addr in _failed_peers:
