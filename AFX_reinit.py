@@ -138,6 +138,12 @@ def _elapsed_str() -> str:
     return f" (+{secs // 60}m{secs % 60:02d}s)"
 
 
+def _phase_elapsed_str(phase_start: float) -> str:
+    """Return '(Xs in this phase (+YmZs))' for long-running wait updates."""
+    _phase_secs = max(0, int(time.monotonic() - phase_start))
+    return f"({_phase_secs}s in this phase{_elapsed_str()})"
+
+
 def _node_pfx(label: str = "") -> str:
     """Return '[label] ' using *label* if given, else _reinit_label."""
     lbl = _augment_role_label_with_ip(str(label or _reinit_label or "").strip(), mode=_operation_mode)
@@ -13234,7 +13240,7 @@ def _peer_reinit_worker(ip, ctx):
             _elapsed = time.monotonic() - _start
             if time.monotonic() - _last_progress >= 120:
                 _status(
-                    f"  ⏳ {_format_status_line(ip, f'Still waiting for boot menu... ({int(_elapsed)}s elapsed)', 'INFO')}"
+                    f"  ⏳ {_format_status_line(ip, f'Still waiting for boot menu... {_phase_elapsed_str(_start)}', 'INFO')}"
                 )
                 try:
                     _keepalive_ch = (_peer_rc_ctx.get("channel")
@@ -14385,7 +14391,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 now = time.monotonic()
                 if now >= _next_progress:
                     elapsed = int(now - start)
-                    _status(f"  ⏳ [{ip}] Still waiting for boot menu... ({elapsed}s elapsed)")
+                    _status(
+                        f"  ⏳ [{ip}] Still waiting for boot menu... "
+                        f"{_phase_elapsed_str(start)}"
+                    )
                     _next_progress = now + 60
                     # ── Heartbeat: keep the channel alive ──────────────────
                     # If the channel has closed entirely, reconnect the BMC SSH
@@ -14592,7 +14601,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _elapsed_min = int((_now - _boot_wait_start) / 60)
                     _remaining_min = int((_boot_timeout - (_now - _boot_wait_start)) / 60)
                     _status(f"  ⏳ [{ip}] Option 6 boot: waiting for node to boot... "
-                            f"({_elapsed_min} min elapsed, {_remaining_min} minutes before timeout)")
+                            f"({_elapsed_min} min elapsed, {_remaining_min} minutes before timeout) "
+                            f"{_phase_elapsed_str(_boot_wait_start)}")
                     if log:
                         log.log(f"[{ip}] boot wait progress: {_elapsed_min} min elapsed")
                     _next_progress = _now + 300
@@ -14947,7 +14957,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         _el4 = int((_now4 - _opt4_boot_start) / 60)
                         _rm4 = int((_opt4_boot_timeout - (_now4 - _opt4_boot_start)) / 60)
                         _status(f"  ⏳ [{ip}] Option 4 boot: waiting for node to boot... "
-                                f"({_el4} min elapsed, {_rm4} minutes before timeout)")
+                                f"({_el4} min elapsed, {_rm4} minutes before timeout) "
+                                f"{_phase_elapsed_str(_opt4_boot_start)}")
                         if log:
                             log.log(f"[{ip}] option 4 boot wait: {_el4} min elapsed")
                         _opt4_next_progress = _now4 + 300
@@ -19081,7 +19092,7 @@ def _run_ontap_upgrade(log):
                 _state_label = _state if _state else "Unknown"
                 print(f"  \u23f3 Waiting for takeover/giveback on {takeover_node}\n"
                       f"     (elapsed {int(_elapsed)}s / remaining {int(_remaining)}s;"
-                      f" Current state: {_state_label})")
+                      f" Current state: {_state_label}) {_phase_elapsed_str(_p1_start)}")
                 time.sleep(60)
 
             # ── Phase 2: poll until node fully back online ───────────────────
@@ -19245,7 +19256,7 @@ def _run_ontap_upgrade(log):
                 _state_label2 = _state if _state else "Unknown"
                 print(f"  \u23f3 Waiting for {takeover_node} to come back online\n"
                       f"     (elapsed {int(_elapsed2)}s / remaining {int(_remaining2)}s;"
-                      f" Current state: {_state_label2})")
+                      f" Current state: {_state_label2}) {_phase_elapsed_str(_p2_start)}")
                 for _r in _not_ready:
                     print(f"     \u2022 {_r}")
                 time.sleep(60)
