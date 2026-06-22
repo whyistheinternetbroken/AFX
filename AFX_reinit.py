@@ -3515,7 +3515,7 @@ def select_operation_mode():
             print("")
             print("  " + "─" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-            if confirm == "yes":
+            if confirm in ("yes", "y"):
                 while True:
                     _ssh_ans = input("  Set up passwordless SSH to cluster management after setup? [y/N]: ").strip().lower()
                     if _ssh_ans in ("y", "n", ""):
@@ -10795,6 +10795,20 @@ _WIZARD_START_TRIGGERS = [
     "do you want to create a new cluster or join",
 ]
 
+_FATAL_BOOT_INTEGRITY_SIGS = [
+    "sha256 checksum failure: varfs.tgz",
+    "netapp_varfs: sha256 checksum failure detected in boot device",
+    "failed to restore /var from /dev/nvrd1",
+]
+
+
+def _fatal_boot_integrity_reason(text: str) -> str:
+    _lower = str(text or "").lower()
+    for _sig in _FATAL_BOOT_INTEGRITY_SIGS:
+        if _sig in _lower:
+            return _sig
+    return ""
+
 def _output_contains_wizard_start(text: str) -> bool:
     _lower = str(text or "").lower()
     return any(_trigger in _lower for _trigger in _WIZARD_START_TRIGGERS)
@@ -10901,6 +10915,22 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
     """
     _node_add = (_operation_mode == 2) if is_node_add is None else bool(is_node_add)
     _pfx = _node_pfx(label)
+
+    def _raise_if_fatal_boot_integrity(_text: str, _stage: str):
+        _reason = _fatal_boot_integrity_reason(_text)
+        if not _reason:
+            return
+        _node = label or "primary"
+        _msg = (
+            f"[{_node}] fatal boot integrity failure detected during {_stage}: "
+            f"{_reason}. Aborting reinit to avoid indefinite prompt waits."
+        )
+        print(f"\n❌ {_msg}")
+        _slog(_msg, prefix="ERROR")
+        if _session_log:
+            _session_log.log(_msg, prefix="ERROR")
+        raise RuntimeError(_msg)
+
     if _node_add:
         print(f"\n⏳ {_pfx}Resetting configuration and rebooting.{_elapsed_str()}")
     _cc_done_ev = None  # set when the cluster-creation progress reporter starts
@@ -10952,6 +10982,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     quiet=_node_add,
                     reconnect_ctx=reconnect_ctx,
                 )
+                _raise_if_fatal_boot_integrity(_out, lbl)
                 if _matched and _matched.lower() == trigger.lower():
                     time.sleep(0.3)
                     channel.send(resp + "\r")
@@ -10975,9 +11006,10 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             if not _answered:
                 _slog("Timeout waiting for zero disks confirmation", prefix="WARN")
         else:
-            direct_send_and_wait(channel, "", trigger, timeout=1800, auto_respond=resp,
-                                 check_bmc_drop=True, quiet=_node_add, node_log=node_log,
-                                 reconnect_ctx=reconnect_ctx)
+            _out = direct_send_and_wait(channel, "", trigger, timeout=1800, auto_respond=resp,
+                                        check_bmc_drop=True, quiet=_node_add, node_log=node_log,
+                                        reconnect_ctx=reconnect_ctx)
+            _raise_if_fatal_boot_integrity(_out, lbl)
         if _cc_done_ev is not None:
             _cc_done_ev.set()
             _cc_done_ev = None
