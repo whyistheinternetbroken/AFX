@@ -3378,7 +3378,7 @@ def select_operation_mode():
             for every other BMC discovered/entered.
       4  -> Install/manage ONTAP  (sub-menu)
         4a: Upgrade ONTAP (rolling takeover/giveback)
-        4b: Netboot and install ONTAP (with optional reinit)
+        4b: Netboot + automated cluster reinit (strict sequencing)
         4c: Netboot and install image only (no cluster create/node add)
       6  -> Script help and instructions
       7  -> Exit.
@@ -3404,7 +3404,7 @@ def select_operation_mode():
         print("")
         print("  4.  Install ONTAP")
         print("    4a. Upgrade ONTAP (rolling takeover/giveback)")
-        print("    4b. Netboot and install ONTAP")
+        print("    4b. Netboot + automated cluster reinit")
         print("    4c. Netboot and install image only (no cluster create/node add)")
         print("")
         print("  5.  Administration and maintenance")
@@ -3728,7 +3728,7 @@ def select_operation_mode():
                 # Show the sub-menu and re-prompt.
                 _print_banner("\U0001f4e6 4: Install ONTAP")
                 print("\n  4a. Upgrade ONTAP (rolling takeover/giveback)")
-                print("  4b. Netboot and install ONTAP")
+                print("  4b. Netboot + automated cluster reinit")
                 print("  4c. Netboot and install image only (no cluster create/node add)")
                 print("")
                 print("  " + "─" * 58)
@@ -3752,25 +3752,24 @@ def select_operation_mode():
                 continue
 
             if choice == "4b":
-                # 4b: Netboot and install ONTAP
-                _print_banner("\U0001f4e6 4b: Netboot and install ONTAP")
+                # 4b: Netboot + automated cluster reinit
+                _print_banner("\U0001f4e6 4b: Netboot and automated cluster reinitialization")
                 print("")
-                print("  You are about to netboot the nodes in this cluster.")
-                print("  This is intended for use with new or reinitializing")
-                print("  clusters and requires each node to be rebooted into")
-                print("  the LOADER prompt, which constitutes an outage.")
+                print("  Runs netboot + automated cluster reinit with strict")
+                print("  sequencing workflow.")
+                print("  Nodes are rebooted to LOADER and this is disruptive.")
                 print("")
                 print("  If you have an existing cluster you wish to upgrade")
                 print("  without taking the nodes down, use option 4a instead.")
                 print("")
                 print("  " + "\u2500" * 58)
                 while True:
-                    confirm = input("  Continue with netboot? [y/N]: ").strip().lower()
+                    confirm = input("  Continue with automated netboot + reinit? [y/N]: ").strip().lower()
                     if confirm in ("y", "n", ""):
                         break
                     print("  Please enter y or N.")
                 if confirm == "y":
-                    print("\n  \u2705 Confirmed. 4b: Netboot and install ONTAP\n")
+                    print("\n  \u2705 Confirmed. 4b: Netboot + automated cluster reinit\n")
                     return 42, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
@@ -3794,25 +3793,6 @@ def select_operation_mode():
                     return 43, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
-
-        # Hidden mode 4d: Netboot + automated cluster reinitialization
-        if choice == "4d":
-            _print_banner("\U0001f4e6 4d: Netboot and automated cluster reinitialization (HIDDEN)")
-            print("")
-            print("  ⚠️  HIDDEN MODE 4d: Netboot + automated cluster reinit with strict sequencing")
-            print("  This is a specialized workflow for automated cluster reinitialization.")
-            print("")
-            print("  " + "\u2500" * 58)
-            while True:
-                confirm = input("  Continue with hidden 4d workflow? [y/N]: ").strip().lower()
-                if confirm in ("y", "n", ""):
-                    break
-                print("  Please enter y or N.")
-            if confirm == "y":
-                print("\n  \u2705 Confirmed. 4d: Hidden netboot + automated reinit\n")
-                return 48, False, False
-            print("\n  \u21a9\ufe0f  Returning to menu...\n")
-            continue
 
         if choice == "6":
             _print_banner("📘 6: Script help and instructions")
@@ -4250,7 +4230,7 @@ _loader_env_stage_enabled: "bool | None" = None
 _force_autoboot_true: "bool | None" = None
 _force_autoboot_lock = threading.Lock()
 
-# Tracks whether hidden 4d mode is active in the current run.
+# Tracks whether mode-42 strict sequencing behavior is active in the current run.
 _is_4d = False
 
 _shutdown_event = threading.Event()
@@ -6135,7 +6115,7 @@ DESCRIPTION
            (same credential-grouping/fallback behavior as 2b; reinit-only)
            ONTAP installs are handled by 4b/4c before running mode 3
       4a   ONTAP rolling upgrade (takeover / software update / giveback)
-      4b   Netboot and install ONTAP image
+      4b   Netboot + automated cluster reinit (strict sequencing)
       4c   Netboot and install ONTAP image only (no reinit)
       5a   Standalone license install
       5b   Set up passwordless SSH to cluster management
@@ -6314,7 +6294,7 @@ INTERACTIVE FEATURES
 
         Works for:
           • Config file paths (--config or interactive prompts)
-          • ONTAP image paths (mode 4b netboot)
+          • ONTAP image paths (mode 4b netboot/reinit)
           • Bootargs files (--diag)
           • License file paths (mode 5a)
           • Any other file/URL input
@@ -6676,7 +6656,7 @@ def parse_args():
                              "node adds).")
     parser.add_argument("--netboot-install", action="store_true", default=False,
                         help="Skip the menu and run mode 4b: netboot and "
-                             "install ONTAP.")
+                             "automated cluster reinit.")
     parser.add_argument("--add-lic", action="store_true", default=False,
                         help="Skip the menu and run mode 5a: install license "
                              "file only.")
@@ -11646,7 +11626,7 @@ def _apply_ntp_servers(channel):
 
 
 # ---------------------------------------------------------------------------
-# Mode 42 (4b): Netboot and install ONTAP
+# Mode 42 (4b): Netboot + automated cluster reinit
 # ---------------------------------------------------------------------------
 
 def _classify_auth_failure(exc: BaseException) -> str:
@@ -13254,12 +13234,11 @@ def _format_status_line(node=None, message="", level="INFO"):
         return f"[{timestamp}] [{level}] {message}"
 
 
-def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, hidden_mode_4d: bool = False):
+def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     """Standalone netboot workflow used by 4b/4c.
 
-    4b runs netboot install and can continue into reinit.
+    4b runs netboot + automated cluster reinit (strict sequencing).
     4c runs netboot install only and always exits before reinit.
-    4d (hidden_mode_4d=True) runs netboot + automated cluster reinit with strict sequencing.
     If *resuming* is True the module-level ``_checkpoint`` is used to skip
     already-completed phases. Returns True on success.
     """
@@ -13267,7 +13246,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
     _peer_log_paths = {}  # reset for this run
     _loader_env_stage_enabled = None
     _bootarg_check_enabled = None
-    _is_4d = hidden_mode_4d  # 4d-specific branches (shared with helper guards)
+    _is_4d = (not install_only)  # 4b strict sequencing mode
     _4d_primary_option9_done = threading.Event()
     _4d_primary_node_ip = None
 
@@ -13284,10 +13263,15 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
             msg = msg.replace(f"[{_label}]", f"[{_role_ip}]")
         stripped = msg.strip()
         if _is_4d:
-            _already_structured = re.match(
-                r"^\[[^\]]+\]\s\|\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s\|\s\[[A-Z]+\]\s",
+            _structured_match = re.search(
+                r"\[[^\]]+\]\s\|\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s\|\s\[[A-Z]+\]\s",
                 stripped,
             )
+            _already_structured = bool(_structured_match)
+            if _structured_match:
+                # Preserve already-structured status lines even when callers
+                # prepend progress glyphs (e.g. "⏳ " or "✅ ").
+                stripped = stripped[_structured_match.start():]
             if not _already_structured:
                 if "❌" in stripped:
                     _lvl = "ERROR"
@@ -13298,7 +13282,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                 else:
                     _lvl = "INFO"
                 _m = re.search(r"\[([^\]]+)\]", stripped)
-                _node = _m.group(1) if _m else "4d"
+                _node = _m.group(1) if _m else "4b"
                 _txt = re.sub(r"^.*?\]\s*", "", stripped)
                 _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 stripped = f"[{_node}] | {_ts} | [{_lvl}] {_txt}"
@@ -13422,8 +13406,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
             _mode_sel  = _cp_mode_sel
             print(f"\n  🔖 Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
         elif _is_4d:
-            # For 4d hidden mode, automatically use mode 3 (end-to-end auto initialize)
-            print("\n  ✅ Package selected. 4d mode: proceeding with end-to-end initialization (mode 3).")
+            # 4b always uses strict end-to-end reinit mode.
+            print("\n  ✅ Package selected. 4b mode: proceeding with end-to-end initialization (mode 3).")
             _do_reinit = True
             _mode_sel = "3"
         else:
@@ -13731,18 +13715,15 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
             _node_files[ip] = None
 
     # ── Decide whether to skip the install phase (Steps 2–6a) ────────────
-    # On a resumed run where every BMC IP already has install_done OR
-    # option6_done recorded, the destructive install work is complete and
-    # we can jump straight to Step 6b (reinit reconnect). option6_done is
-    # written the moment the boot-menu 'y' confirmation is accepted (which
-    # is much earlier than install_done, which waits for login: after the
-    # post-option-6 reboot). Most observed failures happen in that
-    # boot-wait window, so option6_done is the safer skip trigger.
+    # For mode 4b (strict reinit), install_done alone gates resume skips.
+    # For mode 4c (install_only), option6_done is also accepted because
+    # option 6 completion marks successful post-install transition.
     _install_done_ips_set = (
         set(_checkpoint.nodes_done_for("install_done")) if _checkpoint else set()
     )
     _opt6_done_ips_set = (
-        set(_checkpoint.nodes_done_for("option6_done")) if _checkpoint else set()
+        set(_checkpoint.nodes_done_for("option6_done"))
+        if (install_only and _checkpoint) else set()
     )
     _install_equiv_ips = _install_done_ips_set | _opt6_done_ips_set
     _skip_install = bool(
@@ -13750,15 +13731,17 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
         and all(ip in _install_equiv_ips for ip in bmc_ips)
     )
     if _skip_install:
+        _skip_detail = "install_done or option6_done" if install_only else "install_done"
         print(
-            f"\n  🔖 Checkpoint: all {len(bmc_ips)} node(s) have install_done "
-            "or option6_done — skipping Steps 2–6a (BMC connect / reset / "
-            "netboot / option 6)."
+            f"\n  🔖 Checkpoint: all {len(bmc_ips)} node(s) have {_skip_detail} "
+            "— skipping Steps 2–6a (BMC connect / reset / netboot"
+            + (" / option 6)." if install_only else ").")
         )
         if log:
             log.log(
-                "4b resume: skipping install phase — install_done/option6_done "
-                "for all nodes"
+                "4b resume: skipping install phase — "
+                + ("install_done/option6_done" if install_only else "install_done")
+                + " for all nodes"
             )
 
     # Initialise variables used after the install block so the skip path
@@ -13781,7 +13764,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
             _skipped = [ip for ip in bmc_ips if ip not in _install_bmc_ips]
             print(
                 f"\n  🔖 Checkpoint: {len(_skipped)} node(s) already have "
-                f"install_done/option6_done — skipping their install: "
+                f"{'install_done/option6_done' if install_only else 'install_done'} "
+                f"— skipping their install: "
                 f"{', '.join(_skipped)}"
             )
             if log:
@@ -14085,16 +14069,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                     pass
         _node_files.clear()
 
-        # ── Step 6a: Option 6 on all nodes (finish the netboot/install) ───────
-        # Always run option 6 first: this updates flash from backup config and
-        # boots every node to the login prompt, confirming the install succeeded.
-        # If reinit was requested we reconnect via BMC afterwards (Step 6b).
-        # NOTE: 4d mode skips option 6 and proceeds directly to reinit with option 9.
-        if not _is_4d:
+        # ── Step 6a: Option 6 on all nodes (4c install-only path) ────────────
+        # 4b strict mode no longer uses option 6. Keep this flow for 4c where
+        # the run stops after install and validates ONTAP login readiness.
+        if install_only:
            print("\n  Selecting boot menu option 6 (Update flash from backup config) on all nodes"
                  " to complete the netboot/install...")
            if log:
-               log.log(f"4b: running option 6 on all nodes to finish install (do_reinit={_do_reinit})")
+               log.log(f"4c: running option 6 on all nodes to finish install (do_reinit={_do_reinit})")
 
         _menu_sigs_lower = [
                 "selection (1-", "(1-9)?", "(1-11)?", "(1-12)?",
@@ -15288,7 +15270,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                 except Exception:
                     pass
 
-        # 4d mode skips option 6 entirely; peers proceed via option 4 after primary option 9.
+        # 4b strict mode skips option 6 entirely; peers proceed via option 4
+        # after primary option 9.
         opt6_threads = [
             threading.Thread(
                 target=_select_option6,
@@ -15296,7 +15279,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
                 daemon=True,
             )
             for ip in _install_bmc_ips
-        ] if not _is_4d else []
+        ] if install_only else []
         for t in opt6_threads:
             t.start()
         for t in opt6_threads:
@@ -15307,7 +15290,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
         # Per-node marks are already written inside _select_option6 as soon
         # as each node reaches login, so a kill mid-run preserves progress.
         # This post-join sweep is a belt-and-suspenders idempotent backstop.
-        if _checkpoint and not _is_4d:
+        if _checkpoint and install_only:
             for _ip_ok in _opt6_login_nodes:
                 if _checkpoint.is_node_done("install_done", _ip_ok):
                     continue
@@ -15326,8 +15309,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
         # and let the operator confirm before wiping everything.
         # Skip this block when VLDB timeout caused nodes to be marked as
         # "login" — those nodes are NOT actually at a login prompt.
-        # NOTE: 4d mode skips this check since it does not run option 6.
-        if (not _is_4d
+        # 4b strict mode skips this check since it does not run option 6.
+        if (install_only
                 and _opt6_login_nodes == set(_install_bmc_ips)
                 and not _vldb_timeout_nodes
                 and not _nvram_mismatch_nodes):
@@ -16106,7 +16089,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False, 
         if _is_4d and _mode_sel == "3" and _peers_for_reinit and _primary_option9_selected:
             _4d_primary_option9_done.set()
             _status(
-                f"  ✅ {_format_status_line(first_ip, 'Primary option 9 complete; 4d peers may proceed to option 4.', 'SUCCESS')}"
+                f"  ✅ {_format_status_line(first_ip, 'Primary option 9 complete; peer nodes may proceed to option 4.', 'SUCCESS')}"
             )
             _launch_peer_threads_if_needed()
     elif log:
@@ -26084,7 +26067,7 @@ def main():
                     print("\n  ⚡ --reinit: launching mode 3 (end-to-end automated reinit).")
                 elif args.netboot_install:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 42, False, False
-                    print("\n  ⚡ --netboot-install: launching mode 4b (netboot and install ONTAP).")
+                    print("\n  ⚡ --netboot-install: launching mode 4b (netboot + automated cluster reinit).")
                 elif args.add_lic:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 44, False, False
                     print("\n  ⚡ --add-lic: launching mode 5a (install license).")
@@ -26098,7 +26081,7 @@ def main():
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 47, False, False
                     print("\n  ⚡ --verify: launching mode 5d (BMC auth verify).")
                 elif args.loader:
-                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 48, False, False
+                    _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 56, False, False
                     print("\n  ⚡ --loader: launching mode 5z (reset all nodes to LOADER).")
 
                 if _shortcut_mode is not None:
@@ -26142,7 +26125,7 @@ def main():
                     print(f"\n📝 Session log saved to: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
-            # ── Mode 42 (4b): Netboot and install ONTAP ────────────────────────────
+            # ── Mode 42 (4b): Netboot + automated cluster reinit ───────────────────
             if _operation_mode == 42:
                 # ── Resume detection ──────────────────────────────────────────────
                 # Reuse the checkpoint already loaded by the --resume auto-dispatch
@@ -26216,7 +26199,7 @@ def main():
                 if not _resuming:
                     _checkpoint = CheckpointManager()
 
-                _make_session_log("Mode 42: netboot and install ONTAP (4b)")
+                _make_session_log("Mode 42: netboot + automated cluster reinit (4b)")
                 # If resuming, register the gap between previous run exit and now
                 if _resuming and _checkpoint and _session_log:
                     _prev_updated = _checkpoint.get_param("updated")
@@ -27456,19 +27439,6 @@ def main():
                 except (EOFError, KeyboardInterrupt):
                     pass
                 raise _ReturnToMenu
-
-            # ── Mode 48 (4d): Hidden netboot + automated cluster reinit ───────────────
-            if _operation_mode == 48:
-                _print_banner("\U0001f4e6 4d: Hidden netboot + automated cluster reinit")
-                _make_session_log("4d: Hidden netboot + automated cluster reinit")
-                print("")
-                
-                # 4d uses the standard 4b netboot workflow with hidden_mode_4d=True
-                ok = _run_4b_standalone(_session_log, resuming=False, install_only=False, hidden_mode_4d=True)
-                if _session_log:
-                    _session_log.record_completion(normal_exit=ok)
-                    print(f"\n📝 Session log saved to: {_session_log.log_file}")
-                sys.exit(0 if ok else 1)
 
             # ── Mode 56 (5z): reset all nodes to LOADER prompt ─────────────────────
             if _operation_mode == 56:
