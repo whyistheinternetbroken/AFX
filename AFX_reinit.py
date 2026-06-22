@@ -13249,6 +13249,7 @@ def _peer_reinit_worker(ip, ctx):
     cluster_ips_out   = ctx.get("cluster_ips_out")
     _primary_ready_event = ctx.get("primary_option9_done_event")
     _primary_node_ip = ctx.get("primary_node_ip")
+    _run_loader_prep = bool(ctx.get("run_loader_prep"))
     _timings_record = ctx.get("timings_record")
     _timings_lock = ctx.get("timings_lock")
 
@@ -13290,6 +13291,48 @@ def _peer_reinit_worker(ip, ctx):
             _status(
                 f"  ✅ {_format_status_line(ip, 'Primary option 9 complete; proceeding with peer option 4.', 'SUCCESS')}"
             )
+
+        if _run_loader_prep:
+            _status(
+                f"  ⏳ {_format_status_line(ip, 'Applying LOADER environment and boot_ontap menu sequence...', 'INFO')}"
+            )
+            _peer_ld_log_dir = (_session_log.log_dir
+                                if _session_log and hasattr(_session_log, "log_dir")
+                                else os.getcwd())
+            _env_restore_state = _loader_env_pre_post_prompt(
+                peer_ch, f"peer/{ip}", _peer_ld_log_dir,
+                node_log=_pnf, interactive=False
+            )
+            if _env_restore_state is None:
+                with peer_lock:
+                    peer_errors.append((ip, "unsupported boot DNA"))
+                return
+            _peer_loader_cmds = []
+            if _prevent_bios_fw_update:
+                _peer_loader_cmds.append("setenv AUTO_FW_UPDATE false")
+            if _force_autoboot_true:
+                _peer_loader_cmds.append("setenv AUTOBOOT true")
+            if _physical_zeroing:
+                _peer_loader_cmds.append("setenv raid.use-physical-zeroing? true")
+            else:
+                _peer_loader_cmds.append("setenv raid.use-physical-zeroing? false")
+            if _diag_mode and _diag_bootargs:
+                for _bootarg in _diag_bootargs:
+                    _peer_loader_cmds.append(f"setenv {_bootarg}")
+            _peer_loader_cmds += ["saveenv", "boot_ontap menu"]
+            for _cmd in _peer_loader_cmds:
+                if _cmd != "boot_ontap menu":
+                    _out = direct_send_and_wait(
+                        peer_ch, _cmd, "LOADER-", timeout=15, node_log=_pnf
+                    )
+                    if _cmd.startswith("setenv bootarg."):
+                        if any(_tok in _out for _tok in ("%", "Error", "error", "invalid", "unknown", "Unknown")):
+                            with peer_lock:
+                                peer_errors.append((ip, f"LOADER command error: {_cmd}"))
+                            return
+                else:
+                    peer_ch.send("boot_ontap menu\r")
+                    time.sleep(1)
 
         # Wait for boot menu, then send option 4.
         _status(f"  ⏳ {_format_status_line(ip, 'Waiting for boot menu (peer)...', 'INFO')}")
@@ -24138,6 +24181,9 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
                 "cluster_ips_out": _mode3_cluster_ips_out,
                 "timings_record": _mode3_peer_timings,
                 "timings_lock": _mode3_timings_lock,
+                "primary_option9_done_event": threading.Event(),
+                "primary_node_ip": bmc_host,
+                "run_loader_prep": True,
             }
             _mode3_peer_threads = [
                 threading.Thread(
@@ -24154,6 +24200,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
                 "cluster_ips_out": _mode3_cluster_ips_out,
                 "peer_timings": _mode3_peer_timings,
                 "timings_lock": _mode3_timings_lock,
+                "primary_option9_done_event": _mode3_peer_ctx.get("primary_option9_done_event"),
                 "pending_fallback_peers": _fallback_peers,
                 "loader_channels": _mode3_staged_loader_channels,
                 "loader_clients": _mode3_staged_loader_clients,
@@ -24264,10 +24311,20 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         return
 
     if _skip_option4:
+        if (_operation_mode == 3 and _mode3_pipeline_state
+                and (_mode3_pipeline_state.get("primary_option9_done_event") is not None)
+                and not _mode3_pipeline_state["primary_option9_done_event"].is_set()):
+            _mode3_pipeline_state["primary_option9_done_event"].set()
+            _slog(f"[{bmc_host}] primary reached option-4 stage; peer workers released")
         print(f"ℹ️  {_node_pfx(bmc_host)}Skipping option 4 because cluster setup wizard is already active.")
         if _session_log:
             _session_log.log("Cluster setup wizard already active; skipping option 4 selection")
     else:
+        if (_operation_mode == 3 and _mode3_pipeline_state
+                and (_mode3_pipeline_state.get("primary_option9_done_event") is not None)
+                and not _mode3_pipeline_state["primary_option9_done_event"].is_set()):
+            _mode3_pipeline_state["primary_option9_done_event"].set()
+            _slog(f"[{bmc_host}] primary reached option-4 stage; peer workers released")
         drain_channel(channel, seconds=1)
         if bmc_host:
             _opt4_role = _display_node_label(bmc_host, mode=42)
