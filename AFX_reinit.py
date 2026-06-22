@@ -7207,6 +7207,7 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
     start = time.monotonic()
     last_nudge = start
     loader_found = False
+    _takeover_attempted = False
     _entered_console = True
     while time.monotonic() - start < probe_timeout:
         if channel.recv_ready():
@@ -7221,8 +7222,14 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
                 if _session_log:
                     _session_log.log_sent("y (console takeover during loader probe)")
                 channel.send("y\r")
+                _takeover_attempted = True
                 buf = ""
                 continue
+            if _takeover_attempted and _looks_like_bmc_prompt(buf):
+                _tprint(
+                    f"  ⚠️  {pfx}Console takeover did not attach; staying at BMC prompt."
+                )
+                return False
             if _LOADER_PROMPT_RE.search(buf) or "LOADER-" in buf.upper():
                 loader_found = True
                 break
@@ -22680,7 +22687,9 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         print(f"\n  ⚠️  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
         if log:
             log.log(f"2b: {len(_failed)} node(s) failed: {_failed}", prefix="WARN")
-        _retry_ans = _prompt("  Retry failed node(s)? [y/n]: ", "n").lower()
+        _retry_ans = _prompt_with_timeout(
+            "  Retry failed node(s)? [y/n]: ", "n", timeout=60
+        ).lower()
         if _retry_ans != "y":
             break
         print(f"\n  🔁 Retrying {len(_failed)} node(s)...")
@@ -22958,7 +22967,9 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         print(f"\n  ⚠️  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
         if log:
             log.log(f"2a: {len(_failed)} node(s) failed: {_failed}", prefix="WARN")
-        _retry_ans = _prompt("  Retry failed node(s)? [y/n]: ", "n").lower()
+        _retry_ans = _prompt_with_timeout(
+            "  Retry failed node(s)? [y/n]: ", "n", timeout=60
+        ).lower()
         if _retry_ans != "y":
             break
         _pending = _failed
@@ -23880,7 +23891,9 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         if _session_log:
             _session_log.log(f"peer add: {len(_m3_failed)} node(s) failed: {_m3_failed}",
                              prefix="WARN")
-        _m3_retry_ans = _prompt("  Retry failed node(s)? [y/n]: ", "n").lower()
+        _m3_retry_ans = _prompt_with_timeout(
+            "  Retry failed node(s)? [y/n]: ", "n", timeout=60
+        ).lower()
         if _m3_retry_ans != "y":
             _mode3_ok = False
             break
