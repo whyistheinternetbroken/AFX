@@ -8874,6 +8874,19 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
             output += chunk
             output_lower += chunk.lower()
+            fatal_reason = _fatal_boot_integrity_reason(output_lower)
+            if fatal_reason:
+                _screen_status(
+                    f"❌ {_pfx}Detected fatal boot integrity error during boot-menu wait: "
+                    f"'{fatal_reason}'. Aborting."
+                )
+                if _session_log:
+                    _session_log.log(
+                        f"[{node_label or 'primary'}] fatal boot integrity error during "
+                        f"boot-menu wait: {fatal_reason}",
+                        prefix="ERROR",
+                    )
+                return False
             if node_log:
                 _par_write(node_log, chunk)
             else:
@@ -22053,6 +22066,19 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 if _session_log:
                     _session_log.log_console(f"[{label}] {chunk}")
                 out_lower += chunk.lower()
+                fatal_reason = _fatal_boot_integrity_reason(out_lower)
+                if fatal_reason:
+                    print(
+                        f"   ❌ [{label}] Fatal boot integrity error during boot-menu wait: "
+                        f"'{fatal_reason}'."
+                    )
+                    if _session_log:
+                        _session_log.log(
+                            f"[{label}] fatal boot integrity error during boot-menu wait: "
+                            f"{fatal_reason}",
+                            prefix="ERROR",
+                        )
+                    return False
                 if any(sg in out_lower for sg in sig_lower):
                     seen_menu = True
                     break
@@ -24295,6 +24321,18 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
             if _session_log:
                 _session_log.log_console(chunk)
             output_lower += chunk.lower()
+            fatal_reason = _fatal_boot_integrity_reason(output_lower)
+            if fatal_reason:
+                print(
+                    f"   ❌ {_node_pfx(bmc_host)}Fatal boot integrity error during second "
+                    f"boot-menu wait: '{fatal_reason}'. Aborting auto-init."
+                )
+                _slog(
+                    f"[{bmc_host}] fatal boot integrity error during second boot-menu wait: "
+                    f"{fatal_reason}",
+                    prefix="ERROR",
+                )
+                return
             if len(output_lower) > 16384:
                 output_lower = output_lower[-8192:]
             last_progress = time.monotonic()
