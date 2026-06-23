@@ -334,6 +334,35 @@ Notes:
 
 ---
 
+## Experimental Features and Work-in-Progress Notes
+
+Some capabilities are marked **experimental** and are still being refined.
+
+### Checkpoint & Resume (modes 4b and 3)
+
+- Checkpointing is a **work in progress**. Resume behavior is designed to be safe,
+  but phase tracking and resume heuristics may continue to evolve.
+- Always review saved state with `--checkpoint-status` before `--resume`.
+- Treat manual checkpoint snapshots as diagnostic artifacts; only
+  `afx_checkpoint.json` is used for active resume.
+
+### LOADER environment backup / compare / restore paths
+
+- Option **5i** (backup) and **5j** (compare) are experimental diagnostic tools.
+- These flows are intended for visibility and troubleshooting, not as a guaranteed,
+  transactional "full restore" mechanism across every firmware/ONTAP state.
+- In reinit workflows that offer LOADER env restore/apply behavior, treat it as
+  best-effort and verify values on console before proceeding with destructive steps.
+
+### Cluster IP manifest builder (5l)
+
+- Option **5l** is marked **EXPERIMENTAL/IN PROGRESS**.
+- It is useful for deterministic `cluster add-node -cluster-ips` ordering, but
+  operators should still validate generated `configs/cluster_IP.json` content
+  before large-scale runs.
+
+---
+
 ### Why 4a uses the BMC
 
 The upgrade workflow drives the cluster through the BMC console rather
