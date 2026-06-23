@@ -9027,7 +9027,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
             channel.send("\r")
             last_nudge = now
             _slog("No console output for 30s; sending CR to nudge boot menu")
-        if (not loader_recovery_attempted and _force_autoboot_true is False
+        if (not loader_recovery_attempted
                 and now - start_time >= 600):
             loader_recovery_attempted = True
             _screen_status(
@@ -22145,7 +22145,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     if _session_log:
                         _session_log.log(f"[{label}] BMC reconnect failed: {_rc_err}", prefix="ERROR")
                     return False
-            if (not loader_recovery_attempted and _force_autoboot_true is False
+            if (not loader_recovery_attempted
                     and time.monotonic() - s >= 600):
                 loader_recovery_attempted = True
                 print(
@@ -24301,7 +24301,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         if matched:
             found = True
             break
-        if (not loader_recovery_attempted and _force_autoboot_true is False
+        if (not loader_recovery_attempted
                 and time.monotonic() - start >= 600):
             loader_recovery_attempted = True
             print(
