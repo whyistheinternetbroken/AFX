@@ -6148,6 +6148,7 @@ DESCRIPTION
        3   End-to-end reinit: mode 1b on primary + mode 2b on all peers
            (same credential-grouping/fallback behavior as 2b; reinit-only)
            ONTAP installs are handled by 4b/4c before running mode 3
+           includes per-node join-status output during bulk add-node polling
       4a   ONTAP rolling upgrade (takeover / software update / giveback)
       4b   Netboot + automated cluster reinit (strict sequencing)
       4c   Netboot and install ONTAP image only (no reinit)

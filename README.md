@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/18/2026
+**Updated:** 6/23/2026
 
 ---
 
@@ -32,6 +32,8 @@ The script automates the following core tasks:
 - Verifies BMC authentication
 - Runs standalone cluster health and version checks
 - Lists and cleans up stale BMC SSH sessions interactively
+- Stores LOADER env capture files under `logs/<timestamp>/LOADER_ENV/`
+- Fails fast on fatal boot-device integrity errors during boot-menu waits
 
 All session activity is captured in a timestamped log directory with a human-readable summary report and a full screen-output transcript.
 
@@ -837,6 +839,7 @@ logs/
     bmc_session_<timestamp>.log    ← full raw console transcript (BMC/ONTAP I/O)
     screen_output_<timestamp>.log  ← complete transcript of what was printed on screen
     summary_<timestamp>.log        ← human-readable timing and outcome summary
+    LOADER_ENV/                    ← LOADER pre/post env captures for this run
 ```
 
 The `logs/` directory is created in the same folder as the script.
@@ -1352,6 +1355,10 @@ current `[Unreleased]` working set.
 
 | Feature | Description |
 |---|---|
+| **Mode 3 join-status visibility** | During bulk `cluster add-node`, the primary console now prints per-node join status transitions (for example, pending/in-progress/success rows from `cluster add-node-status`) instead of only periodic "waiting" heartbeats. |
+| **LOADER boot-menu recovery hardening** | Boot-menu recovery no longer depends on AUTOBOOT override state; if a node sits at LOADER too long, the script now runs the LOADER recovery path consistently and retries `boot_ontap menu`. |
+| **Boot integrity fail-fast in boot-menu waits** | Boot-menu wait loops now abort immediately when fatal signatures are detected (for example `SHA256 checksum failure: varfs.tgz` or `/dev/nvrd1` restore failures), preventing indefinite CR-nudge loops on unrecoverable nodes. |
+| **LOADER env logs now stored under run logs** | LOADER env pre/post artifacts are now written under each run's `LOADER_ENV/` log subfolder, keeping loader captures grouped with the run that produced them. |
 | **Boot-menu stall recovery (`Waiting for BMC`)** | During option 2b/3 boot-menu waits, if console output reports `Waiting for BMC` and then stalls, the script now visibly retries BMC SSH + `system console` and continues on the refreshed session. |
 | **Boot-menu keepalive (5-minute CR)** | While waiting for long boot transitions, the script now sends a carriage return every 5 minutes to reduce BMC console session timeout risk. |
 | **Boot DNA capture via `printenv`** | DNA verification now runs `printenv` and saves raw LOADER environment output to `configs/loader_printenv_<timestamp>.txt` before parsing `bootarg.init.dna`. |

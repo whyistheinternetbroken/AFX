@@ -9,6 +9,19 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Mode 3 now prints per-node join status during bulk add-node polling.**
+  While polling `cluster add-node-status`, the primary console now emits
+  row-level join status transitions (node/IP + status) and a one-time message
+  when ONTAP has not yet returned any status rows, so peer join progress is
+  visible during long waits.
+- **LOADER env artifacts are now grouped under each run's log directory.**
+  LOADER pre/post capture files now write to `logs/<timestamp>/LOADER_ENV/`
+  instead of the root log folder, keeping loader diagnostics scoped to a
+  single run.
+- **Mode 3 peer workflow now mirrors strict 4b sequencing.**
+  Peer nodes are staged through LOADER/env/`boot_ontap menu` with primary
+  gating before option 4 progression, and post-cluster auto-add timing is
+  consistently included in summary subtimings.
 - **Checkpoint status now labels node roles and mirrors primary-only milestones.**
   `--checkpoint-status` now labels per-node blocks as `primary` or numbered
   `secondary-0N` roles, echoes primary-only milestones such as
@@ -165,6 +178,17 @@ revision labels rather than strict [SemVer](https://semver.org/).
   `1,3,4`) before credential prompts and test execution.
 
 ### Fixed
+- **Boot-menu LOADER recovery no longer depends on AUTOBOOT override state.**
+  The 10-minute LOADER recovery path now runs regardless of
+  `_force_autoboot_true`, preventing runs from looping on CR nudges at
+  `LOADER-A>` without ever retrying `boot_ontap menu`.
+- **Boot-menu waits now fail fast on fatal boot-integrity signatures.**
+  Primary, peer, and second-boot-menu wait loops now abort immediately when
+  fatal varfs/boot-device integrity errors are detected (for example,
+  `SHA256 checksum failure: varfs.tgz` and `/dev/nvrd1` restore failures).
+- **Option 3 destructive confirmation now accepts short answers.**
+  The "Enter yes/no to continue" confirmation now accepts `y`/`n` in addition
+  to full `yes`/`no`.
 - **2b reconnects no longer send `system console` at LOADER.**
   In option 2b peer-node reconnect loops, reconnect state is now probed first
   and `system console` is only sent from a BMC prompt. LOADER/boot-menu states
