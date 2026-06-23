@@ -13323,20 +13323,9 @@ def _peer_reinit_worker(ip, ctx):
 
     try:
         _t_loader_seen = time.monotonic() - _t_thread_start
-        if _primary_ready_event is not None and ip != _primary_node_ip:
-            _status(
-                f"  ⏳ {_format_status_line(ip, 'Waiting for primary option 9 completion before peer option 4.', 'INFO')}"
-            )
-            if not _primary_ready_event.wait(timeout=3600):
-                _status(
-                    f"  ⚠️  {_format_status_line(ip, 'Timed out waiting for primary option 9 completion.', 'WARN')}"
-                )
-                with peer_lock:
-                    peer_errors.append((ip, "primary option 9 wait timeout"))
-                return
-            _status(
-                f"  ✅ {_format_status_line(ip, 'Primary option 9 complete; proceeding with peer option 4.', 'SUCCESS')}"
-            )
+        # NOTE: primary_option9_done_event is now checked AFTER the peer boot menu
+        # is reached (not before loader prep). This lets peers boot to the menu in
+        # parallel with the primary's option-9 phase, reducing total wait time.
 
         if _run_loader_prep:
             _status(
@@ -13436,8 +13425,29 @@ def _peer_reinit_worker(ip, ctx):
 
         time.sleep(1)
         _status(
-            f"  ✅ {_format_status_line(ip, 'Boot menu detected – selecting option 4...', 'SUCCESS')}"
+            f"  ✅ {_format_status_line(ip, 'Boot menu reached – waiting for primary to reach option 4 stage...', 'SUCCESS')}"
         )
+        # Peers reached the boot menu early (in parallel with primary option 9).
+        # Now wait for the primary to signal it has reached the second boot menu
+        # before we send option 4.
+        if _primary_ready_event is not None and ip != _primary_node_ip:
+            _status(
+                f"  ⏳ {_format_status_line(ip, 'Boot menu ready; waiting for primary option 9 completion before sending option 4.', 'INFO')}"
+            )
+            if not _primary_ready_event.wait(timeout=3600):
+                _status(
+                    f"  ⚠️  {_format_status_line(ip, 'Timed out waiting for primary option 9 completion.', 'WARN')}"
+                )
+                with peer_lock:
+                    peer_errors.append((ip, "primary option 9 wait timeout"))
+                return
+            _status(
+                f"  ✅ {_format_status_line(ip, 'Primary option 9 complete; sending option 4.', 'SUCCESS')}"
+            )
+        else:
+            _status(
+                f"  ✅ {_format_status_line(ip, 'Boot menu detected – selecting option 4...', 'SUCCESS')}"
+            )
         if log:
             log.log(f"[{ip}] boot menu detected – sending option 4")
         if _pnf:
