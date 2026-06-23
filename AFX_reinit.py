@@ -4243,9 +4243,6 @@ _loader_env_stage_enabled: "bool | None" = None
 _force_autoboot_true: "bool | None" = None
 _force_autoboot_lock = threading.Lock()
 
-# Tracks whether mode-42 strict sequencing behavior is active in the current run.
-_is_4d = False
-
 _shutdown_event = threading.Event()
 _fatal_boot_dna_event = threading.Event()
 _fatal_boot_dna_lock = threading.Lock()
@@ -13522,13 +13519,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     If *resuming* is True the module-level ``_checkpoint`` is used to skip
     already-completed phases. Returns True on success.
     """
-    global _peer_log_paths, _checkpoint, _loader_env_stage_enabled, _bootarg_check_enabled, _is_4d
+    global _peer_log_paths, _checkpoint, _loader_env_stage_enabled, _bootarg_check_enabled
     _peer_log_paths = {}  # reset for this run
     _loader_env_stage_enabled = None
     _bootarg_check_enabled = None
-    _is_4d = (not install_only)  # 4b strict sequencing mode
-    _4d_primary_option9_done = threading.Event()
-    _4d_primary_node_ip = None
+    _primary_option9_done = threading.Event()
+    _4b_primary_node_ip = None
 
     # ── Shared state ───────────────────────────────────────────────────────
     # Serializes the brief status lines printed to the console by parallel
@@ -13542,30 +13538,29 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             msg = msg.replace(f"[{_ip}]", f"[{_role_ip}]")
             msg = msg.replace(f"[{_label}]", f"[{_role_ip}]")
         stripped = msg.strip()
-        if _is_4d:
-            _structured_match = re.search(
-                r"\[[^\]]+\]\s\|\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s\|\s\[[A-Z]+\]\s",
-                stripped,
-            )
-            _already_structured = bool(_structured_match)
-            if _structured_match:
-                # Preserve already-structured status lines even when callers
-                # prepend progress glyphs (e.g. "⏳ " or "✅ ").
-                stripped = stripped[_structured_match.start():]
-            if not _already_structured:
-                if "❌" in stripped:
-                    _lvl = "ERROR"
-                elif "⚠️" in stripped:
-                    _lvl = "WARN"
-                elif "✅" in stripped:
-                    _lvl = "SUCCESS"
-                else:
-                    _lvl = "INFO"
-                _m = re.search(r"\[([^\]]+)\]", stripped)
-                _node = _m.group(1) if _m else "4b"
-                _txt = re.sub(r"^.*?\]\s*", "", stripped)
-                _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                stripped = f"[{_node}] | {_ts} | [{_lvl}] {_txt}"
+        _structured_match = re.search(
+            r"\[[^\]]+\]\s\|\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s\|\s\[[A-Z]+\]\s",
+            stripped,
+        )
+        _already_structured = bool(_structured_match)
+        if _structured_match:
+            # Preserve already-structured status lines even when callers
+            # prepend progress glyphs (e.g. "⏳ " or "✅ ").
+            stripped = stripped[_structured_match.start():]
+        if not _already_structured:
+            if "❌" in stripped:
+                _lvl = "ERROR"
+            elif "⚠️" in stripped:
+                _lvl = "WARN"
+            elif "✅" in stripped:
+                _lvl = "SUCCESS"
+            else:
+                _lvl = "INFO"
+            _m = re.search(r"\[([^\]]+)\]", stripped)
+            _node = _m.group(1) if _m else "4b"
+            _txt = re.sub(r"^.*?\]\s*", "", stripped)
+            _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            stripped = f"[{_node}] | {_ts} | [{_lvl}] {_txt}"
         with _stdout_lock:
             print(stripped)
         # Mirror to the session log so the log file is a complete record.
@@ -13625,7 +13620,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             return False
         if log:
             log.log(f"4b: {len(bmc_ips)} node(s): {bmc_ips}")
-    _4d_primary_node_ip = bmc_ips[0] if (_is_4d and bmc_ips) else None
+    _4b_primary_node_ip = bmc_ips[0] if bmc_ips else None
 
     # If any BMC password was left empty, ask for the cluster admin password
     # now so it is available when the cluster setup wizard runs later.
@@ -13685,7 +13680,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _do_reinit = _cp_do_reinit
             _mode_sel  = _cp_mode_sel
             print(f"\n  🔖 Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
-        elif _is_4d:
+        elif not install_only:
             # 4b always uses strict end-to-end reinit mode.
             print("\n  ✅ Package selected. 4b mode: proceeding with end-to-end initialization (mode 3).")
             _do_reinit = True
@@ -16273,8 +16268,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             "status":           _status,
             "node_reinit_logs": _node_reinit_logs,
             "cluster_ips_out":  _4b_cluster_ips_out,
-            "primary_option9_done_event": (_4d_primary_option9_done if _is_4d else None),
-            "primary_node_ip":  _4d_primary_node_ip,
+            "primary_option9_done_event": _primary_option9_done,
+            "primary_node_ip":  _4b_primary_node_ip,
         }
 
         if _resume_ready_peer_ips:
@@ -16371,8 +16366,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 raise
             except Exception:
                 pass
-        if _is_4d and _mode_sel == "3" and _peers_for_reinit and _primary_option9_selected:
-            _4d_primary_option9_done.set()
+        if _mode_sel == "3" and _peers_for_reinit and _primary_option9_selected:
+            _primary_option9_done.set()
             _status(
                 f"  ✅ {_format_status_line(first_ip, 'Primary option 9 complete; peer nodes may proceed to option 4.', 'SUCCESS')}"
             )
@@ -24601,7 +24596,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
                              timeout=15, node_log=_env_log)
 
         _slog("bootarg.init.dna verification required; running automatically")
-        if (not _is_4d) and not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
+        if not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
             _mark_fatal_boot_dna(label)
             if _close_env_log and _env_log:
                 with suppress(Exception):
@@ -24632,7 +24627,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
     # Verify boot DNA (required in all modes).
     _slog("bootarg.init.dna verification required; running automatically")
-    if (not _is_4d) and not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
+    if not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
         _mark_fatal_boot_dna(label)
         if _close_env_log and _env_log:
             with suppress(Exception):
