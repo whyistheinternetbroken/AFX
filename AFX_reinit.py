@@ -4243,9 +4243,6 @@ _loader_env_stage_enabled: "bool | None" = None
 _force_autoboot_true: "bool | None" = None
 _force_autoboot_lock = threading.Lock()
 
-# Tracks whether mode-42 strict sequencing behavior is active in the current run.
-_is_4d = False
-
 _shutdown_event = threading.Event()
 _fatal_boot_dna_event = threading.Event()
 _fatal_boot_dna_lock = threading.Lock()
@@ -10981,12 +10978,19 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             # If option 4 was not accepted, the boot menu can remain at
             # "Selection (1-N)?". Detect that and resend option 4 so we don't
             # sit for 30 minutes waiting on a prompt that will never arrive.
-            _deadline = time.monotonic() + 1800
+            # Poll strategy: first slice waits 360s (node needs time to start
+            # disk-erase after option 4), then 30s slices up to 10 min total.
+            _deadline = time.monotonic() + 600
             _answered = False
             _resend_count = 0
+            _first_slice = True
             while time.monotonic() < _deadline and not _answered:
                 _remaining = max(1, int(_deadline - time.monotonic()))
-                _wait = min(90, _remaining)
+                if _first_slice:
+                    _wait = min(360, _remaining)
+                    _first_slice = False
+                else:
+                    _wait = min(30, _remaining)
                 _out, _matched = direct_read_until_any(
                     channel,
                     [trigger] + _menu_sigs,
@@ -13323,20 +13327,9 @@ def _peer_reinit_worker(ip, ctx):
 
     try:
         _t_loader_seen = time.monotonic() - _t_thread_start
-        if _primary_ready_event is not None and ip != _primary_node_ip:
-            _status(
-                f"  ⏳ {_format_status_line(ip, 'Waiting for primary option 9 completion before peer option 4.', 'INFO')}"
-            )
-            if not _primary_ready_event.wait(timeout=3600):
-                _status(
-                    f"  ⚠️  {_format_status_line(ip, 'Timed out waiting for primary option 9 completion.', 'WARN')}"
-                )
-                with peer_lock:
-                    peer_errors.append((ip, "primary option 9 wait timeout"))
-                return
-            _status(
-                f"  ✅ {_format_status_line(ip, 'Primary option 9 complete; proceeding with peer option 4.', 'SUCCESS')}"
-            )
+        # NOTE: primary_option9_done_event is now checked AFTER the peer boot menu
+        # is reached (not before loader prep). This lets peers boot to the menu in
+        # parallel with the primary's option-9 phase, reducing total wait time.
 
         if _run_loader_prep:
             _status(
@@ -13403,7 +13396,7 @@ def _peer_reinit_worker(ip, ctx):
                     pass
                 _last_progress = time.monotonic()
             _remaining = max(1, int(900 - _elapsed))
-            _slice_timeout = min(30, _remaining)
+            _slice_timeout = min(45, _remaining)
             _p_ch = (_peer_rc_ctx.get("channel")
                      if (_peer_rc_ctx and _peer_rc_ctx.get("channel") is not None)
                      else peer_ch)
@@ -13436,8 +13429,29 @@ def _peer_reinit_worker(ip, ctx):
 
         time.sleep(1)
         _status(
-            f"  ✅ {_format_status_line(ip, 'Boot menu detected – selecting option 4...', 'SUCCESS')}"
+            f"  ✅ {_format_status_line(ip, 'Boot menu reached – waiting for primary to reach option 4 stage...', 'SUCCESS')}"
         )
+        # Peers reached the boot menu early (in parallel with primary option 9).
+        # Now wait for the primary to signal it has reached the second boot menu
+        # before we send option 4.
+        if _primary_ready_event is not None and ip != _primary_node_ip:
+            _status(
+                f"  ⏳ {_format_status_line(ip, 'Boot menu ready; waiting for primary option 9 completion before sending option 4.', 'INFO')}"
+            )
+            if not _primary_ready_event.wait(timeout=3600):
+                _status(
+                    f"  ⚠️  {_format_status_line(ip, 'Timed out waiting for primary option 9 completion.', 'WARN')}"
+                )
+                with peer_lock:
+                    peer_errors.append((ip, "primary option 9 wait timeout"))
+                return
+            _status(
+                f"  ✅ {_format_status_line(ip, 'Primary option 9 complete; sending option 4.', 'SUCCESS')}"
+            )
+        else:
+            _status(
+                f"  ✅ {_format_status_line(ip, 'Boot menu detected – selecting option 4...', 'SUCCESS')}"
+            )
         if log:
             log.log(f"[{ip}] boot menu detected – sending option 4")
         if _pnf:
@@ -13512,13 +13526,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     If *resuming* is True the module-level ``_checkpoint`` is used to skip
     already-completed phases. Returns True on success.
     """
-    global _peer_log_paths, _checkpoint, _loader_env_stage_enabled, _bootarg_check_enabled, _is_4d
+    global _peer_log_paths, _checkpoint, _loader_env_stage_enabled, _bootarg_check_enabled
     _peer_log_paths = {}  # reset for this run
     _loader_env_stage_enabled = None
     _bootarg_check_enabled = None
-    _is_4d = (not install_only)  # 4b strict sequencing mode
-    _4d_primary_option9_done = threading.Event()
-    _4d_primary_node_ip = None
+    _primary_option9_done = threading.Event()
+    _4b_primary_node_ip = None
 
     # ── Shared state ───────────────────────────────────────────────────────
     # Serializes the brief status lines printed to the console by parallel
@@ -13532,30 +13545,29 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             msg = msg.replace(f"[{_ip}]", f"[{_role_ip}]")
             msg = msg.replace(f"[{_label}]", f"[{_role_ip}]")
         stripped = msg.strip()
-        if _is_4d:
-            _structured_match = re.search(
-                r"\[[^\]]+\]\s\|\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s\|\s\[[A-Z]+\]\s",
-                stripped,
-            )
-            _already_structured = bool(_structured_match)
-            if _structured_match:
-                # Preserve already-structured status lines even when callers
-                # prepend progress glyphs (e.g. "⏳ " or "✅ ").
-                stripped = stripped[_structured_match.start():]
-            if not _already_structured:
-                if "❌" in stripped:
-                    _lvl = "ERROR"
-                elif "⚠️" in stripped:
-                    _lvl = "WARN"
-                elif "✅" in stripped:
-                    _lvl = "SUCCESS"
-                else:
-                    _lvl = "INFO"
-                _m = re.search(r"\[([^\]]+)\]", stripped)
-                _node = _m.group(1) if _m else "4b"
-                _txt = re.sub(r"^.*?\]\s*", "", stripped)
-                _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                stripped = f"[{_node}] | {_ts} | [{_lvl}] {_txt}"
+        _structured_match = re.search(
+            r"\[[^\]]+\]\s\|\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s\|\s\[[A-Z]+\]\s",
+            stripped,
+        )
+        _already_structured = bool(_structured_match)
+        if _structured_match:
+            # Preserve already-structured status lines even when callers
+            # prepend progress glyphs (e.g. "⏳ " or "✅ ").
+            stripped = stripped[_structured_match.start():]
+        if not _already_structured:
+            if "❌" in stripped:
+                _lvl = "ERROR"
+            elif "⚠️" in stripped:
+                _lvl = "WARN"
+            elif "✅" in stripped:
+                _lvl = "SUCCESS"
+            else:
+                _lvl = "INFO"
+            _m = re.search(r"\[([^\]]+)\]", stripped)
+            _node = _m.group(1) if _m else "4b"
+            _txt = re.sub(r"^.*?\]\s*", "", stripped)
+            _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            stripped = f"[{_node}] | {_ts} | [{_lvl}] {_txt}"
         with _stdout_lock:
             print(stripped)
         # Mirror to the session log so the log file is a complete record.
@@ -13615,7 +13627,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             return False
         if log:
             log.log(f"4b: {len(bmc_ips)} node(s): {bmc_ips}")
-    _4d_primary_node_ip = bmc_ips[0] if (_is_4d and bmc_ips) else None
+    _4b_primary_node_ip = bmc_ips[0] if bmc_ips else None
 
     # If any BMC password was left empty, ask for the cluster admin password
     # now so it is available when the cluster setup wizard runs later.
@@ -13675,7 +13687,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _do_reinit = _cp_do_reinit
             _mode_sel  = _cp_mode_sel
             print(f"\n  🔖 Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
-        elif _is_4d:
+        elif not install_only:
             # 4b always uses strict end-to-end reinit mode.
             print("\n  ✅ Package selected. 4b mode: proceeding with end-to-end initialization (mode 3).")
             _do_reinit = True
@@ -16263,8 +16275,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             "status":           _status,
             "node_reinit_logs": _node_reinit_logs,
             "cluster_ips_out":  _4b_cluster_ips_out,
-            "primary_option9_done_event": (_4d_primary_option9_done if _is_4d else None),
-            "primary_node_ip":  _4d_primary_node_ip,
+            "primary_option9_done_event": _primary_option9_done,
+            "primary_node_ip":  _4b_primary_node_ip,
         }
 
         if _resume_ready_peer_ips:
@@ -16361,8 +16373,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 raise
             except Exception:
                 pass
-        if _is_4d and _mode_sel == "3" and _peers_for_reinit and _primary_option9_selected:
-            _4d_primary_option9_done.set()
+        if _mode_sel == "3" and _peers_for_reinit and _primary_option9_selected:
+            _primary_option9_done.set()
             _status(
                 f"  ✅ {_format_status_line(first_ip, 'Primary option 9 complete; peer nodes may proceed to option 4.', 'SUCCESS')}"
             )
@@ -20206,22 +20218,31 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                    f"Cluster name -> {cc['name']}", timeout=600,
                    node_log=node_log, quiet=bool(node_log))
 
-    # After cluster creation:
-    print("\n⏳ Cluster creating...", end="", flush=True)
-    _slog("Cluster creating – waiting for license key prompt")
-    _dot_done = threading.Event()
-    def _dot_ticker(_ev=_dot_done):
-        while not _ev.wait(15):
-            sys.stdout.write(".")
-            sys.stdout.flush()
-    threading.Thread(target=_dot_ticker, daemon=True).start()
+    # After the cluster name is submitted, ONTAP begins the real cluster-create
+    # work immediately. Use explicit progress messages (rather than a dot-only
+    # ticker) so the console timing reflects when creation actually started.
+    print(
+        "\n⏳ Cluster create started. Waiting for ONTAP to form the cluster "
+        "and reach post-create prompts..."
+    )
+    _slog("Cluster create started – waiting for additional license key prompt")
+    _create_wait_done = threading.Event()
+    _create_wait_t0 = time.monotonic()
+    def _create_wait_reporter(_ev=_create_wait_done, _t0=_create_wait_t0):
+        while not _ev.wait(60):
+            _elapsed = int(time.monotonic() - _t0)
+            print(f"   ⏳ Cluster creation still in progress... ({_elapsed}s elapsed)")
+    threading.Thread(target=_create_wait_reporter, daemon=True).start()
     _wait_and_send(channel, "enter an additional license key", "",
                    "Additional license key -> Enter", timeout=1800,
                    quiet=True, node_log=node_log)
-    _dot_done.set()
-    print()  # newline after dots
+    _create_wait_done.set()
     _log_path = _session_log.log_file if _session_log else "the log file"
-    print(f"\n⏳ Cluster creating. See log for details in a separate SSH session:\n   {_log_path}")
+    print(
+        "\n✅ Cluster create reached post-create wizard prompts. "
+        "Continuing management network configuration..."
+    )
+    print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
     _wait_and_send(channel, "cluster management interface port", cc["mgmt_port"],
                    f"Cluster mgmt port -> {cc['mgmt_port']}", timeout=900,
                    node_log=node_log, quiet=bool(node_log))
@@ -21229,6 +21250,10 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     finally:
         _console_quiet = _prev_quiet
 
+    print("  ⏳ ONTAP accepted cluster add-node. Waiting for node join stages to progress...")
+    if log:
+        log.log("cluster add-node command accepted; waiting for add-node-status milestones")
+
     total_timeout = 900   # 15 minutes
     poll_interval = 120   # 2 minutes
     start = time.monotonic()
@@ -21261,7 +21286,8 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
         _current_row = None
         for _sl in status_out.splitlines():
             _raw = _sl.rstrip("\r\n")
-            stripped = _raw.strip()
+            _clean_raw = _ANSI_RE.sub("", _raw).replace("\x08", "")
+            stripped = "".join(ch for ch in _clean_raw if ch.isprintable()).strip()
             if not stripped:
                 continue
             if set(stripped) <= {'-', ' '}:
@@ -21279,7 +21305,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                     continue
                 # Continuation lines in the "Error Reason" column are indented;
                 # attach them to the current row so each status row logs once.
-                if _raw[:1].isspace():
+                if _clean_raw[:1].isspace():
                     if _current_row is not None:
                         _extra = stripped
                         if _extra:
@@ -21372,6 +21398,11 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                             f"fallback cluster show -> count={_count}, "
                             f"all_true={_all_true}, has_warning={_has_warning}, "
                             f"ports_ok={_ports_ok}")
+                if _count >= _target_count and _all_true and _ports_ok and _has_warning:
+                    print(
+                        "  ⏳ Node has joined cluster membership and cluster ports are healthy; "
+                        "ONTAP is still finishing add-node finalization..."
+                    )
                 if _count >= _target_count and _all_true and not _has_warning and _ports_ok:
                     elapsed_total = round(time.monotonic() - start, 1)
                     print(f"\n  ✅ Cluster reports {_count} healthy node(s); "
@@ -21389,7 +21420,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
 
         elapsed = int(time.monotonic() - start)
         remaining = max(0, total_timeout - elapsed)
-        print(f"\n  ⏳ Waiting for all nodes to report success "
+        print(f"\n  ⏳ Waiting for ONTAP to finish node join finalization "
               f"({elapsed}s elapsed, up to {remaining}s remaining)...")
 
     print(f"\n  ⚠️  cluster add-node did not complete for all "
@@ -24591,7 +24622,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
                              timeout=15, node_log=_env_log)
 
         _slog("bootarg.init.dna verification required; running automatically")
-        if (not _is_4d) and not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
+        if not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
             _mark_fatal_boot_dna(label)
             if _close_env_log and _env_log:
                 with suppress(Exception):
@@ -24622,7 +24653,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
     # Verify boot DNA (required in all modes).
     _slog("bootarg.init.dna verification required; running automatically")
-    if (not _is_4d) and not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
+    if not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
         _mark_fatal_boot_dna(label)
         if _close_env_log and _env_log:
             with suppress(Exception):
