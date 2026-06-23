@@ -10978,12 +10978,19 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             # If option 4 was not accepted, the boot menu can remain at
             # "Selection (1-N)?". Detect that and resend option 4 so we don't
             # sit for 30 minutes waiting on a prompt that will never arrive.
-            _deadline = time.monotonic() + 1800
+            # Poll strategy: first slice waits 360s (node needs time to start
+            # disk-erase after option 4), then 30s slices up to 10 min total.
+            _deadline = time.monotonic() + 600
             _answered = False
             _resend_count = 0
+            _first_slice = True
             while time.monotonic() < _deadline and not _answered:
                 _remaining = max(1, int(_deadline - time.monotonic()))
-                _wait = min(90, _remaining)
+                if _first_slice:
+                    _wait = min(360, _remaining)
+                    _first_slice = False
+                else:
+                    _wait = min(30, _remaining)
                 _out, _matched = direct_read_until_any(
                     channel,
                     [trigger] + _menu_sigs,
