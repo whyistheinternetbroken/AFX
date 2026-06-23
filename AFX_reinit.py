@@ -21233,6 +21233,8 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     start = time.monotonic()
     _already_succeeded: set = set()
     _requested_ips = {str(_ip).strip() for _ip in cluster_ips if str(_ip).strip()}
+    _last_status_by_ip: dict[str, tuple[str, str]] = {}
+    _printed_waiting_for_status = False
 
     while time.monotonic() - start < total_timeout:
         time.sleep(poll_interval)
@@ -21320,6 +21322,14 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             _icon = "✅" if _node_status.lower() == "success" else "⏳"
             _err_suffix = f" ({_node_err})" if _node_err else ""
             _ip_suffix = f" [{_row_ip}]" if _row_ip else ""
+            _status_key = (_node_status.strip().lower(), _node_err.strip().lower())
+            _status_id = _row_ip or _node_name
+            if _status_id and _last_status_by_ip.get(_status_id) != _status_key:
+                print(
+                    f"  {_icon} Join status: {_node_name}{_ip_suffix} -> "
+                    f"{_node_status}{_err_suffix}"
+                )
+                _last_status_by_ip[_status_id] = _status_key
             if log:
                 log.log(
                     f"cluster add-node status: {_icon} {_node_name}{_ip_suffix}: "
@@ -21343,6 +21353,9 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             return True
 
         if not _relevant_rows and _target_count is not None:
+            if not _printed_waiting_for_status:
+                print("  ⏳ Waiting for cluster add-node-status rows from ONTAP...")
+                _printed_waiting_for_status = True
             try:
                 _count, _all_true, _has_warning = _cluster_show_node_status(primary_channel)
                 _port_issues = _cluster_port_health_issues(primary_channel, log=log)
