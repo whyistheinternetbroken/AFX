@@ -9724,7 +9724,7 @@ def _resolve_mgmt_lif_from_retained(lif_type: str):
 
     Returns ``{port, ip, netmask, gateway}`` with missing fields as None.
     """
-    cfg = {"port": None, "ip": None, "netmask": None, "gateway": None}
+    cfg = {"port": None, "ip": None, "netmask": None, "gateway": None, "node_name": None}
     rows = _retained_net_config or []
     candidates = []
     for r in rows:
@@ -9762,6 +9762,9 @@ def _resolve_mgmt_lif_from_retained(lif_type: str):
         cfg["port"] = r.get("home-port") or r.get("port")
         cfg["ip"] = r.get("address")
         cfg["netmask"] = r.get("netmask")
+        cfg["node_name"] = r.get("home-node") or r.get("node-name") or r.get("node_name")
+        if not cfg["node_name"] and lif_type == "node":
+            cfg["node_name"] = next((str(_retained_sp_to_node.get(sp, "") or "").strip() for sp in _retained_sp_to_node if _retained_sp_to_node.get(sp)), "")
     cfg["gateway"] = _retained_default_gateway
     return cfg
 
@@ -9891,7 +9894,7 @@ def apply_retained_to_cluster_config():
         print("\n  \U0001F4D1 Populated cluster config from existing cluster:")
         for k in fills:
             shown = cluster_block[k]
-            print(f"     {k:<20} = {shown}")
+            _ts_print(f"     {k:<20} = {shown}")
         if _session_log:
             _session_log.log(
                 f"Populated cluster config from retained data: {fills}"
@@ -9988,6 +9991,7 @@ def apply_retained_to_node_configs(primary_bmc=None):
 
         filled = []
         mapping = (
+            ("node_name", mgmt.get("node_name")),
             ("node_mgmt_port", mgmt.get("port")),
             ("node_mgmt_ip", mgmt.get("ip")),
             ("node_mgmt_netmask", mgmt.get("netmask")),
@@ -10002,6 +10006,7 @@ def apply_retained_to_node_configs(primary_bmc=None):
             # Also seed _node_mgmt_by_bmc so the per-BMC collector can use
             # the values directly without re-reading the config block.
             _node_mgmt_by_bmc[bmc] = {
+                "node_name": node_block.get("node_name"),
                 "port": node_block.get("node_mgmt_port"),
                 "ip": node_block.get("node_mgmt_ip"),
                 "netmask": node_block.get("node_mgmt_netmask"),
@@ -10084,6 +10089,7 @@ def _normalize_node_mgmt_config(cfg):
         "ip": ("ip", "node_mgmt_ip"),
         "netmask": ("netmask", "node_mgmt_netmask"),
         "gateway": ("gateway", "node_mgmt_gateway"),
+        "node_name": ("node_name", "name"),
     }
     for _canon, _names in _aliases.items():
         _val = None
@@ -10396,6 +10402,7 @@ def collect_node_mgmt_per_bmc(primary_bmc, peer_bmcs):
     primary_defaults = _resolve_node_mgmt_config_from_retained()
     shared_netmask = primary_defaults.get("netmask")
     shared_gateway = primary_defaults.get("gateway") or _retained_default_gateway
+    shared_node_name = primary_defaults.get("node_name")
 
     all_bmcs = [primary_bmc] + [b for b in peer_bmcs if b and b != primary_bmc]
 
@@ -10420,11 +10427,13 @@ def collect_node_mgmt_per_bmc(primary_bmc, peer_bmcs):
             d_ip = node_cfg.get("node_mgmt_ip") or primary_defaults.get("ip")
             d_mask = node_cfg.get("node_mgmt_netmask") or primary_defaults.get("netmask") or shared_netmask
             d_gw = node_cfg.get("node_mgmt_gateway") or primary_defaults.get("gateway") or shared_gateway
+            d_name = node_cfg.get("node_name") or node_cfg.get("name") or primary_defaults.get("node_name") or shared_node_name
         else:
             d_port = node_cfg.get("node_mgmt_port") or "e0M"
             d_ip = node_cfg.get("node_mgmt_ip")
             d_mask = node_cfg.get("node_mgmt_netmask") or shared_netmask
             d_gw = node_cfg.get("node_mgmt_gateway") or shared_gateway
+            d_name = node_cfg.get("node_name") or node_cfg.get("name")
 
         # If the config file has a complete AND valid entry for this BMC,
         # use it silently. Any invalid value forces the prompt path so the
@@ -10479,6 +10488,7 @@ def collect_node_mgmt_per_bmc(primary_bmc, peer_bmcs):
 
         _node_mgmt_by_bmc[bmc] = {
             "port": port, "ip": ip, "netmask": mask, "gateway": gw,
+            "node_name": d_name,
         }
         if _session_log:
             _session_log.log(
@@ -27565,7 +27575,7 @@ def main():
                 print("")
                 print("  " + "─" * 58)
                 if _sp_ips46:
-                    print(f"  SP/BMC addresses gathered from 'service-processor show' ({len(_sp_ips46)}):")
+                    _ts_print(f"  SP/BMC addresses gathered from 'service-processor show' ({len(_sp_ips46)}):")
                     for _sip46 in _sp_ips46:
                         print(f"    • {_sip46}")
                     _bmc_ip_ans = _prompt(
