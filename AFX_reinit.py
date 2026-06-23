@@ -20218,22 +20218,31 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                    f"Cluster name -> {cc['name']}", timeout=600,
                    node_log=node_log, quiet=bool(node_log))
 
-    # After cluster creation:
-    print("\n⏳ Cluster creating...", end="", flush=True)
-    _slog("Cluster creating – waiting for license key prompt")
-    _dot_done = threading.Event()
-    def _dot_ticker(_ev=_dot_done):
-        while not _ev.wait(15):
-            sys.stdout.write(".")
-            sys.stdout.flush()
-    threading.Thread(target=_dot_ticker, daemon=True).start()
+    # After the cluster name is submitted, ONTAP begins the real cluster-create
+    # work immediately. Use explicit progress messages (rather than a dot-only
+    # ticker) so the console timing reflects when creation actually started.
+    print(
+        "\n⏳ Cluster create started. Waiting for ONTAP to form the cluster "
+        "and reach post-create prompts..."
+    )
+    _slog("Cluster create started – waiting for additional license key prompt")
+    _create_wait_done = threading.Event()
+    _create_wait_t0 = time.monotonic()
+    def _create_wait_reporter(_ev=_create_wait_done, _t0=_create_wait_t0):
+        while not _ev.wait(60):
+            _elapsed = int(time.monotonic() - _t0)
+            print(f"   ⏳ Cluster creation still in progress... ({_elapsed}s elapsed)")
+    threading.Thread(target=_create_wait_reporter, daemon=True).start()
     _wait_and_send(channel, "enter an additional license key", "",
                    "Additional license key -> Enter", timeout=1800,
                    quiet=True, node_log=node_log)
-    _dot_done.set()
-    print()  # newline after dots
+    _create_wait_done.set()
     _log_path = _session_log.log_file if _session_log else "the log file"
-    print(f"\n⏳ Cluster creating. See log for details in a separate SSH session:\n   {_log_path}")
+    print(
+        "\n✅ Cluster create reached post-create wizard prompts. "
+        "Continuing management network configuration..."
+    )
+    print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
     _wait_and_send(channel, "cluster management interface port", cc["mgmt_port"],
                    f"Cluster mgmt port -> {cc['mgmt_port']}", timeout=900,
                    node_log=node_log, quiet=bool(node_log))
@@ -21241,6 +21250,10 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     finally:
         _console_quiet = _prev_quiet
 
+    print("  ⏳ ONTAP accepted cluster add-node. Waiting for node join stages to progress...")
+    if log:
+        log.log("cluster add-node command accepted; waiting for add-node-status milestones")
+
     total_timeout = 900   # 15 minutes
     poll_interval = 120   # 2 minutes
     start = time.monotonic()
@@ -21273,7 +21286,8 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
         _current_row = None
         for _sl in status_out.splitlines():
             _raw = _sl.rstrip("\r\n")
-            stripped = _raw.strip()
+            _clean_raw = _ANSI_RE.sub("", _raw).replace("\x08", "")
+            stripped = "".join(ch for ch in _clean_raw if ch.isprintable()).strip()
             if not stripped:
                 continue
             if set(stripped) <= {'-', ' '}:
@@ -21291,7 +21305,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                     continue
                 # Continuation lines in the "Error Reason" column are indented;
                 # attach them to the current row so each status row logs once.
-                if _raw[:1].isspace():
+                if _clean_raw[:1].isspace():
                     if _current_row is not None:
                         _extra = stripped
                         if _extra:
@@ -21384,6 +21398,11 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                             f"fallback cluster show -> count={_count}, "
                             f"all_true={_all_true}, has_warning={_has_warning}, "
                             f"ports_ok={_ports_ok}")
+                if _count >= _target_count and _all_true and _ports_ok and _has_warning:
+                    print(
+                        "  ⏳ Node has joined cluster membership and cluster ports are healthy; "
+                        "ONTAP is still finishing add-node finalization..."
+                    )
                 if _count >= _target_count and _all_true and not _has_warning and _ports_ok:
                     elapsed_total = round(time.monotonic() - start, 1)
                     print(f"\n  ✅ Cluster reports {_count} healthy node(s); "
@@ -21401,7 +21420,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
 
         elapsed = int(time.monotonic() - start)
         remaining = max(0, total_timeout - elapsed)
-        print(f"\n  ⏳ Waiting for all nodes to report success "
+        print(f"\n  ⏳ Waiting for ONTAP to finish node join finalization "
               f"({elapsed}s elapsed, up to {remaining}s remaining)...")
 
     print(f"\n  ⚠️  cluster add-node did not complete for all "
