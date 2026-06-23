@@ -309,6 +309,27 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **5l** | Build Cluster IP Manifest | Connects to cluster management and runs cluster-role interface queries to write `configs/cluster_IP.json`. Stores one cluster IP per node (the first seen per node), preserving file order so 2a/2b/3/4b can reuse this manifest for ordered `cluster add-node -cluster-ips` arguments. **Status: EXPERIMENTAL/IN PROGRESS.** |
 | **5z** | Reset to LOADER | Connects to configured BMC addresses in parallel, issues a system reset on each selected node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. The script exits when every selected node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging nodes before a manual reinit or netboot run. |
 
+### Password Groups (modes 2a, 2b, and 3)
+
+When per-node BMC credentials are needed and nodes do not all share one password,
+you can use **password groups** instead of entering every node password one-by-one.
+
+How it works:
+1. Choose per-node credential entry (do not reuse one password for all).
+2. Select **Use password groups** when prompted.
+3. Create one or more groups, each with a password and a numbered node list.
+4. Review the assignment manifest before continuing.
+
+Example uses:
+1. **Rack-based credentials:** nodes `1,2,3` share one rack password and nodes `4,5,6` share another.
+2. **Mixed policy migration:** most nodes use a new password, but a small subset remains on the old password during cutover.
+3. **Blank + non-blank mix:** some lab nodes intentionally use blank passwords while production nodes use named credentials.
+
+Notes:
+- Enter `PRIMARY` to reuse the primary credential context password for a group.
+- Blank input means an intentional blank password.
+- You can restart grouping before execution if the manifest looks wrong.
+
 > **Warning:** Options 1a and 1b destroy all storage on the target node and reinitialize the cluster. If a cluster already exists, use option 2 instead.
 
 ---
