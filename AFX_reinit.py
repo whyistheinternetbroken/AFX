@@ -10983,6 +10983,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             _deadline = time.monotonic() + 600
             _answered = False
             _resend_count = 0
+            _boot_menu_seen = False
             _first_slice = True
             while time.monotonic() < _deadline and not _answered:
                 _remaining = max(1, int(_deadline - time.monotonic()))
@@ -11009,6 +11010,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     _answered = True
                     break
                 if _matched and _matched.lower() in _menu_sigs:
+                    _boot_menu_seen = True
                     _resend_count += 1
                     if _resend_count <= 3:
                         _slog("Boot menu still visible; resending option 4")
@@ -11022,6 +11024,17 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     _slog("Boot menu remained visible after resending option 4", prefix="WARN")
                     break
             if not _answered:
+                if _boot_menu_seen:
+                    _msg = (
+                        f"[{label or 'primary'}] option 4 did not advance past boot menu; "
+                        "zero-disks confirmation never appeared after multiple retries. "
+                        "Aborting to avoid false cluster-creation wait state."
+                    )
+                    print(f"\n❌ {_msg}")
+                    _slog(_msg, prefix="ERROR")
+                    if _session_log:
+                        _session_log.log(_msg, prefix="ERROR")
+                    raise RuntimeError(_msg)
                 _slog("Timeout waiting for zero disks confirmation", prefix="WARN")
         else:
             _out = direct_send_and_wait(channel, "", trigger, timeout=1800, auto_respond=resp,
