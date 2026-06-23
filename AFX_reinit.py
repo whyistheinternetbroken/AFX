@@ -11532,28 +11532,48 @@ def _apply_license(channel):
         print("  \U0001f50d Gathering node management IPs...")
         if _session_log:
             _session_log.log(
-                "net int show -role node-mgmt -fields address (gather node IPs)"
+                "net int show -role node-mgmt -fields address,home-node (gather node IPs)"
             )
         node_ips = []
+        node_targets = []
         try:
             ni_out = _run_cluster_command(
                 channel,
-                "net int show -role node-mgmt -fields address",
+                "net int show -role node-mgmt -fields address,home-node",
                 timeout=30,
             )
+            seen_node_ips = set()
             for line in ni_out.splitlines():
-                for token in line.split():
-                    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", token):
-                        if token not in node_ips:
-                            node_ips.append(token)
-            if node_ips:
-                print(f"  \u2705 Node-mgmt IPs: {', '.join(node_ips)}")
-                _slog(f"Node-mgmt IPs: {node_ips}")
-            else:
-                print(
-                    "  \u26a0\ufe0f  No node-mgmt IPs found; SFTP step will be skipped."
+                tokens = line.split()
+                for idx, token in enumerate(tokens):
+                    _ip_match = re.match(
+                        r"^(\d{1,3}(?:\.\d{1,3}){3})(?:/\d+)?$",
+                        token,
+                    )
+                    if not _ip_match:
+                        continue
+                    _node_ip = _ip_match.group(1)
+                    if _node_ip in seen_node_ips:
+                        continue
+                    _node_name = tokens[idx + 1] if idx + 1 < len(tokens) else ""
+                    if not _node_name or _node_name in {"-", "true", "false"}:
+                        continue
+                    seen_node_ips.add(_node_ip)
+                    node_ips.append(_node_ip)
+                    node_targets.append(
+                        {"node_name": _node_name, "node_ip": _node_ip}
+                    )
+                    break
+            if node_targets:
+                _node_summary = ", ".join(
+                    f"{_node['node_name']}={_node['node_ip']}"
+                    for _node in node_targets
                 )
-                _slog("No node-mgmt IPs found", prefix="WARN")
+                print(f"  ? Node-mgmt targets: {_node_summary}")
+                _slog(f"Node-mgmt targets: {_node_summary}")
+            elif node_ips:
+                print(f"  ? Node-mgmt IPs: {', '.join(node_ips)}")
+                _slog(f"Node-mgmt IPs: {node_ips}")
         except Exception as exc:
             print(f"  \u26a0\ufe0f  net int show failed: {exc}")
             _slog(f"net int show failed: {exc}", prefix="WARN")
