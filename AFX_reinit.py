@@ -8111,6 +8111,14 @@ def _print_retain_summary(cluster_name, net_rows, peer_addresses=None):
                     f"{r.get('netmask', '-'):<16} "
                     f"{r.get('role', '-')}"
                 )
+            node_names = []
+            for r in mgmt_lifs:
+                home_node = (r.get("home-node") or "").strip()
+                if home_node and home_node not in node_names:
+                    node_names.append(home_node)
+            if node_names:
+                print("\n  Node names discovered from node-mgmt rows:")
+                print(f"    • {', '.join(node_names)}")
 
     if peer_addresses:
         print("\n  Discovered service-processor (BMC) addresses:")
@@ -9904,7 +9912,7 @@ def apply_retained_to_cluster_config():
 
 def _retained_node_mgmt_for(sp_address):
     """Look up the node-management LIF row for the ONTAP node owning
-    ``sp_address``. Returns a dict {port, ip, netmask, gateway} with any
+    ``sp_address``. Returns a dict {port, ip, netmask, gateway, node_name} with any
     missing fields set to None. Returns None if no mapping is available
     (no SP capture, or no node-mgmt LIF for that node).
     """
@@ -9926,6 +9934,7 @@ def _retained_node_mgmt_for(sp_address):
                 "ip": r.get("address"),
                 "netmask": r.get("netmask"),
                 "gateway": _retained_default_gateway,
+                "node_name": r.get("home-node") or r.get("node-name") or node_name,
             }
     return None
 
