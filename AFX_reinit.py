@@ -13396,7 +13396,7 @@ def _peer_reinit_worker(ip, ctx):
                     pass
                 _last_progress = time.monotonic()
             _remaining = max(1, int(900 - _elapsed))
-            _slice_timeout = min(30, _remaining)
+            _slice_timeout = min(45, _remaining)
             _p_ch = (_peer_rc_ctx.get("channel")
                      if (_peer_rc_ctx and _peer_rc_ctx.get("channel") is not None)
                      else peer_ch)
