@@ -307,6 +307,7 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **5j** | Compare LOADER Environment | Compares current LOADER bootenv variables against NetApp defaults and displays a diff showing customizations and deviations. Helps identify bootenv changes and troubleshoot configuration issues (experimental). |
 | **5k** | Check Boot DNA | Loads target IPs from JSON config and shows a numbered selector: **1)** all discovered BMC IPs, **2)** cluster management IP, **3)** custom IP. It evaluates each target's runtime state (**At LOADER** or **At cluster shell**), runs the matching DNA command path, and reports `bootarg.init.dna` with a per-target state/value summary when multiple nodes are checked. |
 | **5l** | Build Cluster IP Manifest | Connects to cluster management and runs cluster-role interface queries to write `configs/cluster_IP.json`. Stores one cluster IP per node (the first seen per node), preserving file order so 2a/2b/3/4b can reuse this manifest for ordered `cluster add-node -cluster-ips` arguments. **Status: EXPERIMENTAL/IN PROGRESS.** |
+| **5m** | Node Name / LIF Repair | Compares current cluster node names and node-management LIF names against the config file, using BMC (SP) IP addresses as the ground truth for node identity. Detects mismatches that occur when nodes join a cluster in a different order than the config expects, reports the required renames, and optionally applies them. Handles permutation cycles safely using a temporary intermediate name. Prompts for confirmation before making any changes. |
 | **5z** | Reset to LOADER | Connects to configured BMC addresses in parallel, issues a system reset on each selected node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. The script exits when every selected node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging nodes before a manual reinit or netboot run. |
 
 ### Password Groups (modes 2a, 2b, and 3)
@@ -360,6 +361,64 @@ Some capabilities are marked **experimental** and are still being refined.
 - It is useful for deterministic `cluster add-node -cluster-ips` ordering, but
   operators should still validate generated `configs/cluster_IP.json` content
   before large-scale runs.
+
+---
+
+### Node Name / LIF Repair (5m and automatic)
+
+When nodes reinitialize and rejoin a cluster, they sometimes join in a different
+order than the config file expects. Because ONTAP assigns node names based on join
+order (node-01 is whoever joins first), the resulting names may not match what the
+config specifies.
+
+The script detects and corrects this using BMC (Service Processor) IP addresses as
+the ground truth for node identity — the BMC IP is wired to the chassis, so it
+always identifies the physical node regardless of what ONTAP has named it.
+
+#### How detection works
+
+1. Runs `service-processor show -fields address,node` to get the current
+   ONTAP name for each BMC IP.
+2. Compares those names against the `bmc` / `node_name` pairs in the config file.
+3. Runs `net int show -role node-mgmt -fields address,home-node` to find
+   node-management LIF names that need to match.
+4. Reports any node name or LIF name that does not match the config expectation.
+
+#### How renaming works
+
+ONTAP `node rename` fails if the target name already exists. When nodes have
+swapped names (a permutation cycle like A→B, B→C, C→A), the script detects the
+cycle and uses a temporary name as a stepping stone:
+
+1. Rename the first node in the cycle to a temporary name (e.g. `oam-nvlts-02a`).
+2. Walk the remaining renames in reverse so each target slot is vacant.
+3. Rename the temporary name to its final target.
+
+The same cycle-safe logic is applied to node-management LIF renames.
+
+#### Automatic repair (modes 3 and 4b)
+
+After peer nodes join the cluster at the end of a mode 3 or mode 4b+reinit run,
+the script automatically runs the comparison and applies any corrections without
+prompting (`auto_confirm=True`). No operator action is needed — if names already
+match the config, nothing is changed and the health check proceeds normally.
+
+The repair result (needed, elapsed, success, per-rename timings) is recorded in
+the session summary as a **Node Name / LIF Repair** phase entry.
+
+#### Standalone repair (5m)
+
+Option **5m** lets you run the comparison and repair manually against an existing
+cluster:
+
+1. Prompts for cluster credentials (or reuses BMC credentials if available).
+2. Connects to the cluster management LIF and runs the comparison.
+3. Displays any mismatches.
+4. Asks `Apply corrections? [y/N]` before making any changes.
+5. Runs a final verification pass and prints corrected node names.
+
+Use 5m when you need to repair names after a partial run, or on a cluster that
+was built without the script.
 
 ---
 

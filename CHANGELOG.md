@@ -177,6 +177,24 @@ revision labels rather than strict [SemVer](https://semver.org/).
   verification against all targets or a comma-separated subset (for example,
   `1,3,4`) before credential prompts and test execution.
 
+### Added
+- **Added mode 5m: node name / LIF repair utility.**
+  New standalone option `5m` compares cluster node names and node-management LIF
+  names against the config file, using BMC (SP) IP addresses as ground truth for
+  node identity. Detects mismatches that occur when nodes join a cluster in a
+  different order than the config expects, reports the discrepancies, and
+  optionally renames them. Handles permutation cycles safely by introducing a
+  temporary intermediate name (e.g. `oam-nvlts-02a`) to break the cycle before
+  walking remaining renames. A final verification pass confirms all names match
+  before reporting success.
+- **Modes 3 and 4b now auto-repair node name / LIF mismatches after cluster join.**
+  After peer nodes successfully join the cluster, the script automatically runs
+  the same comparison and rename logic as 5m with `auto_confirm=True`. If node
+  names already match the config nothing is changed; otherwise renames are applied
+  silently and the health check proceeds. The result (needed, elapsed, success,
+  per-rename timings) is recorded in the session summary as a **Node Name / LIF
+  Repair** phase entry.
+
 ### Fixed
 - **Boot-menu LOADER recovery no longer depends on AUTOBOOT override state.**
   The 10-minute LOADER recovery path now runs regardless of
