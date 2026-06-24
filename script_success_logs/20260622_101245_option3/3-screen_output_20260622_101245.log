@@ -1,0 +1,141 @@
+📝 Session log: /scripts/AFX/logs/20260622_101245/1-bmc_session_20260622_101245.log
+
+🚀 AFX_reinit.py v1.1.1 (last update: 2026-06-22T10:02:38-04:00)
+  ✅ Ping OK: 10.192.160.29 is reachable.
+📄 Using primary BMC from config primary_node: 10.192.160.29 (user=admin)
+  🧹 Proactive known_hosts cleanup for 10.192.160.29 (before BMC login)...
+  ℹ️  No known_hosts entry found for 10.192.160.29.
+Connecting to SP at 10.192.160.29 with username admin...
+   🔌 [primary BMC] connecting to 10.192.160.29 as admin (attempt 1/5)...
+✅ Connection successful!
+Shell invoked. Waiting for initial prompt...
+BMC rtp-afx1k-c01-01> ✅ BMC prompt detected.
+
+Validating BMC status...
+bmc status
+Firmware Version:     18.5P1
+Mgmt MAC Address:     d0:39:ea:bd:d9:27
+Ethernet Link Eth0:   Up, 1000Mb, Full-Duplex, Auto-neg enabled,completed
+  Using DHCP:         no
+IPv4 configuration:
+  IP Address:         10.192.160.29
+  Netmask:            255.255.254.0
+  Gateway:            10.192.160.1
+IPv6 configuration:   Disabled
+BMC rtp-afx1k-c01-01> 
+✅ BMC validation successful – found '10.192.160.29' in status output.
+
+  ↩️  Skipping retain capture; will still discover peer BMC
+     addresses so peer nodes can be reset to LOADER.
+
+  📄 Config file in use — skipping cluster-shell discovery.
+
+  ⚠️  No NTP server configuration found on the existing cluster.
+
+  Select NTP server(s) to add (comma-separated numbers, blank to skip):
+    1. time.nist.gov
+    2. pool.ntp.org
+    3. time.google.com
+    4. time.aws.com
+    5. time.apple.com
+    6. Add all
+    7. Add custom
+
+
+  📑 Populated cluster config from existing cluster:
+     ntp_servers          = time.nist.gov,pool.ntp.org,time.google.com,time.aws.com,time.apple.com
+
+  📄 Added 1 peer BMC(s) from config: 10.192.160.35
+
+============================================================
+  📋 Cluster node summary
+============================================================
+  BMC of first node in the cluster : 10.192.160.29 (user=admin)
+  Nodes to add after cluster init  (1):
+    - 10.192.160.35
+  Total nodes                      : 2
+
+============================================================
+  🌐 Node Management Network Configuration
+============================================================
+
+  Enter node-management network details for each BMC.
+  These will be auto-answered during cluster setup (mode 1b).
+  Press Enter to accept the [default] shown in brackets.
+
+  ── BMC 10.192.160.29 (this node) ──
+    📄 Using config file values for BMC 10.192.160.29
+
+  ── BMC 10.192.160.35 (peer) ──
+    📄 Using config file values for BMC 10.192.160.35
+
+============================================================
+  🔐 Peer BMC SSH Credentials
+============================================================
+
+  Provide SSH credentials for each peer BMC. Press Enter
+  to reuse the primary BMC username 'admin'.
+  For passwords, blank means no password; enter PRIMARY to
+  reuse the primary BMC password.
+  ✅ Using primary credentials (user=admin) for all 1 peer node(s).
+
+============================================================
+  🏛️  Cluster Setup Configuration
+============================================================
+
+  These values will be used to drive the cluster setup wizard
+  after option 4 (mode 1b only). Press Enter to accept defaults.
+  📄 Cluster name (from config): rtp-afx1k-c01
+
+  ℹ️  ONTAP requires the cluster admin password to be at least 8 characters AND contain both letters and numbers.
+    ✅ Reusing BMC login password as cluster admin password (hidden).
+  📄 Cluster management port (from config): e0M
+  📄 Cluster management IP (from config): 10.192.160.103
+  📄 Cluster management netmask (from config): 255.255.255.0
+  📄 Cluster management gateway (from config): 10.192.160.1
+  📄 DNS domain names (comma separated) (from config): ntap.local
+  📄 DNS servers (comma separated) (from config): 10.193.67.228,10.193.67.236
+
+  📄 NTP servers (from config): time.nist.gov,pool.ntp.org,time.google.com,time.aws.com,time.apple.com
+  📄 Controller location (from config): RTP
+
+  🧩 Mode 3: 1 peer node(s) will be auto-added in parallel after primary cluster is up:
+     10.192.160.35
+
+============================================================
+  🔁 Resetting 1 peer node(s) to LOADER (parallel)
+============================================================
+  Peer BMCs: 10.192.160.35
+  📝 [10.192.160.35] | 2026-06-22 10:13:28 |  Reset log → /scripts/AFX/logs/20260622_101245/6-peer_reset_10_192_160_35_20260622_101328.log
+   🔌 [peer/10.192.160.35] connecting to 10.192.160.35 as admin (attempt 1/5)...
+
+  ⚠️  1 peer(s) did not reach LOADER: 10.192.160.35
+
+  🔁 Retrying 1 peer(s)...
+  📝 [10.192.160.35] | 2026-06-22 10:14:38 |  Retry log → /scripts/AFX/logs/20260622_101245/7-peer_reset_retry_10_192_160_35_20260622_101438.log
+   🔌 [peer/10.192.160.35] connecting to 10.192.160.35 as admin (attempt 1/5)...
+
+
+🔄 Sending 'system reset' command...
+system reset
+This will cause a dirty shutdown of your controller.  Continue? [y/n] 
+✅ Detected 'y/n' – auto-responded with 'y'
+
+⏳ System reset in process. Script may appear hung, but be patient — reboot will happen soon.
+Waiting for BMC prompt after reset...
+y
+
+BMC rtp-afx1k-c01-01> 
+BMC rtp-afx1k-c01-01> ✅ BMC prompt returned.
+
+📺 Probing current prompt before entering system console...
+
+BMC rtp-afx1k-c01-01> ✅ BMC prompt detected. Entering system console...
+Waiting for system console response...
+✅ System console connected.
+✅ System console ready.
+
+⏳ LOADER will appear. Script is continuing. Be patient.
+
+Now monitoring boot output...
+

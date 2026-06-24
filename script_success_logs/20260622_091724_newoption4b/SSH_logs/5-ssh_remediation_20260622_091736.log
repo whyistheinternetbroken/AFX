@@ -1,0 +1,6 @@
+[2026-06-22 09:17:36.317] host=10.192.160.29 action=known_hosts_remove outcome=skipped phase=- detail=no entry found
+[2026-06-22 09:17:37.978] host=10.192.160.35 action=known_hosts_remove outcome=skipped phase=- detail=no entry found
+[2026-06-22 09:29:15.090] host=10.192.160.29 action=known_hosts_remove outcome=skipped phase=4b_–_Boot_Menu_Selection detail=no entry found
+[2026-06-22 09:29:20.242] host=10.192.160.35 action=known_hosts_remove outcome=skipped phase=Auto_Cluster_Init_(1b) detail=no entry found
+[2026-06-22 09:31:01.335] host=10.192.160.29 action=known_hosts_remove outcome=skipped phase=Auto_Cluster_Init_(1b) detail=no entry found
+[2026-06-22 09:34:19.160] host=10.192.160.29 action=known_hosts_remove outcome=skipped phase=Auto_Cluster_Init_(1b) detail=no entry found

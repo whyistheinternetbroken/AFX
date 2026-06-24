@@ -1,0 +1,316 @@
+BMC rtp-afx1k-c01-01> 
+BMC rtp-afx1k-c01-01> 
+BMC rtp-afx1k-c01-01>   [10.192.160.29] 🔍 Checking if already at LOADER before system reset...
+system console
+Type Ctrl-D to exit.
+login: 
+login:   ℹ️  [10.192.160.29] Not at LOADER. Exiting console for system reset...
+BMC rtp-afx1k-c01-01> 
+BMC rtp-afx1k-c01-01> 
+>>> system reset
+system reset
+This will cause a dirty shutdown of your controller.  Continue? [y/n] 
+>>> y  (confirming system reset)
+y
+
+BMC rtp-afx1k-c01-01> 
+BMC rtp-afx1k-c01-01> 
+>>> system console
+system console
+Type Ctrl-D to exit.
+
+BIOS Version: 20.6
+Portions Copyright (C) 2014-2025 NetApp, Inc. All Rights Reserved.
+
+Initializing System Memory ...
+Loading Device Drivers ...
+Configuring Devices ...
+
+CPU = 2 Processor(s) Detected.
+  Intel(R) Xeon(R) Platinum 8470N (CPU 0)
+  CPUID: 0x000806F8. Cores per Processor = 52
+  Intel(R) Xeon(R) Platinum 8470N (CPU 1)
+  CPUID: 0x000806F8. Cores per Processor = 52
+1048576 MB System RAM Installed.
+NVME Device: SAMSUNG MZ1L23T8HBLA-00A07
+
+Boot Loader version 8.5.2 
+Copyright (C) 2000-2003 Broadcom Corporation.
+Portions Copyright (C) 2002-2025 NetApp, Inc. All Rights Reserved.
+
+*****************************************
+*** Booted from Backup Firmware Image ***
+*****************************************
+ACPI RSDP Found at 0x777fe014
+
+
+Starting AUTOBOOT press Ctrl-C to abort...
+
+>>> ^C (interrupting autoboot)
+
+Autoboot of PRIMARY image aborted by user.
+
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> 
+>>> priv set diag
+priv set diag
+LOADER-A*> 
+>>> ifconfig e0M -addr=10.192.160.28 -mask=255.255.255.0 -gw=10.192.160.1
+ifconfig e0M -addr=10.192.160.28 -mask=255.255.255.0 -gw=10.192.160.1
+Network interface setup for IPv4
+Device e0M: 
+    hwaddr D0-39-EA-BD-D9-25, ipaddr 10.192.160.28, mask 255.255.255.0
+    gateway 10.192.160.1, nameserver not set
+    speed 1000 full duplex, loopback not supported
+LOADER-A*> 
+>>> netboot http://10.193.67.173:40803/9191RC0_q_image.tgz
+netboot http://10.193.67.173:40803/9191RC0_q_image.tgz
+Downloading 10.193.67.173:40803/9191RC0_q_image.tgz ..
+Extracting archive 10.193.67.173:40803/9191RC0_q_image.tgz ..
+Loading netboot/kernel:0x200000/1507928 0x370260/11147499 0xe11b50/1633072 0x1000000/1400 0x1000578/2696 0x1200000/4316952 0x161df18/10363112 Entry at 0xffffffff80371000
+Found fat://ramdisk/netboot/SB_XXXV/platform.rc
+Loading netboot/platform.ko:0x2000000/1609728 0x2189000/446464 0x21f6000/0 0x21f6000/0 0x21f6000/599888 0x2288750/96 0x22887b0/104 0x2288818/2304 0x2289118/5664 0x228a738/120 0x228a7b0/240 0x228a8a0/112 0x228a910/112 0x228a980/112 0x228a9f0/112 0x228aa60/112 0x228aad0/112 0x228ab40/112 0x228abb0/5376 0x228c0b0/3504 0x228ce60/672 0x2400000/169 0x24abd20/1881432 0x2677278/338736 0x24000a9/10496 0x26c9da8/23616 0x26cf9e8/143928 0x26f2c20/10512 0x26f5530/2016 0x26f5d10/6912 0x26f7810/16128 0x26fb710/312 0x24029b0/67968 0x26fb848/47352 0x2707140/16992 0x2413330/3372 0x2414060/228932 0x270b3a0/33576 0x27136c8/336 0x2713818/336 0x2713968/336 0x2713ab8/336 0x2713c08/336 0x2713d58/336 0x2713ea8/336 0x2713ff8/288 0x2714118/720 0x27143e8/360 0x244beb0/448 0x2714550/7200 0x244c070/0 0x244c070/207672 0x24aba7e/667 0x247eba8/184022 
+Loading netboot/rootfs.img:0x2717000/608712192 
+Loading netboot/platfs3g.img:0x26b9b000/283990016 
+Closing network.
+Starting program at 0xffffffff80371000
+---<<BOOT>>---NetApp Data ONTAP 9.19.1RC0
+Physical memory chunk(s):0x0000000000010000 - 0x000000000009ffff, 589824 bytes (144 pages)
+0x0000000000100000 - 0x00000000001fffff, 1048576 bytes (256 pages)
+0x0000000038676000 - 0x000000006917efff, 816877568 bytes (199433 pages)
+0x00000000777ff000 - 0x00000000777fffff, 4096 bytes (1 pages)
+0x0000000100005000 - 0x000000297bd37fff, 173876129792 bytes (42450227 pages)
+0x0000002a8d800000 - 0x0000002a8d8e7fff, 950272 bytes (232 pages)
+random: registering fast source Intel Secure Key RNG
+mmcfg base is 0x80000000 
+mmcfg limit is 0x8c000000 
+ram0: reserving memory region: 0x0000000000000000 - 0x000000000009ffff, 655360 bytes (160 pages) (smap)
+ram0: reserving memory region: 0x0000000000100000 - 0x000000006917efff, 1762127872 bytes (430207 pages) (smap)
+ram0: reserving memory region: 0x00000000777ff000 - 0x00000000777fffff, 4096 bytes (1 pages) (smap)
+ram0: reserving memory region: 0x0000000100000000 - 0x000001007fffffff, 1097364144128 bytes (267911168 pages) (smap)
+nvme0: doorbell stride #2. 
+xhci_interrupt: host controller halted
+qpair load balancing offnvme0: nvme_notify is complete.
+
+ *******************************************************
+  WARNING: The NVRAM DIMM1 has caused UECC in the past.
+  Please replace it as soon as possible!!!              
+ *******************************************************
+
+IPMI device unit 0 rev. 1, firmware rev. 18.05, version 2.0, device support mask 0xbf
+IPMI device unit 1 rev. 1, firmware rev. 18.05, version 2.0, device support mask 0xbf
+disk (nda0): sector/stripesize 0
+nda0 at nvme0 bus 0 scbus0 target 0 lun 1
+nda0: <SAMSUNG MZ1L23T8HBLA-00A07 GDC7502Q S667NN0Y611913>
+nda0: Serial Number S667NN0Y611913
+nda0: nvme version 1.4
+nda0: 3662830MB (7501476528 512 byte sectors)
+mlx5: Mellanox Core driver 3.7.1 (November 2021)Copyright (C) 1992-2026 NetApp.
+All rights reserved.
+
+*******************************
+*                             *
+* Press Ctrl-C for Boot Menu. *
+*                             *
+*******************************
+netapp_begin started
+cryptomod_fips: Cryptomod FIPS version: Cryptomod FIPS 3.0
+cryptomod_fips: Executing Crypto FIPS Self Tests.
+cryptomod_fips: Crypto FIPS self-test: 'CPU COMPATIBILITY' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 ECB, AES-256 ECB' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CBC, AES-256 CBC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 GCM, AES-256 GCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128, AES-256 CMAC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'CTR_DRBG' passed.
+cryptomod_fips: Crypto FIPS self-test: 'KDF' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA1, SHA256, SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA3-256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'HMAC-SHA1, HMAC-SHA256, HMAC-SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'PBKDF2' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-XTS 128, AES-XTS 256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'Self-integrity' passed.
+Starting netapp_loadnvram - 13:22:02
+e2a: Saving mce sysctl for dev.mce.0
+e2b: Saving mce sysctl for dev.mce.1
+e2c: Saving mce sysctl for dev.mce.2
+e2d: Saving mce sysctl for dev.mce.3
+e1a: Saving mce sysctl for dev.mce.4
+e1b: Saving mce sysctl for dev.mce.5
+e7a: Saving mce sysctl for dev.mce.6
+dev.nvram12.0.nvram_unreg_pci_evt: 0 -> 0
+Ending netapp_loadnvram - 13:22:11
+e7b: Saving mce sysctl for dev.mce.7
+Attempting to use existing varfs on /dev/nvrd1
+e10a: Saving mce sysctl for dev.mce.8
+Running the upgrade system
+e10b: Saving mce sysctl for dev.mce.9
+bootarg.upgrade="true"
+bootarg.from.version="9.18.1P2"
+bootarg.to.version="9.19.1RC0"
+e11a: Saving mce sysctl for dev.mce.10
+e11b: Saving mce sysctl for dev.mce.11
+Pensando Ethernet NIC Driver, ver: 1.4.0-E-78
+ionic_rdma ver 1.4.0-E-78 : Pensando RoCE HCA driver
+netapp_intel_fw_helper: Loading if_irdma.ko
+Loading irdma moduleice_rdma_register: iRDMA driver registered using version 1.1.0
+netapp_mlnx_config_hw_lro: clearing  (ports: none)
+Unable to delete environmental variable : 22
+net.nic_fw_update_complete: 0 -> 1
+dev.qat.0.cfg_services="dc"
+dev.qat.0.disable_safe_dc_mode="1"
+dev.qat.1.cfg_services="dc"
+dev.qat.1.disable_safe_dc_mode="1"
+dev.qat.2.cfg_services="dc"
+dev.qat.2.disable_safe_dc_mode="1"
+dev.qat.3.cfg_services="dc"
+dev.qat.3.disable_safe_dc_mode="1"
+dev.qat.4.cfg_services="dc"
+dev.qat.4.disable_safe_dc_mode="1"
+dev.qat.5.cfg_services="dc"
+dev.qat.5.disable_safe_dc_mode="1"
+dev.qat.6.cfg_services="dc"
+dev.qat.6.disable_safe_dc_mode="1"
+dev.qat.7.cfg_services="dc"
+dev.qat.7.disable_safe_dc_mode="1"
+ipsec_cfcard_init: Starting at Mon Jun 22 13:22:35 UTC 2026
+netapp_tpm_init: tpm_undark:true
+netapp_tpm_init: [UseTPM] netboot enabled, do not use TPM
+netapp_tpm_init: [UseTPM] netboot enabled, do not use TPM
+Mon Jun 22 13:22:36 UTC 2026 (1782134556) [okm_init] [is_okm_supported] netboot enabled, disable file logging
+Mon Jun 22 13:22:36 UTC 2026 (1782134556) [okm_init] [log_wkeydb_file] /cfcard/kmip/km_onboard.wkeydb does not exist
+Mon Jun 22 13:22:36 UTC 2026 (1782134556) [okm_init] [okm_init_start] OKM_INIT start
+open: Read-only file system
+Mon Jun 22 13:22:38 UTC 2026 (1782134558) [okm_init] [okm_init_start] OKM_INIT return: 0
+
+
+Read HAOSC config (0x1111) from bootarg
+Jun 22 13:22:48 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e1a: Link UP (IFFLAG).
+Jun 22 13:22:48 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e1b: Link UP (IFFLAG).
+Jun 22 13:22:49 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e1b: Link TG (MTU).
+Jun 22 13:22:49 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e1a: Link TG (MTU).
+Jun 22 13:22:49 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e1b: Link TG (MEDIA).
+Jun 22 13:22:49 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e1a: Link TG (MEDIA).
+FWU 1st trigger point
+FWU has no post firmware update action registered.
+Jun 22 13:23:01 Power outage protection flash de-staging: 14 cycles
+The Boot Menu will be presented because an alternate boot method was specified.
+
+Please choose one of the following:
+
+(1)  Normal Boot.
+(2)  Boot without /etc/rc.
+(3)  Change password.
+(4)  Initialize and configure system.
+(5)  Maintenance mode boot.
+(6)  Update flash from backup config.
+(7)  Install new software first.
+(8)  Reboot node.
+(9)  Clean System Configuration.
+(10) Set Onboard Key Manager recovery secrets.
+(11) Configure node for external key management.
+Selection (1-11)? 
+>>> 7
+7
+
+This procedure will replace existing Data ONTAP software with new software.
+Do you want to continue? {y|n} 
+>>> y
+y
+
+What is the URL for the package? 
+>>> http://10.193.67.173:40803/9191RC0_q_image.tgz
+http://10.193.67.173:40803/9191RC0_q_image.tgz
+What is the user name on "10.193.67.173", if any? 
+>>> 
+
+
+Checking network link... success.
+Checking route to host "10.193.67.173"... success.
+Attempting to reach 10.193.67.173... success.
+Looking up URL "http://10.193.67.173:40803/9191RC0_q_image.tgz"... success
+configure_ramdisk: image package size is 3230467334 (3080)M
+Computed package size is 3696M
+Using ramdisk size of 3696M
+Downloading package... 9191RC0_q_image.tgz
+success.
+Checking package contents... success.
+Extracting install script from package... success.
+Invoking script (validation phase).
+INSTALL running in check-only mode: the image will be validated only
+Mode of operation is INSTALL
+Current image is image1
+Alternate image is image2
+Using device /dev/nda0 for install
+Package MD5 checksums pass
+Versions are compatible
+Model variant='AFX-1K' detected.
+Boot device size:       3662830 MB
+Size required by image: 1814529 MB
+expected bootmedia usable size: '3840755982336' bytes
+installed bootmedia usable size: '3840755982336' bytes
+Kernel binary matches install machine type
+Install device found
+Invoking script (install phase).  This may take up to 20 minutes.
+Mode of operation is INSTALL
+Current image is image1
+Alternate image is image2
+Using device /dev/nda0 for install
+Versions are compatible
+Model variant='AFX-1K' detected.
+Boot device size:       3662830 MB
+Size required by image: 1814529 MB
+expected bootmedia usable size: '3840755982336' bytes
+installed bootmedia usable size: '3840755982336' bytes
+Kernel binary matches install machine type
+Install device found
+Getting ready to install image
+/dev/md4: 0.5MB (1024 sectors) block size 32768, fragment size 4096
+	using 1 cylinder groups of 0.50MB, 16 blks, 128 inodes.
+	with soft updates
+super-block backups (for fsck_ffs -b #) at:
+ 192
+Partitioning of boot device complete
+=>        40  7501476448  nda0  GPT  (3.5T)
+          40    33554432     1  ms-basic-data  (16G)
+    33554472   134217728     2  freebsd-ufs  (64G)
+   167772200  3145728000     3  freebsd-ufs  (1.5T)
+  3313500200   268435456     4  freebsd-ufs  (128G)
+  3581935656   134217728     5  freebsd-ufs  (64G)
+  3716153384  3785323104     6  ms-basic-data  (1.8T)
+
+/dev/nda0p1: 33488912 sectors in 2093057 FAT32 clusters (8192 bytes/cluster)
+BytesPerSec=512 SecPerClust=16 ResSectors=46 FATs=2 Media=0xf8 SecPerTrack=63 Heads=255 HiddenSecs=0 HugeSectors=33554432 FATsecs=16369 RootCluster=2 FSInfo=1 Backup=2
+New boot device filesystem created
+New filesystem mounted
+Directory /cfcard/cores created
+UFS filesystem created
+/cfcard_ufs filesystem mounted
+------ boardtype= sys_model=AFF-A1K
+Directory /cfcard/x86_64/freebsd/image2 created
+Directory /cfcard/x86_64/freebsd/image1 created
+Directory /cfcard_ufs/x86_64/freebsd/image2 created
+Directory /cfcard_ufs/x86_64/freebsd/image1 created
+Syncing device...
+Extracting to /cfcard/x86_64/freebsd/image1...
+Installed MD5 checksums pass
+Deleting folder: /cfcard/x86_64/freebsd/image1/SB_XXXV/
+Syncing device...
+Extracting to /cfcard/x86_64/freebsd/image2...
+Installed MD5 checksums pass
+Deleting folder: /cfcard/x86_64/freebsd/image2/SB_XXXV/
+Installing diagnostic and firmware files
+Firmware MD5 checksums pass
+New filesystem created on recovery partition
+Boot recovery files installed on recovery partition
+Installation complete.
+
+
+The node must be rebooted to start using the newly installed software and if necessary,
+boot menu option 6 should be executed to restore the system configuration.
+Do you want to reboot now? {y|n} 
+>>> y

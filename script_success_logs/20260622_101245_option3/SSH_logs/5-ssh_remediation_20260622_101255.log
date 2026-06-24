@@ -1,0 +1,6 @@
+[2026-06-22 10:12:55.720] host=10.192.160.29 action=known_hosts_remove outcome=skipped phase=SSH_Connection detail=no entry found
+[2026-06-22 10:17:51.411] host=10.192.160.29 action=known_hosts_remove outcome=skipped phase=Boot_Menu_Selection detail=no entry found
+[2026-06-22 10:19:38.164] host=10.192.160.29 action=known_hosts_remove outcome=skipped phase=Auto_Cluster_Init_(1b) detail=no entry found
+[2026-06-22 10:22:57.386] host=10.192.160.29 action=known_hosts_remove outcome=skipped phase=Auto_Cluster_Init_(1b) detail=no entry found
+[2026-06-22 10:37:56.241] host=10.192.160.35 action=known_hosts_remove outcome=skipped phase=- detail=no entry found
+[2026-06-22 10:39:35.723] host=10.192.160.35 action=known_hosts_remove outcome=skipped phase=- detail=no entry found

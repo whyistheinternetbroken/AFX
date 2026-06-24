@@ -1,0 +1,43 @@
+BMC rtp-afx1k-c01-02> 
+BMC rtp-afx1k-c01-02>   [10.192.160.35] 🔍 Checking if already at LOADER before system reset...
+system console
+Type Ctrl-D to exit.
+login: 
+login:   ℹ️  [10.192.160.35] Not at LOADER. Exiting console for system reset...
+BMC rtp-afx1k-c01-02> 
+BMC rtp-afx1k-c01-02> system reset
+This will cause a dirty shutdown of your controller.  Continue? [y/n] 
+>>> auto-responded to 'y/n' with 'y'
+y
+
+BMC rtp-afx1k-c01-02> 
+BMC rtp-afx1k-c01-02> system console
+Type Ctrl-D to exit.
+
+BIOS Version: 20.8X1
+Portions Copyright (C) 2014-2026 NetApp, Inc. All Rights Reserved.
+
+Initializing System Memory ...
+Loading Device Drivers ...
+Configuring Devices ...
+1048576 MB System RAM Installed.
+NVME Device: SAMSUNG MZ1L23T8HBLA-00A07
+
+Boot Loader version 8.7.0X1 
+Copyright (C) 2000-2003 Broadcom Corporation.
+Portions Copyright (C) 2002-2026 NetApp, Inc. All Rights Reserved.
+
+ACPI RSDP Found at 0x777fe014
+
+
+Starting AUTOBOOT press Ctrl-C to abort...
+
+>>> [Ctrl+C x5 — intercepting AUTOBOOT]
+
+Autoboot of PRIMARY image aborted by user.
+
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> 

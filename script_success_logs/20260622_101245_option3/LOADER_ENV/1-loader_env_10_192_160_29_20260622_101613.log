@@ -1,0 +1,91 @@
+set-defaults
+LOADER-A> printenv
+
+Variable Name        Value
+-------------------- --------------------------------------------------
+ARCH                 X86_64
+AUTOBOOT             true
+AUTOBOOT_FROM        PRIMARY
+AUTO_FW_UPDATE       true
+BACKUP_BIOS_VERSION  20.6
+bios.bootarg.os_ver  9.19.1RC0
+BIOS_DATE            09/16/2025
+BIOS_INTERFACE       2
+BIOS_VERSION         20.6
+BMC_FW_ARCH_REV      1
+BOARDNAME            SB_XXXV
+bootarg.acpi_rsdp    0x777fe014
+bootarg.bmr_supported true
+bootarg.event_info.address 0x6a105018
+bootarg.event_info.size 0x1020
+bootarg.force_ht_enable 1
+bootarg.frurom.fileid 538344558
+bootarg.init.dna     3088
+bootarg.init.flash_optimized true
+bootarg.mem.decode.socket.0.numClus 4
+bootarg.mem.decode.socket.0.numUmaClus 4
+bootarg.mem.decode.socket.0.totalCha 52
+bootarg.mem.decode.socket.1.numClus 4
+bootarg.mem.decode.socket.1.numUmaClus 4
+bootarg.mem.decode.socket.1.totalCha 52
+bootarg.net.auto_update_disable true
+bootarg.nvram.no_mcu_downgrade true
+bootarg.pegasus.nvmeof.storage_ports e11a,e11b,e10a,e10b
+BOOT_CONSOLE         eficons0a
+boot_diags           setenv NET_DEVICE e0M; setenv LINUX_BOOTARGS $DIAG_LINUX_BOOTARGS; boot -bzimage $GX_DIAG_URL
+BOOT_FLASH           flash0b
+boot_ontap           autoboot
+BT_BIOS_VERSION      20.7
+CPU_NUM_CORES        208
+CPU_SPEED            1700
+CPU_TYPE             Intel(R) Xeon(R) Platinum 8470N
+DIAG_LINUX_BOOTARGS  "unknown_nmi_panic console=ttyS0 loglevel=3 acpi_rsdp=$bootarg.acpi_rsdp mem=112G pcie_port_pm=off intel_iommu=off iomem=relaxed cpioroot=$GX_DIAG_ROOTRD_URL root=/dev/nvme0n1p1 8250.disable_console_mirroring=1"
+ENABLE_SMI           false
+ENV_VERSION          1
+FIRMWARE_URL         fat://boot0/X86_64/firmware/SB_XXXV/firmware.img
+GX_BACKUP_KERNEL_URL fat://boot0/X86_64/freebsd/image2/kernel
+GX_DIAG_ROOTRD_URL   /X86_64/freebsd/image1/rootrd.img
+GX_DIAG_URL          fat://boot0/X86_64/freebsd/image1/bzImage
+GX_KERNELNAME        X86_64/freebsd/image1/kernel
+GX_PRIMARY_KERNEL_URL fat://boot0/X86_64/freebsd/image1/kernel
+ldkern               load -elf64 $GX_PRIMARY_KERNEL_URL
+LINUX_BACKUP_KERNEL_URL fat://boot0/X86_64/Linux/image2/vmlinuz
+LINUX_KERNELNAME     X86_64/Linux/image1/vmlinuz
+LINUX_PRIMARY_KERNEL_URL fat://boot0/X86_64/Linux/image1/vmlinuz
+LOADER_VERSION       8.5.2
+MOBO_MODEL           AFF-A1K
+MOBO_REV             A6
+MOBO_SERIAL_NUM      042427001714   
+MOBO_VENDOR          NetApp, Inc.
+netboot              setenv BOOTED_FROM NETWORK; boot -elf64 
+OEM_TYPE_2/0/20/0/0x8086/0x1BCD 0/u/b
+OEM_TYPE_2/1/0/0/0x8086/0x125D 0/e/M
+OEM_TYPE_2/152/0/0/0x15B3/0x101D 7/#/#
+OEM_TYPE_2/152/0/1/0x15B3/0x101D 7/#/#
+OEM_TYPE_2/184/0/0/0x15B3/0x101D 10/#/#
+OEM_TYPE_2/184/0/1/0x15B3/0x101D 10/#/#
+OEM_TYPE_2/2/0/0/0x8086/0x125D 0/e/S
+OEM_TYPE_2/200/0/0/0x15B3/0x101D 11/#/#
+OEM_TYPE_2/200/0/1/0x15B3/0x101D 11/#/#
+OEM_TYPE_2/22/0/0/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/22/0/1/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/22/0/2/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/22/0/3/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/3/0/0/0x144D/0xA80A 0/u/a
+OEM_TYPE_2/73/0/0/0x1275/0xE 4/#/#
+OEM_TYPE_2/90/0/0/0x15B3/0x101D 1/#/#
+OEM_TYPE_2/90/0/1/0x15B3/0x101D 1/#/#
+OEM_TYPE_3           0/3/0/0/u0a.0/SAMSUNG MZ1L23T8HBLA-00A07;
+OEM_TYPE_4           32768/0/4096/0xFE0C8000
+presets.haosc        0x1111
+PRIMARY_BIOS_VERSION 20.8X1
+savenv               saveenv
+SYS_MODEL            AFF-A1K
+SYS_REV              A6
+SYS_SERIAL_NUM       952416000449
+TPM_FW_VERSION       15.24.18954.0
+update_flash         flash -backup $FIRMWARE_URL flash0a
+USE_SECONDARY        false
+vm.pci.mmio.64.addr  0x200000000000
+vm.pci.mmio.64.size  0x15000000000
+LOADER-A> 

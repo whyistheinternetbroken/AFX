@@ -1,0 +1,1646 @@
+
+=== _bmc_reach_loader: 10.192.160.29 ===
+BMC rtp-afx1k-c01-01> 
+BMC rtp-afx1k-c01-01>   [10.192.160.29] 🔍 Checking if already at LOADER before system reset...
+system console
+Type Ctrl-D to exit.
+Uptime: 3m9s
+
+BIOS Version: 20.6
+Portions Copyright (C) 2014-2025 NetApp, Inc. All Rights Reserved.
+
+Initializing System Memory ...
+Loading Device Drivers ...
+Configuring Devices ...
+
+CPU = 2 Processor(s) Detected.
+  Intel(R) Xeon(R) Platinum 8470N (CPU 0)
+  CPUID: 0x000806F8. Cores per Processor = 52
+  Intel(R) Xeon(R) Platinum 8470N (CPU 1)
+  CPUID: 0x000806F8. Cores per Processor = 52
+1048576 MB System RAM Installed.
+NVME Device: SAMSUNG MZ1L23T8HBLA-00A07
+
+Boot Loader version 8.5.2 
+Copyright (C) 2000-2003 Broadcom Corporation.
+Portions Copyright (C) 2002-2025 NetApp, Inc. All Rights Reserved.
+
+  ℹ️  [10.192.160.29] Not at LOADER. Exiting console for system reset...
+BMC rtp-afx1k-c01-01> 
+BMC rtp-afx1k-c01-01> 
+BMC rtp-afx1k-c01-01>   [10.192.160.29] 🔍 Checking if already at LOADER before system reset...
+system console
+Type Ctrl-D to exit.
+*****************************************
+*** Booted from Backup Firmware Image ***
+*****************************************
+ACPI RSDP Found at 0x777fe014
+
+
+Starting AUTOBOOT press Ctrl-C to abort...
+Loading X86_64/freebsd/image1/kernel:0x200000/1507928 0x370260/11147499 0xe11b50/1633072 0x1000000/1400 0x1000578/2696 0x1200000/4316952 0x161df18/10363112 Entry at 0xffffffff80371000
+Loading X86_64/freebsd/image1/platform.ko:0x2000000/1609728 0x2189000/446464 0x21f6000/0 0x21f6000/0 0x21f6000/599888 0x2288750/96 0x22887b0/104 0x2288818/2304 0x2289118/5664 0x228a738/120 0x228a7b0/240 0x228a8a0/112 0x228a910/112 0x228a980/112 0x228a9f0/112 0x228aa60/112 0x228aad0/112 0x228ab40/112 0x228abb0/5376 0x228c0b0/3504 0x228ce60/672 0x2400000/169 0x24abd20/1881432 0x2677278/338736 0x24000a9/10496 0x26c9da8/23616 0x26cf9e8/143928 0x26f2c20/10512 0x26f5530/2016 0x26f5d10/6912 0x26f7810/16128 0x26fb710/312 0x24029b0/67968 0x26fb848/47352 0x2707140/16992 0x2413330/3372 0x2414060/228932 0x270b3a0/33576 0x27136c8/336 0x2713818/336 0x2713968/336 0x2713ab8/336 0x2713c08/336 0x2713d58/336 0x2713ea8/336 0x2713ff8/288 0x2714118/720 0x27143e8/360 0x244beb0/448 0x2714550/7200 0x244c070/0 0x244c070/207672 0x24aba7e/667 0x247eba8/184022 
+Starting program at 0xffffffff80371000
+---<<BOOT>>---NetApp Data ONTAP 9.19.1RC0
+Physical memory chunk(s):0x0000000000010000 - 0x000000000009ffff, 589824 bytes (144 pages)
+0x0000000000100000 - 0x00000000001fffff, 1048576 bytes (256 pages)
+0x000000000311b000 - 0x000000006917efff, 1711685632 bytes (417892 pages)
+0x00000000777ff000 - 0x00000000777fffff, 4096 bytes (1 pages)
+0x0000000100005000 - 0x000000294f944fff, 173133791232 bytes (42268992 pages)
+0x0000002a60000000 - 0x0000002a600e7fff, 950272 bytes (232 pages)
+random: registering fast source Intel Secure Key RNG
+mmcfg base is 0x80000000 
+mmcfg limit is 0x8c000000 
+ram0: reserving memory region: 0x0000000000000000 - 0x000000000009ffff, 655360 bytes (160 pages) (smap)
+ram0: reserving memory region: 0x0000000000100000 - 0x000000006917efff, 1762127872 bytes (430207 pages) (smap)
+ram0: reserving memory region: 0x00000000777ff000 - 0x00000000777fffff, 4096 bytes (1 pages) (smap)
+ram0: reserving memory region: 0x0000000100000000 - 0x000001007fffffff, 1097364144128 bytes (267911168 pages) (smap)
+nvme0: doorbell stride #2. 
+xhci_interrupt: host controller halted
+qpair load balancing offnvme0: nvme_notify is complete.
+
+ *******************************************************
+  WARNING: The NVRAM DIMM1 has caused UECC in the past.
+  Please replace it as soon as possible!!!              
+ *******************************************************
+
+IPMI device unit 0 rev. 1, firmware rev. 18.05, version 2.0, device support mask 0xbf
+IPMI device unit 1 rev. 1, firmware rev. 18.05, version 2.0, device support mask 0xbf
+disk (nda0): sector/stripesize 0
+nda0 at nvme0 bus 0 scbus0 target 0 lun 1
+nda0: <SAMSUNG MZ1L23T8HBLA-00A07 GDC7502Q S667NN0Y611913>
+nda0: Serial Number S667NN0Y611913
+nda0: nvme version 1.4
+nda0: 3662830MB (7501476528 512 byte sectors)
+mlx5: Mellanox Core driver 3.7.1 (November 2021)Copyright (C) 1992-2026 NetApp.
+All rights reserved.
+
+*******************************
+*                             *
+* Press Ctrl-C for Boot Menu. *
+*                             *
+*******************************
+netapp_begin started
+
+cryptomod_fips: Cryptomod FIPS version: Cryptomod FIPS 3.0
+cryptomod_fips: Executing Crypto FIPS Self Tests.
+cryptomod_fips: Crypto FIPS self-test: 'CPU COMPATIBILITY' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 ECB, AES-256 ECB' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CBC, AES-256 CBC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 GCM, AES-256 GCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128, AES-256 CMAC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'CTR_DRBG' passed.
+cryptomod_fips: Crypto FIPS self-test: 'KDF' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA1, SHA256, SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA3-256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'HMAC-SHA1, HMAC-SHA256, HMAC-SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'PBKDF2' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-XTS 128, AES-XTS 256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'Self-integrity' passed.
+
+
+e2a: Saving mce sysctl for dev.mce.0
+
+e2b: Saving mce sysctl for dev.mce.1
+e2c: Saving mce sysctl for dev.mce.2
+e2d: Saving mce sysctl for dev.mce.3
+e1a: Saving mce sysctl for dev.mce.4
+e1b: Saving mce sysctl for dev.mce.5
+e7a: Saving mce sysctl for dev.mce.6
+e7b: Saving mce sysctl for dev.mce.7
+e10a: Saving mce sysctl for dev.mce.8
+e10b: Saving mce sysctl for dev.mce.9
+
+e11a: Saving mce sysctl for dev.mce.10
+e11b: Saving mce sysctl for dev.mce.11
+Starting netapp_loadnvram - 13:26:39
+dev.nvram12.0.nvram_unreg_pci_evt: 0 ->   ℹ️  [10.192.160.29] Not at LOADER. Exiting console for system reset...
+BMC rtp-afx1k-c01-01> 
+BMC rtp-afx1k-c01-01> system reset
+This will cause a dirty shutdown of your controller.  Continue? [y/n] y
+
+BMC rtp-afx1k-c01-01> 
+BMC rtp-afx1k-c01-01> system console
+Type Ctrl-D to exit.
+
+BIOS Version: 20.6
+Portions Copyright (C) 2014-2025 NetApp, Inc. All Rights Reserved.
+
+Initializing System Memory ...
+Loading Device Drivers ...
+Configuring Devices ...
+
+CPU = 2 Processor(s) Detected.
+  Intel(R) Xeon(R) Platinum 8470N (CPU 0)
+  CPUID: 0x000806F8. Cores per Processor = 52
+  Intel(R) Xeon(R) Platinum 8470N (CPU 1)
+  CPUID: 0x000806F8. Cores per Processor = 52
+1048576 MB System RAM Installed.
+NVME Device: SAMSUNG MZ1L23T8HBLA-00A07
+
+Boot Loader version 8.5.2 
+Copyright (C) 2000-2003 Broadcom Corporation.
+Portions Copyright (C) 2002-2025 NetApp, Inc. All Rights Reserved.
+
+*****************************************
+*** Booted from Backup Firmware Image ***
+*****************************************
+ACPI RSDP Found at 0x777fe014
+
+
+Starting AUTOBOOT press Ctrl-C to abort...
+
+>>> ^C (interrupting autoboot)
+
+Autoboot of PRIMARY image aborted by user.
+
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> ^C
+LOADER-A> printenv
+
+Variable Name        Value
+-------------------- --------------------------------------------------
+ARCH                 X86_64
+AUTOBOOT             true
+AUTOBOOT_FROM        PRIMARY
+AUTO_FW_UPDATE       true
+BACKUP_BIOS_VERSION  20.6
+bios.bootarg.os_ver  9.19.1RC0
+BIOS_DATE            09/16/2025
+BIOS_INTERFACE       2
+BIOS_VERSION         20.6
+BMC_FW_ARCH_REV      1
+BOARDNAME            SB_XXXV
+bootarg.acpi_rsdp    0x777fe014
+bootarg.allow_clone_volume_recovery true
+bootarg.bmr.ipinfo.local 169.254.208.14#e7a#169.254.74.114#e7b#255.255.0.0
+bootarg.bmr.ipinfo.remote 169.254.123.234#169.254.253.31
+bootarg.bmr_supported true
+bootarg.bootmenu.node_uuid a7aa1857-6c60-11f1-9935-d039eabdd925
+bootarg.cloud_optimized false
+bootarg.csm._spinnpMaxConn 184
+bootarg.dsa_shelf_count 1
+bootarg.event_info.address 0x6a105018
+bootarg.event_info.size 0x1020
+bootarg.expanded.rest.roles true
+bootarg.force_ht_enable 1
+bootarg.frurom.fileid 538344558
+bootarg.ha_ports     e1a,e1b
+bootarg.init.boot_clustered true
+bootarg.init.clearvarfsnvram false
+bootarg.init.dna     3088
+bootarg.init.first_time_nvram_init_done true
+bootarg.init.flash_optimized true
+bootarg.init.not_first_time_boot true
+bootarg.init.switchless_cluster.enable 0
+bootarg.kcs.clam.partnerState hb
+bootarg.kcs.clam.quorumEpoch 102
+bootarg.kcs.enable.chaaq? true
+bootarg.keymanager.support true
+bootarg.lmgr.working_mode 1
+bootarg.local.storage.pod.uuid 4f31c87e-6c61-11f1-9935-d039eabdd925
+bootarg.lp_upgrade_state 2
+bootarg.mcc.e1a-17.cfg 1527905961/24,0,0,0,0
+bootarg.mcc.e1b-18.cfg 974323369/24,0,0,0,0
+bootarg.mem.decode.socket.0.numClus 4
+bootarg.mem.decode.socket.0.numUmaClus 4
+bootarg.mem.decode.socket.0.totalCha 52
+bootarg.mem.decode.socket.1.numClus 4
+bootarg.mem.decode.socket.1.numUmaClus 4
+bootarg.mem.decode.socket.1.totalCha 52
+bootarg.mgwd.scsi_blade_uuid a7a98dd6-6c60-11f1-9935-d039eabdd925
+bootarg.mroot.mount_fail_count 0
+bootarg.nameservices.ypbind true
+bootarg.net.activate_ionic_ko true
+bootarg.net.auto_update_disable true
+bootarg.net.force_fw_update_cx5 false
+bootarg.net.rc_mlnx_fw_update true
+bootarg.net.rc_naples_fw_update true
+bootarg.nscache.enabled true
+bootarg.nvram.no_mcu_downgrade true
+bootarg.ontapx.node.index 0
+bootarg.ontapx.partner.node.index 1
+bootarg.ontapx.rootvol.created true
+bootarg.partner.bootmenu.node_uuid f0310835-6c5f-11f1-8f40-d039eac03a6e
+bootarg.partner.storage.pod.uuid 4f31c87e-6c61-11f1-9935-d039eabdd925
+bootarg.partner_dbladeid f0310835-6c5f-11f1-8f40-d039eac03a6e
+bootarg.pci_config_init.done true
+bootarg.pegasus.nvmeof.storage_ports e11a,e11b,e10a,e10b
+bootarg.rdb.Bcom.incarnation 1
+bootarg.rdb.Crs.incarnation 1
+bootarg.rdb.Management.incarnation 1
+bootarg.rdb.VifMgr.incarnation 1
+bootarg.rdb.VLDB.incarnation 1
+bootarg.setup.ngsh_debug true
+bootarg.storage.shelf.tiebreaker 9753218993708638208
+bootarg.vm.pre_ontap_sdot_init_done true
+bootarg.volume.DPO_max_vvol? false
+bootarg.wafl.600TB_volume_publish_support false
+bootarg.wafl.600TB_volume_support_enabled true
+bootarg.wafl.large_volume_file_enabled true
+bootarg.wafl.large_volume_file_enabled_LH true
+bootarg.wafl.large_volume_file_enabled_PP true
+BOOTED_FROM          OTHER
+BOOT_CONSOLE         eficons0a
+boot_diags           setenv NET_DEVICE e0M; setenv LINUX_BOOTARGS $DIAG_LINUX_BOOTARGS; boot -bzimage $GX_DIAG_URL
+BOOT_FLASH           flash0b
+boot_ontap           autoboot
+BT_BIOS_VERSION      20.7
+CPU_NUM_CORES        208
+CPU_SPEED            1700
+CPU_TYPE             Intel(R) Xeon(R) Platinum 8470N
+DIAG_LINUX_BOOTARGS  "unknown_nmi_panic console=ttyS0 loglevel=3 acpi_rsdp=$bootarg.acpi_rsdp mem=112G pcie_port_pm=off intel_iommu=off iomem=relaxed cpioroot=$GX_DIAG_ROOTRD_URL root=/dev/nvme0n1p1 8250.disable_console_mirroring=1"
+ENABLE_SMI           false
+ENV_VERSION          1
+FIRMWARE_URL         fat://boot0/X86_64/firmware/SB_XXXV/firmware.img
+FORCE_BIOS_REFLASH   true
+GX_BACKUP_KERNEL_URL fat://boot0/X86_64/freebsd/image2/kernel
+GX_DIAG_ROOTRD_URL   /X86_64/freebsd/image1/rootrd.img
+GX_DIAG_URL          fat://boot0/X86_64/freebsd/image1/bzImage
+GX_KERNELNAME        X86_64/freebsd/image1/kernel
+GX_PRIMARY_KERNEL_URL fat://boot0/X86_64/freebsd/image1/kernel
+ha-mhints-local-1    b480b579-6c61-11f1-9935-d039eabdd925,000000000000008c,38325330:58A02066:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000,38325330:58A02065:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000
+ha-mhints-local-2    b480b579-6c61-11f1-9935-d039eabdd925,000000000000008c,00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000,00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000
+ha-mhints-local-3    b480b579-6c61-11f1-9935-d039eabdd925,000000000000008c,00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000,00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000:00000000
+last-OS-booted-raid-ver 18
+last-OS-booted-ver   9.18.1P2
+last-OS-booted-wafl-ver 61960
+ldkern               load -elf64 $GX_PRIMARY_KERNEL_URL
+LINUX_BACKUP_KERNEL_URL fat://boot0/X86_64/Linux/image2/vmlinuz
+LINUX_KERNELNAME     X86_64/Linux/image1/vmlinuz
+LINUX_PRIMARY_KERNEL_URL fat://boot0/X86_64/Linux/image1/vmlinuz
+LOADER_VERSION       8.5.2
+MOBO_MODEL           AFF-A1K
+MOBO_REV             A6
+MOBO_SERIAL_NUM      042427001714   
+MOBO_VENDOR          NetApp, Inc.
+netboot              setenv BOOTED_FROM NETWORK; boot -elf64 
+NET_DEVICE           e0M
+NET_GATEWAY          10.192.160.1
+NET_HWADDR           d0-39-ea-bd-d9-25
+NET_IPADDR           10.192.160.28
+NET_NAMESERVER       0.0.0.0
+NET_NETMASK          255.255.255.0
+OEM_TYPE_2/0/20/0/0x8086/0x1BCD 0/u/b
+OEM_TYPE_2/1/0/0/0x8086/0x125D 0/e/M
+OEM_TYPE_2/152/0/0/0x15B3/0x101D 7/#/#
+OEM_TYPE_2/152/0/1/0x15B3/0x101D 7/#/#
+OEM_TYPE_2/184/0/0/0x15B3/0x101D 10/#/#
+OEM_TYPE_2/184/0/1/0x15B3/0x101D 10/#/#
+OEM_TYPE_2/2/0/0/0x8086/0x125D 0/e/S
+OEM_TYPE_2/200/0/0/0x15B3/0x101D 11/#/#
+OEM_TYPE_2/200/0/1/0x15B3/0x101D 11/#/#
+OEM_TYPE_2/22/0/0/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/22/0/1/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/22/0/2/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/22/0/3/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/3/0/0/0x144D/0xA80A 0/u/a
+OEM_TYPE_2/73/0/0/0x1275/0xE 4/#/#
+OEM_TYPE_2/90/0/0/0x15B3/0x101D 1/#/#
+OEM_TYPE_2/90/0/1/0x15B3/0x101D 1/#/#
+OEM_TYPE_3           0/3/0/0/u0a.0/SAMSUNG MZ1L23T8HBLA-00A07;
+OEM_TYPE_4           32768/0/4096/0xFE0C8000
+partner-sysid        0538344545
+presets.haosc        0x1111
+PRIMARY_BIOS_VERSION 20.8X1
+raid.use-physical-zeroing? true
+REBOOT_REASON        REBOOT_UNKNOWN
+savenv               saveenv
+sysvar.init.boot.varfs.restore.success true
+SYS_MODEL            AFF-A1K
+SYS_REV              A6
+SYS_SERIAL_NUM       952416000449
+TPM_FW_VERSION       15.24.18954.0
+update_flash         flash -backup $FIRMWARE_URL flash0a
+USE_SECONDARY        false
+vm.pci.mmio.64.addr  0x200000000000
+vm.pci.mmio.64.size  0x15000000000
+LOADER-A> set-defaults
+LOADER-A> printenv
+
+Variable Name        Value
+-------------------- --------------------------------------------------
+ARCH                 X86_64
+AUTOBOOT             true
+AUTOBOOT_FROM        PRIMARY
+AUTO_FW_UPDATE       true
+BACKUP_BIOS_VERSION  20.6
+bios.bootarg.os_ver  9.19.1RC0
+BIOS_DATE            09/16/2025
+BIOS_INTERFACE       2
+BIOS_VERSION         20.6
+BMC_FW_ARCH_REV      1
+BOARDNAME            SB_XXXV
+bootarg.acpi_rsdp    0x777fe014
+bootarg.bmr_supported true
+bootarg.event_info.address 0x6a105018
+bootarg.event_info.size 0x1020
+bootarg.force_ht_enable 1
+bootarg.frurom.fileid 538344558
+bootarg.init.dna     3088
+bootarg.init.flash_optimized true
+bootarg.mem.decode.socket.0.numClus 4
+bootarg.mem.decode.socket.0.numUmaClus 4
+bootarg.mem.decode.socket.0.totalCha 52
+bootarg.mem.decode.socket.1.numClus 4
+bootarg.mem.decode.socket.1.numUmaClus 4
+bootarg.mem.decode.socket.1.totalCha 52
+bootarg.net.auto_update_disable true
+bootarg.nvram.no_mcu_downgrade true
+bootarg.pegasus.nvmeof.storage_ports e11a,e11b,e10a,e10b
+BOOT_CONSOLE         eficons0a
+boot_diags           setenv NET_DEVICE e0M; setenv LINUX_BOOTARGS $DIAG_LINUX_BOOTARGS; boot -bzimage $GX_DIAG_URL
+BOOT_FLASH           flash0b
+boot_ontap           autoboot
+BT_BIOS_VERSION      20.7
+CPU_NUM_CORES        208
+CPU_SPEED            1700
+CPU_TYPE             Intel(R) Xeon(R) Platinum 8470N
+DIAG_LINUX_BOOTARGS  "unknown_nmi_panic console=ttyS0 loglevel=3 acpi_rsdp=$bootarg.acpi_rsdp mem=112G pcie_port_pm=off intel_iommu=off iomem=relaxed cpioroot=$GX_DIAG_ROOTRD_URL root=/dev/nvme0n1p1 8250.disable_console_mirroring=1"
+ENABLE_SMI           false
+ENV_VERSION          1
+FIRMWARE_URL         fat://boot0/X86_64/firmware/SB_XXXV/firmware.img
+GX_BACKUP_KERNEL_URL fat://boot0/X86_64/freebsd/image2/kernel
+GX_DIAG_ROOTRD_URL   /X86_64/freebsd/image1/rootrd.img
+GX_DIAG_URL          fat://boot0/X86_64/freebsd/image1/bzImage
+GX_KERNELNAME        X86_64/freebsd/image1/kernel
+GX_PRIMARY_KERNEL_URL fat://boot0/X86_64/freebsd/image1/kernel
+ldkern               load -elf64 $GX_PRIMARY_KERNEL_URL
+LINUX_BACKUP_KERNEL_URL fat://boot0/X86_64/Linux/image2/vmlinuz
+LINUX_KERNELNAME     X86_64/Linux/image1/vmlinuz
+LINUX_PRIMARY_KERNEL_URL fat://boot0/X86_64/Linux/image1/vmlinuz
+LOADER_VERSION       8.5.2
+MOBO_MODEL           AFF-A1K
+MOBO_REV             A6
+MOBO_SERIAL_NUM      042427001714   
+MOBO_VENDOR          NetApp, Inc.
+netboot              setenv BOOTED_FROM NETWORK; boot -elf64 
+OEM_TYPE_2/0/20/0/0x8086/0x1BCD 0/u/b
+OEM_TYPE_2/1/0/0/0x8086/0x125D 0/e/M
+OEM_TYPE_2/152/0/0/0x15B3/0x101D 7/#/#
+OEM_TYPE_2/152/0/1/0x15B3/0x101D 7/#/#
+OEM_TYPE_2/184/0/0/0x15B3/0x101D 10/#/#
+OEM_TYPE_2/184/0/1/0x15B3/0x101D 10/#/#
+OEM_TYPE_2/2/0/0/0x8086/0x125D 0/e/S
+OEM_TYPE_2/200/0/0/0x15B3/0x101D 11/#/#
+OEM_TYPE_2/200/0/1/0x15B3/0x101D 11/#/#
+OEM_TYPE_2/22/0/0/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/22/0/1/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/22/0/2/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/22/0/3/0x15B3/0x1021 2/#/#
+OEM_TYPE_2/3/0/0/0x144D/0xA80A 0/u/a
+OEM_TYPE_2/73/0/0/0x1275/0xE 4/#/#
+OEM_TYPE_2/90/0/0/0x15B3/0x101D 1/#/#
+OEM_TYPE_2/90/0/1/0x15B3/0x101D 1/#/#
+OEM_TYPE_3           0/3/0/0/u0a.0/SAMSUNG MZ1L23T8HBLA-00A07;
+OEM_TYPE_4           32768/0/4096/0xFE0C8000
+presets.haosc        0x1111
+PRIMARY_BIOS_VERSION 20.8X1
+savenv               saveenv
+SYS_MODEL            AFF-A1K
+SYS_REV              A6
+SYS_SERIAL_NUM       952416000449
+TPM_FW_VERSION       15.24.18954.0
+update_flash         flash -backup $FIRMWARE_URL flash0a
+USE_SECONDARY        false
+vm.pci.mmio.64.addr  0x200000000000
+vm.pci.mmio.64.size  0x15000000000
+LOADER-A> setenv bootarg.destroy.all.storage.pods true
+LOADER-A> setenv raid.use-physical-zeroing? true
+LOADER-A> saveenv
+LOADER-A> boot_ontap menu
+Loading X86_64/freebsd/image1/kernel:0x200000/1507928 0x370260/11147499 0xe11b50/1633072 0x1000000/1400 0x1000578/2696 0x1200000/4316952 0x161df18/10363112 Entry at 0xffffffff80371000
+Loading X86_64/freebsd/image1/platform.ko:0x2000000/1609728 0x2189000/446464 0x21f6000/0 0x21f6000/0 0x21f6000/599888 0x2288750/96 0x22887b0/104 0x2288818/2304 0x2289118/5664 0x228a738/120 0x228a7b0/240 0x228a8a0/112 0x228a910/112 0x228a980/112 0x228a9f0/112 0x228aa60/112 0x228aad0/112 0x228ab40/112 0x228abb0/5376 0x228c0b0/3504 0x228ce60/672 0x2400000/169 0x24abd20/1881432 0x2677278/338736 0x24000a9/10496 0x26c9da8/23616 0x26cf9e8/143928 0x26f2c20/10512 0x26f5530/2016 0x26f5d10/6912 0x26f7810/16128 0x26fb710/312 0x24029b0/67968 0x26fb848/47352 0x2707140/16992 0x2413330/3372 0x2414060/228932 0x270b3a0/33576 0x27136c8/336 0x2713818/336 0x2713968/336 0x2713ab8/336 0x2713c08/336 0x2713d58/336 0x2713ea8/336 0x2713ff8/288 0x2714118/720 0x27143e8/360 0x244beb0/448 0x2714550/7200 0x244c070/0 0x244c070/207672 0x24aba7e/667 0x247eba8/184022 
+Starting program at 0xffffffff80371000
+---<<BOOT>>---NetApp Data ONTAP 9.19.1RC0
+Physical memory chunk(s):0x0000000000010000 - 0x000000000009ffff, 589824 bytes (144 pages)
+0x0000000000100000 - 0x00000000001fffff, 1048576 bytes (256 pages)
+0x000000000311a000 - 0x000000006917efff, 1711689728 bytes (417893 pages)
+0x00000000777ff000 - 0x00000000777fffff, 4096 bytes (1 pages)
+0x0000000100005000 - 0x000000294f944fff, 173133791232 bytes (42268992 pages)
+0x0000002a60000000 - 0x0000002a600e7fff, 950272 bytes (232 pages)
+random: registering fast source Intel Secure Key RNG
+mmcfg base is 0x80000000 
+mmcfg limit is 0x8c000000 
+ram0: reserving memory region: 0x0000000000000000 - 0x000000000009ffff, 655360 bytes (160 pages) (smap)
+ram0: reserving memory region: 0x0000000000100000 - 0x000000006917efff, 1762127872 bytes (430207 pages) (smap)
+ram0: reserving memory region: 0x00000000777ff000 - 0x00000000777fffff, 4096 bytes (1 pages) (smap)
+ram0: reserving memory region: 0x0000000100000000 - 0x000001007fffffff, 1097364144128 bytes (267911168 pages) (smap)
+nvme0: doorbell stride #2. 
+xhci_interrupt: host controller halted
+qpair load balancing offnvme0: nvme_notify is complete.
+
+ *******************************************************
+  WARNING: The NVRAM DIMM1 has caused UECC in the past.
+  Please replace it as soon as possible!!!              
+ *******************************************************
+
+IPMI device unit 0 rev. 1, firmware rev. 18.05, version 2.0, device support mask 0xbf
+IPMI device unit 1 rev. 1, firmware rev. 18.05, version 2.0, device support mask 0xbf
+disk (nda0): sector/stripesize 0
+nda0 at nvme0 bus 0 scbus0 target 0 lun 1
+nda0: <SAMSUNG MZ1L23T8HBLA-00A07 GDC7502Q S667NN0Y611913>
+nda0: Serial Number S667NN0Y611913
+nda0: nvme version 1.4
+nda0: 3662830MB (7501476528 512 byte sectors)
+mlx5: Mellanox Core driver 3.7.1 (November 2021)Copyright (C) 1992-2026 NetApp.
+All rights reserved.
+
+*******************************
+*                             *
+* Press Ctrl-C for Boot Menu. *
+*                             *
+*******************************
+netapp_begin started
+cryptomod_fips: Cryptomod FIPS version: Cryptomod FIPS 3.0
+cryptomod_fips: Executing Crypto FIPS Self Tests.
+cryptomod_fips: Crypto FIPS self-test: 'CPU COMPATIBILITY' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 ECB, AES-256 ECB' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CBC, AES-256 CBC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 GCM, AES-256 GCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128, AES-256 CMAC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'CTR_DRBG' passed.
+cryptomod_fips: Crypto FIPS self-test: 'KDF' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA1, SHA256, SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA3-256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'HMAC-SHA1, HMAC-SHA256, HMAC-SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'PBKDF2' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-XTS 128, AES-XTS 256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'Self-integrity' passed.
+Starting netapp_loadnvram - 13:28:13
+e2a: Saving mce sysctl for dev.mce.0
+e2b: Saving mce sysctl for dev.mce.1
+e2c: Saving mce sysctl for dev.mce.2
+e2d: Saving mce sysctl for dev.mce.3
+e1a: Saving mce sysctl for dev.mce.4
+e1b: Saving mce sysctl for dev.mce.5
+e7a: Saving mce sysctl for dev.mce.6
+e7b: Saving mce sysctl for dev.mce.7
+e10a: Saving mce sysctl for dev.mce.8
+e10b: Saving mce sysctl for dev.mce.9
+e11a: Saving mce sysctl for dev.mce.10
+e11b: Saving mce sysctl for dev.mce.11
+dev.nvram12.0.nvram_unreg_pci_evt: 0 -> 0
+Ending netapp_loadnvram - 13:28:21
+Attempting to use existing varfs on /dev/nvrd1
+/cfcard: Freeing unused sector 3574 22 1c831fff
+Warning: Freeing unused FAT sector 3574 22 1c831fffPensando Ethernet NIC Driver, ver: 1.4.0-E-78
+ionic_rdma ver 1.4.0-E-78 : Pensando RoCE HCA driver
+netapp_intel_fw_helper: Loading if_irdma.ko
+Loading irdma moduleice_rdma_register: iRDMA driver registered using version 1.1.0
+netapp_mlnx_config_hw_lro: clearing  (ports: none)
+Unable to delete environmental variable : 22
+net.nic_fw_update_complete: 0 -> 1
+dev.qat.0.cfg_services="dc"
+dev.qat.0.disable_safe_dc_mode="1"
+dev.qat.1.cfg_services="dc"
+dev.qat.1.disable_safe_dc_mode="1"
+dev.qat.2.cfg_services="dc"
+dev.qat.2.disable_safe_dc_mode="1"
+dev.qat.3.cfg_services="dc"
+dev.qat.3.disable_safe_dc_mode="1"
+dev.qat.4.cfg_services="dc"
+dev.qat.4.disable_safe_dc_mode="1"
+dev.qat.5.cfg_services="dc"
+dev.qat.5.disable_safe_dc_mode="1"
+dev.qat.6.cfg_services="dc"
+dev.qat.6.disable_safe_dc_mode="1"
+dev.qat.7.cfg_services="dc"
+dev.qat.7.disable_safe_dc_mode="1"
+ipsec_cfcard_init: Starting at Mon Jun 22 13:28:46 UTC 2026
+netapp_tpm_init: tpm_undark:true
+netapp_tpm_init: UseTPM: true
+netapp_tpm_init: /dev/tpm exists
+netapp_tpm_init: Using /dev/tpm
+netapp_tpm_init: Starting at Mon Jun 22 13:28:47 UTC 2026
+SSAL: tss_tpm_nvread:1086 
+Mon Jun 22 13:28:47 UTC 2026 (1782134927) [okm_init] [log_wkeydb_file] /cfcard/kmip/km_onboard.wkeydb does not exist
+eval: cannot create /cfcard/kmip/netapp_okm.log: No such file or directory
+Mon Jun 22 13:28:47 UTC 2026 (1782134927) [okm_init] [okm_init_start] OKM_INIT start
+eval: cannot create /cfcard/kmip/netapp_okm.log: No such file or directory
+Mon Jun 22 13:28:49 UTC 2026 (1782134929) [okm_init] [okm_init_start] OKM_INIT return: 0
+
+
+Read HAOSC config (0x1111) from bootarg
+Jun 22 13:29:00 [localhost:netif.linkInfo:notice]: Ethernet e1a: Link UP (IFFLAG).
+Jun 22 13:29:00 [localhost:netif.linkInfo:notice]: Ethernet e1b: Link UP (IFFLAG).
+Jun 22 13:29:00 [localhost:netif.linkInfo:notice]: Ethernet e1b: Link TG (MTU).
+Jun 22 13:29:00 [localhost:netif.linkInfo:notice]: Ethernet e1a: Link TG (MTU).
+Jun 22 13:29:01 [localhost:netif.linkInfo:notice]: Ethernet e1b: Link TG (MEDIA).
+Jun 22 13:29:01 [localhost:netif.linkInfo:notice]: Ethernet e1a: Link TG (MEDIA).
+FWU 1st trigger point
+FWU has no post firmware update action registered.
+Jun 22 13:29:13 Power outage protection flash de-staging: 14 cycles
+
+The boot device has changed. System configuration information
+could be lost. Use option (6) to restore the system configuration, or
+option (4) to initialize all disks and setup a new system.
+Normal Boot is prohibited.
+
+Please choose one of the following:
+
+(1)  Normal Boot.
+(2)  Boot without /etc/rc.
+(3)  Change password.
+(4)  Initialize and configure system.
+(5)  Maintenance mode boot.
+(6)  Update flash from backup config.
+(7)  Install new software first.
+(8)  Reboot node.
+(9)  Clean System Configuration.
+(10) Set Onboard Key Manager recovery secrets.
+(11) Configure node for external key management.
+Selection (1-11)? 9
+
+  [10.192.160.29] Starting automatic cluster initialization...
+
+🤖 [primary/10.192.160.29] Mode 1b: automated cluster initialization in progress...
+[secondary-01/10.192.160.35] | 2026-06-22 09:29:19 | [SUCCESS] | 2026-06-22 09:29:19 | [SUCCESS] Primary option 9 complete; proceeding with peer option 4.
+[secondary-01/10.192.160.35] | 2026-06-22 09:29:19 | [INFO] | 2026-06-22 09:29:19 | [INFO] Waiting for boot menu (peer)...
+
+⏳ [primary/10.192.160.29] Waiting for storage-availability-zone warning (auto-answer 'no')...
+[secondary-01/10.192.160.35] | 2026-06-22 09:29:20 | [SUCCESS] | 2026-06-22 09:29:20 | [SUCCESS] Boot menu detected – selecting option 4...
+   🧹 Proactive known_hosts cleanup after option 4 on 10.192.160.35...
+  ℹ️  No known_hosts entry found for 10.192.160.35.
+
+⏳ [secondary-01/10.192.160.35] Resetting configuration and rebooting.
+
+⏳ [primary/10.192.160.29] Waiting for second boot menu (auto-select option 4)...
+🔢 [primary/10.192.160.29] | 2026-06-22 09:31:01 | [INFO] Selecting option 4 (Initialize and configure)...
+   🧹 Proactive known_hosts cleanup after option 4 on 10.192.160.29...
+  ℹ️  No known_hosts entry found for 10.192.160.29.
+
+⏳ [primary/10.192.160.29] Waiting for zero disks confirmation (auto-answer 'yes')...
+4
+
+⏳ [secondary-01/10.192.160.35] Waiting for node to boot and get ready for node add.
+   For details, see log at:
+   /scripts/AFX/logs/20260622_091724/9-bmc_session_add_10_192_160_35_20260622_092502.log
+   (open in a separate SSH session)
+
+Destroying existing aggregates.. 
+Boot destroy aggregates: Disk e11a.01.12.17 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.14.22 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.2.11 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.2.6 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.14.23 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.10.9 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.2.7 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.12.15 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.14.19 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.14.20 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.12.12 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.8.3 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.14.18 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.12.16 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.8.2 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.8.1 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.10.10 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.8.4 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.12.13 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.8.5 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.14.21 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.10.8 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.8.0 forced to be a SPARE disk
+Boot destroy aggregates: Disk e11a.01.12.14 forced to be a SPARE disk
+
+Unpartitioning disks...
+
+No disk found to be eligible for unpartitioning.
+
+
+Removing disk ownership...
+
+Disk ownership successfully removed.
+Disk ownership successfully removed.
+Terminated
+.
+/var/VERSION
+varfs_backup_restore: bootarg.abandon_varfs is set! Skipping /var backup.
+Uptime: 3m45s
+Mailbox init not completed :0
+
+BIOS Version: 20.6
+Portions Copyright (C) 2014-2025 NetApp, Inc. All Rights Reserved.
+
+Initializing System Memory ...
+   ⏳ [secondary-01/10.192.160.35] Still waiting for node add readiness... (60s in this phase)
+Loading Device Drivers ...
+Configuring Devices ...
+
+CPU = 2 Processor(s) Detected.
+  Intel(R) Xeon(R) Platinum 8470N (CPU 0)
+  CPUID: 0x000806F8. Cores per Processor = 52
+  Intel(R) Xeon(R) Platinum 8470N (CPU 1)
+  CPUID: 0x000806F8. Cores per Processor = 52
+1048576 MB System RAM Installed.
+NVME Device: SAMSUNG MZ1L23T8HBLA-00A07
+
+Boot Loader version 8.5.2 
+Copyright (C) 2000-2003 Broadcom Corporation.
+Portions Copyright (C) 2002-2025 NetApp, Inc. All Rights Reserved.
+
+*****************************************
+*** Booted from Backup Firmware Image ***
+*****************************************
+ACPI RSDP Found at 0x777fe014
+
+
+Starting AUTOBOOT press Ctrl-C to abort...
+Loading X86_64/freebsd/image1/kernel:0x200000/1507928 0x370260/11147499 0xe11b50/1633072 0x1000000/1400 0x1000578/2696 0x1200000/4316952 0x161df18/10363112 Entry at 0xffffffff80371000
+Loading X86_64/freebsd/image1/platform.ko:0x2000000/1609728 0x2189000/446464 0x21f6000/0 0x21f6000/0 0x21f6000/599888 0x2288750/96 0x22887b0/104 0x2288818/2304 0x2289118/5664 0x228a738/120 0x228a7b0/240 0x228a8a0/112 0x228a910/112 0x228a980/112 0x228a9f0/112 0x228aa60/112 0x228aad0/112 0x228ab40/112 0x228abb0/5376 0x228c0b0/3504 0x228ce60/672 0x2400000/169 0x24abd20/1881432 0x2677278/338736 0x24000a9/10496 0x26c9da8/23616 0x26cf9e8/143928 0x26f2c20/10512 0x26f5530/2016 0x26f5d10/6912 0x26f7810/16128 0x26fb710/312 0x24029b0/67968 0x26fb848/47352 0x2707140/16992 0x2413330/3372 0x2414060/228932 0x270b3a0/33576 0x27136c8/336 0x2713818/336 0x2713968/336 0x2713ab8/336 0x2713c08/336 0x2713d58/336 0x2713ea8/336 0x2713ff8/288 0x2714118/720 0x27143e8/360 0x244beb0/448 0x2714550/7200 0x244c070/0 0x244c070/207672 0x24aba7e/667 0x247eba8/184022 
+Starting program at 0xffffffff80371000
+---<<BOOT>>---NetApp Data ONTAP 9.19.1RC0
+Physical memory chunk(s):0x0000000000010000 - 0x000000000009ffff, 589824 bytes (144 pages)
+0x0000000000100000 - 0x00000000001fffff, 1048576 bytes (256 pages)
+0x000000000311b000 - 0x000000006917efff, 1711685632 bytes (417892 pages)
+0x00000000777ff000 - 0x00000000777fffff, 4096 bytes (1 pages)
+0x0000000100005000 - 0x000000294f944fff, 173133791232 bytes (42268992 pages)
+0x0000002a60000000 - 0x0000002a600e7fff, 950272 bytes (232 pages)
+random: registering fast source Intel Secure Key RNG
+mmcfg base is 0x80000000 
+mmcfg limit is 0x8c000000 
+ram0: reserving memory region: 0x0000000000000000 - 0x000000000009ffff, 655360 bytes (160 pages) (smap)
+ram0: reserving memory region: 0x0000000000100000 - 0x000000006917efff, 1762127872 bytes (430207 pages) (smap)
+ram0: reserving memory region: 0x00000000777ff000 - 0x00000000777fffff, 4096 bytes (1 pages) (smap)
+ram0: reserving memory region: 0x0000000100000000 - 0x000001007fffffff, 1097364144128 bytes (267911168 pages) (smap)
+nvme0: doorbell stride #2. 
+xhci_interrupt: host controller halted
+   ⏳ [secondary-01/10.192.160.35] Still waiting for node add readiness... (120s in this phase)
+qpair load balancing offnvme0: nvme_notify is complete.
+
+ *******************************************************
+  WARNING: The NVRAM DIMM1 has caused UECC in the past.
+  Please replace it as soon as possible!!!              
+ *******************************************************
+
+IPMI device unit 0 rev. 1, firmware rev. 18.05, version 2.0, device support mask 0xbf
+IPMI device unit 1 rev. 1, firmware rev. 18.05, version 2.0, device support mask 0xbf
+disk (nda0): sector/stripesize 0
+nda0 at nvme0 bus 0 scbus0 target 0 lun 1
+nda0: <SAMSUNG MZ1L23T8HBLA-00A07 GDC7502Q S667NN0Y611913>
+nda0: Serial Number S667NN0Y611913
+nda0: nvme version 1.4
+nda0: 3662830MB (7501476528 512 byte sectors)
+mlx5: Mellanox Core driver 3.7.1 (November 2021)Copyright (C) 1992-2026 NetApp.
+All rights reserved.
+
+*******************************
+*                             *
+* Press Ctrl-C for Boot Menu. *
+*                             *
+*******************************
+netapp_begin started
+cryptomod_fips: Cryptomod FIPS version: Cryptomod FIPS 3.0
+cryptomod_fips: Executing Crypto FIPS Self Tests.
+cryptomod_fips: Crypto FIPS self-test: 'CPU COMPATIBILITY' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 ECB, AES-256 ECB' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CBC, AES-256 CBC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 GCM, AES-256 GCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128, AES-256 CMAC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'CTR_DRBG' passed.
+cryptomod_fips: Crypto FIPS self-test: 'KDF' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA1, SHA256, SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA3-256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'HMAC-SHA1, HMAC-SHA256, HMAC-SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'PBKDF2' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-XTS 128, AES-XTS 256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'Self-integrity' passed.
+Starting netapp_loadnvram - 13:33:16
+e2a: Saving mce sysctl for dev.mce.0
+e2b: Saving mce sysctl for dev.mce.1
+e2c: Saving mce sysctl for dev.mce.2
+e2d: Saving mce sysctl for dev.mce.3
+e1a: Saving mce sysctl for dev.mce.4
+e1b: Saving mce sysctl for dev.mce.5
+e7a: Saving mce sysctl for dev.mce.6
+e7b: Saving mce sysctl for dev.mce.7
+e10a: Saving mce sysctl for dev.mce.8
+e10b: Saving mce sysctl for dev.mce.9
+e11a: Saving mce sysctl for dev.mce.10
+e11b: Saving mce sysctl for dev.mce.11
+dev.nvram12.0.nvram_unreg_pci_evt: 0 -> 0
+Ending netapp_loadnvram - 13:33:25
+Pensando Ethernet NIC Driver, ver: 1.4.0-E-78
+ionic_rdma ver 1.4.0-E-78 : Pensando RoCE HCA driver
+netapp_intel_fw_helper: Loading if_irdma.ko
+Loading irdma moduleice_rdma_register: iRDMA driver registered using version 1.1.0
+netapp_mlnx_config_hw_lro: clearing  (ports: none)
+Unable to delete environmental variable : 22
+net.nic_fw_update_complete: 0 -> 1
+dev.qat.0.cfg_services="dc"
+dev.qat.0.disable_safe_dc_mode="1"
+dev.qat.1.cfg_services="dc"
+dev.qat.1.disable_safe_dc_mode="1"
+dev.qat.2.cfg_services="dc"
+dev.qat.2.disable_safe_dc_mode="1"
+dev.qat.3.cfg_services="dc"
+dev.qat.3.disable_safe_dc_mode="1"
+dev.qat.4.cfg_services="dc"
+dev.qat.4.disable_safe_dc_mode="1"
+dev.qat.5.cfg_services="dc"
+dev.qat.5.disable_safe_dc_mode="1"
+dev.qat.6.cfg_services="dc"
+dev.qat.6.disable_safe_dc_mode="1"
+dev.qat.7.cfg_services="dc"
+dev.qat.7.disable_safe_dc_mode="1"
+ipsec_cfcard_init: Starting at Mon Jun 22 13:33:50 UTC 2026
+netapp_tpm_init: tpm_undark:true
+netapp_tpm_init: UseTPM: true
+netapp_tpm_init: /dev/tpm exists
+netapp_tpm_init: Using /dev/tpm
+netapp_tpm_init: Starting at Mon Jun 22 13:33:50 UTC 2026
+SSAL: tss_tpm_nvread:1086 
+Mon Jun 22 13:33:50 UTC 2026 (1782135230) [okm_init] [log_wkeydb_file] /cfcard/kmip/km_onboard.wkeydb does not exist
+Mon Jun 22 13:33:50 UTC 2026 (1782135230) [okm_init] [okm_init_start] OKM_INIT start
+Mon Jun 22 13:33:53 UTC 2026 (1782135233) [okm_init] [okm_init_start] OKM_INIT return: 0
+
+
+Read HAOSC config (0x1111) from bootarg
+Jun 22 13:34:04 [localhost:netif.linkInfo:notice]: Ethernet e1a: Link UP (IFFLAG).
+Jun 22 13:34:04 [localhost:netif.linkInfo:notice]: Ethernet e1b: Link UP (IFFLAG).
+Jun 22 13:34:04 [localhost:netif.linkInfo:notice]: Ethernet e1b: Link TG (MEDIA).
+Jun 22 13:34:04 [localhost:netif.linkInfo:notice]: Ethernet e1a: Link TG (MEDIA).
+FWU 1st trigger point
+FWU has no post firmware update action registered.
+   ⏳ [secondary-01/10.192.160.35] Still waiting for node add readiness... (180s in this phase)
+Jun 22 13:34:19 Power outage protection flash de-staging: 14 cycles
+
+The boot device has changed. System configuration information
+could be lost. Use option (6) to restore the system configuration, or
+option (4) to initialize all disks and setup a new system.
+Normal Boot is prohibited.
+
+Please choose one of the following:
+
+(1)  Normal Boot.
+(2)  Boot without /etc/rc.
+(3)  Change password.
+(4)  Initialize and configure system.
+(5)  Maintenance mode boot.
+(6)  Update flash from backup config.
+(7)  Install new software first.
+(8)  Reboot node.
+(9)  Clean System Configuration.
+(10) Set Onboard Key Manager recovery secrets.
+(11) Configure node for external key management.
+Selection (1-11)?    🧹 Proactive known_hosts cleanup after option 4 on 10.192.160.29...
+  ℹ️  No known_hosts entry found for 10.192.160.29.
+4
+Pensando Offload Driver, ver 1.4.0-E-78
+NVMe-oF: Setting up port e10a
+Jun 22 13:34:27 [localhost:netif.linkInfo:notice]: Ethernet e10a: Link TG (MEDIA).
+NVMe-oF: Setting up port e10b
+Jun 22 13:34:31 [localhost:netif.linkInfo:notice]: Ethernet e10b: Link TG (MEDIA).
+NVMe-oF: Setting up port e11a
+Jun 22 13:34:37 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de66" (port "e10a").
+Jun 22 13:34:37 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8e" (port "e10a").
+Jun 22 13:34:37 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dffe" (port "e10a").
+Jun 22 13:34:37 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfde" (port "e10a").
+Jun 22 13:34:37 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e306" (port "e10a").
+Jun 22 13:34:37 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01e" (port "e10a").
+Jun 22 13:34:37 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f6" (port "e10a").
+Jun 22 13:34:37 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e989" (port "e10a").
+Jun 22 13:34:40 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfdf" (port "e10b").
+Jun 22 13:34:40 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de67" (port "e10b").
+Jun 22 13:34:40 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfff" (port "e10b").
+Jun 22 13:34:40 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8f" (port "e10b").
+Jun 22 13:34:40 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f7" (port "e10b").
+Jun 22 13:34:40 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e307" (port "e10b").
+Jun 22 13:34:40 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e98a" (port "e10b").
+Jun 22 13:34:40 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01f" (port "e10b").
+   ⏳ [secondary-01/10.192.160.35] Still waiting for node add readiness... (240s in this phase)
+Jun 22 13:35:19 [localhost:netif.linkInfo:notice]: Ethernet e11a: Link TG (MEDIA).
+NVMe-oF: Setting up port e11b
+Jun 22 13:35:20 [localhost:netif.linkInfo:notice]: Ethernet e11b: Link TG (MEDIA).
+Jun 22 13:35:24 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8e" (port "e11a").
+Jun 22 13:35:24 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de66" (port "e11a").
+Jun 22 13:35:24 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dffe" (port "e11a").
+Jun 22 13:35:24 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfde" (port "e11a").
+Jun 22 13:35:24 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01e" (port "e11a").
+Jun 22 13:35:24 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e306" (port "e11a").
+Jun 22 13:35:24 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f6" (port "e11a").
+Jun 22 13:35:24 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e989" (port "e11a").
+Jun 22 13:35:25 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfdf" (port "e11b").
+Jun 22 13:35:25 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfff" (port "e11b").
+Jun 22 13:35:25 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8f" (port "e11b").
+Jun 22 13:35:25 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de67" (port "e11b").
+Jun 22 13:35:25 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f7" (port "e11b").
+Jun 22 13:35:25 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e307" (port "e11b").
+Jun 22 13:35:25 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e98a" (port "e11b").
+Jun 22 13:35:25 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01f" (port "e11b").
+***OS2SP configured successfully***slc_check_enabled: disable_slc is 0; PSM_PROP_DISABLE_TOPSPIN is 0
+slc_enabled_platform: is_node_all_flash_only 1; is_vsa_1p 0 
+Jun 22 13:35:29 [localhost:time.stamp.micro.base:notice]: last_uniq is 0 seconds, wall time is 1782135329 seconds.
+Jun 22 13:35:29 [localhost:time.stamp.nano.base:notice]: last_uniq_nano is 0 seconds, wall time is 1782135329 seconds.
+RC NIC fw update error is :0 
+NIC FW update from kernel error is :0 
+ksmf_rpc: ACE functions initializedksmf_rpc: Successfully created TCP service on port kdsmdbksmf_rpc: RPC program v1 registeredksmf_rpc: Successfully created TCP service on port kdsmdb_2ksmf_rpc: RPC program v2 registeredpnso provider init started.
+Notice : pnso card not detected.
+QAT provider init started.
+QAT service data size is [328]
+Notice: 64 QAT number instances detected.
+Notice: 8 QAT Acceleration devices discovered.
+Notice: 8 QAT Acceleration devices configured.
+Memory allocated for handles: 9728 bytes
+QAT num_req_instances : 64
+QAT hwo_qat_num_accel_devs :8
+QAT num_decomp_inst_per_dev : 4
+QAT num_comp_inst_per_dev : 4
+Initializing instance:Dc0 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+QAT init completed : 0
+hwo: Node is using hardware provider : 3.
+cryptomod_fips: Cryptomod FIPS version: Cryptomod FIPS 3.0
+cryptomod_fips: Executing Crypto FIPS Self Tests.
+cryptomod_fips: Crypto FIPS self-test: 'CPU COMPATIBILITY' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 ECB, AES-256 ECB' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CBC, AES-256 CBC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 GCM, AES-256 GCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128, AES-256 CMAC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'CTR_DRBG' passed.
+cryptomod_fips: Crypto FIPS self-test: 'KDF' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA1, SHA256, SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA3-256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'HMAC-SHA1, HMAC-SHA256, HMAC-SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'PBKDF2' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-XTS 128, AES-XTS 256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'Self-integrity' passed.
+WARNING: The value for 'bootarg.init.unjoined' variable is not set / unable to read
+WARNING: This node may not have been properly unjoined from an existing cluster, please confirm before using option (4)
+
+WARNING: This node may not have been properly unjoined from an existing cluster. Please confirm before continuing with option 4.
+Zero disks, reset config and install a new file system?: 
+⏳ [primary/10.192.160.29] Waiting for erase data confirmation (auto-answer 'yes')...
+yes
+
+NOTE: Make sure that all encrypting drives (if present) in the system are re-keyed to MSID 0x0 before proceeding with re-initialization.
+This will erase all the data on the disks, are you sure?: 
+✅ Detected 'this will erase all the data on the disks' – auto-responded with 'yes'
+
+⏳ [primary/10.192.160.29] Waiting for node to boot and begin cluster creation.
+   For details, see log at:
+   /scripts/AFX/logs/20260622_091724/1-bmc_session_20260622_091724.log
+   (open in a separate SSH session)
+yes
+Unsetting bootarg bootarg.bootmenu.node_uuid
+Unsetting bootarg bootarg.partner.bootmenu.node_uuid
+Unsetting bootarg bootarg.ontapx.node.index
+Unsetting bootarg bootarg.ontapx.partner.node.index
+Unsetting bootarg bootarg.partner_dbladeid
+Unsetting bootarg bootarg.ontapx.rootvol.created
+Unsetting bootarg bootarg.local.storage.pod.uuid
+Unsetting bootarg bootarg.partner.storage.pod.uuid
+Unsetting bootarg ha-mhints-local-1
+Unsetting bootarg ha-mhints-local-2
+Unsetting bootarg ha-mhints-local-3
+Unsetting bootarg ha-mhints-local-4
+Unsetting bootarg bootarg.bmr.ipinfo.local
+Unsetting bootarg bootarg.bmr.ipinfo.remote
+Unsetting bootarg partner-sysid
+Unsetting bootarg failoverToken
+Unsetting bootarg bootarg.destroy.all.storage.pods
+unsetBootarg:109 ret=0 for bootarg.bmr.ipinfo.local
+unsetVariable:531 EFI not supported 
+unsetBootarg:109 ret=0 for bootarg.bmr.ipinfo.remote
+unsetVariable:531 EFI not supported 
+unsetBootarg:109 ret=0 for bootarg.local.storage.pod.uuid
+unsetVariable:531 EFI not supported 
+unsetBootarg:109 ret=0 for bootarg.partner.storage.pod.uuid
+unsetVariable:531 EFI not supported 
+unsetBootarg:109 ret=0 for bootarg.bootmenu.node_uuid
+unsetVariable:531 EFI not supported 
+unsetBootarg:109 ret=0 for bootarg.partner.bootmenu.node_uuid
+unsetVariable:531 EFI not supported 
+
+
+Rebooting to finish wipeconfig request.
+Reinitialized partition header on /dev/nda0p3.
+Coredump wipe complete.
+   ⏳ [secondary-01/10.192.160.35] Still waiting for node add readiness... (300s in this phase)
+Terminated
+.
+Skipped backing up /var file system to boot device.
+Uptime: 3m7s
+Mailbox init not completed :0
+
+BIOS Version: 20.6
+Portions Copyright (C) 2014-2025 NetApp, Inc. All Rights Reserved.
+
+Initializing System Memory ...
+Loading Device Drivers ...
+Configuring Devices ...
+
+CPU = 2 Processor(s) Detected.
+  Intel(R) Xeon(R) Platinum 8470N (CPU 0)
+  CPUID: 0x000806F8. Cores per Processor = 52
+  Intel(R) Xeon(R) Platinum 8470N (CPU 1)
+  CPUID: 0x000806F8. Cores per Processor = 52
+1048576 MB System RAM Installed.
+NVME Device: SAMSUNG MZ1L23T8HBLA-00A07
+
+Boot Loader version 8.5.2 
+Copyright (C) 2000-2003 Broadcom Corporation.
+Portions Copyright (C) 2002-2025 NetApp, Inc. All Rights Reserved.
+
+
+⏳ Waiting for setup prompt: node management interface port...
+  ✅ Using config node management interface port: e0M
+   ⏳ [primary/10.192.160.29] Still waiting for cluster creation... (60s in this phase)
+*****************************************
+*** Booted from Backup Firmware Image ***
+*****************************************
+ACPI RSDP Found at 0x777fe014
+
+
+Starting AUTOBOOT press Ctrl-C to abort...
+
+⏳ Waiting for setup prompt: node management interface IP address...
+  ✅ Using config node management interface IP address: 10.192.160.30
+Loading X86_64/freebsd/image1/kernel:0x200000/1507928 0x370260/11147499 0xe11b50/1633072 0x1000000/1400 0x1000578/2696 0x1200000/4316952 0x161df18/10363112 Entry at 0xffffffff80371000
+Loading X86_64/freebsd/image1/platform.ko:0x2000000/1609728 0x2189000/446464 0x21f6000/0 0x21f6000/0 0x21f6000/599888 0x2288750/96 0x22887b0/104 0x2288818/2304 0x2289118/5664 0x228a738/120 0x228a7b0/240 0x228a8a0/112 0x228a910/112 0x228a980/112 0x228a9f0/112 0x228aa60/112 0x228aad0/112 0x228ab40/112 0x228abb0/5376 0x228c0b0/3504 0x228ce60/672 0x2400000/169 0x24abd20/1881432 0x2677278/338736 0x24000a9/10496 0x26c9da8/23616 0x26cf9e8/143928 0x26f2c20/10512 0x26f5530/2016 0x26f5d10/6912 0x26f7810/16128 0x26fb710/312 0x24029b0/67968 0x26fb848/47352 0x2707140/16992 0x2413330/3372 0x2414060/228932 0x270b3a0/33576 0x27136c8/336 0x2713818/336 0x2713968/336 0x2713ab8/336 0x2713c08/336 0x2713d58/336 0x2713ea8/336 0x2713ff8/288 0x2714118/720 0x27143e8/360 0x244beb0/448 0x2714550/7200 0x244c070/0 0x244c070/207672 0x24aba7e/667 0x247eba8/184022 
+Starting program at 0xffffffff80371000
+
+⏳ Waiting for setup prompt: node management interface netmask...
+  ✅ Using config node management interface netmask: 255.255.255.0
+---<<BOOT>>---NetApp Data ONTAP 9.19.1RC0
+Physical memory chunk(s):0x0000000000010000 - 0x000000000009ffff, 589824 bytes (144 pages)
+0x0000000000100000 - 0x00000000001fffff, 1048576 bytes (256 pages)
+0x000000000311b000 - 0x000000006917efff, 1711685632 bytes (417892 pages)
+0x00000000777ff000 - 0x00000000777fffff, 4096 bytes (1 pages)
+0x0000000100005000 - 0x000000294f944fff, 173133791232 bytes (42268992 pages)
+0x0000002a60000000 - 0x0000002a600e7fff, 950272 bytes (232 pages)
+random: registering fast source Intel Secure Key RNG
+
+⏳ Waiting for setup prompt: node management interface default gateway...
+  ✅ Using config node management interface default gateway: 10.192.160.1
+
+🛑 [10.192.160.35] Aborting cluster wizard (Ctrl+C)...
+
+⏳ [10.192.160.35] Logging in as admin...
+
+📡 [10.192.160.35] Capturing cluster interface IP...
+
+✅ [10.192.160.35] Cluster interface IP: 169.254.156.132
+[secondary-01/10.192.160.35] | 2026-06-22 09:37:26 | [SUCCESS] | 2026-06-22 09:37:26 | [SUCCESS] Ready for cluster add-node (IP: 169.254.156.132).
+mmcfg base is 0x80000000 
+mmcfg limit is 0x8c000000 
+ram0: reserving memory region: 0x0000000000000000 - 0x000000000009ffff, 655360 bytes (160 pages) (smap)
+ram0: reserving memory region: 0x0000000000100000 - 0x000000006917efff, 1762127872 bytes (430207 pages) (smap)
+ram0: reserving memory region: 0x00000000777ff000 - 0x00000000777fffff, 4096 bytes (1 pages) (smap)
+ram0: reserving memory region: 0x0000000100000000 - 0x000001007fffffff, 1097364144128 bytes (267911168 pages) (smap)
+nvme0: doorbell stride #2. 
+xhci_interrupt: host controller halted
+qpair load balancing offnvme0: nvme_notify is complete.
+
+ *******************************************************
+  WARNING: The NVRAM DIMM1 has caused UECC in the past.
+  Please replace it as soon as possible!!!              
+ *******************************************************
+
+IPMI device unit 0 rev. 1, firmware rev. 18.05, version 2.0, device support mask 0xbf
+IPMI device unit 1 rev. 1, firmware rev. 18.05, version 2.0, device support mask 0xbf
+disk (nda0): sector/stripesize 0
+nda0 at nvme0 bus 0 scbus0 target 0 lun 1
+nda0: <SAMSUNG MZ1L23T8HBLA-00A07 GDC7502Q S667NN0Y611913>
+nda0: Serial Number S667NN0Y611913
+nda0: nvme version 1.4
+nda0: 3662830MB (7501476528 512 byte sectors)
+mlx5: Mellanox Core driver 3.7.1 (November 2021)Copyright (C) 1992-2026 NetApp.
+All rights reserved.
+
+*******************************
+*                             *
+* Press Ctrl-C for Boot Menu. *
+*                             *
+*******************************
+netapp_begin started
+cryptomod_fips: Cryptomod FIPS version: Cryptomod FIPS 3.0
+cryptomod_fips: Executing Crypto FIPS Self Tests.
+cryptomod_fips: Crypto FIPS self-test: 'CPU COMPATIBILITY' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 ECB, AES-256 ECB' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CBC, AES-256 CBC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 GCM, AES-256 GCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128, AES-256 CMAC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'CTR_DRBG' passed.
+cryptomod_fips: Crypto FIPS self-test: 'KDF' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA1, SHA256, SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA3-256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'HMAC-SHA1, HMAC-SHA256, HMAC-SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'PBKDF2' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-XTS 128, AES-XTS 256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'Self-integrity' passed.
+Wipe filer procedure requested.
+Reinitializing device /dev/nda0p4
+
+
+Starting netapp_loadnvram - 13:37:43
+e2a: Saving mce sysctl for dev.mce.0
+e2b: Saving mce sysctl for dev.mce.1
+e2c: Saving mce sysctl for dev.mce.2
+e2d: Saving mce sysctl for dev.mce.3
+e1a: Saving mce sysctl for dev.mce.4
+e1b: Saving mce sysctl for dev.mce.5
+e7a: Saving mce sysctl for dev.mce.6
+e7b: Saving mce sysctl for dev.mce.7
+e10a: Saving mce sysctl for dev.mce.8
+e10b: Saving mce sysctl for dev.mce.9
+e11a: Saving mce sysctl for dev.mce.10
+e11b: Saving mce sysctl for dev.mce.11
+dev.nvram12.0.nvram_unreg_pci_evt: 0 -> 0
+Ending netapp_loadnvram - 13:37:52
+Pensando Ethernet NIC Driver, ver: 1.4.0-E-78
+ionic_rdma ver 1.4.0-E-78 : Pensando RoCE HCA driver
+netapp_intel_fw_helper: Loading if_irdma.ko
+Loading irdma moduleice_rdma_register: iRDMA driver registered using version 1.1.0
+netapp_mlnx_config_hw_lro: clearing  (ports: none)
+Unable to delete environmental variable : 22
+net.nic_fw_update_complete: 0   ⏳ [primary/10.192.160.29] Still waiting for cluster creation... (120s in this phase)
+ -> 1
+dev.qat.0.cfg_services="dc"
+dev.qat.0.disable_safe_dc_mode="1"
+dev.qat.1.cfg_services="dc"
+dev.qat.1.disable_safe_dc_mode="1"
+dev.qat.2.cfg_services="dc"
+dev.qat.2.disable_safe_dc_mode="1"
+dev.qat.3.cfg_services="dc"
+dev.qat.3.disable_safe_dc_mode="1"
+dev.qat.4.cfg_services="dc"
+dev.qat.4.disable_safe_dc_mode="1"
+dev.qat.5.cfg_services="dc"
+dev.qat.5.disable_safe_dc_mode="1"
+dev.qat.6.cfg_services="dc"
+dev.qat.6.disable_safe_dc_mode="1"
+dev.qat.7.cfg_services="dc"
+dev.qat.7.disable_safe_dc_mode="1"
+ipsec_cfcard_init: Starting at Mon Jun 22 13:38:17 UTC 2026
+netapp_tpm_init: tpm_undark:true
+netapp_tpm_init: UseTPM: true
+netapp_tpm_init: /dev/tpm exists
+netapp_tpm_init: Using /dev/tpm
+netapp_tpm_init: Starting at Mon Jun 22 13:38:17 UTC 2026
+SSAL: tss_tpm_nvread:1086 
+Mon Jun 22 13:38:17 UTC 2026 (1782135497) [okm_init] [log_wkeydb_file] /cfcard/kmip/km_onboard.wkeydb does not exist
+Mon Jun 22 13:38:17 UTC 2026 (1782135497) [okm_init] [okm_init_start] OKM_INIT start
+Mon Jun 22 13:38:20 UTC 2026 (1782135500) [okm_init] [okm_init_start] OKM_INIT return: 0
+
+
+Read HAOSC config (0x1111) from bootarg
+Jun 22 13:38:31 [localhost:netif.linkInfo:notice]: Ethernet e1a: Link UP (IFFLAG).
+Jun 22 13:38:31 [localhost:netif.linkInfo:notice]: Ethernet e1b: Link UP (IFFLAG).
+Jun 22 13:38:31 [localhost:netif.linkInfo:notice]: Ethernet e1b: Link TG (MEDIA).
+Jun 22 13:38:31 [localhost:netif.linkInfo:notice]: Ethernet e1a: Link TG (MEDIA).
+FWU 1st trigger point
+FWU has no post firmware update action registered.
+Jun 22 13:38:43 Power outage protection flash de-staging: 14 cycles
+   ⏳ [primary/10.192.160.29] Still waiting for cluster creation... (180s in this phase)
+NVMe-oF: Setting up port e10a
+Jun 22 13:39:25 [localhost:netif.linkInfo:notice]: Ethernet e10a: Link TG (MEDIA).
+NVMe-oF: Setting up port e10b
+Pensando Offload Driver, ver 1.4.0-E-78
+Jun 22 13:39:26 [localhost:netif.linkInfo:notice]: Ethernet e10b: Link TG (MEDIA).
+NVMe-oF: Setting up port e11a
+Jun 22 13:39:27 [localhost:netif.linkInfo:notice]: Ethernet e11a: Link TG (MEDIA).
+NVMe-oF: Setting up port e11b
+Jun 22 13:39:28 [localhost:netif.linkInfo:notice]: Ethernet e11b: Link TG (MEDIA).
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dffe" (port "e11a").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de66" (port "e11a").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8e" (port "e11a").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfde" (port "e11a").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfdf" (port "e10b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfdf" (port "e11b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de67" (port "e10b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de67" (port "e11b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfff" (port "e10b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfff" (port "e11b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8f" (port "e10b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8f" (port "e11b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e306" (port "e11a").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01e" (port "e11a").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f6" (port "e11a").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e989" (port "e11a").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f7" (port "e10b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f7" (port "e11b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e307" (port "e10b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e307" (port "e11b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e98a" (port "e10b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e98a" (port "e11b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01f" (port "e10b").
+Jun 22 13:39:34 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01f" (port "e11b").
+Jun 22 13:39:46 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e306" (port "e10a").
+Jun 22 13:39:46 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01e" (port "e10a").
+Jun 22 13:39:46 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f6" (port "e10a").
+Jun 22 13:39:46 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e989" (port "e10a").
+Jun 22 13:39:46 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de66" (port "e10a").
+Jun 22 13:39:46 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8e" (port "e10a").
+Jun 22 13:39:46 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dffe" (port "e10a").
+Jun 22 13:39:46 [localhost:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfde" (port "e10a").
+   ⏳ [primary/10.192.160.29] Still waiting for cluster creation... (240s in this phase)
+***OS2SP configured successfully***slc_check_enabled: disable_slc is 0; PSM_PROP_DISABLE_TOPSPIN is 0
+slc_enabled_platform: is_node_all_flash_only 1; is_vsa_1p 0 
+Jun 22 13:40:33 [localhost:time.stamp.micro.base:notice]: last_uniq is 0 seconds, wall time is 1782135633 seconds.
+Jun 22 13:40:33 [localhost:time.stamp.nano.base:notice]: last_uniq_nano is 0 seconds, wall time is 1782135633 seconds.
+RC NIC fw update error is :0 
+NIC FW update from kernel error is :0 
+ksmf_rpc: ACE functions initializedksmf_rpc: Successfully created TCP service on port kdsmdbksmf_rpc: RPC program v1 registeredksmf_rpc: Successfully created TCP service on port kdsmdb_2ksmf_rpc: RPC program v2 registeredBoot argument NfsRdmaOk not specified.  Default (set) is in effect.
+Boot argument NfsIpOk not specified.  Default (set) is in effect.
+FWU 2nd trigger point
+FWU has no post firmware update action registered.
+pnso provider init started.
+Notice : pnso card not detected.
+QAT provider init started.
+QAT service data size is [328]
+Notice: 64 QAT number instances detected.
+Notice: 8 QAT Acceleration devices discovered.
+Notice: 8 QAT Acceleration devices configured.
+Memory allocated for handles: 9728 bytes
+QAT num_req_instances : 64
+QAT hwo_qat_num_accel_devs :8
+QAT num_decomp_inst_per_dev : 4
+QAT num_comp_inst_per_dev : 4
+Initializing instance:Dc0 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+QAT init completed : 0
+hwo: Node is using hardware provider : 3.
+   ⏳ [primary/10.192.160.29] Still waiting for cluster creation... (300s in this phase)
+cryptomod_fips: Cryptomod FIPS version: Cryptomod FIPS 3.0
+cryptomod_fips: Executing Crypto FIPS Self Tests.
+cryptomod_fips: Crypto FIPS self-test: 'CPU COMPATIBILITY' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 ECB, AES-256 ECB' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CBC, AES-256 CBC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 GCM, AES-256 GCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128, AES-256 CMAC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'CTR_DRBG' passed.
+cryptomod_fips: Crypto FIPS self-test: 'KDF' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA1, SHA256, SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA3-256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'HMAC-SHA1, HMAC-SHA256, HMAC-SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'PBKDF2' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-XTS 128, AES-XTS 256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'Self-integrity' passed.
+bootarg.bootmenu.selection is |4a|
+Jun 22 13:41:12 [localhost:mgr.boot.bios_backup_flash:error]: System boot from the primary BIOS flash image failed. system booted from the backup BIOS flash image.
+
+
+...... STORAGE POD: DISKLESS BOOT .......
+
+
+**** Skipping boot_from_disk2 - First time boot****
+kern.geom.eli.threads: 0 -> 16
+GEOM_ELI: Device nda0p4.eli created.
+GEOM_ELI: Encryption: AES-XTS 256
+GEOM_ELI:     Crypto: accelerated software
+Jun 22 13:41:26 [localhost:netif.linkInfo:notice]: Ethernet e2a: Link UP (IFFLAG).
+Jun 22 13:41:26 [localhost:netif.linkInfo:notice]: Ethernet e2b: Link UP (IFFLAG).
+Jun 22 13:41:26 [localhost:netif.linkInfo:notice]: Ethernet e2c: Link UP (IFFLAG).
+Jun 22 13:41:27 [localhost:netif.linkInfo:notice]: Ethernet e2d: Link UP (IFFLAG).
+Jun 22 13:41:27 [localhost:netif.linkInfo:notice]: Ethernet e7a: Link UP (IFFLAG).
+Jun 22 13:41:27 [localhost:netif.linkInfo:notice]: Ethernet e7b: Link UP (IFFLAG).
+Jun 22 13:41:27 [localhost:netport.eth.discovered:notice]: Physical network port e0M (node localhost) has been discovered.
+Jun 22 13:41:27 [localhost:netport.eth.discovered:notice]: Physical network port e2a (node localhost) has been discovered.
+Jun 22 13:41:27 [localhost:netport.eth.discovered:notice]: Physical network port e2b (node localhost) has been discovered.
+Jun 22 13:41:27 [localhost:netport.eth.discovered:notice]: Physical network port e2c (node localhost) has been discovered.
+Jun 22 13:41:27 [localhost:netport.eth.discovered:notice]: Physical network port e2d (node localhost) has been discovered.
+Jun 22 13:41:27 [localhost:netport.eth.discovered:notice]: Physical network port e7a (node localhost) has been discovered.
+Jun 22 13:41:27 [localhost:netport.eth.discovered:notice]: Physical network port e7b (node localhost) has been discovered.
+Jun 22 13:41:27 [localhost:netif.linkInfo:notice]: Ethernet e7a: Link TG (MEDIA).
+Jun 22 13:41:27 [localhost:tar.csum.notFound:notice]: Stored checksum file does not exist, extracting /mroot_late.tgz.
+Jun 22 13:41:28 [localhost:netif.linkInfo:notice]: Ethernet e7b: Link TG (MEDIA).
+Jun 22 13:41:28 [localhost:netif.linkInfo:notice]: Ethernet e2a: Link TG (MEDIA).
+Jun 22 13:41:28 [localhost:vifmgr.port.settings:notice]: Port e2a on node "localhost" is configured with MTU: , speed: auto, flowcontrol: full, duplex: auto.
+Jun 22 13:41:28 [localhost:tar.csum.mismatch:notice]: Stored checksum 0 does not match calculated checksum 2836888962, extracting /mroot_late.tgz.
+Jun 22 13:41:29 [localhost:vifmgr.port.settings:notice]: Port e2a on node "localhost" is configured with MTU: 1500, speed: , flowcontrol: , duplex: .
+Jun 22 13:41:29 [localhost:netif.linkInfo:notice]: Ethernet e2b: Link TG (MEDIA).
+Jun 22 13:41:29 [localhost:vifmgr.port.settings:notice]: Port e2b on node "localhost" is configured with MTU: , speed: auto, flowcontrol: full, duplex: auto.
+Jun 22 13:41:30 [localhost:vifmgr.port.settings:notice]: Port e2b on node "localhost" is configured with MTU: 1500, speed: , flowcontrol: , duplex: .
+Jun 22 13:41:30 [localhost:netif.linkInfo:notice]: Ethernet e2c: Link TG (MEDIA).
+Jun 22 13:41:30 [localhost:vifmgr.port.settings:notice]: Port e2c on node "localhost" is configured with MTU: , speed: auto, flowcontrol: full, duplex: auto.
+Jun 22 13:41:30 [localhost:vifmgr.port.settings:notice]: Port e2c on node "localhost" is configured with MTU: 1500, speed: , flowcontrol: , duplex: .
+Jun 22 13:41:30 [localhost:netif.linkInfo:notice]: Ethernet e2d: Link TG (MEDIA).
+Jun 22 13:41:30 [localhost:vifmgr.port.settings:notice]: Port e2d on node "localhost" is configured with MTU: , speed: auto, flowcontrol: full, duplex: auto.
+Jun 22 13:41:30 [localhost:vifmgr.port.settings:notice]: Port e2d on node "localhost" is configured with MTU: 1500, speed: , flowcontrol: , duplex: .
+Jun 22 13:41:30 [localhost:vifmgr.port.settings:notice]: Port e7a on node "localhost" is configured with MTU: , speed: auto, flowcontrol: none, duplex: auto.
+Jun 22 13:41:30 [localhost:netif.linkInfo:notice]: Ethernet e7a: Link TG (MTU).
+Jun 22 13:41:30 [localhost:vifmgr.port.settings:notice]: Port e7a on node "localhost" is configured with MTU: 9000, speed: , flowcontrol: , duplex: .
+Jun 22 13:41:30 [localhost:vifmgr.port.settings:notice]: Port e7b on node "localhost" is configured with MTU: , speed: auto, flowcontrol: none, duplex: auto.
+Jun 22 13:41:30 [localhost:netif.linkInfo:notice]: Ethernet e7b: Link TG (MTU).
+Jun 22 13:41:31 [localhost:vifmgr.port.settings:notice]: Port e7b on node "localhost" is configured with MTU: 9000, speed: , flowcontrol: , duplex: .
+Jun 22 13:41:31 [localhost:vifmgr.port.settings:notice]: Port e7a on node "localhost" is configured with MTU: , speed: auto, flowcontrol: none, duplex: auto.
+Jun 22 13:41:31 [localhost:vifmgr.port.settings:notice]: Port e7a on node "localhost" is configured with MTU: 9000, speed: , flowcontrol: , duplex: .
+Jun 22 13:41:31 [localhost:vifmgr.port.settings:notice]: Port e7b on node "localhost" is configured with MTU: , speed: auto, flowcontrol: none, duplex: auto.
+Jun 22 13:41:31 [localhost:vifmgr.port.settings:notice]: Port e7b on node "localhost" is configured with MTU: 9000, speed: , flowcontrol: , duplex: .
+Jun 22 13:41:32 [localhost:tar.csum.notFound:notice]: Stored checksum file does not exist, extracting /cfcard/x86_64/freebsd/image1/pmroot_late.tgz.
+Jun 22 13:41:32 [localhost:tar.csum.mismatch:notice]: Stored checksum 0 does not match calculated checksum 1865747099, extracting /cfcard/x86_64/freebsd/image1/pmroot_late.tgz.
+wrote key file "/tmp/rndc.key"
+** /dev/nda0p2
+** Last Mounted on /mnt/recoverydisk
+** Phase 1 - Check Blocks and Sizes
+** Phase 2 - Check Pathnames
+** Phase 3 - Check Connectivity
+** Phase 4 - Check Reference Counts
+** Phase 5 - Check Cyl groups
+3 files, 788906 used, 15460765 free (21 frags, 1932593 blocks, 0.0% fragmentation)
+
+***** FILE SYSTEM IS CLEAN *****
+Jun 22 13:41:55 [localhost:asup.general.optout:notice]: AutoSupport will be enabled 24 hours after system initialization.
+
+
+Welcome to the cluster setup wizard.
+
+You can enter the following commands at any time:
+  "help" or "?" - if you want to have a question clarified,
+  "back" - if you want to change previously answered questions, and
+  "exit" or "quit" - if you want to quit the cluster setup wizard.
+     Any changes you made before quitting will be saved.
+
+You can return to cluster setup at any time by typing "cluster setup".
+To accept a default or omit a question, do not enter a value.
+
+This system will send event messages and periodic reports to NetApp Technical
+Support. To disable this feature, enter 
+autosupport modify -support disable
+within 24 hours.
+
+Enabling AutoSupport can significantly speed problem determination
+and resolution, should a problem occur on your system.
+For further information on AutoSupport, see:
+https://support.netapp.com/autosupport/
+
+Type yes to confirm and continue {yes}: 
+✅ Detected 'type yes to confirm and continue' – auto-responded with 'yes'
+
+📋 Node management config to apply:
+   port     = e0M
+   ip       = 10.192.160.28
+   netmask  = 255.255.255.0
+   gateway  = 10.192.160.1
+
+⏳ Waiting for setup prompt: node management interface port...
+  ✅ Using config node management interface port: e0M
+
+⏳ Waiting for setup prompt: node management interface IP address...
+  ✅ Using config node management interface IP address: 10.192.160.28
+
+⏳ Waiting for setup prompt: node management interface netmask...
+  ✅ Using config node management interface netmask: 255.255.255.0
+
+⏳ Waiting for setup prompt: node management interface default gateway...
+  ✅ Using config node management interface default gateway: 10.192.160.1
+
+✅ Mode 1b auto-init complete; driving cluster setup wizard...
+
+🤖 Driving ONTAP cluster setup wizard from collected values...
+
+⏳ Waiting for cluster setup wizard to begin...
+
+ℹ️  Sending Enter to advance past any pending wizard gate...
+
+⏳ Waiting for create/join prompt and selecting 'create'...
+
+⏳ Cluster creating..............................
+
+⏳ Cluster creating. See log for details in a separate SSH session:
+   /scripts/AFX/logs/20260622_091724/1-bmc_session_20260622_091724.log
+
+⏳ Waiting for: Cluster mgmt gateway...
+
+✅ Prompt already received (fast cluster): DNS domain names -> ntap.local
+
+⏳ Finishing remaining cluster configuration steps. For details see log in a separate SSH session:
+   /scripts/AFX/logs/20260622_091724/1-bmc_session_20260622_091724.log
+
+✅ Cluster "rtp-afx1k-c01" has been created.
+
+⏳ Finishing remaining cluster configuration steps...
+
+✅ Cluster creation complete.
+
+login: admin
+Password:
+******************************************************
+* This is a serial console session. Output from this *
+* session is mirrored on the SP console session.     *
+******************************************************
+rtp-afx1k-c01::> 
+⏳ Configuring NTP servers...
+ntp server create -server time.nist.gov
+  (cluster time-service ntp server create)
+
+rtp-afx1k-c01::>   ✅ NTP server added: time.nist.gov
+ntp server create -server pool.ntp.org
+  (cluster time-service ntp server create)
+
+rtp-afx1k-c01::>   ✅ NTP server added: pool.ntp.org
+ntp server create -server time.google.com
+  (cluster time-service ntp server create)
+
+rtp-afx1k-c01::>   ✅ NTP server added: time.google.com
+ntp server create -server time.aws.com
+  (cluster time-service ntp server create)
+
+rtp-afx1k-c01::>   ✅ NTP server added: time.aws.com
+ntp server create -server time.apple.com
+  (cluster time-service ntp server create)
+
+rtp-afx1k-c01::>   ✅ NTP server added: time.apple.com
+
+rtp-afx1k-c01::> 
+============================================================
+  🔑 Configuring passwordless SSH
+============================================================
+  🗑️  Removed existing known_hosts entries for 10.192.160.103.
+  ℹ️  Using existing key: /root/.ssh/id_rsa
+  ✅ Accepted SSH host key for 10.192.160.103.
+
+rtp-afx1k-c01::> security login show admin -application ssh -authentication-method publickey
+There are no entries matching your query.
+
+rtp-afx1k-c01::> security login create -user-or-group-name admin -application ssh -authentication-method publickey -role admin -vserver rtp-afx1k-c01
+Warning: Public key authentication is being setup for user "admin". This requires creating a public key for the user. After this command completes, use the "security login publickey create" command to create a public key for user "admin".
+
+rtp-afx1k-c01::>   ✅ SSH login entry created for 'admin'.
+security login publickey create -vserver rtp-afx1k-c01 -username admin -publickey "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCpehSfGN01ciCLmw7nLh3HebW3XBwnj6LZ6q+oF8jpI0np2ui63Oc25mPwTZxMxRIWMrIZsazo+IN6JrOHfhUE1OEbXVk3cM9gxcTFhX1YJZpav+XEcbfAFa/MeCnhaRy9trZUAfOBp5GvLxd2IB+S+sJLVwZbQzDSUhsn40OkY8g/SfUWOD2gt5sDsWsaBpbRFkIFwuh1dB9yO1dmuRc5W6Bk2nZehMexCEgXLFe44IV2oNVFlZEigWybz6gMF51H+My64OY0mG53drxR0DW8AGu54Nzpw9zktdiYm+snMfTyT10YLiKOO5oc5cNSVBWm7CPESe9wrhwQ4guh4F3NzzcTnKlwSAjQ44XrcODFyzdkygstNIYd/ecJTOJVvGAEVQa3IzUolSZUGXskp/kzyLTRDWjaYnP6wlDlG9pPlcXtYq37OsY3tRE4UpplblsVxm969NMENXFrqfed5sBASYgeXPa6wZ9h56M1Fx4O6bnhI4aTuH8BdpR6wKYpjcn8hwtw8WRUpQhzAnnv77w7cHL14MkbqTrYaqQK+8VGwdygkc7JxoArSuL6kdC1GdSZS3BkbTUUl77FLvc/Aq1c3XFQlt0QxOJBDrF33/Ub7UHdROm+FQnvU6s2DF5aFDNQEUw6d0q3qvH9TbbgWn3TIH1cST2d+Lm+71Bz342bkQ== root@rhel9-client1.ntap.local"
+
+rtp-afx1k-c01::>   ✅ Public key installed on cluster.
+
+  🔎 Testing ssh admin@10.192.160.103...
+  ⚠️  SSH test could not load a local legacy SSH key format.
+     Retest manually with: ssh admin@10.192.160.103
+
+✅ Cluster configuration complete. Moving on to add nodes.
+
+✅ Mode 3: auto-selecting 2b (automatic node add).
+
+  ✅ Confirmed. 2B: Automatic node add.
+
+  Primary cluster add-node activity log:
+
+    /scripts/AFX/logs/20260622_091724/1-bmc_session_20260622_091724.log
+
+  Peer BMC console logs (prep steps before cluster add-node):
+
+    Peer BMC1 (10.192.160.35): /scripts/AFX/logs/20260622_091724/9-bmc_session_add_10_192_160_35_20260622_092502.log
+
+
+➡️  Continuing into node-add session...

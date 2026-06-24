@@ -1,0 +1,251 @@
+📝 Session log: /scripts/AFX/logs/20260622_091724/1-bmc_session_20260622_091724.log
+
+🚀 AFX_reinit.py v1.1.1 (last update: 2026-06-22T09:16:11-04:00)
+
+
+  Found existing BMC config file(s):
+    1. /scripts/AFX/configs/reinit-config.json  (2 node(s): 10.192.160.29, 10.192.160.35)
+    0. Enter BMC addresses manually
+
+
+  ✅ Loaded 2 BMC(s) from /scripts/AFX/configs/reinit-config.json
+     • 10.192.160.29
+     • 10.192.160.35
+
+  Verifying BMC IP addresses via 'bmc status'...
+  🧹 Proactive known_hosts cleanup for 10.192.160.29 (before BMC verification)...
+  ℹ️  No known_hosts entry found for 10.192.160.29.
+  ✅ 10.192.160.29 verified.
+  🧹 Proactive known_hosts cleanup for 10.192.160.35 (before BMC verification)...
+  ℹ️  No known_hosts entry found for 10.192.160.35.
+  ✅ 10.192.160.35 verified.
+
+  Select the ONTAP package to netboot-install:
+
+  ⚠️  WARNING: If you are downgrading FROM 9.19.1 (or later) with large-SAZ support enabled, a full
+  cluster reinitialize will be required after reverting to an earlier ONTAP version.
+
+  Enter a path to a .tgz file, a directory containing .tgz files,
+  or a web URL (blank to exit).
+
+  Found 3 package(s) in /scripts/ONTAP/:
+    1. 9181P2_q_image.tgz
+    2. 9191RC0_q_image.tgz
+    3. 9191RC1_q_image.tgz
+    4. Exit
+
+
+  ✅ Package selected. 4d mode: proceeding with end-to-end initialization (mode 3).
+
+  ──────────────────────────────────────────────────────────
+  Looking for a reinit config file for the cluster setup...
+
+  📄 Found config file: /scripts/AFX/configs/reinit-config.json
+  📄 Loaded config: /scripts/AFX/configs/reinit-config.json
+
+============================================================
+  🌐 Node Management Network Configuration
+============================================================
+
+  Enter node-management network details for each BMC.
+  These will be auto-answered during cluster setup (mode 1b).
+  Press Enter to accept the [default] shown in brackets.
+
+  ── BMC 10.192.160.29 (this node) ──
+    📄 Using config file values for BMC 10.192.160.29
+
+  ── BMC 10.192.160.35 (peer) ──
+    📄 Using config file values for BMC 10.192.160.35
+
+============================================================
+  🏛️  Cluster Setup Configuration
+============================================================
+
+  These values will be used to drive the cluster setup wizard
+  after option 4 (mode 1b only). Press Enter to accept defaults.
+  📄 Cluster name (from config): rtp-afx1k-c01
+
+  ℹ️  ONTAP requires the cluster admin password to be at least 8 characters AND contain both letters and numbers.
+    ✅ Reusing BMC login password as cluster admin password (hidden).
+  📄 Cluster management port (from config): e0M
+  📄 Cluster management IP (from config): 10.192.160.103
+  📄 Cluster management netmask (from config): 255.255.255.0
+  📄 Cluster management gateway (from config): 10.192.160.1
+  📄 DNS domain names (comma separated) (from config): ntap.local
+  📄 DNS servers (comma separated) (from config): 10.193.67.228,10.193.67.236
+
+  ℹ️   NTP servers (optional). Select from the list or add custom.
+
+  Select NTP server(s) to add (comma-separated numbers, blank to skip):
+    1. time.nist.gov
+    2. pool.ntp.org
+    3. time.google.com
+    4. time.aws.com
+    5. time.apple.com
+    6. Add all
+    7. Add custom
+
+  ✅ NTP servers configured: time.nist.gov,pool.ntp.org,time.google.com,time.aws.com,time.apple.com
+  📄 Controller location (from config): RTP
+
+============================================================
+  📜 ONTAP License
+============================================================
+
+============================================================
+  Node pre-config
+============================================================
+
+  ℹ️   Physical zeroing can help ensure consistency in throughput results.
+  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).
+  ℹ️   BIOS firmware auto-update prevention disabled.
+
+  ✅ All setup information collected. Starting operations...
+
+🔖 Checkpoint created: afx_checkpoint.json
+   Run 'python AFX_reinit.py --checkpoint' to view or resume from checkpoint.
+  📝 [10.192.160.29] | 2026-06-22 09:18:13 |  BMC session log: /scripts/AFX/logs/20260622_091724/6-bmc_session_10_192_160_29_20260622_091813.log
+  📝 [10.192.160.35] | 2026-06-22 09:18:13 |  BMC session log: /scripts/AFX/logs/20260622_091724/7-bmc_session_10_192_160_35_20260622_091813.log
+
+  Connecting to 2 BMC(s) in parallel...
+[primary/10.192.160.29] | 2026-06-22 09:18:13 | [INFO] Connecting to BMC...
+   🔌 [BMC/10.192.160.29] connecting to 10.192.160.29 as admin (attempt 1/2)...
+[primary/10.192.160.29] | 2026-06-22 09:18:14 | [SUCCESS] BMC shell ready.
+[secondary-01/10.192.160.35] | 2026-06-22 09:18:15 | [INFO] Connecting to BMC...
+   🔌 [BMC/10.192.160.35] connecting to 10.192.160.35 as admin (attempt 1/2)...
+[secondary-01/10.192.160.35] | 2026-06-22 09:18:16 | [SUCCESS] BMC shell ready.
+
+  Resetting 2 node(s) to LOADER (output → per-node logs)...
+[secondary-01/10.192.160.35] | 2026-06-22 09:18:21 | [INFO] Sending system reset...
+[primary/10.192.160.29] | 2026-06-22 09:18:21 | [INFO] Sending system reset...
+[secondary-01/10.192.160.35] | 2026-06-22 09:18:21 | [INFO] Node rebooting...
+[primary/10.192.160.29] | 2026-06-22 09:18:21 | [INFO] Node rebooting...
+[primary/10.192.160.29] | 2026-06-22 09:19:02 | [INFO] Interrupting AUTOBOOT...
+[primary/10.192.160.29] | 2026-06-22 09:19:04 | [SUCCESS] At LOADER prompt.
+[secondary-01/10.192.160.35] | 2026-06-22 09:19:04 | [INFO] Interrupting AUTOBOOT...
+[secondary-01/10.192.160.35] | 2026-06-22 09:19:06 | [SUCCESS] At LOADER prompt.
+  🌐 HTTP server started: http://10.193.67.173:40803/9191RC0_q_image.tgz
+
+  Starting netboot-install on 2 node(s) in parallel (output → per-node logs)...
+[primary/10.192.160.29] | 2026-06-22 09:19:06 | [INFO] Static LOADER ifconfig: e0M  addr=10.192.160.28  mask=255.255.255.0  gw=10.192.160.1 | 2026-06-22 09:19:06
+[secondary-01/10.192.160.35] | 2026-06-22 09:19:06 | [INFO] Static LOADER ifconfig: e0M  addr=10.192.160.30  mask=255.255.255.0  gw=10.192.160.1 | 2026-06-22 09:19:06
+[secondary-01/10.192.160.35] | 2026-06-22 09:19:07 | [INFO] 🧬 Verifying boot DNA (bootarg.init.dna)...
+
+🧬 Boot DNA check: verifying bootarg.init.dna...
+[primary/10.192.160.29] | 2026-06-22 09:19:08 | [INFO] 🧬 Verifying boot DNA (bootarg.init.dna)...
+
+🧬 Boot DNA check: verifying bootarg.init.dna...
+   ✅ Boot DNA check passed: bootarg.init.dna=3088
+[secondary-01/10.192.160.35] | 2026-06-22 09:19:09 | [SUCCESS] | 2026-06-22 09:19:09 | [SUCCESS] Boot DNA verified; proceeding with netboot.
+[secondary-01/10.192.160.35] | 2026-06-22 09:19:09 | [INFO] Starting netboot: http://10.193.67.173:40803/9191RC0_q_image.tgz
+[secondary-01/10.192.160.35] | 2026-06-22 09:19:09 | [INFO] 📥 Downloading ONTAP image — this may take several minutes...
+   ✅ Boot DNA check passed: bootarg.init.dna=3088
+[primary/10.192.160.29] | 2026-06-22 09:19:10 | [SUCCESS] | 2026-06-22 09:19:10 | [SUCCESS] Boot DNA verified; proceeding with netboot.
+[primary/10.192.160.29] | 2026-06-22 09:19:10 | [INFO] Starting netboot: http://10.193.67.173:40803/9191RC0_q_image.tgz
+[primary/10.192.160.29] | 2026-06-22 09:19:10 | [INFO] 📥 Downloading ONTAP image — this may take several minutes...
+[secondary-01/10.192.160.35] | 2026-06-22 09:20:09 | [INFO] | 2026-06-22 09:20:09 | [INFO] Image downloading... (60s elapsed)
+[primary/10.192.160.29] | 2026-06-22 09:20:10 | [INFO] | 2026-06-22 09:20:10 | [INFO] Image downloading... (60s elapsed)
+[secondary-01/10.192.160.35] | 2026-06-22 09:21:09 | [INFO] | 2026-06-22 09:21:09 | [INFO] Image downloading... (120s elapsed)
+[primary/10.192.160.29] | 2026-06-22 09:21:10 | [INFO] | 2026-06-22 09:21:10 | [INFO] Image downloading... (120s elapsed)
+[secondary-01/10.192.160.35] | 2026-06-22 09:22:09 | [INFO] | 2026-06-22 09:22:09 | [INFO] Image downloading... (180s elapsed)
+[primary/10.192.160.29] | 2026-06-22 09:22:10 | [INFO] | 2026-06-22 09:22:10 | [INFO] Image downloading... (180s elapsed)
+[secondary-01/10.192.160.35] | 2026-06-22 09:23:01 | [SUCCESS] | 2026-06-22 09:23:01 | [SUCCESS] Download complete — boot menu detected.
+[secondary-01/10.192.160.35] | 2026-06-22 09:23:01 | [INFO] 💿 Installing ONTAP image (selecting option 7)...
+[primary/10.192.160.29] | 2026-06-22 09:23:03 | [SUCCESS] | 2026-06-22 09:23:03 | [SUCCESS] Download complete — boot menu detected.
+[primary/10.192.160.29] | 2026-06-22 09:23:03 | [INFO] 💿 Installing ONTAP image (selecting option 7)...
+[secondary-01/10.192.160.35] | 2026-06-22 09:23:03 | [INFO] Answering 'do you want to continue?' → y
+[secondary-01/10.192.160.35] | 2026-06-22 09:23:03 | [INFO] Entering package URL: http://10.193.67.173:40803/9191RC0_q_image.tgz
+[secondary-01/10.192.160.35] | 2026-06-22 09:23:03 | [INFO] User name prompt → (blank)
+[secondary-01/10.192.160.35] | 2026-06-22 09:23:03 | [INFO] 📝 Installing — log: /scripts/AFX/logs/20260622_091724/7-bmc_session_10_192_160_35_20260622_091813.log
+[primary/10.192.160.29] | 2026-06-22 09:23:05 | [INFO] Answering 'do you want to continue?' → y
+[primary/10.192.160.29] | 2026-06-22 09:23:05 | [INFO] Entering package URL: http://10.193.67.173:40803/9191RC0_q_image.tgz
+[primary/10.192.160.29] | 2026-06-22 09:23:05 | [INFO] User name prompt → (blank)
+[primary/10.192.160.29] | 2026-06-22 09:23:05 | [INFO] 📝 Installing — log: /scripts/AFX/logs/20260622_091724/6-bmc_session_10_192_160_29_20260622_091813.log
+[secondary-01/10.192.160.35] | 2026-06-22 09:23:33 | [INFO] | 2026-06-22 09:23:33 | [INFO] 💿 Image installing... (30s elapsed)
+[primary/10.192.160.29] | 2026-06-22 09:23:35 | [INFO] | 2026-06-22 09:23:35 | [INFO] 💿 Image installing... (30s elapsed)
+[secondary-01/10.192.160.35] | 2026-06-22 09:24:03 | [INFO] | 2026-06-22 09:24:03 | [INFO] 💿 Image installing... (60s elapsed)
+[primary/10.192.160.29] | 2026-06-22 09:24:05 | [INFO] | 2026-06-22 09:24:05 | [INFO] 💿 Image installing... (60s elapsed)
+[secondary-01/10.192.160.35] | 2026-06-22 09:24:33 | [INFO] | 2026-06-22 09:24:33 | [INFO] 💿 Image installing... (90s elapsed)
+[primary/10.192.160.29] | 2026-06-22 09:24:35 | [INFO] | 2026-06-22 09:24:35 | [INFO] 💿 Image installing... (90s elapsed)
+[secondary-01/10.192.160.35] | 2026-06-22 09:25:00 | [INFO] Reboot prompt (early, backup skipped) → y
+[secondary-01/10.192.160.35] | 2026-06-22 09:25:00 | [SUCCESS] | 2026-06-22 09:25:00 | [SUCCESS] Image installed — 🔄 node rebooting...
+[primary/10.192.160.29] | 2026-06-22 09:25:02 | [INFO] Reboot prompt (early, backup skipped) → y
+[primary/10.192.160.29] | 2026-06-22 09:25:02 | [SUCCESS] | 2026-06-22 09:25:02 | [SUCCESS] Image installed — 🔄 node rebooting...
+
+  ✅ Netboot complete on all 2 node(s).
+  📝 [10.192.160.29] | 2026-06-22 09:25:02 |  Log saved: /scripts/AFX/logs/20260622_091724/6-bmc_session_10_192_160_29_20260622_091813.log
+  📝 [10.192.160.35] | 2026-06-22 09:25:02 |  Log saved: /scripts/AFX/logs/20260622_091724/7-bmc_session_10_192_160_35_20260622_091813.log
+
+  ✅ Netboot/install complete on all nodes. Reconnecting to 2 BMC(s) for cluster reinit (mode 3)...
+[primary/10.192.160.29] | 2026-06-22 09:25:02 | [INFO] Reinit log → /scripts/AFX/logs/20260622_091724/8-bmc_session_reinit_primary_10_192_160_29_20260622_092502.log
+[secondary-01/10.192.160.35] | 2026-06-22 09:25:02 | [INFO] Reinit log → /scripts/AFX/logs/20260622_091724/9-bmc_session_add_10_192_160_35_20260622_092502.log
+
+  🔁 [10.192.160.29] | 2026-06-22 09:25:02 |  Connecting and moving to LOADER...
+   🔌 [BMC/10.192.160.29] connecting to 10.192.160.29 as admin (attempt 1/3)...
+
+  🔁 [10.192.160.35] | 2026-06-22 09:25:02 |  Connecting and moving to LOADER...
+   🔌 [BMC/10.192.160.35] connecting to 10.192.160.35 as admin (attempt 1/3)...
+  ⏳ [10.192.160.29] | 2026-06-22 09:25:47 |  LOADER not confirmed yet; re-checking before reset...
+  ⏳ [10.192.160.35] | 2026-06-22 09:25:48 |  LOADER not confirmed yet; re-checking before reset...
+
+✅ Detected 'y/n' – auto-responded with 'y'
+  ⏳ [10.192.160.29] | 2026-06-22 09:26:49 |  Node rebooting...
+
+✅ Detected 'y/n' – auto-responded with 'y'
+  ⏳ [10.192.160.35] | 2026-06-22 09:26:50 |  Node rebooting...
+  ⏳ [10.192.160.29] | 2026-06-22 09:26:52 |  Waiting for AUTOBOOT / LOADER prompt...
+   For details, see log at:
+   /scripts/AFX/logs/20260622_091724/8-bmc_session_reinit_primary_10_192_160_29_20260622_092502.log
+   (open in a separate SSH session)
+  ⏳ [10.192.160.35] | 2026-06-22 09:26:53 |  Waiting for AUTOBOOT / LOADER prompt...
+   For details, see log at:
+   /scripts/AFX/logs/20260622_091724/9-bmc_session_add_10_192_160_35_20260622_092502.log
+   (open in a separate SSH session)
+  ⏳ [10.192.160.29] | 2026-06-22 09:27:22 |  Still booting... (30s elapsed)
+  ⏳ [10.192.160.35] | 2026-06-22 09:27:23 |  Still booting... (30s elapsed)
+  🛑 [10.192.160.29] | 2026-06-22 09:27:30 |  AUTOBOOT detected – sending Ctrl+C...
+  ✅ [10.192.160.29] | 2026-06-22 09:27:32 |  At LOADER prompt.
+  🛑 [10.192.160.35] | 2026-06-22 09:27:33 |  AUTOBOOT detected – sending Ctrl+C...
+  ✅ [10.192.160.35] | 2026-06-22 09:27:35 |  At LOADER prompt.
+[primary/10.192.160.29] | 2026-06-22 09:27:39 | [SUCCESS] Reconnected to LOADER – boot_ontap menu sent.
+[secondary-01/10.192.160.35] | 2026-06-22 09:27:42 | [SUCCESS] Reconnected to LOADER – boot_ontap menu sent.
+
+  Mode 3: auto-joining 1 peer node(s) in parallel...
+
+⏳ Primary node booting to boot menu (will auto-select option 9 – Initialize)
+   📝 Primary node log: /scripts/AFX/logs/20260622_091724/8-bmc_session_reinit_primary_10_192_160_29_20260622_092502.log
+   📝 BMC session log: /scripts/AFX/logs/20260622_091724/1-bmc_session_20260622_091724.log
+
+✅ Boot menu detected! Option 9 selected. Node reinitializing and Storage Availability Zone being destroyed.
+   🧹 Proactive known_hosts cleanup after option 9 on 10.192.160.29...
+  ℹ️  No known_hosts entry found for 10.192.160.29.
+[primary/10.192.160.29] | 2026-06-22 09:29:19 | [SUCCESS] | 2026-06-22 09:29:19 | [SUCCESS] Primary option 9 complete; 4d peers may proceed to option 4.
+[secondary-01/10.192.160.35] | 2026-06-22 09:29:19 | [INFO] | 2026-06-22 09:29:19 | [INFO] Waiting for primary option 9 completion before peer option 4.
+   🔌 [cluster/10.192.160.103] connecting to 10.192.160.103 as admin (attempt 1/1)...
+
+This is your first recorded login.
+Unsuccessful login attempts since last login: 1
+rtp-afx1k-c01::> 
+rtp-afx1k-c01::> 
+  Using previously collected cluster network IP(s)
+  Running add-node command
+     cluster add-node -cluster-ips 169.254.156.132
+
+  ➕ Adding 1 node(s) to cluster...
+
+  ⏳ Waiting for all nodes to report success (122s elapsed, up to 778s remaining)...
+
+  ⏳ Waiting for all nodes to report success (244s elapsed, up to 656s remaining)...
+
+  ⏳ Waiting for all nodes to report success (366s elapsed, up to 534s remaining)...
+
+  ✅ Cluster reports 2 healthy node(s); treating cluster add-node as complete (488.7s).
+
+  🔍 Final health check: waiting for 2 healthy node(s)...
+
+   ✅ [4b mode 3] cluster show reports 2 healthy node(s) after 1s.
+
+  🔍 Final failover/giveback check...
+[primary/10.192.160.29] | 2026-06-22 09:57:56 | [INFO] Reinit log saved: /scripts/AFX/logs/20260622_091724/8-bmc_session_reinit_primary_10_192_160_29_20260622_092502.log
+[secondary-01/10.192.160.35] | 2026-06-22 09:57:56 | [INFO] Reinit log saved: /scripts/AFX/logs/20260622_091724/9-bmc_session_add_10_192_160_35_20260622_092502.log
+📋 Summary log: /scripts/AFX/logs/20260622_091724/2-summary_20260622_091724.log

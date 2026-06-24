@@ -1,0 +1,528 @@
+Pensando Offload Driver, ver 1.4.0-E-78
+NVMe-oF: Setting up port e10a
+Jun 22 14:17:58 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e10a: Link TG (MTU).
+Jun 22 14:17:59 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e10a: Link TG (MEDIA).
+NVMe-oF: Setting up port e10b
+Jun 22 14:18:02 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e10b: Link TG (MTU).
+Jun 22 14:18:03 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e10b: Link TG (MEDIA).
+NVMe-oF: Setting up port e11a
+Jun 22 14:18:13 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f7" (port "e10b").
+Jun 22 14:18:13 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e307" (port "e10b").
+Jun 22 14:18:13 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e98a" (port "e10b").
+Jun 22 14:18:13 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01f" (port "e10b").
+Jun 22 14:18:13 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfdf" (port "e10b").
+Jun 22 14:18:13 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de67" (port "e10b").
+Jun 22 14:18:13 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfff" (port "e10b").
+Jun 22 14:18:13 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8f" (port "e10b").
+Jun 22 14:18:19 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01e" (port "e10a").
+Jun 22 14:18:19 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e306" (port "e10a").
+Jun 22 14:18:19 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f6" (port "e10a").
+Jun 22 14:18:19 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e989" (port "e10a").
+Jun 22 14:18:19 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de66" (port "e10a").
+Jun 22 14:18:19 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8e" (port "e10a").
+Jun 22 14:18:19 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dffe" (port "e10a").
+Jun 22 14:18:19 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfde" (port "e10a").
+Jun 22 14:18:50 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e11a: Link TG (MTU).
+Jun 22 14:18:51 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e11a: Link TG (MEDIA).
+NVMe-oF: Setting up port e11b
+Jun 22 14:18:52 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e11b: Link TG (MTU).
+Jun 22 14:18:52 [rtp-afx1k-c01-01:netif.linkInfo:notice]: Ethernet e11b: Link TG (MEDIA).
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dffe" (port "e11a").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de66" (port "e11a").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8e" (port "e11a").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfde" (port "e11a").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfdf" (port "e11b").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:de67" (port "e11b").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:dfff" (port "e11b").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:df8f" (port "e11b").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01e" (port "e11a").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e306" (port "e11a").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f6" (port "e11a").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e989" (port "e11a").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e0f7" (port "e11b").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e307" (port "e11b").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e01f" (port "e11b").
+Jun 22 14:18:58 [rtp-afx1k-c01-01:nvmeof.subsystem.add:notice]: NVMe-oF subsystem added at address "fe80::d239:eaff:fecc:e98a" (port "e11b").
+***OS2SP configured successfully***slc_check_enabled: disable_slc is 0; PSM_PROP_DISABLE_TOPSPIN is 0
+slc_enabled_platform: is_node_all_flash_only 1; is_vsa_1p 0 
+Jun 22 14:19:00 [rtp-afx1k-c01-01:time.stamp.micro.base:notice]: last_uniq is 0 seconds, wall time is 1782137940 seconds.
+Jun 22 14:19:00 [rtp-afx1k-c01-01:time.stamp.nano.base:notice]: last_uniq_nano is 0 seconds, wall time is 1782137940 seconds.
+RC NIC fw update error is :0 
+NIC FW update from kernel error is :0 
+ksmf_rpc: ACE functions initializedksmf_rpc: Successfully created TCP service on port kdsmdbksmf_rpc: RPC program v1 registeredksmf_rpc: Successfully created TCP service on port kdsmdb_2ksmf_rpc: RPC program v2 registeredpnso provider init started.
+Notice : pnso card not detected.
+QAT provider init started.
+QAT service data size is [328]
+Notice: 64 QAT number instances detected.
+Notice: 8 QAT Acceleration devices discovered.
+Notice: 8 QAT Acceleration devices configured.
+Memory allocated for handles: 9728 bytes
+QAT num_req_instances : 64
+QAT hwo_qat_num_accel_devs :8
+QAT num_decomp_inst_per_dev : 4
+QAT num_comp_inst_per_dev : 4
+Initializing instance:Dc0 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 0, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 1, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 2, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 3, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 4, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 5, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 6, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc0 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc1 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc2 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc3 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc4 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc5 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc6 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+Initializing instance:Dc7 (packageId: 7, acceleratorId: 0)
+Allocate session size: 712
+QAT init completed : 0
+hwo: Node is using hardware provider : 3.
+cryptomod_fips: Cryptomod FIPS version: Cryptomod FIPS 3.0
+cryptomod_fips: Executing Crypto FIPS Self Tests.
+cryptomod_fips: Crypto FIPS self-test: 'CPU COMPATIBILITY' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 ECB, AES-256 ECB' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CBC, AES-256 CBC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 GCM, AES-256 GCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128 CCM' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-128, AES-256 CMAC' passed.
+cryptomod_fips: Crypto FIPS self-test: 'CTR_DRBG' passed.
+cryptomod_fips: Crypto FIPS self-test: 'KDF' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA1, SHA256, SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'SHA3-256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'HMAC-SHA1, HMAC-SHA256, HMAC-SHA512' passed.
+cryptomod_fips: Crypto FIPS self-test: 'PBKDF2' passed.
+cryptomod_fips: Crypto FIPS self-test: 'AES-XTS 128, AES-XTS 256' passed.
+cryptomod_fips: Crypto FIPS self-test: 'Self-integrity' passed.
+9
+Bootarg bootarg.destroy.all.storage.pods is set
+
+
+************** Disaggregated Storage Deployment **************
+*                                                            *
+*   WARNING: STORAGE AVAILABILITY ZONE WILL BE DESTROYED     *
+*                                                            *
+**************************************************************
+
+This is a disruptive operation that applies to all the disks
+no
+that are attached and visible to this node.
+
+Before proceeding further, make sure that:
+1) The storage availability zones visible from this node do not contain
+   data that needs to be preserved.
+2) This option (9) has been executed or will be executed
+   on the nodes in this cluster.
+3) The other nodes in this cluster are currently waiting at the boot menu.
+
+
+
+Do you want to create a new cluster or join an existing cluster? {create, join}:
+create
+
+
+Existing cluster interface configuration found:
+
+Port	MTU	IP		Netmask
+e7a	9000	169.254.99.154	255.255.0.0
+e7b	9000	169.254.236.3	255.255.0.0
+
+Do you want to use this configuration? {yes, no} [yes]: yes
+
+Enter the cluster administrator's (username "admin") password:
+
+Retype the password: 
+Jun 22 14:30:55 [localhost:passwd.changed:notice]: passwd for user 'admin' changed.
+
+
+Step 1 of 5: Create a Cluster
+You can type "back", "exit", or "help" at any question.
+
+Enter the cluster name: rtp-afx1k-c01
+
+Creating cluster rtp-afx1k-c01                                                         
+
+.                                                                              Jun 22 14:30:58 [rtp-afx1k-c01-01:vifmgr.started:notice]: The Logical Interface Manager (VIFMgr) has started.
+Starting replication service                                                   Starting replication service .                                                 Creating cluster                                                               Creating cluster .                                                             Creating cluster ..                                                            Creating cluster ...                                                           System start up                                                                System start up .                                                              System start up ..                                                             Jun 22 14:31:08 [rtp-afx1k-c01-01:vifmgr.port.discovered:notice]: Physical network port e0M (node rtp-afx1k-c01-01) has been discovered.
+Jun 22 14:31:08 [rtp-afx1k-c01-01:vifmgr.port.discovered:notice]: Physical network port e2a (node rtp-afx1k-c01-01) has been discovered.
+Jun 22 14:31:08 [rtp-afx1k-c01-01:vifmgr.port.discovered:notice]: Physical network port e2b (node rtp-afx1k-c01-01) has been discovered.
+Jun 22 14:31:08 [rtp-afx1k-c01-01:vifmgr.port.discovered:notice]: Physical network port e2c (node rtp-afx1k-c01-01) has been discovered.
+System start up ...                                                            Jun 22 14:31:08 [rtp-afx1k-c01-01:vifmgr.port.discovered:notice]: Physical network port e2d (node rtp-afx1k-c01-01) has been discovered.
+Jun 22 14:31:08 [rtp-afx1k-c01-01:vifmgr.port.discovered:notice]: Physical network port e7a (node rtp-afx1k-c01-01) has been discovered.
+Jun 22 14:31:08 [rtp-afx1k-c01-01:vifmgr.port.discovered:notice]: Physical network port e7b (node rtp-afx1k-c01-01) has been discovered.
+Jun 22 14:31:09 [rtp-afx1k-c01-01:clus.reboot.rebootDetected:notice]: Cluster reboot was detected at 6/22/2026 14:31:09. Sequence number for the cluster reboot was 1. Estimated beginning time of the cluster reboot was 1/1/1970 00:00:00.
+System start up ....                                                           System start up .....                                                          Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e0M on node "rtp-afx1k-c01-01" is configured with MTU: 1500, speed: , flowcontrol: , duplex: .
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e0M on node "rtp-afx1k-c01-01" is configured with MTU: , speed: auto, flowcontrol: full, duplex: auto.
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e2a on node "rtp-afx1k-c01-01" is configured with MTU: 1500, speed: , flowcontrol: , duplex: .
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e2a on node "rtp-afx1k-c01-01" is configured with MTU: , speed: auto, flowcontrol: full, duplex: auto.
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e2b on node "rtp-afx1k-c01-01" is configured with MTU: 1500, speed: , flowcontrol: , duplex: .
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e2b on node "rtp-afx1k-c01-01" is configured with MTU: , speed: auto, flowcontrol: full, duplex: auto.
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e2c on node "rtp-afx1k-c01-01" is configured with MTU: 1500, speed: , flowcontrol: , duplex: .
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e2c on node "rtp-afx1k-c01-01" is configured with MTU: , speed: auto, flowcontrol: full, duplex: auto.
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e2d on node "rtp-afx1k-c01-01" is configured with MTU: 1500, speed: , flowcontrol: , duplex: .
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e2d on node "rtp-afx1k-c01-01" is configured with MTU: , speed: auto, flowcontrol: full, duplex: auto.
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e7a on node "rtp-afx1k-c01-01" is configured with MTU: 9000, speed: , flowcontrol: , duplex: .
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e7a on node "rtp-afx1k-c01-01" is configured with MTU: , speed: auto, flowcontrol: none, duplex: auto.
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e7b on node "rtp-afx1k-c01-01" is configured with MTU: 9000, speed: , flowcontrol: , duplex: .
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e7b on node "rtp-afx1k-c01-01" is configured with MTU: , speed: auto, flowcontrol: none, duplex: auto.
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e7a-40 on node "rtp-afx1k-c01-01" is configured with MTU: 9000, speed: , flowcontrol: , duplex: .
+Jun 22 14:31:10 [rtp-afx1k-c01-01:vifmgr.port.settings:notice]: Port e7b-40 on node "rtp-afx1k-c01-01" is configured with MTU: 9000, speed: , flowcontrol: , duplex: .
+Jun 22 14:31:11 [rtp-afx1k-c01-01:vifmgr.lifBeingRemoved:notice]: LIF rtp-afx1k-c01-01_dcn1 (on virtual server 4294967268), IP address 169.254.229.230, is being removed from node rtp-afx1k-c01-01, port e7a-40.
+Jun 22 14:31:11 [rtp-afx1k-c01-01:vifmgr.bcastdomain.portadd:notice]: Network port e7a-40 on node rtp-afx1k-c01-01 was added to broadcast domain DCN in IPspace DCN.
+Jun 22 14:31:11 [rtp-afx1k-c01-01:vifmgr.bcastdomain.portadd:notice]: Network port e7b-40 on node rtp-afx1k-c01-01 was added to broadcast domain DCN in IPspace DCN.
+Checking cluster applications                                                  Jun 22 14:31:12 [rtp-afx1k-c01-01:vifmgr.lifCapacity:notice]: Node rtp-afx1k-c01-01 is capable of hosting 256 data LIFs.
+Jun 22 14:31:12 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:31:12 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Checking cluster applications .                                                Storage Pod setup                                                              Jun 22 14:31:14 [rtp-afx1k-c01-01:vifmgr.staticRoute.add:notice]: Static route created on Vserver rtp-afx1k-c01: dest 0.0.0.0/0, gw 10.192.160.1, metric 20.
+storage-pod-id:05ab4453-6e47-11f1-acdd-d039eabdd925 added to sanown cache
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.14.18 (S/N S82SNA0XA00159) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.14.22 (S/N S82SNA0XA00370) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.14.19 (S/N S82SNA0XA00433) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.14.20 (S/N S82SNA0XA00502) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.14.21 (S/N S82SNA0XA00516) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.14.23 (S/N S82SNA0XA00759) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.0.1 (S/N S82SNA0XA01854) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.8.3 (S/N S82SNA0XA01943) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.0.0 (S/N S82SNA0XA01949) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.8.2 (S/N S82SNA0XA01961) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.8.4 (S/N S82SNA0XA01973) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.8.5 (S/N S82SNA0XA01977) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.10.6 (S/N S82SNA0XA02021) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.10.11 (S/N S82SNA0XA02022) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.12.12 (S/N S82SNA0XA02024) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.12.13 (S/N S82SNA0XA02025) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.12.15 (S/N S82SNA0XA02026) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.10.9 (S/N S82SNA0XA02030) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.10.10 (S/N S82SNA0XA02061) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.12.16 (S/N S82SNA0XA02062) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.12.14 (S/N S82SNA0XA02063) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.12.17 (S/N S82SNA0XA02065) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.10.7 (S/N S82SNA0XA02066) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:diskown.changingStoragePod:notice]: Storage pod ownership of disk e11a.01.10.8 (S/N S82SNA0XA02067) was changed. Old storage pod UUID: unowned. New UUID: 05ab4453-6e47-11f1-acdd-d039eabdd925.
+Jun 22 14:31:14 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database                                              Jun 22 14:31:14 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:31:15 [rtp-afx1k-c01-01:vifmgr.dns.reconfigured:notice]: ONTAP DNS server successfully reconfigured due to LIF configuration changes.
+Updating volume location database .                                            Updating volume location database ..                                           Updating volume location database ...                                          Updating volume location database ....                                         Updating volume location database .....                                        Jun 22 14:31:20 [rtp-afx1k-c01-01:vifmgr.clntdev.updated:notice]: Remote device rtp-afx-9336-01 (model: OTHER, version: Cisco Nexus Operating System (NX-OS) Software 7.0(3)I7(3)
+TAC support: http://www.cisco.com/tac
+Copyright (c) 2002-2018, Cisco Systems, Inc. All rights reserved., IP address: 10.192.160.105) has been detected on the cluster network.
+Updating volume location database ......                                       Updating volume location database .......                                      Updating volume location database ........                                     Jun 22 14:31:24 [rtp-afx1k-c01-01:vifmgr.clntdev.updated:notice]: Remote device rtp-afx-9336-02 (model: OTHER, version: Cisco Nexus Operating System (NX-OS) Software 7.0(3)I7(3)
+TAC support: http://www.cisco.com/tac
+Copyright (c) 2002-2018, Cisco Systems, Inc. All rights reserved., IP address: 10.192.160.106) has been detected on the cluster network.
+Jun 22 14:31:24 [rtp-afx1k-c01-01:vifmgr.clntdev.updated:notice]: Remote device rtp-afx-9336-01 (model: OTHER, version: Cisco Nexus Operating System (NX-OS) Software 7.0(3)I7(3)
+TAC support: http://www.cisco.com/tac
+Copyright (c) 2002-2018, Cisco Systems, Inc. All rights reserved., IP address: 10.192.160.105) has been detected on the cluster network.
+Updating volume location database .........                                    Updating volume location database ..........                                   Updating volume location database ...........                                  Jun 22 14:31:27 [rtp-afx1k-c01-01:vifmgr.clntdev.updated:notice]: Remote device rtp-afx-9336-01 (model: OTHER, version: Cisco Nexus Operating System (NX-OS) Software, Version 7.0(3)I7(3), IP address: 10.192.160.105) has been detected on the cluster network.
+Updating volume location database ............                                 Jun 22 14:31:27 [rtp-afx1k-c01-01:vifmgr.clntdev.updated:notice]: Remote device rtp-afx-9336-02 (model: OTHER, version: Cisco Nexus Operating System (NX-OS) Software 7.0(3)I7(3)
+TAC support: http://www.cisco.com/tac
+Copyright (c) 2002-2018, Cisco Systems, Inc. All rights reserved., IP address: 10.192.160.106) has been detected on the cluster network.
+Jun 22 14:31:28 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:31:28 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database .............                                Updating volume location database ..............                               Updating volume location database ...............                              Updating volume location database ................                             Jun 22 14:31:31 [rtp-afx1k-c01-01:vifmgr.clntdev.updated:notice]: Remote device rtp-afx-9336-02 (model: OTHER, version: Cisco Nexus Operating System (NX-OS) Software, Version 7.0(3)I7(3), IP address: 10.192.160.106) has been detected on the cluster network.
+Updating volume location database .................                            Updating volume location database ..................                           Updating volume location database ...................                          Jun 22 14:31:35 [rtp-afx1k-c01-01:vifmgr.dns.reconfigured:notice]: ONTAP DNS server successfully reconfigured due to LIF configuration changes.
+Updating volume location database ....................                         Updating volume location database .....................                        Updating volume location database ......................                       Updating volume location database .......................                      Updating volume location database ........................                     Jun 22 14:31:41 [rtp-afx1k-c01-01:vifmgr.hm.promoted:notice]: The Reachability Health Monitor has been promoted on IPspace DCN.
+Jun 22 14:31:41 [rtp-afx1k-c01-01:vifmgr.hm.promoted:notice]: The Reachability Health Monitor has been promoted on IPspace Cluster.
+Jun 22 14:31:41 [rtp-afx1k-c01-01:vifmgr.hm.promoted:notice]: The Reachability Health Monitor has been promoted on IPspace Default.
+Updating volume location database .........................                    Jun 22 14:31:42 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:31:42 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database ..........................                   Updating volume location database                                              Updating volume location database .                                            Updating volume location database ..                                           Updating volume location database ...                                          Updating volume location database ....                                         Updating volume location database .....                                        Updating volume location database ......                                       Updating volume location database .......                                      Updating volume location database ........                                     Updating volume location database .........                                    Updating volume location database ..........                                   Updating volume location database ...........                                  Jun 22 14:31:56 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:31:56 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database ............                                 Updating volume location database .............                                Updating volume location database ..............                               Updating volume location database ...............                              Updating volume location database ................                             Updating volume location database .................                            Updating volume location database ..................                           Updating volume location database ...................                          Updating volume location database ....................                         Updating volume location database .....................                        Updating volume location database ......................                       Updating volume location database .......................                      Updating volume location database ........................                     Updating volume location database .........................                    Jun 22 14:32:10 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:32:10 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database ..........................                   Updating volume location database                                              Updating volume location database .                                            Updating volume location database ..                                           Updating volume location database ...                                          Updating volume location database ....                                         Updating volume location database .....                                        Updating volume location database ......                                       Updating volume location database .......                                      Updating volume location database ........                                     Updating volume location database .........                                    Updating volume location database ..........                                   Updating volume location database ...........                                  Jun 22 14:32:24 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:32:24 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database ............                                 .Updating volume location database .............                                Updating volume location database ..............                               Updating volume location database ...............                              Updating volume location database ................                             Updating volume location database .................                            .Updating volume location database ..................                           Updating volume location database ...................                          Updating volume location database ....................                         Updating volume location database .....................                        Updating volume location database ......................                       .Updating volume location database .......................                      Updating volume location database ........................                     Jun 22 14:32:38 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:32:38 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database .........................                    Updating volume location database ..........................                   .Updating volume location database                                              Updating volume location database .                                            Updating volume location database ..                                           Updating volume location database ...                                          Updating volume location database ....                                         .Updating volume location database .....                                        Updating volume location database ......                                       Updating volume location database .......                                      Updating volume location database ........                                     Updating volume location database .........                                    .Updating volume location database ..........                                   Updating volume location database ...........                                  Jun 22 14:32:52 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:32:52 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database ............                                 Updating volume location database .............                                Updating volume location database ..............                               .Updating volume location database ...............                              Updating volume location database ................                             Updating volume location database .................                            Updating volume location database ..................                           Updating volume location database ...................                          .Updating volume location database ....................                         Updating volume location database .....................                        Updating volume location database ......................                       Updating volume location database .......................                      .Updating volume location database ........................                     Jun 22 14:33:06 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:33:06 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database .........................                    Updating volume location database ..........................                   Updating volume location database                                              Updating volume location database .                                            .Updating volume location database ..                                           Updating volume location database ...                                          Updating volume location database ....                                         Updating volume location database .....                                        Updating volume location database ......                                       .Updating volume location database .......                                      Updating volume location database ........                                     Updating volume location database .........                                    Updating volume location database ..........                                   Updating volume location database ...........                                  Jun 22 14:33:20 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+.Jun 22 14:33:20 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+DBG:diskzero_get_next_zone: disk e10b.01.1.8 next_dbn 936215296 last_dbn 937683013 size 1467718
+DBG:diskzero_get_next_zone: disk e11b.01.5.18 next_dbn 936215296 last_dbn 937683013 size 1467718
+Jun 22 14:33:21 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10b.01.1.8 Shelf 1 Bay 8 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02067] UID [38325330:58A02067:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:21 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e11b.01.5.18 Shelf 1 Bay 18 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA00159] UID [38325330:58A00159:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+DBG:diskzero_get_next_zone: disk e10a.01.4.17 next_dbn 936215296 last_dbn 937683013 size 1467718
+Updating volume location database ............                                 DBG:diskzero_get_next_zone: disk e11b.01.7.15 next_dbn 936215296 last_dbn 937683013 size 1467718
+DBG:diskzero_get_next_zone: disk e10a.01.6.22 next_dbn 936215296 last_dbn 937683013 size 1467718
+Jun 22 14:33:21 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10a.01.4.17 Shelf 1 Bay 17 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02065] UID [38325330:58A02065:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:21 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e11b.01.7.15 Shelf 1 Bay 15 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02026] UID [38325330:58A02026:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:21 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10a.01.6.22 Shelf 1 Bay 22 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA00370] UID [38325330:58A00370:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zerDBG:diskzero_get_next_zone: disk e11b.01.1.9 next_dbn 936215296 last_dbn 937683013 size 1467718
+oing complete
+Jun 22 14:33:21 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e11b.01.1.9 Shelf 1 Bay 9 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02030] UID [38325330:58A02030:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroiDBG:diskzero_get_next_zone: disk e10a.01.2.7 next_dbn 936215296 last_dbn 937683013 size 1467718
+ng complete
+DBG:diskzero_get_next_zone: disk e10a.01.4.16 next_dbn 936215296 last_dbn 937683013 size 1467718
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10a.01.2.7 Shelf 1 Bay 7 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02066] UID [38325330:58A02066:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroiDBG:diskzero_get_next_zone: disk e10a.01.2.6 next_dbn 936215296 last_dbn 937683013 size 1467718
+ng complete
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10a.01.4.16 Shelf 1 Bay 16 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02062] UID [38325330:58A02062:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+DBG:diskzero_get_next_zone: disk e11b.01.11.2 next_dbn 936215296 last_dbn 937683013 size 1467718
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10a.01.2.6 Shelf 1 Bay 6 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02021] UID [38325330:58A02021:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e11b.01.11.2 Shelf 1 Bay 2 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01961] UID [38325330:58A01961:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroDBG:diskzero_get_next_zone: disk e10b.01.3.3 next_dbn 936215296 last_dbn 937683013 size 1467718
+ing complete
+DBG:diskzero_get_next_zone: disk e10b.01.15.14 next_dbn 936215296 last_dbn 937683013 size 1467718
+DBG:diskzero_get_next_zone: disk e11b.01.5.20 next_dbn 936215296 last_dbn 937683013 size 1467718
+DBG:diskzero_get_next_zone: disk e11b.01.11.5 next_dbn 936215296 last_dbn 937683013 size 1467718
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10b.01.3.3 Shelf 1 Bay 3 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01943] UID [38325330:58A01943:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+DBG:diskzero_get_next_zone: disk e11b.01.9.11 next_dbn 936215296 last_dbn 937683013 size 1467718
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e11b.01.5.20 Shelf 1 Bay 20 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA00502] UID [38325330:58A00502:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10b.01.15.14 Shelf 1 Bay 14 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02063] UID [38325330:58A02063:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e11b.01.11.5 Shelf 1 Bay 5 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01977] UID [38325330:58A01977:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e11b.01.9.11 Shelf 1 Bay 11 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02022] UID [38325330:58A02022:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+DBG:diskzero_get_next_zone: disk e10b.01.13.19 next_dbn 936215296 last_dbn 937683013 size 1467718
+DBG:diskzero_get_next_zone: disk e11b.01.13.21 next_dbn 936215296 last_dbn 937683013 size 1467718
+DBG:diskzero_get_next_zone: disk e10b.01.15.12 next_dbn 936215296 last_dbn 937683013 size 1467718
+Updating volume location database .............                                DBG:diskzero_get_next_zone: disk e10a.01.0.4 next_dbn 936215296 last_dbn 937683013 size 1467718
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10b.01.13.19 Shelf 1 Bay 19 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA00433] UID [38325330:58A00433:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e11b.01.13.21 Shelf 1 Bay 21 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA00516] UID [38325330:58A00516:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10b.01.15.12 Shelf 1 Bay 12 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02024] UID [38325330:58A02024:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeDBG:diskzero_get_next_zone: disk e10b.01.9.10 next_dbn 936215296 last_dbn 937683013 size 1467718
+roing complete
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10a.01.0.4 Shelf 1 Bay 4 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01973] UID [38325330:58A01973:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:22 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10b.01.9.10 Shelf 1 Bay 10 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02061] UID [38325330:58A02061:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+DBG:diskzero_get_next_zone: disk e10b.01.7.13 next_dbn 936215296 last_dbn 937683013 size 1467718
+Jun 22 14:33:23 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10b.01.7.13 Shelf 1 Bay 13 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02025] UID [38325330:58A02025:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Updating volume location database ..............                               DBG:diskzero_get_next_zone: disk e10b.01.3.1 next_dbn 936215296 last_dbn 937683013 size 1467718
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e10b.01.3.1 Shelf 1 Bay 1 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01854] UID [38325330:58A01854:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+DBG:diskzero_get_next_zone: disk e11b.01.11.0 next_dbn 936215296 last_dbn 937683013 size 1467718
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.disk.zero.done:notice]: Disk e11b.01.11.0 Shelf 1 Bay 0 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01949] UID [38325330:58A01949:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] : disk zeroing complete
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10a.01.6.22 Shelf 1 Bay 22 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA00370] UID [38325330:58A00370:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e11b.01.13.21 Shelf 1 Bay 21 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA00516] UID [38325330:58A00516:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e11b.01.5.20 Shelf 1 Bay 20 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA00502] UID [38325330:58A00502:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Updating volume location database ...............                              Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10b.01.13.19 Shelf 1 Bay 19 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA00433] UID [38325330:58A00433:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e11b.01.5.18 Shelf 1 Bay 18 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA00159] UID [38325330:58A00159:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10a.01.4.17 Shelf 1 Bay 17 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02065] UID [38325330:58A02065:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10a.01.4.16 Shelf 1 Bay 16 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02062] UID [38325330:58A02062:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e11b.01.7.15 Shelf 1 Bay 15 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02026] UID [38325330:58A02026:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10b.01.15.14 Shelf 1 Bay 14 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02063] UID [38325330:58A02063:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10b.01.7.13 Shelf 1 Bay 13 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02025] UID [38325330:58A02025:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10b.01.15.12 Shelf 1 Bay 12 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02024] UID [38325330:58A02024:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e11b.01.9.11 Shelf 1 Bay 11 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02022] UID [38325330:58A02022:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10b.01.9.10 Shelf 1 Bay 10 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02061] UID [38325330:58A02061:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e11b.01.1.9 Shelf 1 Bay 9 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02030] UID [38325330:58A02030:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10b.01.1.8 Shelf 1 Bay 8 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02067] UID [38325330:58A02067:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10a.01.2.7 Shelf 1 Bay 7 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02066] UID [38325330:58A02066:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10a.01.2.6 Shelf 1 Bay 6 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA02021] UID [38325330:58A02021:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e11b.01.11.5 Shelf 1 Bay 5 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01977] UID [38325330:58A01977:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10a.01.0.4 Shelf 1 Bay 4 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01973] UID [38325330:58A01973:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10b.01.3.3 Shelf 1 Bay 3 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01943] UID [38325330:58A01943:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e11b.01.11.2 Shelf 1 Bay 2 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01961] UID [38325330:58A01961:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e10b.01.3.1 Shelf 1 Bay 1 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01854] UID [38325330:58A01854:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Jun 22 14:33:24 [rtp-afx1k-c01-01:raid.vol.disk.add.done:notice]: Addition of Disk /storage_availability_zone_0/plex0/rg0/e11b.01.11.0 Shelf 1 Bay 0 [NETAPP   X4034S173A3T8NTE NQ54] S/N [S82SNA0XA01949] UID [38325330:58A01949:00253841:00000002:00000000:00000000:00000000:00000000:00000000:00000000] to aggregate storage_availability_zone_0 has completed successfully
+Updating volume location database ................                             Updating volume location database .................                            Updating volume location database ..................                           Updating volume location database ...................                          Updating volume location database ....................                         Updating volume location database .....................                        Updating volume location database ......................                       Updating volume location database .......................                      Updating volume location database ........................                     Jun 22 14:33:34 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:33:34 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database .........................                    Updating volume location database ..........................                   Updating volume location database                                              Updating volume location database .                                            Updating volume location database ..                                           Updating volume location database ...                                          Updating volume location database ....                                         Updating volume location database .....                                        Updating volume location database ......                                       Updating volume location database .......                                      Updating volume location database ........                                     Updating volume location database .........                                    Updating volume location database ..........                                   Updating volume location database ...........                                  Jun 22 14:33:48 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:33:48 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database ............                                 Updating volume location database .............                                Updating volume location database ..............                               Updating volume location database ...............                              Updating volume location database ................                             Updating volume location database .................                            Updating volume location database ..................                           Updating volume location database ...................                          Updating volume location database ....................                         Updating volume location database .....................                        Updating volume location database ......................                       Updating volume location database .......................                      Updating volume location database ........................                     Jun 22 14:34:02 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:34:02 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Updating volume location database .........................                    Updating volume location database ..........................                   Updating volume location database                                              Updating volume location database .                                            Updating volume location database ..                                           Updating volume location database ...                                          fm_get_node_index_by_host: bootarg.ontapx.node.index 0Updating volume location database ....                                         Creating Root Aggregate                                                        Creating Root Aggregate .                                                      Creating Root Aggregate ..                                                     Creating Root Aggregate ...                                                    Creating Root Aggregate ....                                                   Creating Root Aggregate .....                                                  Jun 22 14:34:16 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2c on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:34:16 [rtp-afx1k-c01-01:vifmgr.reach.err:error]: Network port e2d on node rtp-afx1k-c01-01 encountered errors while scanning for reachability. Reachability was detected to the following broadcast domains: -.
+Jun 22 14:34:17 [rtp-afx1k-c01-01:wafl.data.compaction.event:notice]: WAFL volume data compaction state changed in aggregate "rootFA_1_p0_i1" to "enabled".
+Jun 22 14:34:17 [rtp-afx1k-c01-01:wafl.compress.cde.event:notice]: WAFL container compression state changed in aggregate "rootFA_1_p0_i1" to "enabled".
+Creating Root Aggregate ......                                                 Jun 22 14:34:17 [rtp-afx1k-c01-01:wafl.transition.cp.completed:notice]: Transition CP with reason none, 00000000 for replaying=0,0 unmounting=0,0 total=1,0 volumes with a total of total=98 incoming=73 dirty buffers took 14ms with longest CP phases being CP_P1_CLEAN=5, CP_P2_FLUSH=2, CP_P2A_INO=1 on aggregate rootFA_1_p0_i1.
+Jun 22 14:34:17 [rtp-afx1k-c01-01:wafl.transition.cp.completed:notice]: Transition CP with reason none, 00000000 for replaying=0,0 unmounting=0,0 total=1,0 volumes with a total of total=101 incoming=23 dirty buffers took 9ms with longest CP phases being CP_P2_FLUSH=1, CP_P2A_INO=1, CP_P2A_VOLINFO=0 on aggregate rootFA_1_p0_i1.
+Jun 22 14:34:17 [rtp-afx1k-c01-01:wafl.transition.cp.completed:notice]: Transition CP with reason none, 00000000 for replaying=0,0 unmounting=0,0 total=2,1 volumes with a total of total=167 incoming=22 dirty buffers took 13ms with longest CP phases being CP_P2_FLUSH=3, CP_PRE_P0=1, CP_P2A_VOLINFO=0 on aggregate rootFA_1_p0_i1.
+Jun 22 14:34:17 [rtp-afx1k-c01-01:wafl.transition.cp.completed:notice]: Transition CP with reason none, 00000000 for replaying=0,0 unmounting=0,0 total=2,1 volumes with a total of total=156 incoming=5 dirty buffers took 11ms with longest CP phases being CP_P2_FLUSH=2, CP_P2A_BM=1, CP_P2A_VOLINFO=0 on aggregate rootFA_1_p0_i1.
+Jun 22 14:34:17 [rtp-afx1k-c01-01:wafl.transition.cp.completed:notice]: Transition CP with reason none, 00000000 for replaying=0,0 unmounting=0,0 total=2,1 volumes with a total of total=148 incoming=3 dirty buffers took 11ms with longest CP phases being CP_P2_FLUSH=2, CP_P5_FINISH=0, CP_P4_FINISH=0 on aggregate rootFA_1_p0_i1.
+RootFA rootFA_1_p0_i1 is locally owned. Continuing boot.
+Creating Root Aggregate .......                                                Jun 22 14:34:18 [rtp-afx1k-c01-01:cf.fm.notkoverClusterDisable:error]: Failover monitor: takeover disabled (restart)
+Jun 22 14:34:18 [rtp-afx1k-c01-01:cf.fm.diskInventoryOff:error]: Failover monitor: HA disk inventory disabled.
+Creating Root Aggregate ........                                               Jun 22 14:34:19 [rtp-afx1k-c01-01:tar.csum.notFound:notice]: Stored checksum file does not exist, extracting local://mnt/prestage/mroot.tgz.
+Jun 22 14:34:19 [rtp-afx1k-c01-01:tar.csum.mismatch:notice]: Stored checksum 0 does not match calculated checksum 431478161, extracting local://mnt/prestage/mroot.tgz.
+Jun 22 14:34:19 [rtp-afx1k-c01-01:cf.fsm.backupMailboxError:error]: Failover monitor: partner mailbox error detected.
+Jun 22 14:34:19 [rtp-afx1k-c01-01:cf.fsm.takeoverOfPartnerDisabled:error]: Failover monitor: takeover of partner disabled (Controller Failover takeover disabled).
+Jun 22 14:34:19 [rtp-afx1k-c01-01:cf.fm.notkoverBadMbox:notice]: Failover monitor: uninitialized backup mailbox data detected
+Creating Root Aggregate .........                                              Jun 22 14:34:20 [rtp-afx1k-c01-01:tar.csum.notFound:notice]: Stored checksum file does not exist, extracting local://mnt/prestage/pmroot.tgz.
+Jun 22 14:34:20 [rtp-afx1k-c01-01:tar.csum.mismatch:notice]: Stored checksum 0 does not match calculated checksum 2207349189, extracting local://mnt/prestage/pmroot.tgz.
+Jun 22 14:34:20 [rtp-afx1k-c01-01:kern.syslog.msg:notice]: Registry is being upgraded to improve storing of local changes.
+Jun 22 14:34:20 [rtp-afx1k-c01-01:kern.syslog.msg:notice]: Registry upgrade successful.
+Jun 22 14:34:20 [rtp-afx1k-c01-01:kern.syslog.msg:notice]: domain xing mode: off, domain xing interrupt: false
+Jun 22 14:34:20 [rtp-afx1k-c01-01:clam.invalid.config:error]: Local node (name=unknown, id=0) is in an invalid configuration for providing CLAM functionality. CLAM cannot determine the identity of the HA partner.
+System initialization has completed successfully.
+Jun 22 14:34:20 [rtp-afx1k-c01-01:reg.options.cf.change:notice]: Option sis.dense_data_limit changed on one cluster node.
+Jun 22 14:34:20 [rtp-afx1k-c01-01:cf.hwassist.notifyCfgFailed:ALERT]: Failed to update the hardware-assist configuration with hardware component (BMC). Error: HWAssist not configured(4).
+netapp_mount_mroot_late: starting in normal mode
+Mounting Root Volume                                                           netapp_mount_mroot_late: /droot is mounted
+Mounting Root Volume .                                                         Mounting Root Volume ..                                                        Mounting Root Volume ...                                                       Mounting Root Volume ....                                                      Mounting Root Volume .....                                                     Mounting Root Volume ......                                                    Mounting Root Volume .......                                                   Mounting Root Volume ........                                                  Mounting Root Volume .........                                                 Mounting Root Volume ..........                                                Mounting Root Volume ...........                                               Mounting Root Volume ............                                              Mounting Root Volume .............                                             Mounting Root Volume ..............                                            Mounting Root Volume ...............                                           Mounting Root Volume ................                                          Mounting Root Volume .................                                         Mounting Root Volume ..................                                        Mounting Root Volume ...................                                       Mounting Root Volume ....................                                      Mounting Root Volume .....................                                     Mounting Root Volume ......................                                    Mounting Root Volume .......................                                   Mounting Root Volume ........................                                  Mounting Root Volume .........................                                 Mounting Root Volume ..........................                                Mounting Root Volume ...........................                               Mounting Root Volume ............................                              Mounting Root Volume .............................                             Mounting Root Volume ..............................                            Mounting Root Volume ...............................                           Mounting Root Volume ................................                          Mounting Root Volume .................................                         Mounting Root Volume ..................................                        Mounting Root Volume ...................................                       Mounting Root Volume ....................................                      Mounting Root Volume .....................................                     Mounting Root Volume ......................................                    Jun 22 14:35:00 [rtp-afx1k-c01-01:monitor.globalStatus.critical:EMERGENCY]: Controller failover partner unknown. Controller failover not possible.
+Mounting Root Volume .......................................                   Mounting Root Volume                                                           Mounting Root Volume .                                                         Mounting Root Volume ..                                                        Mounting Root Volume ...                                                       Mounting Root Volume ....                                                      Mounting Root Volume .....                                                     Mounting Root Volume ......                                                    Mounting Root Volume .......                                                   Mounting Root Volume ........                                                  Mounting Root Volume .........                                                 Mounting Root Volume ..........                                                Mounting Root Volume ...........                                               Mounting Root Volume ............                                              Mounting Root Volume .............                                             Mounting Root Volume ..............                                            Mounting Root Volume ...............                                           Mounting Root Volume ................                                          Mounting Root Volume .................                                         Mounting Root Volume ..................                                        LOADING webjail mounts rc
+Mounting Root Volume ...................                                       Mounting Root Volume ....................                                      Mounting Root Volume .....................                                     Mounting Root Volume ......................                                    Mounting Root Volume .......................                                   Mounting Root Volume ........................                                  Mounting Root Volume .........................                                 Mounting Root Volume ..........................                                Mounting Root Volume ...........................                               Mounting Root Volume ............................                              Mounting Root Volume .............................                             Mounting Root Volume ..............................                            Mounting Root Volume ...............................                           Creating Data Aggregate 1 of 1                                                 Creating Data Aggregate 1 of 1 .                                               Creating Data Aggregate 1 of 1 ..                                              Creating Data Aggregate 1 of 1 ...                                             Creating Data Aggregate 1 of 1 ....                                            Creating Data Aggregate 1 of 1 .....                                           Creating Data Aggregate 1 of 1 ......                                          Creating Data Aggregate 1 of 1 .......                                         Creating Data Aggregate 1 of 1 ........                                        Creating Data Aggregate 1 of 1 .........                                       Creating Data Aggregate 1 of 1 ..........                                      Creating Data Aggregate 1 of 1 ...........                                     Creating Data Aggregate 1 of 1 ............                                    Creating Data Aggregate 1 of 1 .............                                   Creating Data Aggregate 1 of 1 ..............                                  Creating Data Aggregate 1 of 1 ...............                                 Creating Data Aggregate 1 of 1 ................                                Creating Data Aggregate 1 of 1 .................                               Creating Data Aggregate 1 of 1 ..................                              Creating Data Aggregate 1 of 1 ...................                             Platform does not support frulog
+Creating Data Aggregate 1 of 1 ....................                            Creating Data Aggregate 1 of 1 .....................                           Creating Data Aggregate 1 of 1 ......................                          Creating Data Aggregate 1 of 1 .......................                         Creating Data Aggregate 1 of 1 ........................                        Creating Data Aggregate 1 of 1 .........................                       Creating Data Aggregate 1 of 1 ..........................                      Creating Data Aggregate 1 of 1 ...........................                     Creating Data Aggregate 1 of 1 ............................                    Creating Data Aggregate 1 of 1 .............................                   Creating Data Aggregate 1 of 1                                                 Creating Data Aggregate 1 of 1 .                                               Creating Data Aggregate 1 of 1 ..                                              Creating Data Aggregate 1 of 1 ...                                             Creating Data Aggregate 1 of 1 ....                                            Creating Data Aggregate 1 of 1 .....                                           Creating Data Aggregate 1 of 1 ......                                          Creating Data Aggregate 1 of 1 .......                                         Creating Data Aggregate 1 of 1 ........                                        Creating Data Aggregate 1 of 1 .........                                       Creating Data Aggregate 1 of 1 ..........                                      Creating Data Aggregate 1 of 1 ...........                                     Creating Data Aggregate 1 of 1 ............                                    Creating Data Aggregate 1 of 1 .............                                   Creating Data Aggregate 1 of 1 ..............                                  Creating Data Aggregate 1 of 1 ...............                                 Creating Data Aggregate 1 of 1 ................                                Creating Data Aggregate 1 of 1 .................                               Creating Data Aggregate 1 of 1 ..................                              
+
+Cluster rtp-afx1k-c01 has been created.
+
+
+Step 2 of 5: Add Feature License Keys
+You can type "back", "exit", or "help" at any question.
+
+Enter an additional license key []: 
+
+
+Step 3 of 5: Set Up a Vserver for Cluster Administration
+You can type "back", "exit", or "help" at any question.
+
+
+Enter the cluster management interface port [e2a]: e0M
+Enter the cluster management interface IP address: 10.192.160.103
+Enter the cluster management interface netmask: 255.255.255.0
+
+Warning: The configured failover-group has no valid failover targets for the
+         LIF's failover-policy. To view the failover targets for a LIF, use the
+         "network interface show -failover" command.
+Enter the cluster management interface default gateway [10.192.160.1]:
+10.192.160.1
+
+A cluster management interface on port e0M with IP address 10.192.160.103 has been created.  You can use this address to connect to and manage the cluster.
+
+Enter the DNS domain names: ntap.local
+Enter the name server IP addresses: 10.193.67.228,10.193.67.236
+DNS lookup for the admin Vserver will use the ntap.local domain.
+
+Step 4 of 5: Configure Storage Failover (SFO)
+You can type "back", "exit", or "help" at any question.
+
+
+SFO is enabled.
+
+
+Step 5 of 5: Set Up the Node
+You can type "back", "exit", or "help" at any question.
+
+Where is the controller located []: RTP
+
+
+Cluster "rtp-afx1k-c01" has been created.
+
+To complete cluster setup, you must join each additional node to the cluster
+by running "system node show-discovered" and "cluster add-node" from a node in the cluster.
+
+To complete system configuration, you can use either OnCommand System Manager
+or the Data ONTAP command-line interface.
+
+To access OnCommand System Manager, point your web browser to the cluster
+management IP address (https://10.192.160.103).
+
+To access the command-line interface, connect to the cluster management
+IP address (for example, ssh admin@10.192.160.103).
+
+
+
+
+Stale PID file found for nvdimm_log, removing.
+netapp_qat_monitor.sh is already running (PID 21506)
+nvme_fw is already running (PID 21625)
+netapp_mlx5dump.sh is already running (PID 21749)
+netapp_mlx_hp.sh is already running (PID 21753)
+
+Mon Jun 22 14:37:43 UTC 2026
+login: 
