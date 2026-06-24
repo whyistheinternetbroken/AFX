@@ -16647,7 +16647,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 _checkpoint.mark_node_done("peer_joined", _pip)
                         _4b_filtered_ips_out.pop(_pip, None)
 
-                _4b_collected_ips = _ordered_cluster_ips_for_add(
+                _4b_collected_ips = _ordered_cluster_entries_for_add(
                     _4b_filtered_ips_out, preferred_bmcs=_peers_for_reinit
                 )
                 if _4b_collected_ips:
@@ -21183,8 +21183,8 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
     return _cluster_ip
 
 
-def _ordered_cluster_ips_for_add(cluster_ips_out, preferred_bmcs=None):
-    """Return cluster add-node IPs ordered by cluster_IP.json when available."""
+def _ordered_cluster_entries_for_add(cluster_ips_out, preferred_bmcs=None):
+    """Return ordered cluster add-node rows from cluster_IP.json / memory."""
     if not isinstance(cluster_ips_out, dict) or not cluster_ips_out:
         cluster_ips_out = {}
 
@@ -21226,12 +21226,16 @@ def _ordered_cluster_ips_for_add(cluster_ips_out, preferred_bmcs=None):
                     pass
                 else:
                     continue
-            _ordered.append(_ip)
+            _ordered.append({
+                "cluster_ip": _ip,
+                "node_name": str(_mr.get("node_name") or "").strip(),
+                "bmc": _bmc,
+            })
             _seen.add(_ip)
         for _r in _rows:
             _ip = _r["cluster_ip"]
             if _ip not in _seen:
-                _ordered.append(_ip)
+                _ordered.append(_r)
                 _seen.add(_ip)
         if _ordered:
             return _ordered
@@ -21242,7 +21246,11 @@ def _ordered_cluster_ips_for_add(cluster_ips_out, preferred_bmcs=None):
         _pref_index.get(r["bmc"], len(_pref_index)),
         r["cluster_ip"],
     ))
-    return [r["cluster_ip"] for r in _rows]
+    return _rows
+
+
+def _ordered_cluster_ips_for_add(cluster_ips_out, preferred_bmcs=None):
+    return [r["cluster_ip"] for r in _ordered_cluster_entries_for_add(cluster_ips_out, preferred_bmcs=preferred_bmcs)]
 
 
 def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
@@ -21267,13 +21275,31 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                 state="in_progress",
             )
 
-    ips_str = ",".join(cluster_ips)
+    _rows = []
+    for _entry in cluster_ips:
+        if isinstance(_entry, dict):
+            _ip = str(_entry.get("cluster_ip") or _entry.get("ip") or "").strip()
+            _node = str(_entry.get("node_name") or _entry.get("node") or "").strip()
+        else:
+            _ip = str(_entry or "").strip()
+            _node = ""
+        if _ip:
+            _rows.append({"cluster_ip": _ip, "node_name": _node})
+    if not _rows:
+        return True
+
+    ips_str = ",".join(r["cluster_ip"] for r in _rows)
+    node_names = [r["node_name"] for r in _rows]
+    names_str = ",".join(node_names) if node_names and all(node_names) else ""
+    cmd = f"cluster add-node -cluster-ips {ips_str}"
+    if names_str:
+        cmd += f" -node-names {names_str}"
     print("\n  Using previously collected cluster network IP(s)")
     print("  Running add-node command")
-    print(f"     cluster add-node -cluster-ips {ips_str}")
-    print(f"\n  ➕ Adding {len(cluster_ips)} node(s) to cluster...")
+    print(f"     {cmd}")
+    print(f"\n  ➕ Adding {len(_rows)} node(s) to cluster...")
     if log:
-        log.log(f"cluster add-node -cluster-ips {ips_str}")
+        log.log(cmd)
 
     _baseline_count = -1
     _target_count = None
@@ -21284,7 +21310,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             log.log(f"cluster add-node: baseline cluster show failed: {_e}",
                     prefix="WARN")
     if _baseline_count >= 0:
-        _target_count = _baseline_count + len(cluster_ips)
+        _target_count = _baseline_count + len(_rows)
         if log:
             log.log(f"cluster add-node: baseline count={_baseline_count}, "
                     f"target count={_target_count}")
@@ -21310,7 +21336,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     poll_interval = 120   # 2 minutes
     start = time.monotonic()
     _already_succeeded: set = set()
-    _requested_ips = {str(_ip).strip() for _ip in cluster_ips if str(_ip).strip()}
+    _requested_ips = {str(_ip).strip() for _ip in [r["cluster_ip"] for r in _rows] if str(_ip).strip()}
     _last_status_by_ip: dict[str, tuple[str, str]] = {}
     _printed_waiting_for_status = False
 
@@ -22898,7 +22924,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
     _2b_add_node_timings: "dict[str, float]" = {}
     if primary_channel and _cluster_ips_out:
-        _collected_ips = _ordered_cluster_ips_for_add(
+        _collected_ips = _ordered_cluster_entries_for_add(
             _cluster_ips_out, preferred_bmcs=peer_bmcs
         )
         if _collected_ips:
@@ -23175,7 +23201,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
     _2a_add_node_timings: "dict[str, float]" = {}
     if primary_channel and _cluster_ips_out:
-        _collected_ips = _ordered_cluster_ips_for_add(
+        _collected_ips = _ordered_cluster_entries_for_add(
             _cluster_ips_out, preferred_bmcs=peer_bmcs
         )
         if _collected_ips:
@@ -24101,7 +24127,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         _m3_pending = _m3_failed
 
     # ── Bulk cluster join via cluster add-node ─────────────────────────────
-    _m3_collected_ips = _ordered_cluster_ips_for_add(
+    _m3_collected_ips = _ordered_cluster_entries_for_add(
         _m3_cluster_ips_out, preferred_bmcs=peer_bmcs
     )
     _m3_add_node_timings: "dict[str, float]" = {}
@@ -26517,7 +26543,7 @@ def _run_2c_resume():
         for _nd in nodes_to_retry
         if str(_nd.get("bmc") or "").strip()
     ]
-    _2c_ips = _ordered_cluster_ips_for_add(
+    _2c_ips = _ordered_cluster_entries_for_add(
         _2c_cluster_ips_out, preferred_bmcs=_2c_preferred_bmcs
     )
     if primary_channel and _2c_ips:
