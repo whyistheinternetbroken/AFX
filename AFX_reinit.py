@@ -25775,6 +25775,29 @@ def _get_cluster_node_mgmt_ips(channel, cluster_name=None):
     return result
 
 
+def _cluster_role_rows_from_net_rows(net_rows):
+    """Return deduped cluster-role interface rows parsed from retained net data."""
+    _rows = []
+    _seen_nodes = set()
+    _seen_ips = set()
+    for _r in (net_rows or []):
+        _role = str(_r.get("role") or "").strip().lower()
+        _ipspace = str(_r.get("ipspace") or "").strip().lower()
+        if _role != "cluster" and _ipspace != "cluster":
+            continue
+        _ip = str(_r.get("address") or "").strip()
+        if not _is_valid_ipv4(_ip) or _ip in _seen_ips:
+            continue
+        _node = str(_r.get("home-node") or _r.get("node-name") or _r.get("node_name") or "").strip()
+        if _node and _node in _seen_nodes:
+            continue
+        _rows.append({"node_name": _node, "cluster_ip": _ip})
+        _seen_ips.add(_ip)
+        if _node:
+            _seen_nodes.add(_node)
+    return _rows
+
+
 def _get_cluster_role_ips(channel):
     """Return first cluster-role IP per node in command output order."""
     _cmds = [
@@ -27154,7 +27177,7 @@ def main():
                         direct_cluster_ssh=_is_direct46,
                     )
                     try:
-                        _cluster_ip_rows46 = _get_cluster_role_ips(_ch46)
+                        _cluster_ip_rows46 = _cluster_role_rows_from_net_rows(_net46)
                         if _cluster_ip_rows46:
                             _session_log.log(
                                 f"5c: captured {len(_cluster_ip_rows46)} cluster-role IP row(s)"
