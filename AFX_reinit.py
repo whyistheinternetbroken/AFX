@@ -16703,11 +16703,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
         # Repair node names if nodes joined out of expected order
         if _4b_pch and _config_data:
-            _repair_node_names_and_lifs(
+            _repair_result = _repair_node_names_and_lifs(
                 _4b_pch, _config_data,
                 log=log,
                 auto_confirm=True,
             )
+            _record_node_repair_to_log(log, _repair_result)
 
         if _4b_pch:
             _target_nodes = len(bmc_ips)
@@ -20576,11 +20577,12 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                         _wait_for_cluster_prompt(channel, timeout=30)
                 except Exception:
                     pass
-                _repair_node_names_and_lifs(
+                _repair_result = _repair_node_names_and_lifs(
                     channel, _config_data,
                     log=_session_log,
                     auto_confirm=True,
                 )
+                _record_node_repair_to_log(_session_log, _repair_result)
             _option3_finalize(_run_context, cc.get("mgmt_ip"))
             return
         print("\n❌ Mode 3 did not complete: one or more peer nodes failed to add.")
@@ -26171,10 +26173,29 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
     cluster_name – override cluster vserver name for LIF renames
     auto_confirm – if True, apply renames without prompting
 
-    Returns True if all names match config after the operation.
+    Returns a dict:
+        needed       – bool: True if mismatches were detected
+        elapsed      – float: total seconds for the operation
+        success      – bool: True if all names match after the operation
+        node_renames – [(old, new, elapsed_s), ...] renames performed
+        lif_renames  – [(old, new, elapsed_s), ...] renames performed
+        skipped      – bool: True if user declined or data was unavailable
     """
+    _t0 = time.monotonic()
+
+    def _result(needed, success, node_renames=None, lif_renames=None,
+                skipped=False):
+        return {
+            "needed": needed,
+            "elapsed": time.monotonic() - _t0,
+            "success": success,
+            "node_renames": node_renames or [],
+            "lif_renames": lif_renames or [],
+            "skipped": skipped,
+        }
+
     if not isinstance(config_data, dict):
-        return True
+        return _result(False, True)
 
     def _slog(msg, **kw):
         if log:
@@ -26201,7 +26222,7 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
     if not node_to_sp:
         print("  \u26a0\ufe0f  service-processor show returned no node data; skipping repair.")
         _slog("service-processor show: no data parsed", prefix="WARN")
-        return False
+        return _result(False, False, skipped=True)
 
     # Invert: sp_address → current_node_name
     sp_to_node_current = {v: k for k, v in node_to_sp.items()}
@@ -26219,7 +26240,7 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
     except Exception as _e:
         print(f"  \u26a0\ufe0f  Could not run net int show: {_e}")
         _slog(f"net int show failed: {_e}", prefix="WARN")
-        return False
+        return _result(False, False, skipped=True)
 
     lif_rows = _parse_net_int_node_mgmt_table(ni_raw)
 
@@ -26252,7 +26273,7 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
 
     if not sp_to_node_expected:
         print("  \u26a0\ufe0f  No node BMC/name pairs found in config; skipping repair.")
-        return True
+        return _result(False, True)
 
     # ── Find node name mismatches ─────────────────────────────────────────
     node_mismatches = {}
@@ -26284,7 +26305,7 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
     if not node_mismatches and not lif_mismatches:
         print("  \u2705 All node names and LIF names match the config file.")
         _slog("5m: no node name or LIF mismatches found")
-        return True
+        return _result(False, True)
 
     print("\n  Found node:address mismatches; repairing.")
     print("\n  Node name mismatches:")
@@ -26302,31 +26323,37 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
         if _ans != "y":
             print("  \u21a9\ufe0f  No changes made.")
             _slog("5m: user declined to apply corrections")
-            return False
+            return _result(True, False, skipped=True)
 
     print("")
 
     # ── Node renames ──────────────────────────────────────────────────────
     node_rename_seq = _compute_rename_sequence(node_mismatches)
     _slog(f"5m: node rename sequence: {node_rename_seq}")
+    _node_renames_done = []
     for old_name, new_name in node_rename_seq:
         _cmd = f"node rename -node {old_name} -newname {new_name}"
         print(f"  Running: {_cmd}")
         _slog(f"5m: {_cmd}")
+        _rt0 = time.monotonic()
         try:
             with _suppress_console():
                 _out = _run_cluster_command(channel, _cmd, timeout=60)
+            _rt = time.monotonic() - _rt0
             if "succeeded" in _out.lower() or "success" in _out.lower():
                 print(f"  \u2705 {old_name} \u2192 {new_name}")
             else:
                 print(f"  \u26a0\ufe0f  Rename may not have succeeded.")
                 print(f"     Output: {_out.strip()[:200]}")
             _slog(f"5m: rename output: {_out.strip()[:400]}")
+            _node_renames_done.append((old_name, new_name, _rt))
         except Exception as _e:
             print(f"  \u274c Rename failed: {_e}")
             _slog(f"5m: rename failed: {_e}", prefix="ERROR")
+            _node_renames_done.append((old_name, new_name, time.monotonic() - _rt0))
 
     # ── LIF renames ───────────────────────────────────────────────────────
+    _lif_renames_done = []
     if lif_mismatches:
         lif_rename_seq = _compute_rename_sequence(lif_mismatches)
         _slog(f"5m: LIF rename sequence: {lif_rename_seq}")
@@ -26335,14 +26362,18 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
                     f"-lif {old_lif} -newname {new_lif}")
             print(f"  Running: {_cmd}")
             _slog(f"5m: {_cmd}")
+            _rt0 = time.monotonic()
             try:
                 with _suppress_console():
                     _out = _run_cluster_command(channel, _cmd, timeout=60)
+                _rt = time.monotonic() - _rt0
                 print(f"  \u2705 LIF {old_lif} \u2192 {new_lif}")
                 _slog(f"5m: LIF rename output: {_out.strip()[:400]}")
+                _lif_renames_done.append((old_lif, new_lif, _rt))
             except Exception as _e:
                 print(f"  \u274c LIF rename failed: {_e}")
                 _slog(f"5m: LIF rename failed: {_e}", prefix="ERROR")
+                _lif_renames_done.append((old_lif, new_lif, time.monotonic() - _rt0))
 
     # ── Final verification ────────────────────────────────────────────────
     print("\n  \U0001f50d Final verification...")
@@ -26397,9 +26428,51 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
     except Exception as _ve:
         print(f"  \u26a0\ufe0f  Final verification failed: {_ve}")
         _slog(f"5m: final verification error: {_ve}", prefix="WARN")
-        return False
+        return _result(True, False, _node_renames_done, _lif_renames_done)
 
-    return not bool(remaining_mismatches) and not bool(lif_remaining)
+    return _result(
+        True,
+        not bool(remaining_mismatches) and not bool(lif_remaining),
+        _node_renames_done,
+        _lif_renames_done,
+    )
+
+
+def _record_node_repair_to_log(log, result):
+    """Record the result of _repair_node_names_and_lifs to the session summary.
+
+    Writes a 'Node Name / LIF Repair' phase entry with per-rename subtimings
+    so the summary file shows whether renames were needed, how long they took,
+    and whether they succeeded.
+    """
+    if not log or not isinstance(result, dict):
+        return
+    _phase = "Node Name / LIF Repair"
+    _elapsed = float(result.get("elapsed", 0.0))
+    _needed  = bool(result.get("needed"))
+    _success = bool(result.get("success"))
+    _skipped = bool(result.get("skipped"))
+    _nr = result.get("node_renames") or []
+    _lr = result.get("lif_renames") or []
+
+    # Don't add a phase entry when we couldn't gather data at all
+    if _skipped and not _needed:
+        return
+
+    _outcome = "PASS" if _success else ("SKIPPED" if _skipped else "FAIL")
+    log.record_phase(_phase, _elapsed, outcome=_outcome)
+
+    if not _needed:
+        log.add_phase_subtiming(_phase, "No renames needed", _elapsed)
+    elif _skipped:
+        log.add_phase_subtiming(_phase, "User declined corrections", _elapsed)
+    else:
+        for old, new, t in _nr:
+            log.add_phase_subtiming(_phase, f"node: {old} \u2192 {new}", t)
+        for old, new, t in _lr:
+            log.add_phase_subtiming(_phase, f"LIF:  {old} \u2192 {new}", t)
+        if not _success:
+            log.add_phase_subtiming(_phase, "\u26a0\ufe0f  Some renames may have failed", 0.0)
 
 
 def _run_5m_node_repair_mode():
@@ -26504,13 +26577,14 @@ def _run_5m_node_repair_mode():
             else _config_data
         )
 
-        all_match = _repair_node_names_and_lifs(
+        _repair_result = _repair_node_names_and_lifs(
             _ch5m, _cfg_for_repair,
             log=_session_log,
             auto_confirm=False,
         )
+        _record_node_repair_to_log(_session_log, _repair_result)
 
-        if all_match and not (
+        if _repair_result and not (
             # Only print the "all match" banner if no repair was needed
             # (_repair_node_names_and_lifs already prints status)
             False
