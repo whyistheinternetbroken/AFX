@@ -1,8 +1,0 @@
-[2026-06-22 10:12:55.722] label=primary BMC host=10.192.160.29 user=admin attempt=1 event=connect_attempt reconnect=no phase=SSH_Connection details=max_attempts=5
-[2026-06-22 10:12:56.683] label=primary BMC host=10.192.160.29 user=admin attempt=1 event=connect_success reconnect=no phase=SSH_Connection
-[2026-06-22 10:13:28.752] label=peer/10.192.160.35 host=10.192.160.35 user=admin attempt=1 event=connect_attempt reconnect=no phase=Peer_Node_Reset_to_LOADER details=max_attempts=5
-[2026-06-22 10:13:29.618] label=peer/10.192.160.35 host=10.192.160.35 user=admin attempt=1 event=connect_success reconnect=no phase=Peer_Node_Reset_to_LOADER
-[2026-06-22 10:14:38.415] label=peer/10.192.160.35 host=10.192.160.35 user=admin attempt=1 event=connect_attempt reconnect=no phase=Peer_Node_Reset_to_LOADER details=max_attempts=5
-[2026-06-22 10:14:39.309] label=peer/10.192.160.35 host=10.192.160.35 user=admin attempt=1 event=connect_success reconnect=no phase=Peer_Node_Reset_to_LOADER
-[2026-06-22 10:37:56.243] label=peer/10.192.160.35 host=10.192.160.35 user=admin attempt=1 event=connect_attempt reconnect=no phase=- details=max_attempts=5
-[2026-06-22 10:37:57.126] label=peer/10.192.160.35 host=10.192.160.35 user=admin attempt=1 event=connect_success reconnect=no phase=-
