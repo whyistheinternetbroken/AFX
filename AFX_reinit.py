@@ -8102,11 +8102,7 @@ def _print_retain_summary(cluster_name, net_rows, peer_addresses=None):
             print("  " + "-" * 105)
             print(f"  {'lif':<26} {'home-node':<18} {'port':<8} {'address':<18} {'netmask':<16} {'role'}")
             print("  " + "-" * 105)
-            node_names = []
             for r in mgmt_lifs:
-                home_node = (r.get('home-node') or '').strip()
-                if home_node and home_node not in node_names:
-                    node_names.append(home_node)
                 print(
                     f"  {r.get('lif', '-'):<26} "
                     f"{r.get('home-node', '-'):<18} "
@@ -8115,6 +8111,11 @@ def _print_retain_summary(cluster_name, net_rows, peer_addresses=None):
                     f"{r.get('netmask', '-'):<16} "
                     f"{r.get('role', '-')}"
                 )
+            node_names = []
+            for r in mgmt_lifs:
+                home_node = (r.get("home-node") or "").strip()
+                if home_node and home_node not in node_names:
+                    node_names.append(home_node)
             if node_names:
                 print("\n  Node names discovered from node-mgmt rows:")
                 print(f"    • {', '.join(node_names)}")
@@ -9731,7 +9732,7 @@ def _resolve_mgmt_lif_from_retained(lif_type: str):
 
     Returns ``{port, ip, netmask, gateway}`` with missing fields as None.
     """
-    cfg = {"port": None, "ip": None, "netmask": None, "gateway": None}
+    cfg = {"port": None, "ip": None, "netmask": None, "gateway": None, "node_name": None}
     rows = _retained_net_config or []
     candidates = []
     for r in rows:
@@ -9769,6 +9770,9 @@ def _resolve_mgmt_lif_from_retained(lif_type: str):
         cfg["port"] = r.get("home-port") or r.get("port")
         cfg["ip"] = r.get("address")
         cfg["netmask"] = r.get("netmask")
+        cfg["node_name"] = r.get("home-node") or r.get("node-name") or r.get("node_name")
+        if not cfg["node_name"] and lif_type == "node":
+            cfg["node_name"] = next((str(_retained_sp_to_node.get(sp, "") or "").strip() for sp in _retained_sp_to_node if _retained_sp_to_node.get(sp)), "")
     cfg["gateway"] = _retained_default_gateway
     return cfg
 
@@ -9898,7 +9902,7 @@ def apply_retained_to_cluster_config():
         print("\n  \U0001F4D1 Populated cluster config from existing cluster:")
         for k in fills:
             shown = cluster_block[k]
-            print(f"     {k:<20} = {shown}")
+            _ts_print(f"     {k:<20} = {shown}")
         if _session_log:
             _session_log.log(
                 f"Populated cluster config from retained data: {fills}"
@@ -10094,6 +10098,7 @@ def _normalize_node_mgmt_config(cfg):
         "ip": ("ip", "node_mgmt_ip"),
         "netmask": ("netmask", "node_mgmt_netmask"),
         "gateway": ("gateway", "node_mgmt_gateway"),
+        "node_name": ("node_name", "name"),
     }
     for _canon, _names in _aliases.items():
         _val = None
@@ -10406,6 +10411,7 @@ def collect_node_mgmt_per_bmc(primary_bmc, peer_bmcs):
     primary_defaults = _resolve_node_mgmt_config_from_retained()
     shared_netmask = primary_defaults.get("netmask")
     shared_gateway = primary_defaults.get("gateway") or _retained_default_gateway
+    shared_node_name = primary_defaults.get("node_name")
 
     all_bmcs = [primary_bmc] + [b for b in peer_bmcs if b and b != primary_bmc]
 
@@ -10430,11 +10436,13 @@ def collect_node_mgmt_per_bmc(primary_bmc, peer_bmcs):
             d_ip = node_cfg.get("node_mgmt_ip") or primary_defaults.get("ip")
             d_mask = node_cfg.get("node_mgmt_netmask") or primary_defaults.get("netmask") or shared_netmask
             d_gw = node_cfg.get("node_mgmt_gateway") or primary_defaults.get("gateway") or shared_gateway
+            d_name = node_cfg.get("node_name") or node_cfg.get("name") or primary_defaults.get("node_name") or shared_node_name
         else:
             d_port = node_cfg.get("node_mgmt_port") or "e0M"
             d_ip = node_cfg.get("node_mgmt_ip")
             d_mask = node_cfg.get("node_mgmt_netmask") or shared_netmask
             d_gw = node_cfg.get("node_mgmt_gateway") or shared_gateway
+            d_name = node_cfg.get("node_name") or node_cfg.get("name")
 
         # If the config file has a complete AND valid entry for this BMC,
         # use it silently. Any invalid value forces the prompt path so the
@@ -10489,6 +10497,7 @@ def collect_node_mgmt_per_bmc(primary_bmc, peer_bmcs):
 
         _node_mgmt_by_bmc[bmc] = {
             "port": port, "ip": ip, "netmask": mask, "gateway": gw,
+            "node_name": d_name,
         }
         if _session_log:
             _session_log.log(
@@ -11542,28 +11551,48 @@ def _apply_license(channel):
         print("  \U0001f50d Gathering node management IPs...")
         if _session_log:
             _session_log.log(
-                "net int show -role node-mgmt -fields address (gather node IPs)"
+                "net int show -role node-mgmt -fields address,home-node (gather node IPs)"
             )
         node_ips = []
+        node_targets = []
         try:
             ni_out = _run_cluster_command(
                 channel,
-                "net int show -role node-mgmt -fields address",
+                "net int show -role node-mgmt -fields address,home-node",
                 timeout=30,
             )
+            seen_node_ips = set()
             for line in ni_out.splitlines():
-                for token in line.split():
-                    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", token):
-                        if token not in node_ips:
-                            node_ips.append(token)
-            if node_ips:
-                print(f"  \u2705 Node-mgmt IPs: {', '.join(node_ips)}")
-                _slog(f"Node-mgmt IPs: {node_ips}")
-            else:
-                print(
-                    "  \u26a0\ufe0f  No node-mgmt IPs found; SFTP step will be skipped."
+                tokens = line.split()
+                for idx, token in enumerate(tokens):
+                    _ip_match = re.match(
+                        r"^(\d{1,3}(?:\.\d{1,3}){3})(?:/\d+)?$",
+                        token,
+                    )
+                    if not _ip_match:
+                        continue
+                    _node_ip = _ip_match.group(1)
+                    if _node_ip in seen_node_ips:
+                        continue
+                    _node_name = tokens[idx + 1] if idx + 1 < len(tokens) else ""
+                    if not _node_name or _node_name in {"-", "true", "false"}:
+                        continue
+                    seen_node_ips.add(_node_ip)
+                    node_ips.append(_node_ip)
+                    node_targets.append(
+                        {"node_name": _node_name, "node_ip": _node_ip}
+                    )
+                    break
+            if node_targets:
+                _node_summary = ", ".join(
+                    f"{_node['node_name']}={_node['node_ip']}"
+                    for _node in node_targets
                 )
-                _slog("No node-mgmt IPs found", prefix="WARN")
+                print(f"  ? Node-mgmt targets: {_node_summary}")
+                _slog(f"Node-mgmt targets: {_node_summary}")
+            elif node_ips:
+                print(f"  ? Node-mgmt IPs: {', '.join(node_ips)}")
+                _slog(f"Node-mgmt IPs: {node_ips}")
         except Exception as exc:
             print(f"  \u26a0\ufe0f  net int show failed: {exc}")
             _slog(f"net int show failed: {exc}", prefix="WARN")
@@ -27604,7 +27633,7 @@ def main():
                 print("")
                 print("  " + "─" * 58)
                 if _sp_ips46:
-                    print(f"  SP/BMC addresses gathered from 'service-processor show' ({len(_sp_ips46)}):")
+                    _ts_print(f"  SP/BMC addresses gathered from 'service-processor show' ({len(_sp_ips46)}):")
                     for _sip46 in _sp_ips46:
                         print(f"    • {_sip46}")
                     _bmc_ip_ans = _prompt(
