@@ -3432,6 +3432,7 @@ def select_operation_mode():
         print("    5j. Compare LOADER env to defaults (diff) (experimental)")
         print("    5k. Check boot DNA (cluster shell or LOADER)")
         print("    5l. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
+        print("    5m. Compare and correct cluster node names:IP addresses")
         print("")
         print("    !!Disruptive commands!!")
         print("      5z. Reset all nodes to LOADER prompt")
@@ -3819,7 +3820,7 @@ def select_operation_mode():
             print("")
             continue
 
-        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5k", "5l", "5z"):
+        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5k", "5l", "5m", "5z"):
             if choice == "5":
                 _print_banner("🛠️ 5: Administration and maintenance")
                 print("\n  5a. Install license file only")
@@ -3833,12 +3834,13 @@ def select_operation_mode():
                 print("  5j. Compare LOADER env to defaults (diff) (experimental)")
                 print("  5k. Check boot DNA (cluster shell or LOADER)")
                 print("  5l. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
+                print("  5m. Compare and correct cluster node names:IP addresses")
                 print("")
                 print("  !!Disruptive commands!!")
                 print("    5z. Reset all nodes to LOADER prompt")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5l, 5z) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5a–5m, 5z) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -4035,13 +4037,29 @@ def select_operation_mode():
                     print("\n  ✅ Confirmed. 5l: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)\n")
                     return 55, False, False
                 print("\n  ↩️  Returning to menu...\n")
+
+            if choice == "5m":
+                _print_banner("\U0001f527 5m: Compare and correct cluster node names")
+                print("")
+                print("  Connects to the cluster management LIF, compares current")
+                print("  node names and management LIF names against the reinit_config")
+                print("  file (using BMC/SP addresses as node identity ground truth),")
+                print("  and offers to correct any mismatches via ONTAP node rename")
+                print("  and net int rename commands.")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  \u2705 Confirmed. 5m: Compare and correct cluster node names\n")
+                    return 57, False, False
+                print("\n  \u21a9\ufe0f  Returning to menu...\n")
             continue
 
         if choice == "7":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 2c, 3, 4a-4c, 5a-5l/5z, 6, or 7.")
+        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 2c, 3, 4a-4c, 5a-5m/5z, 6, or 7.")
 
 
 def get_loader_commands():
@@ -16683,9 +16701,17 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     log.log("4b mode 3: no cluster IPs; skipping cluster add-node",
                             prefix="ERROR")
 
+        # Repair node names if nodes joined out of expected order
+        if _4b_pch and _config_data:
+            _repair_node_names_and_lifs(
+                _4b_pch, _config_data,
+                log=log,
+                auto_confirm=True,
+            )
+
         if _4b_pch:
             _target_nodes = len(bmc_ips)
-            print(f"\n  🔍 Final health check: waiting for {_target_nodes} healthy node(s)...")
+            print(f"\n  \U0001f50d Final health check: waiting for {_target_nodes} healthy node(s)...")
             _healthy_nodes = _wait_for_cluster_nodes_healthy(
                 _4b_pch,
                 target_count=_target_nodes,
@@ -20543,6 +20569,18 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             primary_bmc=primary_bmc,
         )
         if _mode3_ok:
+            # Repair node names if nodes joined out of expected order
+            if _config_data:
+                try:
+                    with _suppress_console():
+                        _wait_for_cluster_prompt(channel, timeout=30)
+                except Exception:
+                    pass
+                _repair_node_names_and_lifs(
+                    channel, _config_data,
+                    log=_session_log,
+                    auto_confirm=True,
+                )
             _option3_finalize(_run_context, cc.get("mgmt_ip"))
             return
         print("\n❌ Mode 3 did not complete: one or more peer nodes failed to add.")
@@ -25980,6 +26018,521 @@ def _run_cluster_ip_manifest_mode():
                     _obj.close()
 
 
+# ── Node name / LIF repair helpers (option 5m) ──────────────────────────────
+
+def _parse_net_int_node_mgmt_table(output):
+    """Parse 'net int show -role node-mgmt -fields address,home-node' output.
+
+    Returns list of dicts: [{lif, home_node, address, vserver}, ...]
+    """
+    output = _ANSI_RE.sub("", output)
+    rows = []
+    headers = None
+    dashes_seen = False
+    for line in output.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if "::" in s:
+            continue
+        if s.startswith("(") and s.endswith(")"):
+            continue
+        if "entries were displayed" in s.lower() or "entry was displayed" in s.lower():
+            continue
+        if set(s) <= {"-", " "}:
+            dashes_seen = True
+            continue
+        tokens = s.split()
+        if not dashes_seen:
+            low = [t.lower() for t in tokens]
+            if "address" in low:
+                headers = low
+            continue
+        if not headers or len(tokens) < 3:
+            continue
+        row = {}
+        if len(tokens) >= len(headers):
+            for i, h in enumerate(headers):
+                row[h] = tokens[i]
+        else:
+            if len(tokens) >= 4:
+                row = {
+                    "vserver": tokens[0],
+                    "logical": tokens[1],
+                    "home-node": tokens[2],
+                    "address": tokens[3],
+                }
+            elif len(tokens) == 3:
+                row = {"logical": tokens[0], "home-node": tokens[1], "address": tokens[2]}
+        lif = (row.get("logical") or row.get("lif")
+               or row.get("logical interface") or "")
+        home = row.get("home-node") or row.get("home_node") or ""
+        addr = row.get("address") or ""
+        vserver = row.get("vserver") or ""
+        if not re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", addr):
+            continue
+        if lif and home:
+            rows.append({"lif": lif, "home_node": home,
+                         "address": addr, "vserver": vserver})
+    return rows
+
+
+def _parse_sp_show_to_node_map(output):
+    """Parse 'service-processor show -fields address,node' output.
+
+    Returns {node_name: sp_address} dict.
+    """
+    output = _ANSI_RE.sub("", output)
+    result = {}
+    headers = None
+    dashes_seen = False
+    for line in output.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if "::" in s or s.lower().startswith("service-processor"):
+            continue
+        if "entries were displayed" in s.lower():
+            continue
+        if set(s) <= {"-", " "}:
+            dashes_seen = True
+            continue
+        tokens = s.split()
+        if not dashes_seen:
+            low = [t.lower() for t in tokens]
+            if "address" in low:
+                headers = low
+            continue
+        if not headers or len(tokens) < len(headers):
+            continue
+        row = dict(zip(headers, tokens[:len(headers)]))
+        addr = row.get("address", "")
+        node = row.get("node", "")
+        if (addr and addr not in ("-", "--")
+                and node and node not in ("-", "--")):
+            result[node] = addr
+    return result
+
+
+def _compute_rename_sequence(mismatches):
+    """Given {current_name: expected_name}, return an ordered list of
+    (old_name, new_name) tuples safe for sequential ONTAP rename commands.
+
+    Resolves permutation cycles by temporarily renaming one node to
+    '{expected_name}a' to break conflicts, mirroring ONTAP best practice.
+    """
+    if not mismatches:
+        return []
+    all_current_names = set(mismatches.keys())
+    renames = []
+    remaining = dict(mismatches)
+    while remaining:
+        start_old = next(iter(remaining))
+        start_new = remaining[start_old]
+        if start_new in remaining:
+            # Cycle detected: collect all members
+            cycle = [start_old]
+            current = start_new
+            while current != start_old and current in remaining:
+                cycle.append(current)
+                current = remaining.get(current)
+            # Use target name + "a" as temp (mirrors ONTAP example)
+            temp_name = start_new + "a"
+            all_vals = {v for v in remaining.values()}
+            while temp_name in all_current_names or temp_name in all_vals:
+                temp_name += "a"
+            # Step 1: rename start_old to temp
+            renames.append((start_old, temp_name))
+            # Step 2: rename cycle tail in reverse so each target is free
+            for node in reversed(cycle[1:]):
+                renames.append((node, remaining[node]))
+            # Step 3: rename temp to start_old's expected name
+            renames.append((temp_name, remaining[start_old]))
+            for node in cycle:
+                del remaining[node]
+        else:
+            # Direct rename — no conflict with remaining
+            renames.append((start_old, remaining[start_old]))
+            del remaining[start_old]
+    return renames
+
+
+def _repair_node_names_and_lifs(channel, config_data, log=None,
+                                 cluster_name=None, auto_confirm=False):
+    """Compare and correct cluster node names and node-mgmt LIF names.
+
+    Uses service-processor show (BMC IPs as node identity ground truth) and
+    net int show to detect mismatches against reinit_config, then resolves
+    them via cycle-safe rename sequences.
+
+    channel      – active cluster shell channel (::>)
+    config_data  – loaded reinit_config dict
+    log          – SessionLogger (optional)
+    cluster_name – override cluster vserver name for LIF renames
+    auto_confirm – if True, apply renames without prompting
+
+    Returns True if all names match config after the operation.
+    """
+    if not isinstance(config_data, dict):
+        return True
+
+    def _slog(msg, **kw):
+        if log:
+            log.log(msg, **kw)
+
+    print("\n  \U0001f50d Checking cluster node names against config file...")
+    _slog("5m: gathering node names via service-processor show and net int show")
+
+    # ── Gather current SP (BMC) → node mapping ────────────────────────────
+    try:
+        with _suppress_console():
+            sp_raw = _run_cluster_command(
+                channel,
+                "set -rows 0; service-processor show -fields address,node",
+                timeout=30,
+            )
+        _slog(f"service-processor show output:\n{sp_raw[:2000]}")
+    except Exception as _e:
+        print(f"  \u26a0\ufe0f  Could not run service-processor show: {_e}")
+        _slog(f"service-processor show failed: {_e}", prefix="WARN")
+        return False
+
+    node_to_sp = _parse_sp_show_to_node_map(sp_raw)
+    if not node_to_sp:
+        print("  \u26a0\ufe0f  service-processor show returned no node data; skipping repair.")
+        _slog("service-processor show: no data parsed", prefix="WARN")
+        return False
+
+    # Invert: sp_address → current_node_name
+    sp_to_node_current = {v: k for k, v in node_to_sp.items()}
+
+    # ── Gather current LIF info ───────────────────────────────────────────
+    try:
+        with _suppress_console():
+            ni_raw = _run_cluster_command(
+                channel,
+                "set -rows 0; net int show -role node-mgmt "
+                "-fields address,home-node",
+                timeout=30,
+            )
+        _slog(f"net int show -role node-mgmt output:\n{ni_raw[:2000]}")
+    except Exception as _e:
+        print(f"  \u26a0\ufe0f  Could not run net int show: {_e}")
+        _slog(f"net int show failed: {_e}", prefix="WARN")
+        return False
+
+    lif_rows = _parse_net_int_node_mgmt_table(ni_raw)
+
+    # Auto-detect cluster/vserver name from LIF rows if not provided
+    lif_vserver = cluster_name or ""
+    if not lif_vserver:
+        for _r in lif_rows:
+            _vs = _r.get("vserver", "").strip()
+            if _vs:
+                lif_vserver = _vs
+                break
+    if not lif_vserver:
+        lif_vserver = (config_data.get("cluster") or {}).get("name", "")
+
+    # ── Build expected mapping from config ───────────────────────────────
+    all_nodes = []
+    _pn = config_data.get("primary_node") or {}
+    if isinstance(_pn, dict) and _pn.get("bmc"):
+        all_nodes.append(_pn)
+    for _sn in (config_data.get("secondary_nodes") or []):
+        if isinstance(_sn, dict) and _sn.get("bmc"):
+            all_nodes.append(_sn)
+
+    sp_to_node_expected = {}
+    for _n in all_nodes:
+        _bmc = str(_n.get("bmc", "")).strip()
+        _name = str(_n.get("node_name", "")).strip()
+        if _bmc and _name:
+            sp_to_node_expected[_bmc] = _name
+
+    if not sp_to_node_expected:
+        print("  \u26a0\ufe0f  No node BMC/name pairs found in config; skipping repair.")
+        return True
+
+    # ── Find node name mismatches ─────────────────────────────────────────
+    node_mismatches = {}
+    for sp_addr, expected_name in sp_to_node_expected.items():
+        current_name = sp_to_node_current.get(sp_addr)
+        if not current_name:
+            _slog(f"BMC {sp_addr}: not found in SP show output", prefix="WARN")
+            continue
+        if current_name != expected_name:
+            node_mismatches[current_name] = expected_name
+
+    # ── Find LIF name mismatches ─────────────────────────────────────────
+    lif_mismatches = {}
+    for _r in lif_rows:
+        _lif = _r.get("lif", "")
+        _home = _r.get("home_node", "")
+        _vs = _r.get("vserver", "") or lif_vserver
+        if not _lif or not _home:
+            continue
+        if _home in node_mismatches:
+            expected_home = node_mismatches[_home]
+            expected_lif = _lif.replace(_home, expected_home)
+            if expected_lif != _lif:
+                lif_mismatches[_lif] = expected_lif
+                if _vs:
+                    lif_vserver = _vs
+
+    # ── Report ────────────────────────────────────────────────────────────
+    if not node_mismatches and not lif_mismatches:
+        print("  \u2705 All node names and LIF names match the config file.")
+        _slog("5m: no node name or LIF mismatches found")
+        return True
+
+    print("\n  Found node:address mismatches; repairing.")
+    print("\n  Node name mismatches:")
+    for curr, exp in node_mismatches.items():
+        print(f"    {curr}  \u2192  {exp}")
+    if lif_mismatches:
+        print("\n  LIF name mismatches:")
+        for curr, exp in lif_mismatches.items():
+            print(f"    {curr}  \u2192  {exp}")
+    _slog(f"5m: node mismatches={node_mismatches}; LIF mismatches={lif_mismatches}")
+
+    # ── Confirm ───────────────────────────────────────────────────────────
+    if not auto_confirm:
+        _ans = input("\n  Apply corrections? [y/N]: ").strip().lower()
+        if _ans != "y":
+            print("  \u21a9\ufe0f  No changes made.")
+            _slog("5m: user declined to apply corrections")
+            return False
+
+    print("")
+
+    # ── Node renames ──────────────────────────────────────────────────────
+    node_rename_seq = _compute_rename_sequence(node_mismatches)
+    _slog(f"5m: node rename sequence: {node_rename_seq}")
+    for old_name, new_name in node_rename_seq:
+        _cmd = f"node rename -node {old_name} -newname {new_name}"
+        print(f"  Running: {_cmd}")
+        _slog(f"5m: {_cmd}")
+        try:
+            with _suppress_console():
+                _out = _run_cluster_command(channel, _cmd, timeout=60)
+            if "succeeded" in _out.lower() or "success" in _out.lower():
+                print(f"  \u2705 {old_name} \u2192 {new_name}")
+            else:
+                print(f"  \u26a0\ufe0f  Rename may not have succeeded.")
+                print(f"     Output: {_out.strip()[:200]}")
+            _slog(f"5m: rename output: {_out.strip()[:400]}")
+        except Exception as _e:
+            print(f"  \u274c Rename failed: {_e}")
+            _slog(f"5m: rename failed: {_e}", prefix="ERROR")
+
+    # ── LIF renames ───────────────────────────────────────────────────────
+    if lif_mismatches:
+        lif_rename_seq = _compute_rename_sequence(lif_mismatches)
+        _slog(f"5m: LIF rename sequence: {lif_rename_seq}")
+        for old_lif, new_lif in lif_rename_seq:
+            _cmd = (f"net int rename -vserver {lif_vserver} "
+                    f"-lif {old_lif} -newname {new_lif}")
+            print(f"  Running: {_cmd}")
+            _slog(f"5m: {_cmd}")
+            try:
+                with _suppress_console():
+                    _out = _run_cluster_command(channel, _cmd, timeout=60)
+                print(f"  \u2705 LIF {old_lif} \u2192 {new_lif}")
+                _slog(f"5m: LIF rename output: {_out.strip()[:400]}")
+            except Exception as _e:
+                print(f"  \u274c LIF rename failed: {_e}")
+                _slog(f"5m: LIF rename failed: {_e}", prefix="ERROR")
+
+    # ── Final verification ────────────────────────────────────────────────
+    print("\n  \U0001f50d Final verification...")
+    remaining_mismatches = {}
+    lif_remaining = {}
+    try:
+        with _suppress_console():
+            sp_raw2 = _run_cluster_command(
+                channel,
+                "set -rows 0; service-processor show -fields address,node",
+                timeout=30,
+            )
+        with _suppress_console():
+            ni_raw2 = _run_cluster_command(
+                channel,
+                "set -rows 0; net int show -role node-mgmt "
+                "-fields address,home-node",
+                timeout=30,
+            )
+        node_to_sp2 = _parse_sp_show_to_node_map(sp_raw2)
+        sp_to_node2 = {v: k for k, v in node_to_sp2.items()}
+        for sp, exp in sp_to_node_expected.items():
+            curr2 = sp_to_node2.get(sp)
+            if curr2 and curr2 != exp:
+                remaining_mismatches[curr2] = exp
+        if remaining_mismatches:
+            print(f"  \u26a0\ufe0f  {len(remaining_mismatches)} node mismatch(es) remain after repair:")
+            for curr, exp in remaining_mismatches.items():
+                print(f"    {curr}  \u2192  {exp}")
+            _slog(f"5m: remaining mismatches after repair: {remaining_mismatches}",
+                  prefix="WARN")
+        else:
+            print("  \u2705 All node names now match the config file.")
+            print("\n  Corrected node names:")
+            for sp_addr in sorted(sp_to_node_expected):
+                curr_name = sp_to_node2.get(sp_addr, "<not found>")
+                print(f"    BMC {sp_addr}: {curr_name}")
+            _slog("5m: repair complete; all names match config")
+
+        lif_rows2 = _parse_net_int_node_mgmt_table(ni_raw2)
+        lif_current_names = {_r["lif"] for _r in lif_rows2}
+        for old_lif, new_lif in lif_mismatches.items():
+            if old_lif in lif_current_names:
+                lif_remaining[old_lif] = new_lif
+        if lif_remaining:
+            print(f"  \u26a0\ufe0f  {len(lif_remaining)} LIF mismatch(es) remain:")
+            for lif, exp in lif_remaining.items():
+                print(f"    {lif}  \u2192  {exp}")
+        else:
+            _slog("5m: all LIF names correct after repair")
+
+    except Exception as _ve:
+        print(f"  \u26a0\ufe0f  Final verification failed: {_ve}")
+        _slog(f"5m: final verification error: {_ve}", prefix="WARN")
+        return False
+
+    return not bool(remaining_mismatches) and not bool(lif_remaining)
+
+
+def _run_5m_node_repair_mode():
+    """Mode 5m: Compare and correct cluster node names / LIF names.
+
+    Prompts for cluster credentials, runs comparison, optionally repairs.
+    """
+    _print_banner("\U0001f527 5m: Compare and correct cluster node names")
+    _make_session_log("Mode 5m: node name / LIF repair")
+    print("")
+
+    # ── Load config ───────────────────────────────────────────────────────
+    _5m_cfg_data = {}
+    _5m_cfg_files = _find_config_files(deep_scan=True)
+    _5m_mgmt_ip = ""
+    _5m_user = "admin"
+
+    if _5m_cfg_files:
+        _5m_cfg_path = _5m_cfg_files[0]
+        try:
+            with open(_5m_cfg_path, "r", encoding="utf-8") as _f5m:
+                _5m_cfg_data = json.load(_f5m)
+            print(f"  \U0001f4c4 Using config: {_5m_cfg_path}")
+        except Exception as _e5m:
+            print(f"  \u26a0\ufe0f  Could not read {_5m_cfg_path}: {_e5m}")
+            _5m_cfg_data = {}
+
+    if isinstance(_5m_cfg_data, dict) and _5m_cfg_data:
+        _5m_mgmt_ip = ((_5m_cfg_data.get("cluster") or {}).get("clus_mgmt_address")
+                       or _cluster_config.get("mgmt_ip") or "")
+        _5m_user = ((_5m_cfg_data.get("cluster") or {}).get("username") or "admin")
+    elif isinstance(_config_data, dict) and _config_data:
+        _5m_mgmt_ip = ((_config_data.get("cluster") or {}).get("clus_mgmt_address")
+                       or _cluster_config.get("mgmt_ip") or "")
+
+    if _5m_mgmt_ip:
+        _in = input(f"  Cluster management IP [{_5m_mgmt_ip}]: ").strip()
+        if _in:
+            _5m_mgmt_ip = _in
+    else:
+        _5m_mgmt_ip = input("  Cluster management LIF IP: ").strip()
+    if not _5m_mgmt_ip:
+        print("  No IP entered. Returning to menu.")
+        try:
+            input("  Press Enter to return to the main menu...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+        return
+
+    _u_in = input(f"  Cluster admin username [{_5m_user}]: ").strip()
+    if _u_in:
+        _5m_user = _u_in
+    try:
+        _5m_pass = _RAW_GETPASS(
+            f"  Cluster admin password for {_5m_user}@{_5m_mgmt_ip}: "
+        )
+    except (EOFError, KeyboardInterrupt):
+        _5m_pass = ""
+
+    # ── Connect ───────────────────────────────────────────────────────────
+    print(f"\n  \U0001f50c Connecting to {_5m_mgmt_ip} as {_5m_user}...")
+    _cl5m = None
+    _ch5m = None
+    try:
+        _cl5m, _, _ = _ssh_connect_with_retry(
+            _5m_mgmt_ip, _5m_user, _5m_pass,
+            label=f"5m/{_5m_mgmt_ip}",
+            max_attempts=3, interactive=False,
+        )
+    except Exception as _e5m:
+        print(f"  \u274c Connection failed: {_e5m}")
+        if _session_log:
+            _session_log.log(f"5m: connection failed: {_e5m}", prefix="ERROR")
+        try:
+            input("  Press Enter to return to the main menu...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+        return
+
+    try:
+        _ch5m = _open_shell(_cl5m)
+        with suppress(Exception):
+            _ch5m.resize_pty(width=256, height=50)
+
+        with _suppress_console():
+            _at_cluster = _wait_for_cluster_prompt(_ch5m, timeout=30)
+        if not _at_cluster:
+            print(f"  \u274c Could not reach the cluster shell on {_5m_mgmt_ip}.")
+            if _session_log:
+                _session_log.log(
+                    f"5m: cluster shell not reached on {_5m_mgmt_ip}", prefix="ERROR"
+                )
+            try:
+                input("  Press Enter to return to the main menu...")
+            except (EOFError, KeyboardInterrupt):
+                pass
+            return
+
+        _cfg_for_repair = (
+            _5m_cfg_data
+            if isinstance(_5m_cfg_data, dict) and _5m_cfg_data
+            else _config_data
+        )
+
+        all_match = _repair_node_names_and_lifs(
+            _ch5m, _cfg_for_repair,
+            log=_session_log,
+            auto_confirm=False,
+        )
+
+        if all_match and not (
+            # Only print the "all match" banner if no repair was needed
+            # (_repair_node_names_and_lifs already prints status)
+            False
+        ):
+            pass  # status already printed inside _repair_node_names_and_lifs
+
+    finally:
+        with suppress(Exception):
+            if _ch5m:
+                _ch5m.close()
+        with suppress(Exception):
+            if _cl5m:
+                _cl5m.close()
+
+    if _session_log:
+        print(f"\n  \U0001f4dd Session log: {_session_log.log_file}")
+    try:
+        input("\n  Press Enter to return to the main menu...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
 def _run_2c_resume():
     """Drive option 2c: locate a node-add manifest and retry any nodes that
     have not yet joined the cluster.
@@ -27337,6 +27890,7 @@ def main():
                         _b_puser = input("  BMC username [admin]: ").strip() or "admin"
                         _b_ppw   = getpass.getpass("  BMC password (blank = none): ")
                         _b_pport = input("  Node management port [e0M]: ").strip() or "e0M"
+                        _b_pname = input("  Node name: ").strip()
                         _b_pip   = input("  Node management IP: ").strip()
                         _b_pmask = input("  Node management netmask: ").strip()
                         _b_pgw   = input("  Node management gateway: ").strip()
@@ -27344,6 +27898,7 @@ def main():
                             "bmc": _b_pbmc,
                             "bmc_user": _b_puser,
                             "bmc_password": _b_ppw,
+                            "node_name": _b_pname,
                             "node_mgmt_port": _b_pport,
                             "node_mgmt_ip": _b_pip,
                             "node_mgmt_netmask": _b_pmask,
@@ -27512,6 +28067,13 @@ def main():
                             _config_data["primary_node"] = {}
                         if _clus_ip46:
                             _config_data["primary_node"]["cluster_network_ip"] = _clus_ip46
+                        _existing_pname46 = str(
+                            _config_data["primary_node"].get("node_name") or ""
+                        ).strip()
+                        if not _existing_pname46:
+                            _config_data["primary_node"]["node_name"] = input(
+                                "  Primary node name: "
+                            ).strip()
 
                         # 5. Prompt for new node BMC addresses (nodes to be joined).
                         print("\n" + "─" * 60)
@@ -27537,6 +28099,7 @@ def main():
                                 _nadd_user46 = input(f"  Node {_nadd_idx46} BMC username [admin]: ").strip() or "admin"
                                 _nadd_pw46   = getpass.getpass(f"  Node {_nadd_idx46} BMC password (blank = none): ")
                                 _nadd_port46 = input(f"  Node {_nadd_idx46} mgmt port [e0M]: ").strip() or "e0M"
+                                _nadd_name46 = _prompt_ip46(f"Node {_nadd_idx46} name")
                                 _nadd_ip46   = _prompt_ip46(f"Node {_nadd_idx46} mgmt IP")
                                 _nadd_mask46 = _prompt_ip46(f"Node {_nadd_idx46} mgmt netmask")
                                 _nadd_gw46   = _prompt_ip46(f"Node {_nadd_idx46} mgmt gateway")
@@ -27547,6 +28110,7 @@ def main():
                                 "bmc": _nadd_bmc46,
                                 "bmc_user": _nadd_user46,
                                 "bmc_password": _nadd_pw46,
+                                "node_name": _nadd_name46,
                                 "node_mgmt_port": _nadd_port46,
                                 "node_mgmt_ip": _nadd_ip46,
                                 "node_mgmt_netmask": _nadd_mask46,
@@ -27606,6 +28170,7 @@ def main():
                                 _nport46 = input(
                                     f"  Node {_node_idx46} management port [e0M]: "
                                 ).strip() or "e0M"
+                                _nname46 = _prompt_req46(f"Node {_node_idx46} name")
                                 _nip46   = _prompt_req46(f"Node {_node_idx46} management IP")
                                 _nmask46 = _prompt_req46(f"Node {_node_idx46} management netmask")
                                 _ngw46   = _prompt_req46(f"Node {_node_idx46} management gateway")
@@ -27617,6 +28182,7 @@ def main():
                                 "bmc": _nbmc46,
                                 "bmc_user": _nuser46,
                                 "bmc_password": _npass46,
+                                "node_name": _nname46,
                                 "node_mgmt_port": _nport46,
                                 "node_mgmt_ip": _nip46,
                                 "node_mgmt_netmask": _nmask46,
@@ -29304,6 +29870,11 @@ def main():
             # ── Mode 55 (5l): Build cluster_IP manifest ───────────────────────────
             if _operation_mode == 55:
                 _run_cluster_ip_manifest_mode()
+                raise _ReturnToMenu
+
+            # ── Mode 57 (5m): Compare and correct cluster node names ──────────────
+            if _operation_mode == 57:
+                _run_5m_node_repair_mode()
                 raise _ReturnToMenu
 
             # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
