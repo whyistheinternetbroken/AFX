@@ -7284,27 +7284,43 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
     if _entered_console:
         _tprint(f"  ℹ️  {pfx}Not at LOADER. Exiting console for system reset...")
         _exit_buf = ""
-        for _exit_attempt in range(1, 4):
+        _max_exit_attempts = 5
+        for _exit_attempt in range(1, _max_exit_attempts + 1):
             if _session_log:
                 _session_log.log_sent(
-                    f"Ctrl-D (console exit after loader probe, attempt {_exit_attempt}/3)"
+                    f"Ctrl-D (console exit after loader probe, attempt {_exit_attempt}/{_max_exit_attempts})"
                 )
             channel.send("\x04")  # Ctrl+D
             time.sleep(0.8)
             channel.send("\r")
             time.sleep(0.3)
             _exit_buf += drain_channel(
-                channel, seconds=1.6, node_log=node_log, quiet=True
+                channel, seconds=3.0, node_log=node_log, quiet=True
             )
             if _LOADER_PROMPT_RE.search(_exit_buf) or "LOADER-" in _exit_buf.upper():
                 _tprint(f"  ✅ {pfx}LOADER prompt appeared while exiting console.")
                 return True
             if _looks_like_bmc_prompt(_exit_buf):
                 return False
-            if _exit_attempt < 3:
+            if _exit_attempt < _max_exit_attempts:
                 _tprint(
-                    f"  ⚠️  {pfx}BMC prompt not returned after Ctrl-D; retrying console exit..."
+                    f"  ⚠️  {pfx}BMC prompt not returned after Ctrl-D; retrying console exit "
+                    f"({_exit_attempt}/{_max_exit_attempts})..."
                 )
+        # Final long read — some SPs emit the prompt well after the last Ctrl+D.
+        _final_buf, _final_m = direct_read_until_any(
+            channel,
+            [">", "bmc", "loader-"],
+            timeout=10,
+            node_log=node_log,
+            quiet=True,
+        )
+        _final_combined = _exit_buf + (_final_buf or "") + (_final_m or "")
+        if _LOADER_PROMPT_RE.search(_final_combined) or "LOADER-" in _final_combined.upper():
+            _tprint(f"  ✅ {pfx}LOADER prompt appeared during extended console exit wait.")
+            return True
+        if _looks_like_bmc_prompt(_final_combined):
+            return False
         _tprint(
             f"  ❌ {pfx}Could not return to BMC prompt after console probe; "
             "aborting reset to avoid sending commands to the node console."
@@ -31230,9 +31246,16 @@ def main():
                     _primary_loader_result = [None]
 
                     def _primary_loader_worker():
-                        _primary_loader_result[0] = _already_at_loader(
-                            channel, label=sp_host
-                        )
+                        try:
+                            _primary_loader_result[0] = _already_at_loader(
+                                channel, label=sp_host
+                            )
+                        except RuntimeError:
+                            # Console exit failed; treat as "not at LOADER" so
+                            # the caller falls through to the system-reset path.
+                            # The channel will have had more time to recover by
+                            # the time the main thread reaches system reset.
+                            _primary_loader_result[0] = False
 
                     _primary_thread = threading.Thread(
                         target=_primary_loader_worker, daemon=True
