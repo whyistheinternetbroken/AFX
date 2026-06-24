@@ -26333,6 +26333,15 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
             print(f"    {curr}  \u2192  {exp}")
     _slog(f"5m: node mismatches={node_mismatches}; LIF mismatches={lif_mismatches}")
 
+    # Pre-compute address→expected_lif so verification can check by IP, not name.
+    # (Name-based checks break in cycles where target names == old names.)
+    addr_to_expected_lif = {}
+    for _r in lif_rows:
+        _lif = _r.get("lif", "")
+        _addr = _r.get("address", "")
+        if _lif and _addr:
+            addr_to_expected_lif[_addr] = lif_mismatches.get(_lif, _lif)
+
     # ── Confirm ───────────────────────────────────────────────────────────
     if not auto_confirm:
         _ans = input("\n  Apply corrections? [y/N]: ").strip().lower()
@@ -26347,20 +26356,21 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
     node_rename_seq = _compute_rename_sequence(node_mismatches)
     _slog(f"5m: node rename sequence: {node_rename_seq}")
     _node_renames_done = []
+    if node_rename_seq:
+        print("  Correcting node name order")
     for old_name, new_name in node_rename_seq:
         _cmd = f"node rename -node {old_name} -newname {new_name}"
-        print(f"  Running: {_cmd}")
         _slog(f"5m: {_cmd}")
         _rt0 = time.monotonic()
         try:
             with _suppress_console():
                 _out = _run_cluster_command(channel, _cmd, timeout=60)
             _rt = time.monotonic() - _rt0
-            if "succeeded" in _out.lower() or "success" in _out.lower():
-                print(f"  \u2705 {old_name} \u2192 {new_name}")
-            else:
+            if "error" in _out.lower():
                 print(f"  \u26a0\ufe0f  Rename may not have succeeded.")
                 print(f"     Output: {_out.strip()[:200]}")
+            else:
+                print(f"  \u2705 {old_name} \u2192 {new_name}")
             _slog(f"5m: rename output: {_out.strip()[:400]}")
             _node_renames_done.append((old_name, new_name, _rt))
         except Exception as _e:
@@ -26373,10 +26383,10 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
     if lif_mismatches:
         lif_rename_seq = _compute_rename_sequence(lif_mismatches)
         _slog(f"5m: LIF rename sequence: {lif_rename_seq}")
+        print("  Renaming node management LIFs")
         for old_lif, new_lif in lif_rename_seq:
             _cmd = (f"net int rename -vserver {lif_vserver} "
                     f"-lif {old_lif} -newname {new_lif}")
-            print(f"  Running: {_cmd}")
             _slog(f"5m: {_cmd}")
             _rt0 = time.monotonic()
             try:
@@ -26421,25 +26431,31 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
                 print(f"    {curr}  \u2192  {exp}")
             _slog(f"5m: remaining mismatches after repair: {remaining_mismatches}",
                   prefix="WARN")
-        else:
-            print("  \u2705 All node names now match the config file.")
-            print("\n  Corrected node names:")
-            for sp_addr in sorted(sp_to_node_expected):
-                curr_name = sp_to_node2.get(sp_addr, "<not found>")
-                print(f"    BMC {sp_addr}: {curr_name}")
-            _slog("5m: repair complete; all names match config")
 
         lif_rows2 = _parse_net_int_node_mgmt_table(ni_raw2)
-        lif_current_names = {_r["lif"] for _r in lif_rows2}
-        for old_lif, new_lif in lif_mismatches.items():
-            if old_lif in lif_current_names:
-                lif_remaining[old_lif] = new_lif
+        addr_to_current_lif2 = {
+            _r["address"]: _r["lif"]
+            for _r in lif_rows2
+            if _r.get("address") and _r.get("lif")
+        }
+        for addr, expected in addr_to_expected_lif.items():
+            current = addr_to_current_lif2.get(addr)
+            if current and current != expected:
+                lif_remaining[current] = expected
         if lif_remaining:
             print(f"  \u26a0\ufe0f  {len(lif_remaining)} LIF mismatch(es) remain:")
             for lif, exp in lif_remaining.items():
                 print(f"    {lif}  \u2192  {exp}")
         else:
             _slog("5m: all LIF names correct after repair")
+
+        if not remaining_mismatches and not lif_remaining:
+            print("  \u2705 All node names now match the config file.")
+            print("\n  Corrected node names:")
+            for sp_addr in sorted(sp_to_node_expected):
+                curr_name = sp_to_node2.get(sp_addr, "<not found>")
+                print(f"    BMC {sp_addr}: {curr_name}")
+            _slog("5m: repair complete; all names match config")
 
     except Exception as _ve:
         print(f"  \u26a0\ufe0f  Final verification failed: {_ve}")
