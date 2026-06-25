@@ -9739,6 +9739,48 @@ def _run_boot_dna_check_mode():
             _found_file54 = _p54
             break
 
+    # Second pass: if IPs were found but names or cluster mgmt are still
+    # missing, search all config files (e.g. reinit-config.json alongside
+    # an old-format BMC_IP.json that only had netboot_bmcs).
+    if _bmc_ips54 and (not _bmc_names54 or not _cluster_mgmt54):
+        for _p54_b in _find_config_files(
+            candidate_names=(
+                "reinit-config.json",
+                "reinit_config.json",
+                "reinit-afx-config.json",
+                "BMC_IP.json",
+                "add_nodes.json",
+            ),
+        ):
+            try:
+                with open(_p54_b, "r", encoding="utf-8") as _f54_b:
+                    _d54_b = json.load(_f54_b)
+            except Exception:
+                continue
+            if not isinstance(_d54_b, dict):
+                continue
+            if not _bmc_names54:
+                for _nd_b in (
+                    ([_d54_b.get("primary_node")] if isinstance(_d54_b.get("primary_node"), dict) else [])
+                    + list(_d54_b.get("secondary_nodes") or [])
+                    + list(_d54_b.get("nodes") or [])
+                ):
+                    if not isinstance(_nd_b, dict):
+                        continue
+                    _bmc_b = str(_nd_b.get("bmc") or "").strip()
+                    _nm_b = str(_nd_b.get("node_name") or "").strip()
+                    if _bmc_b and _nm_b and _nm_b != "Cluster":
+                        _bmc_names54[_bmc_b] = _nm_b
+            if not _cluster_mgmt54:
+                _cl_b = _d54_b.get("cluster") if isinstance(_d54_b.get("cluster"), dict) else {}
+                for _k_b in ("clus_mgmt_address", "cluster_mgmt_ip", "cluster_management_ip", "mgmt_ip"):
+                    _v_b = str((_cl_b.get(_k_b) if isinstance(_cl_b, dict) else _d54_b.get(_k_b)) or "").strip()
+                    if _v_b:
+                        _cluster_mgmt54 = _v_b
+                        break
+            if _bmc_names54 and _cluster_mgmt54:
+                break
+
     if not _cluster_mgmt54 and isinstance(_config_data, dict):
         _cfg_cluster54 = _config_data.get("cluster") if isinstance(_config_data.get("cluster"), dict) else {}
         for _k54 in ("clus_mgmt_address", "cluster_mgmt_ip", "cluster_management_ip", "mgmt_ip"):
