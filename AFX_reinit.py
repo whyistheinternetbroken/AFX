@@ -9743,7 +9743,8 @@ def _run_boot_dna_check_mode():
         print(f"    1. All {'nodes' if _use_names54 else 'BMC IPs'}")
         if _bmc_ips54:
             for _ip54 in _bmc_ips54:
-                _disp54 = _bmc_names54.get(_ip54) or _ip54
+                _nm54 = _bmc_names54.get(_ip54)
+                _disp54 = f"{_nm54} ({_ip54})" if _nm54 else _ip54
                 print(f"       - {_disp54}")
         else:
             print("       - (no BMC IPs found in config)")
