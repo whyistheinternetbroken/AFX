@@ -9390,7 +9390,7 @@ def _extract_boot_dna_records(output, default_label=""):
             continue
 
         match = re.search(
-            r"bootarg\.init\.dna[ \t]*[=:]?[ \t]+(\S+)",
+            r"bootarg\.init\.dna[ \t]*(?:==|[=:])[ \t]+(\S+)",
             line,
             flags=re.IGNORECASE,
         )
@@ -9417,7 +9417,7 @@ def _extract_boot_dna_records(output, default_label=""):
         return records
 
     matches = re.findall(
-        r"bootarg\.init\.dna[ \t]*[=:]?[ \t]+(\S+)",
+        r"bootarg\.init\.dna[ \t]*(?:==|[=:])[ \t]+(\S+)",
         output or "",
         flags=re.IGNORECASE,
     )
@@ -9726,6 +9726,10 @@ def _run_boot_dna_check_mode():
             "ok": False,
         }
         _results54.append(_res54)
+        # node run * queries all nodes from one cluster shell; no need to
+        # connect to the remaining targets once we have a successful result.
+        if _res54.get("state") == "At cluster shell" and _res54.get("ok"):
+            break
 
     if len(_targets54) > 1 and _results54:
         print("\n  🧾 Boot DNA summary:")
