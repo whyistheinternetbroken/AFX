@@ -9379,8 +9379,16 @@ def _extract_boot_dna_records(output, default_label=""):
     """Extract ``[(label, dna_value), ...]`` from LOADER or cluster-shell output."""
     records = []
     seen = set()
+    current_node = None
     for raw_line in (output or "").splitlines():
         line = _ANSI_RE.sub("", raw_line).strip()
+
+        # Track "Node: <name>" headers emitted by "node run *"
+        _node_hdr = re.match(r'^Node:\s+(\S+)', line)
+        if _node_hdr:
+            current_node = _node_hdr.group(1)
+            continue
+
         lower = line.lower()
         if "bootarg.init.dna" not in lower:
             continue
@@ -9401,11 +9409,16 @@ def _extract_boot_dna_records(output, default_label=""):
         if not value or value.lower() in {"value", "name", "variable"}:
             continue
 
-        label = default_label or ""
-        prefix = line[:match.start()]
-        label_match = re.search(r"([A-Za-z0-9_.-]+)\s*:\s*$", prefix)
-        if label_match:
-            label = label_match.group(1)
+        # Prefer the node name tracked from "Node:" header lines; fall back
+        # to an inline label (LOADER format) or the caller-supplied default.
+        if current_node:
+            label = current_node
+        else:
+            label = default_label or ""
+            prefix = line[:match.start()]
+            label_match = re.search(r"([A-Za-z0-9_.-]+)\s*:\s*$", prefix)
+            if label_match:
+                label = label_match.group(1)
 
         key = (label, value)
         if key in seen:
@@ -9731,21 +9744,20 @@ def _run_boot_dna_check_mode():
         if _res54.get("state") == "At cluster shell" and _res54.get("ok"):
             break
 
-    if len(_targets54) > 1 and _results54:
+    if _results54:
         print("\n  🧾 Boot DNA summary:")
-        print(f"  {'Target':<24}  {'State':<18}  Value(s)")
-        print(f"  {'-'*24}  {'-'*18}  {'-'*24}")
+        print(f"  {'Node':<24}  {'State':<18}  Value")
+        print(f"  {'-'*24}  {'-'*18}  {'-'*12}")
         for _r54 in _results54:
+            _state54 = str(_r54.get("state") or "Unknown")
             _vals54 = _r54.get("records") or []
             if not _vals54:
-                _val_disp54 = "(parse failed)"
+                _tgt54 = str(_r54.get("target") or "-")
+                print(f"  {_tgt54:<24}  {_state54:<18}  (parse failed)")
             else:
-                _val_disp54 = ", ".join(sorted({str(v) for _, v in _vals54}))
-            print(
-                f"  {str(_r54.get('target') or '-'):<24}  "
-                f"{str(_r54.get('state') or 'Unknown'):<18}  "
-                f"{_val_disp54}"
-            )
+                for _lbl54, _val54 in _vals54:
+                    _disp54 = _lbl54 or str(_r54.get("target") or "-")
+                    print(f"  {_disp54:<24}  {_state54:<18}  {_val54}")
 
     if _session_log:
         print(f"\n📝 Session log: {_session_log.log_file}")
