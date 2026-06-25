@@ -26055,29 +26055,29 @@ def _run_cluster_ip_manifest_mode():
         or ""
     )
 
-    if _mgmt_ip:
-        print(f"\n  Cluster management IP [{_mgmt_ip}]")
-        _in = _prompt("  Press Enter to use this value, or type a different IP: ", "").strip()
-        if _in:
-            _mgmt_ip = _in
-    else:
-        _mgmt_ip = _prompt("  Cluster management IP address: ").strip()
-    if not _mgmt_ip:
-        print("  ❌ Cluster management IP is required.")
-        return
-
-    _u_in = _prompt(f"  Cluster admin username [{_admin_user}]: ", "").strip()
-    if _u_in:
-        _admin_user = _u_in
-    if not _admin_pw:
-        try:
-            _admin_pw = getpass.getpass(f"  Cluster admin password for {_admin_user}@{_mgmt_ip}: ")
-        except (EOFError, KeyboardInterrupt):
-            _admin_pw = ""
-
     _client = None
     _ch = None
     try:
+        if _mgmt_ip:
+            print(f"\n  Cluster management IP or hostname [{_mgmt_ip}]")
+            _in = _prompt("  Press Enter to use this value, or type a different IP/hostname: ", "").strip()
+            if _in:
+                _mgmt_ip = _in
+        else:
+            _mgmt_ip = _prompt("  Cluster management IP or hostname: ").strip()
+        if not _mgmt_ip:
+            print("  ❌ Cluster management IP or hostname is required.")
+            return
+
+        _u_in = _prompt(f"  Cluster admin username [{_admin_user}]: ", "").strip()
+        if _u_in:
+            _admin_user = _u_in
+        if not _admin_pw:
+            try:
+                _admin_pw = getpass.getpass(f"  Cluster admin password for {_admin_user}@{_mgmt_ip}: ")
+            except (EOFError, KeyboardInterrupt):
+                _admin_pw = ""
+
         _client, _admin_user, _admin_pw = _ssh_connect_with_retry(
             _mgmt_ip,
             _admin_user,
@@ -26109,15 +26109,22 @@ def _run_cluster_ip_manifest_mode():
             return
 
         print(f"\n  ✅ Wrote cluster IP manifest: {_path}")
-        print("  Entries:")
-        for _idx, _e in enumerate(_entries, 1):
+        print(f"\n  {'Node':<20}  Cluster IP")
+        print(f"  {'-'*20}  {'-'*18}")
+        for _e in _entries:
             _node = _e["node_name"] or "unknown-node"
-            print(f"    {_idx:>2}. {_node:<20} {_e['cluster_ip']}")
+            print(f"  {_node:<20}  {_e['cluster_ip']}")
     finally:
         for _obj in (_ch, _client):
             with suppress(Exception):
                 if _obj:
                     _obj.close()
+        if _session_log:
+            print(f"\n📝 Session log: {_session_log.log_file}")
+        try:
+            input("\n  Press Enter to return to the main menu...")
+        except (EOFError, KeyboardInterrupt):
+            pass
 
 
 # ── Node name / LIF repair helpers (option 5m) ──────────────────────────────
