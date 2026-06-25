@@ -4076,6 +4076,7 @@ def get_loader_commands():
             cmds.append("setenv raid.use-physical-zeroing? true")
         else:
             cmds.append("setenv raid.use-physical-zeroing? false")
+        cmds.append("setenv bootarg.init.unjoined true")
         if _diag_mode and _diag_bootargs:
             for ba in _diag_bootargs:
                 cmds.append(f"setenv {ba}")
@@ -4092,6 +4093,7 @@ def get_loader_commands():
             cmds.append("setenv raid.use-physical-zeroing? true")
         else:
             cmds.append("setenv raid.use-physical-zeroing? false")
+        cmds.append("setenv bootarg.init.unjoined true")
         if _diag_mode and _diag_bootargs:
             for ba in _diag_bootargs:
                 cmds.append(f"setenv {ba}")
@@ -21399,7 +21401,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     if log:
         log.log("cluster add-node command accepted; waiting for add-node-status milestones")
 
-    total_timeout = 900   # 15 minutes
+    total_timeout = max(900, len(_rows) * 150)   # 2.5 min/node, min 15 min
     poll_interval = 120   # 2 minutes
     start = time.monotonic()
     _already_succeeded: set = set()
@@ -21413,8 +21415,9 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
         _console_quiet = True
         try:
             with _primary_shell_lock:
+                _status_timeout = max(30, len(_requested_ips - _already_succeeded) * 5)
                 status_out = _run_cluster_command(
-                    primary_channel, "cluster add-node-status", timeout=30)
+                    primary_channel, "cluster add-node-status", timeout=_status_timeout)
         finally:
             _console_quiet = _prev_quiet
 
