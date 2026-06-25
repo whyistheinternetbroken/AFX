@@ -3433,6 +3433,7 @@ def select_operation_mode():
         print("    5k. Check boot DNA (cluster shell or LOADER)")
         print("    5l. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
         print("    5m. Compare and correct cluster node names:IP addresses")
+        print("    5n. Show reinit-config.json (human-readable)")
         print("")
         print("    !!Disruptive commands!!")
         print("      5z. Reset all nodes to LOADER prompt")
@@ -3820,7 +3821,7 @@ def select_operation_mode():
             print("")
             continue
 
-        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5k", "5l", "5m", "5z"):
+        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5k", "5l", "5m", "5n", "5z"):
             if choice == "5":
                 _print_banner("🛠️ 5: Administration and maintenance")
                 print("\n  5a. Install license file only")
@@ -3835,12 +3836,13 @@ def select_operation_mode():
                 print("  5k. Check boot DNA (cluster shell or LOADER)")
                 print("  5l. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
                 print("  5m. Compare and correct cluster node names:IP addresses")
+                print("  5n. Show reinit-config.json (human-readable)")
                 print("")
                 print("  !!Disruptive commands!!")
                 print("    5z. Reset all nodes to LOADER prompt")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5m, 5z) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5a–5n, 5z) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -4050,16 +4052,30 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5m: Compare and correct cluster node names\n")
+                    print("\n  ✅ Confirmed. 5m: Compare and correct cluster node names\n")
                     return 57, False, False
-                print("\n  \u21a9\ufe0f  Returning to menu...\n")
+                print("\n  ↩️  Returning to menu...\n")
+
+            if choice == "5n":
+                _print_banner("📋 5n: Show reinit-config.json")
+                print("")
+                print("  Reads the reinit-config.json (or equivalent) and displays")
+                print("  its contents in human-readable format: cluster settings,")
+                print("  nodes, management IPs, and credentials (passwords masked).")
+                print("")
+                print("  " + "─" * 58)
+                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
+                if confirm == "yes":
+                    print("\n  ✅ Confirmed. 5n: Show config\n")
+                    return 58, False, False
+                print("\n  ↩️  Returning to menu...\n")
             continue
 
         if choice == "7":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  \u26a0\ufe0f  Invalid choice. Please enter 1a, 1b, 2a, 2b, 2c, 3, 4a-4c, 5a-5m/5z, 6, or 7.")
+        print("  ⚠️  Invalid choice. Please enter 1a, 1b, 2a, 2b, 2c, 3, 4a-4c, 5a-5n/5z, 6, or 7.")
 
 
 def get_loader_commands():
@@ -6180,6 +6196,8 @@ DESCRIPTION
       5j   Compare LOADER env to defaults (diff) (experimental)
       5k   Check boot DNA (config target picker + state-aware query)
       5l   Build cluster_IP.json manifest for node-add workflows
+      5m   Compare and correct cluster node names and LIF IP addresses
+      5n   Show reinit-config.json in human-readable format
       5z   Reset all nodes to LOADER prompt (parallel; disruptive command)
 
 OPTIONS
@@ -6291,6 +6309,12 @@ OPTIONS
         overall result, phase timing, step timing, error/warning count,
         runtime duration, and classified non-phase timing such as
         startup/inter-phase gaps, prompt waits, and explicit pause waits.
+
+    --show-config
+        Read and display the reinit-config.json (or equivalent config file)
+        in human-readable format, then exit. Passwords are masked as [set]
+        or [none]. Use --config to specify the file path explicitly;
+        otherwise the script searches standard locations automatically.
 
     --install-completion
         Install startup option tab-completion support:
@@ -6604,7 +6628,7 @@ def _maybe_warn_missing_completion_setup(args) -> None:
     if not (sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty()):
         return
     if (args.help or args.version or args.config_example
-            or args.checkpoint_status or args.last_status
+            or args.checkpoint_status or args.last_status or args.show_config
             or args.install_completion or args.print_completion_hook):
         return
     _script = _script_path_for_completion()
@@ -6669,6 +6693,12 @@ def parse_args():
                              "AFX_reinit run, then exit. Useful for checking the "
                              "result of a previous job without scrolling through "
                              "logs, including classified non-phase timing.")
+    parser.add_argument("--show-config", action="store_true", default=False,
+                        help="Read and display the reinit-config.json (or equivalent "
+                             "config file) in human-readable format, then exit. "
+                             "Passwords are masked. Use --config to specify a path "
+                             "explicitly, otherwise the script searches standard "
+                             "locations automatically.")
     parser.add_argument("--install-completion", action="store_true", default=False,
                         help="Install startup option tab-completion support: "
                              "installs Python module argcomplete (if missing) "
@@ -9510,7 +9540,9 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
             _result54["state"] = "At cluster shell"
         elif _init54_match and "login:" in _init54_match.lower():
             print("  🔐 Cluster login prompt detected directly.")
-            if not _wait_for_cluster_prompt(_ch54, timeout=45):
+            with _suppress_console():
+                _wfc54_ok = _wait_for_cluster_prompt(_ch54, timeout=45)
+            if not _wfc54_ok:
                 print("  ❌ Could not reach the cluster shell.")
                 return _result54
             _cluster_ready54 = True
@@ -9576,7 +9608,9 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
             elif ("::>" in _combined54 or "::*>" in _combined54
                   or "login:" in _combined54 or "password:" in _combined54):
                 print("  ✅ Live-cluster console detected; reaching cluster shell...")
-                if not _wait_for_cluster_prompt(_ch54, timeout=45):
+                with _suppress_console():
+                    _wfc54_ok = _wait_for_cluster_prompt(_ch54, timeout=45)
+                if not _wfc54_ok:
                     print("  ❌ Could not reach the cluster shell from system console.")
                     return _result54
                 _cluster_ready54 = True
@@ -9588,24 +9622,26 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
 
         if _cluster_ready54:
             print('\n  ▶ Running: node run * -c "priv set diag; bootargs get bootarg.init.dna"\n')
-            _boot54_out = _run_cluster_command(
-                _ch54,
-                'node run * -c "priv set diag; bootargs get bootarg.init.dna"',
-                timeout=90,
-            )
+            with _suppress_console():
+                _boot54_out = _run_cluster_command(
+                    _ch54,
+                    'node run * -c "priv set diag; bootargs get bootarg.init.dna"',
+                    timeout=90,
+                )
             _boot54_records = _extract_boot_dna_records(_boot54_out, default_label=_target54)
             _result54["records"] = list(_boot54_records or [])
             _result54["ok"] = bool(_boot54_records)
             _print_boot_dna_records(_boot54_records, source_label=_source54)
         elif _loader_ready54:
             print("\n  ▶ Running: printenv bootarg.init.dna\n")
-            _boot54_out = direct_send_and_wait(
-                _ch54,
-                "printenv bootarg.init.dna",
-                "LOADER-",
-                timeout=20,
-                node_log=_nf54,
-            )
+            with _suppress_console():
+                _boot54_out = direct_send_and_wait(
+                    _ch54,
+                    "printenv bootarg.init.dna",
+                    "LOADER-",
+                    timeout=20,
+                    node_log=_nf54,
+                )
             _boot54_records = _extract_boot_dna_records(_boot54_out, default_label=_target54)
             _result54["records"] = list(_boot54_records or [])
             _result54["ok"] = bool(_boot54_records)
@@ -26757,6 +26793,169 @@ def _run_5m_node_repair_mode():
         pass
 
 
+def _run_show_config_mode(config_path=None):
+    """Mode 5n / --show-config: display reinit-config.json in human-readable format."""
+    _print_banner("📋 5n: Show reinit-config")
+
+    def _pw(val):
+        return "[set]" if str(val or "").strip() else "[none]"
+
+    def _field(label, value, indent="  "):
+        v = str(value or "").strip()
+        if v:
+            print(f"{indent}  {label:<22}  {v}")
+
+    def _print_node(nd, indent="  "):
+        nm = str(nd.get("node_name") or "").strip()
+        if nm and nm != "Cluster":
+            _field("Name", nm, indent)
+        bmc = str(nd.get("bmc") or "").strip()
+        bu = str(nd.get("bmc_user") or "admin").strip()
+        bp = _pw(nd.get("bmc_password"))
+        if bmc:
+            print(f"{indent}  {'BMC':<22}  {bmc}  ({bu} / {bp})")
+        ip = str(nd.get("node_mgmt_ip") or "").strip()
+        mask = str(nd.get("node_mgmt_netmask") or "").strip()
+        gw = str(nd.get("node_mgmt_gateway") or "").strip()
+        port = str(nd.get("node_mgmt_port") or "").strip()
+        if ip:
+            _net = ip
+            if mask:
+                _net += f" / {mask}"
+            if gw:
+                _net += f"  → gw {gw}"
+            if port:
+                _net += f"  (port {port})"
+            print(f"{indent}  {'Node mgmt':<22}  {_net}")
+        cip = str(nd.get("cluster_ip") or "").strip()
+        if cip:
+            _field("Cluster IP", cip, indent)
+
+    # ── Locate config ─────────────────────────────────────────────────────
+    _cfg = {}
+    _cfg_found = None
+    if config_path:
+        try:
+            with open(config_path, "r", encoding="utf-8") as _f:
+                _cfg = json.load(_f)
+            _cfg_found = config_path
+        except Exception as _e:
+            print(f"\n  ❌ Could not load {config_path}: {_e}")
+    if not _cfg:
+        for _p in _find_config_files(
+            candidate_names=(
+                "reinit-config.json",
+                "reinit_config.json",
+                "reinit-afx-config.json",
+                "BMC_IP.json",
+                "add_nodes.json",
+            ),
+        ):
+            try:
+                with open(_p, "r", encoding="utf-8") as _f:
+                    _d = json.load(_f)
+                if isinstance(_d, dict):
+                    _cfg = _d
+                    _cfg_found = _p
+                    break
+            except Exception:
+                continue
+
+    if not _cfg:
+        print("\n  ⚠️  No config file found.\n")
+        return
+
+    print(f"\n  Config file:  {_cfg_found}\n")
+
+    # ── Cluster section ───────────────────────────────────────────────────
+    _cl = _cfg.get("cluster") if isinstance(_cfg.get("cluster"), dict) else {}
+    _has_cluster_block = bool(_cl)
+
+    # Flatten cluster fields from top-level fallbacks
+    def _clv(*keys):
+        for k in keys:
+            v = str((_cl.get(k) if _cl else None) or _cfg.get(k) or "").strip()
+            if v:
+                return v
+        return ""
+
+    _cl_name = _clv("name")
+    _cl_mgmt = _clv("clus_mgmt_address", "cluster_mgmt_ip", "cluster_management_ip", "mgmt_ip")
+    _cl_mask = _clv("clus_mgmt_mask")
+    _cl_gw = _clv("clus_mgmt_gw")
+    _cl_port = _clv("clus_mgmt_port")
+    _cl_user = _clv("user", "cluster_admin_user")
+    _cl_pass_raw = _clv("password", "cluster_admin_password")
+    _cl_dns_dom = _clv("dns_domains")
+    _cl_dns_srv = _clv("dns_servers")
+    _cl_ntp = _clv("ntp_servers")
+    _cl_loc = _clv("location")
+    _cl_contact = _clv("contact")
+
+    if any([_cl_name, _cl_mgmt, _cl_user, _cl_dns_dom, _cl_loc]):
+        print("  ── Cluster ──────────────────────────────────────────────────────────────")
+        _field("Name", _cl_name)
+        if _cl_mgmt:
+            _net = _cl_mgmt
+            if _cl_mask:
+                _net += f" / {_cl_mask}"
+            if _cl_gw:
+                _net += f"  → gw {_cl_gw}"
+            if _cl_port:
+                _net += f"  (port {_cl_port})"
+            print(f"    {'Management IP':<22}  {_net}")
+        if _cl_user:
+            print(f"    {'Credentials':<22}  {_cl_user} / {_pw(_cl_pass_raw)}")
+        _field("DNS domains", _cl_dns_dom)
+        _field("DNS servers", _cl_dns_srv)
+        _field("NTP servers", _cl_ntp)
+        _field("Location", _cl_loc)
+        _field("Contact", _cl_contact)
+        print()
+
+    # ── Nodes ─────────────────────────────────────────────────────────────
+    _pn = _cfg.get("primary_node") if isinstance(_cfg.get("primary_node"), dict) else None
+    _sns = _cfg.get("secondary_nodes") if isinstance(_cfg.get("secondary_nodes"), list) else []
+    _nodes_flat = _cfg.get("nodes") if isinstance(_cfg.get("nodes"), list) else []
+
+    if _pn:
+        print("  ── Primary Node ─────────────────────────────────────────────────────────")
+        _print_node(_pn)
+        print()
+    if _sns:
+        print("  ── Secondary Nodes ──────────────────────────────────────────────────────")
+        for _i, _sn in enumerate(_sns):
+            if not isinstance(_sn, dict):
+                continue
+            print(f"    [{_i + 1}]")
+            _print_node(_sn, indent="    ")
+        print()
+    if _nodes_flat and not _pn and not _sns:
+        print("  ── Nodes (legacy flat list) ──────────────────────────────────────────────")
+        for _i, _n in enumerate(_nodes_flat):
+            if not isinstance(_n, dict):
+                continue
+            _role = "primary" if _i == 0 else f"node {_i}"
+            print(f"    [{_i}]  {_role}")
+            _print_node(_n, indent="    ")
+        print()
+
+    # ── Extra top-level fields not yet printed ────────────────────────────
+    _skip_keys = {
+        "cluster", "primary_node", "secondary_nodes", "nodes",
+        "cluster_admin_user", "cluster_admin_password",
+        "cluster_mgmt_ip", "cluster_management_ip", "mgmt_ip",
+    }
+    _extra = {k: v for k, v in _cfg.items() if k not in _skip_keys
+              and not isinstance(v, (dict, list))}
+    if _extra:
+        print("  ── Other fields ─────────────────────────────────────────────────────────")
+        for _k, _v in _extra.items():
+            if str(_v or "").strip():
+                _field(_k, _v)
+        print()
+
+
 def _run_2c_resume():
     """Drive option 2c: locate a node-add manifest and retry any nodes that
     have not yet joined the cluster.
@@ -27426,6 +27625,10 @@ def main():
             _status_rc = max(_status_rc, _last_rc)
             _printed_any = True
         sys.exit(_status_rc)
+
+    if args.show_config:
+        _run_show_config_mode(config_path=args.config)
+        sys.exit(0)
 
     _bg_mode = args.bg
     _auto_clear_stale_bmc = args.auto_clear_stale_bmc
@@ -30101,6 +30304,11 @@ def main():
             # ── Mode 57 (5m): Compare and correct cluster node names ──────────────
             if _operation_mode == 57:
                 _run_5m_node_repair_mode()
+                raise _ReturnToMenu
+
+            # ── Mode 58 (5n): Show reinit-config ─────────────────────────────────
+            if _operation_mode == 58:
+                _run_show_config_mode()
                 raise _ReturnToMenu
 
             # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
