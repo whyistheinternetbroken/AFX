@@ -20740,36 +20740,63 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 pass
         sys.exit(1)
 
-    # Mode 1 (1a/1b) only initialises the first node — exit cleanly here.
+    # Mode 1 (1a/1b): prompt whether to run node add (2a/2b) or return to menu.
+    _came_from_mode1 = False
     if _operation_mode == 1:
         mgmt_ip = cc.get("mgmt_ip") or "<cluster-management-ip>"
         _print_banner("✅ Configuration complete.")
         print(f"  To login to the cluster, SSH to {mgmt_ip} or use a web")
         print(f"  browser to access https://{mgmt_ip}")
         print("=" * 60)
-        if _session_log:
-            _session_log.log("Mode 1 complete; exiting (peer nodes not touched)")
-            _session_log.log(f"SSH to {mgmt_ip} or https://{mgmt_ip}")
-            _session_log.set_outcome("PASS", "cluster setup complete (mode 1)")
-            try:
-                _session_log.close()
-            except Exception:
-                pass
-        # Checkpoint: mark option 1 as complete
         if _checkpoint:
             try:
-                _checkpoint.mark_done("option1_complete")
-                _slog("checkpoint: option1_complete saved")
+                if _auto_setup:
+                    _checkpoint.clear()
+                    _slog("checkpoint: cleared after 1b complete")
+                else:
+                    _checkpoint.mark_done("option1_complete")
+                    _slog("checkpoint: option1_complete saved")
             except _InjectedCheckpointFailure:
                 raise
             except Exception:
                 pass
-        sys.exit(0)
+        _print_banner("➕ Add Nodes")
+        print("  Would you like to add peer nodes now?")
+        print("")
+        print("  2a. Add nodes interactively  (manual prompts at each step)")
+        print("  2b. Add nodes automatically  (auto-answer all prompts)")
+        print("  N.  Return to main menu")
+        print("")
+        while True:
+            print("  " + "─" * 58)
+            node_choice = _prompt_with_timeout(
+                "  Enter choice (2a / 2b / N): ",
+                default="n",
+                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+            ).strip().lower()
+            if node_choice in ("2a", "2b", "n", ""):
+                break
+            print("  ⚠️  Please enter 2a, 2b, or N.")
+        if node_choice in ("n", ""):
+            if _session_log:
+                _session_log.log("Mode 1 complete; user chose to return to main menu")
+                _session_log.log(f"SSH to {mgmt_ip} or https://{mgmt_ip}")
+                _session_log.set_outcome("PASS", "cluster setup complete (mode 1)")
+                try:
+                    _session_log.close()
+                except Exception:
+                    pass
+            raise _ReturnToMenu
+        if _session_log:
+            _session_log.log(f"Mode 1 complete; user chose {node_choice} for node add")
+        _came_from_mode1 = True
 
     # Ask the operator whether to continue (e.g. into interactive add-node
     # flow) or stop the script with a friendly summary.
     # For automated modes (2b, 3) answer yes automatically.
-    if _auto_add or _operation_mode == 3:
+    if _came_from_mode1:
+        ans = "y"
+    elif _auto_add or _operation_mode == 3:
         ans = "y"
         print("\n✅ Cluster configuration complete. Moving on to add nodes.")
         _slog("Continue to add nodes? y [auto-answered for automated mode]")
@@ -20804,7 +20831,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
 
     # Ask whether to add nodes interactively (2a) or automatically (2b).
     # Mode 3 always auto-selects 2b (no prompt needed).
-    if _operation_mode == 3:
+    if _came_from_mode1:
+        pass  # node_choice already set in mode 1 block above
+    elif _operation_mode == 3:
         node_choice = "2b"
         print("\n✅ Mode 3: auto-selecting 2b (automatic node add).")
         _slog("Mode 3: auto-selected 2b for node add")
