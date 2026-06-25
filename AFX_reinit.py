@@ -21359,7 +21359,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
 
     ips_str = ",".join(r["cluster_ip"] for r in _rows)
     node_names = [r["node_name"] for r in _rows]
-    names_str = ",".join(node_names) if node_names and all(node_names) else ""
+    names_str = ",".join(node_names) if (node_names and all(n and n != "Cluster" for n in node_names)) else ""
     cmd = f"cluster add-node -cluster-ips {ips_str}"
     if names_str:
         cmd += f" -node-names {names_str}"
