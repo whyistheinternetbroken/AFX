@@ -9710,6 +9710,22 @@ def _run_boot_dna_check_mode():
                     if isinstance(_n54, dict) and _n54.get("bmc"):
                         _collect_node54(_n54)
 
+        # Always collect names from structured nodes — handles the case where
+        # netboot_bmcs provided the IPs but primary_node/secondary_nodes/nodes
+        # carry the node_name fields in the same file.
+        if not _tmp_names54:
+            for _nd_nm54 in (
+                ([_d54.get("primary_node")] if isinstance(_d54.get("primary_node"), dict) else [])
+                + list(_d54.get("secondary_nodes") or [])
+                + list(_d54.get("nodes") or [])
+            ):
+                if not isinstance(_nd_nm54, dict):
+                    continue
+                _bmc_nm54 = str(_nd_nm54.get("bmc") or "").strip()
+                _name_nm54 = str(_nd_nm54.get("node_name") or "").strip()
+                if _bmc_nm54 and _name_nm54 and _name_nm54 != "Cluster":
+                    _tmp_names54[_bmc_nm54] = _name_nm54
+
         _cl54 = _d54.get("cluster") if isinstance(_d54.get("cluster"), dict) else {}
         for _k54 in ("clus_mgmt_address", "cluster_mgmt_ip", "cluster_management_ip", "mgmt_ip"):
             _v54 = str((_cl54.get(_k54) if isinstance(_cl54, dict) else _d54.get(_k54)) or "").strip()
