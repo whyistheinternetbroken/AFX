@@ -29748,6 +29748,7 @@ def main():
                 print("  " + "─" * 58)
 
                 print(f"\n📝 Session log: {_session_log.log_file}")
+                input("\n  Press Enter to return to the main menu...")
                 raise _ReturnToMenu
 
             # ── Mode 52 (5i): Backup LOADER environment variables ─────────────────
