@@ -23023,6 +23023,39 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     _2B_PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
         log.end_phase()
 
+    # Node name/LIF repair
+    if primary_channel and isinstance(_config_data, dict):
+        _repair_result = _repair_node_names_and_lifs(
+            primary_channel, _config_data, log=log, auto_confirm=True)
+        _record_node_repair_to_log(log, _repair_result)
+
+    # Final health check
+    if primary_channel:
+        _target = baseline + len(peer_bmcs)
+        print(f"\n  🔍 Final health check: waiting for {_target} healthy node(s)...")
+        _wait_for_cluster_nodes_healthy(
+            primary_channel, target_count=_target,
+            total_timeout=1800, poll_interval=120,
+            label="2b", final_count=_target,
+        )
+        _fo_out = ""
+        try:
+            with _suppress_console():
+                _fo_out = _run_cluster_command(
+                    primary_channel, "set -rows 0; storage failover show", timeout=30)
+        except Exception:
+            pass
+        _expected_nodes = []
+        if _fo_out:
+            _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out)
+                               if r.get("node")]
+        if len(_expected_nodes) >= _target:
+            _expected_nodes = _expected_nodes[:_target]
+            print("\n  🔍 Final failover/giveback check...")
+            _wait_for_cluster_healthy(
+                primary_channel, _expected_nodes,
+                total_timeout=1200, poll_interval=60, log=log)
+
     if primary_client:
         try:
             primary_client.close()
@@ -23299,6 +23332,39 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 log.add_phase_subtiming(
                     _2A_PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
         log.end_phase()
+
+    # Node name/LIF repair
+    if primary_channel and isinstance(_config_data, dict):
+        _repair_result = _repair_node_names_and_lifs(
+            primary_channel, _config_data, log=log, auto_confirm=True)
+        _record_node_repair_to_log(log, _repair_result)
+
+    # Final health check
+    if primary_channel:
+        _target = baseline + len(peer_bmcs)
+        print(f"\n  🔍 Final health check: waiting for {_target} healthy node(s)...")
+        _wait_for_cluster_nodes_healthy(
+            primary_channel, target_count=_target,
+            total_timeout=1800, poll_interval=120,
+            label="2a", final_count=_target,
+        )
+        _fo_out = ""
+        try:
+            with _suppress_console():
+                _fo_out = _run_cluster_command(
+                    primary_channel, "set -rows 0; storage failover show", timeout=30)
+        except Exception:
+            pass
+        _expected_nodes = []
+        if _fo_out:
+            _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out)
+                               if r.get("node")]
+        if len(_expected_nodes) >= _target:
+            _expected_nodes = _expected_nodes[:_target]
+            print("\n  🔍 Final failover/giveback check...")
+            _wait_for_cluster_healthy(
+                primary_channel, _expected_nodes,
+                total_timeout=1200, poll_interval=60, log=log)
 
     if primary_client:
         try:
@@ -31413,11 +31479,10 @@ def main():
 
                 collect_node_mgmt_per_bmc(sp_host, [])
 
-            # ── Mode 2b multi-node: run parallel add when config has >1 secondary ──
-            # If the config file lists multiple secondary nodes AND the operator
-            # chose 2b (auto_add), collect all peers, confirm, and run every node
-            # through LOADER → option 4 → join in parallel (joins serialized).
-            # Single-node 2b falls through to the existing sequential path below.
+            # ── Mode 2b: run parallel add for all 2b configurations ────────────────
+            # Collect all peers, run every node through LOADER → option 4 → join in
+            # parallel (joins serialized), then repair node names/LIFs and run a
+            # final health check.
             if _operation_mode == 2 and _auto_add:
                 _2b_extra_peers = []
                 if isinstance(_config_data, dict):
@@ -31435,42 +31500,41 @@ def main():
                             if isinstance(n, dict) and n.get("bmc")
                             and str(n["bmc"]) != sp_host
                         ]
-                if _2b_extra_peers:
-                    _2b_all_peers = [sp_host] + _2b_extra_peers
+                _2b_all_peers = [sp_host] + _2b_extra_peers
 
-                    # Collect node-mgmt info for each extra peer.
-                    for _ep in _2b_extra_peers:
-                        collect_node_mgmt_per_bmc(_ep, [])
+                # Collect node-mgmt info for each extra peer.
+                for _ep in _2b_extra_peers:
+                    collect_node_mgmt_per_bmc(_ep, [])
 
-                    # Register sp_host credentials so the thread can look them up.
-                    if sp_host not in _peer_bmc_creds:
-                        _peer_bmc_creds[sp_host] = {"user": sp_user, "password": sp_pass}
+                # Register sp_host credentials so the thread can look them up.
+                if sp_host not in _peer_bmc_creds:
+                    _peer_bmc_creds[sp_host] = {"user": sp_user, "password": sp_pass}
 
-                    # Close the already-open channel for sp_host; _add_peer_node_thread
-                    # will establish its own fresh BMC connection for every peer.
-                    try:
-                        channel.close()
-                    except Exception:
-                        pass
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
+                # Close the already-open channel for sp_host; _add_peer_node_thread
+                # will establish its own fresh BMC connection for every peer.
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
-                    _print_autopilot_banner()
-                    ok = _run_2b_parallel_add(
-                        _2b_all_peers, sp_user,
-                        {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "")
-                         for ip in _2b_all_peers},
-                        _session_log,
+                _print_autopilot_banner()
+                ok = _run_2b_parallel_add(
+                    _2b_all_peers, sp_user,
+                    {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "")
+                     for ip in _2b_all_peers},
+                    _session_log,
+                )
+                if ok and _session_log and hasattr(_session_log, "log_dir"):
+                    _archive_node_add_manifests_to_log_dir(
+                        _session_log.log_dir, reason="2b: parallel add success"
                     )
-                    if ok and _session_log and hasattr(_session_log, "log_dir"):
-                        _archive_node_add_manifests_to_log_dir(
-                            _session_log.log_dir, reason="2b: parallel add success"
-                        )
-                    _session_log.record_completion(normal_exit=ok)
-                    print(f"\n📝 Session log: {_session_log.log_file}")
-                    sys.exit(0 if ok else 1)
+                _session_log.record_completion(normal_exit=ok)
+                print(f"\n📝 Session log: {_session_log.log_file}")
+                sys.exit(0 if ok else 1)
 
             # ── Mode 2a: parallel add with interactive broker ───────────────────────
             # Mode 2a always uses the parallel thread infrastructure (same as 2b) so
