@@ -30572,6 +30572,15 @@ def main():
                     print("  ℹ️   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
                 else:
                     print("  ℹ️   BIOS firmware auto-update prevention disabled.")
+                try:
+                    while True:
+                        _env_q = input("  Skip LOADER backup/printenv capture? [Y/n]: ").strip().lower()
+                        if _env_q in ("", "y", "yes", "n", "no"):
+                            break
+                        print("  Please enter y or N.")
+                except (EOFError, KeyboardInterrupt):
+                    _env_q = ""
+                _loader_env_stage_enabled = (_env_q in ("n", "no"))
 
             # License: collect key(s) or validate the license file path now, before
             # the BMC session starts, so the operator can fix issues early.
@@ -31642,16 +31651,6 @@ def main():
                 _auto_setup and _netboot_before_reinit
             ):
                 _print_autopilot_banner()
-
-            if _operation_mode == 3 and _loader_env_stage_enabled is None:
-                while True:
-                    _m3_skip_env = input(
-                        "  Skip LOADER backup/printenv capture for option 3 nodes? [Y/n]: "
-                    ).strip().lower()
-                    if _m3_skip_env in ("", "y", "yes", "n", "no"):
-                        break
-                    print("  Please enter y or N.")
-                _loader_env_stage_enabled = (_m3_skip_env in ("n", "no"))
 
             # Phase: System Reset (skipped if already at LOADER)
             _session_log.start_phase("System Reset")
