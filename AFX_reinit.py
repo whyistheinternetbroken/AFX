@@ -11031,20 +11031,19 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             # If option 4 was not accepted, the boot menu can remain at
             # "Selection (1-N)?". Detect that and resend option 4 so we don't
             # sit for 30 minutes waiting on a prompt that will never arrive.
-            # Poll strategy: first slice waits 360s (node needs time to start
-            # disk-erase after option 4), then 30s slices up to 10 min total.
+            # Poll strategy: 60s slices up to 10 min total. 60s granularity
+            # lets us emit AUTOBOOT heartbeats without a long silent gap.
             _deadline = time.monotonic() + 600
             _answered = False
             _resend_count = 0
             _boot_menu_seen = False
-            _first_slice = True
+            _autoboot_seen = False
+            _accumulated = ""
+            _last_heartbeat = time.monotonic()
+            _phase_start = time.monotonic()
             while time.monotonic() < _deadline and not _answered:
                 _remaining = max(1, int(_deadline - time.monotonic()))
-                if _first_slice:
-                    _wait = min(360, _remaining)
-                    _first_slice = False
-                else:
-                    _wait = min(30, _remaining)
+                _wait = min(60, _remaining)
                 _out, _matched = direct_read_until_any(
                     channel,
                     [trigger] + _menu_sigs,
@@ -11055,6 +11054,18 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     reconnect_ctx=reconnect_ctx,
                 )
                 _raise_if_fatal_boot_integrity(_out, lbl)
+                if _out:
+                    _accumulated += _out.lower()
+                    if not _autoboot_seen and "starting autoboot" in _accumulated:
+                        _autoboot_seen = True
+                        _elapsed = int(time.monotonic() - _phase_start)
+                        print(f"   ⏳ {_pfx}Node booting (AUTOBOOT started, {_elapsed}s elapsed)...")
+                        _slog("AUTOBOOT detected during zero-disks wait")
+                        _last_heartbeat = time.monotonic()
+                elif _autoboot_seen and time.monotonic() - _last_heartbeat >= 60:
+                    _elapsed = int(time.monotonic() - _phase_start)
+                    print(f"   ⏳ {_pfx}Node booting... ({_elapsed}s elapsed)")
+                    _last_heartbeat = time.monotonic()
                 if _matched and _matched.lower() == trigger.lower():
                     time.sleep(0.3)
                     channel.send(resp + "\r")
