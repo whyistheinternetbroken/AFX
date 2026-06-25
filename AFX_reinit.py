@@ -9417,7 +9417,7 @@ def _extract_boot_dna_records(output, default_label=""):
             continue
 
         match = re.search(
-            r"bootarg\.init\.dna[ \t]*(?:==|[=:])[ \t]+(\S+)",
+            r"bootarg\.init\.dna(?:[ \t]*(?:==|[=:]))?[ \t]+(\S+)",
             line,
             flags=re.IGNORECASE,
         )
