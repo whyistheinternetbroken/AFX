@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/23/2026
+**Updated:** 6/25/2026
 
 ---
 
@@ -287,8 +287,8 @@ The script presents a menu at startup. Enter the number corresponding to the des
 
 | Mode | Short Name | Description |
 |---|---|---|
-| **1a** | Initialize First Node (interactive) | Boots to LOADER, sets `destroy-all-storage-pods` flag, selects boot menu option 9 (Clean System Configuration). Prompts the operator for all cluster setup wizard inputs. |
-| **1b** | Initialize First Node (automated) | Same as 1a, but drives the full ONTAP cluster setup wizard automatically using values from config file or prompts. |
+| **1a** | Initialize First Node (interactive) | Boots to LOADER, sets `destroy-all-storage-pods` flag, selects boot menu option 9 (Clean System Configuration). Prompts the operator for all cluster setup wizard inputs. When complete, prompts whether to run **2a**, **2b**, or return to the main menu (**N**). |
+| **1b** | Initialize First Node (automated) | Same as 1a, but drives the full ONTAP cluster setup wizard automatically using values from config file or prompts. Clears the checkpoint file on completion. When complete, prompts whether to run **2a**, **2b**, or return to the main menu (**N**). |
 | **2a** | Add Node to Cluster (interactive) | Boots to LOADER, selects boot menu option 4 (Initialize and configure system). Operator completes the node-join wizard. In multi-node runs, supports numbered omit selection and auto-skips nodes already in cluster. Per-node credential collection can use password groups, and BMC auth attempts include silent fallback (including blank password). |
 | **2b** | Add Node to Cluster (automated) | Same as 2a, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel, numbered omit selection, and auto-skips nodes already in cluster. In this flow, "primary BMC" is used as the default credential context (use `PRIMARY` to reuse that password; blank means an actual blank password), not as a unique controller after parallel add starts. Per-node credential collection can use password groups, and BMC auth attempts include silent fallback (including blank password). |
 | **2c** | Resume Node Additions | Resumes interrupted node-join operations from the last successful checkpoint. Use when a previous mode 2b or mode 3 run was interrupted before all secondary nodes completed. Run `--checkpoint-status` to inspect the checkpoint state before resuming. |
@@ -305,9 +305,10 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **5h** | Stale BMC Session Cleanup | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. SSH diagnostics one-IP targeting uses a numbered, labeled config-IP picker (BMC/cluster mgmt/node mgmt) with a custom-IP option. Includes a dedicated known_hosts reset action (`ssh-keygen -R <BMC IP>`). |
 | **5i** | Backup LOADER Environment Variables | Backs up current LOADER bootenv variables to a timestamped JSON file (e.g., `loader_env_backup_YYYYMMDD_HHMMSS.json`) for comparison and troubleshooting. Part of LOADER environment utilities (experimental). |
 | **5j** | Compare LOADER Environment | Compares current LOADER bootenv variables against NetApp defaults and displays a diff showing customizations and deviations. Helps identify bootenv changes and troubleshoot configuration issues (experimental). |
-| **5k** | Check Boot DNA | Loads target IPs from JSON config and shows a numbered selector: **1)** all discovered BMC IPs, **2)** cluster management IP, **3)** custom IP. It evaluates each target's runtime state (**At LOADER** or **At cluster shell**), runs the matching DNA command path, and reports `bootarg.init.dna` with a per-target state/value summary when multiple nodes are checked. |
-| **5l** | Build Cluster IP Manifest | Connects to cluster management and runs cluster-role interface queries to write `configs/cluster_IP.json`. Stores one cluster IP per node (the first seen per node), preserving file order so 2a/2b/3/4b can reuse this manifest for ordered `cluster add-node -cluster-ips` arguments. **Status: EXPERIMENTAL/IN PROGRESS.** |
+| **5k** | Check Boot DNA | Loads target IPs from JSON config and shows a numbered selector: **1)** all discovered BMC IPs, **2)** cluster management IP, **3)** custom IP. It evaluates each target's runtime state (**At LOADER** or **At cluster shell**), runs the matching DNA command path, and reports `bootarg.init.dna` with a per-target state/value summary when multiple nodes are checked. Targets are shown as `node_name (IP)` when names are available from the config file. |
+| **5l** | Build Cluster IP Manifest | Connects to cluster management and runs cluster-role interface queries to write `configs/cluster_IP.json`. Stores one cluster IP per node (the first seen per node), preserving file order so 2a/2b/3/4b can reuse this manifest for ordered `cluster add-node -cluster-ips` arguments. Supports hostname or IP as the cluster target. **Status: EXPERIMENTAL/IN PROGRESS.** |
 | **5m** | Node Name / LIF Repair | Compares current cluster node names and node-management LIF names against the config file, using BMC (SP) IP addresses as the ground truth for node identity. Detects mismatches that occur when nodes join a cluster in a different order than the config expects, reports the required renames, and optionally applies them. Handles permutation cycles safely using a temporary intermediate name. Prompts for confirmation before making any changes. |
+| **5n** | Show Config | Displays the current `reinit-config.json` in a human-readable format — cluster settings, primary node, secondary nodes, and any extra fields. Passwords are masked as `[set]` or `[none]`. Also available via `--show-config` CLI flag. Press Enter to return to the main menu. |
 | **5z** | Reset to LOADER | Connects to configured BMC addresses in parallel, issues a system reset on each selected node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. The script exits when every selected node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging nodes before a manual reinit or netboot run. |
 
 ### Password Groups (modes 2a, 2b, and 3)
@@ -693,7 +694,8 @@ kill -TERM $SCRIPT_PID
 | Mode | LOADER Commands |
 |---|---|
 | 1a / 1b | `set-defaults`, `setenv bootarg.destroy.all.storage.pods true`, `saveenv`, `boot_ontap menu` → Option 9 |
-| 2a / 2b / 2c | `set-defaults`, `saveenv`, `boot_ontap menu` → Option 4 |
+| 2a / 2b / 2c | `set-defaults`, `setenv bootarg.init.unjoined true`, `saveenv`, `boot_ontap menu` → Option 4 |
+| 3 | Same as 1b for primary; same as 2a/2b for peer nodes (includes `setenv bootarg.init.unjoined true`) |
 | 4b | `set-defaults`, `setenv AUTOBOOT false`, `saveenv`, netboot sequence |
 
 ---
@@ -708,6 +710,7 @@ python3 AFX_reinit.py [OPTIONS]
 |---|---|---|
 | `--config PATH` | `-c PATH` | Path to a JSON config file. If omitted, the script auto-discovers config files or prompts for all values. |
 | `--config-example` | | Print an annotated example config file and exit. |
+| `--show-config` | | Display the current `reinit-config.json` in human-readable format (passwords masked) and exit. Equivalent to menu option 5n. |
 | `--debug` | `-d` | Enable debug mode: print all raw console I/O to the screen. Also enables verbose Paramiko SSH logging. |
 | `--bg` | | Background mode: handle SIGHUP so the log is closed cleanly when the terminal closes. Use with `nohup` or `screen`. |
 | `--screen` | | Re-launch the script inside a detached GNU screen session. Keeps the run alive if your SSH connection drops or times out. Implies `--bg`. Use `screen -r afx-reinit` to reattach. No-op if already running inside screen. |

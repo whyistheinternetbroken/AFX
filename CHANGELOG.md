@@ -9,7 +9,64 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
-- **Mode 3 now prints per-node join status during bulk add-node polling.**
+- **After 1a/1b completion, prompt to run 2a, 2b, or return to menu.**
+  Options 1a and 1b no longer exit the script after the cluster setup wizard
+  completes. Instead, the operator is shown a three-choice prompt (2a / 2b / N).
+  Choosing 2a or 2b flows directly into node-add without re-prompting for the
+  "continue to add nodes?" and sub-option questions. Choosing N (or Enter) raises
+  `_ReturnToMenu` and returns to the main menu cleanly.
+- **Option 1b now clears the checkpoint on completion.**
+  When option 1b finishes, the checkpoint file is deleted rather than marked done,
+  so stale 1b state does not interfere with subsequent runs.
+- **5k raw SSH output suppressed; only the DNA summary is shown.**
+  `_run_boot_dna_check_target` now wraps SSH operations in `_suppress_console()`
+  so raw BMC/ONTAP echo no longer appears on screen. The per-target intermediate
+  "values from BMC" table was removed; only the final multi-target summary is
+  printed.
+- **5k target list now shows `node_name (IP)` when names are available.**
+  The boot-DNA target selection list now resolves node names from the config file
+  (primary_node / secondary_nodes / netboot_bmcs + structured nodes) and displays
+  entries as `node_name (IP)`. A two-pass search is used so names and cluster
+  management IP are found even when BMC IPs and node names are in separate files.
+- **5l now supports hostname input, prints discovered IPs, and logs the path.**
+  Mode 5l accepts a hostname or IP for the cluster target, prints the cluster-role
+  IPs discovered during the query, logs the path of the written `cluster_IP.json`,
+  and pauses for Enter before returning to the main menu.
+- **5f now pauses before returning to menu.**
+  After the cluster health and version check (5f / 5g), the script waits for
+  Enter before returning to the main menu, keeping result output visible.
+- **5n now runs without a yes/no confirmation and pauses for Enter.**
+  The "show config" view no longer asks for confirmation; it displays immediately
+  and shows a "Press Enter to return to the main menu" pause at the end.
+
+### Added
+- **New option 5n and `--show-config` flag: display reinit-config.json.**
+  Option 5n (and the equivalent `--show-config` CLI flag) renders the active
+  config file in a human-readable layout: cluster settings, primary node,
+  secondary nodes, and any extra fields. Passwords are masked as `[set]` or
+  `[none]`.
+
+### Fixed
+- **Boot DNA regex now matches `printenv` whitespace-only format.**
+  `_extract_boot_dna_records()` previously required `==` or `:` between key
+  and value. The `printenv` command outputs `bootarg.init.dna     3088` with
+  whitespace only, causing option 3 LOADER-stage DNA verification to always
+  return `None` and abort with "unsupported boot DNA". The separator group is
+  now optional so both `bootarg.init.dna == 3088` and
+  `bootarg.init.dna     3088` are matched.
+- **`setenv bootarg.init.unjoined true` now set in all node-add LOADER flows.**
+  The LOADER command set for options 2a, 2b, 2c, and the peer-node path of
+  option 3 now includes `setenv bootarg.init.unjoined true` before `saveenv`.
+  This was missing and could cause node-join failures after option 4.
+- **Node-add timeouts increased for large clusters.**
+  Disk-erase and node-management wait timeouts in 2a/2b/3 peer workers were
+  raised to better handle slower hardware and larger disk counts.
+- **`-node-names` omitted from `cluster add-node` when names are not configured.**
+  `cluster add-node` no longer passes `-node-names` when node names are absent
+  or unset in the config, preventing a command error on clusters where auto-name
+  assignment is expected.
+
+
   While polling `cluster add-node-status`, the primary console now emits
   row-level join status transitions (node/IP + status) and a one-time message
   when ONTAP has not yet returned any status rows, so peer join progress is
