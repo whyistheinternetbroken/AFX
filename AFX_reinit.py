@@ -4057,18 +4057,7 @@ def select_operation_mode():
                 print("\n  ↩️  Returning to menu...\n")
 
             if choice == "5n":
-                _print_banner("📋 5n: Show reinit-config.json")
-                print("")
-                print("  Reads the reinit-config.json (or equivalent) and displays")
-                print("  its contents in human-readable format: cluster settings,")
-                print("  nodes, management IPs, and credentials (passwords masked).")
-                print("")
-                print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
-                    print("\n  ✅ Confirmed. 5n: Show config\n")
-                    return 58, False, False
-                print("\n  ↩️  Returning to menu...\n")
+                return 58, False, False
             continue
 
         if choice == "7":
@@ -27011,6 +27000,11 @@ def _run_show_config_mode(config_path=None):
             if str(_v or "").strip():
                 _field(_k, _v)
         print()
+
+    try:
+        input("\n  Press Enter to return to the main menu...")
+    except (EOFError, KeyboardInterrupt):
+        pass
 
 
 def _run_2c_resume():
