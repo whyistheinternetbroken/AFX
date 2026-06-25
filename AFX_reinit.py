@@ -9628,6 +9628,7 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
 def _run_boot_dna_check_mode():
     """Mode 5k helper: detect cluster-shell vs LOADER and print DNA values."""
     _bmc_ips54 = []
+    _bmc_names54 = {}   # BMC IP -> node name (populated from reinit-config)
     _cluster_mgmt54 = ""
     _found_file54 = None
     for _p54 in _find_config_files(
@@ -9648,19 +9649,30 @@ def _run_boot_dna_check_mode():
             continue
 
         _tmp_bmcs54 = []
+        _tmp_names54 = {}
+
+        def _collect_node54(node_dict):
+            _ip = str(node_dict.get("bmc") or "").strip()
+            if not _ip:
+                return
+            _tmp_bmcs54.append(_ip)
+            _nm = str(node_dict.get("node_name") or "").strip()
+            if _nm and _nm != "Cluster":
+                _tmp_names54[_ip] = _nm
+
         if isinstance(_d54.get("netboot_bmcs"), list):
             _tmp_bmcs54.extend([str(x).strip() for x in _d54["netboot_bmcs"] if str(x).strip()])
         else:
             _pn54 = _d54.get("primary_node")
             if isinstance(_pn54, dict) and _pn54.get("bmc"):
-                _tmp_bmcs54.append(str(_pn54.get("bmc")).strip())
+                _collect_node54(_pn54)
             for _sn54 in (_d54.get("secondary_nodes") or []):
                 if isinstance(_sn54, dict) and _sn54.get("bmc"):
-                    _tmp_bmcs54.append(str(_sn54.get("bmc")).strip())
+                    _collect_node54(_sn54)
             if not _tmp_bmcs54:
                 for _n54 in (_d54.get("nodes") or []):
                     if isinstance(_n54, dict) and _n54.get("bmc"):
-                        _tmp_bmcs54.append(str(_n54.get("bmc")).strip())
+                        _collect_node54(_n54)
 
         _cl54 = _d54.get("cluster") if isinstance(_d54.get("cluster"), dict) else {}
         for _k54 in ("clus_mgmt_address", "cluster_mgmt_ip", "cluster_management_ip", "mgmt_ip"):
@@ -9671,6 +9683,7 @@ def _run_boot_dna_check_mode():
 
         if _tmp_bmcs54 or _cluster_mgmt54:
             _bmc_ips54 = list(dict.fromkeys([x for x in _tmp_bmcs54 if x]))
+            _bmc_names54 = _tmp_names54
             _found_file54 = _p54
             break
 
@@ -9690,10 +9703,12 @@ def _run_boot_dna_check_mode():
     while True:
         print("")
         print("  Target selection:")
-        print("    1. All BMC IPs")
+        _use_names54 = bool(_bmc_names54)
+        print(f"    1. All {'nodes' if _use_names54 else 'BMC IPs'}")
         if _bmc_ips54:
             for _ip54 in _bmc_ips54:
-                print(f"       - {_ip54}")
+                _disp54 = _bmc_names54.get(_ip54) or _ip54
+                print(f"       - {_disp54}")
         else:
             print("       - (no BMC IPs found in config)")
         _cm_disp54 = _cluster_mgmt54 if _cluster_mgmt54 else "<not found>"
