@@ -3919,7 +3919,7 @@ def select_operation_mode():
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
                     print("\n  \u2705 Confirmed. 5z: Reset all nodes to LOADER prompt\n")
-                    return 48, False, False
+                    return 56, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
             if choice == "5f":
