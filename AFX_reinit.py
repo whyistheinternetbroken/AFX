@@ -9631,7 +9631,6 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
             _boot54_records = _extract_boot_dna_records(_boot54_out, default_label=_target54)
             _result54["records"] = list(_boot54_records or [])
             _result54["ok"] = bool(_boot54_records)
-            _print_boot_dna_records(_boot54_records, source_label=_source54)
         elif _loader_ready54:
             print("\n  ▶ Running: printenv bootarg.init.dna\n")
             with _suppress_console():
@@ -9645,7 +9644,6 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
             _boot54_records = _extract_boot_dna_records(_boot54_out, default_label=_target54)
             _result54["records"] = list(_boot54_records or [])
             _result54["ok"] = bool(_boot54_records)
-            _print_boot_dna_records(_boot54_records, source_label=_source54)
         return _result54
     finally:
         if _nf54:
