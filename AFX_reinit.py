@@ -31588,12 +31588,121 @@ def main():
                             _print_autopilot_banner()
 
                 # Holds the result of the primary-node LOADER probe when it runs in
-                # parallel with the peer resets (mode 3 only).
+                # parallel with the peer resets (mode 1 or mode 3).
                 _primary_loader_result = [None]
 
+                # Mode 1: before initializing the primary, park every peer node at
+                # LOADER so no running ONTAP instance can interfere with cluster setup.
+                # Credentials fall back to the primary BMC creds if not in config.
+                if other_sps and _operation_mode == 1:
+                    for _addr1 in other_sps:
+                        if _addr1 not in _peer_bmc_creds:
+                            _cfg1 = _node_cfg_for(_addr1)
+                            _u1 = (_cfg1.get("bmc_user") or "").strip() or sp_user
+                            _p1 = _cfg1.get("bmc_password")
+                            if _p1 is None:
+                                _p1 = sp_pass
+                            _peer_bmc_creds[_addr1] = {"user": _u1, "password": _p1}
+
+                    _print_banner(
+                        f"🔁 Mode 1: Resetting {len(other_sps)} peer node(s) to LOADER (parallel)"
+                    )
+                    print(f"  Peer BMCs: {', '.join(other_sps)}")
+                    _session_log.start_phase("Peer Node Reset to LOADER")
+                    _session_log.log(f"Mode 1 peer BMCs to reset: {other_sps}")
+
+                    _pr1_log_dir = _session_log.log_dir if _session_log else os.getcwd()
+                    _pr1_node_logs: dict = {}
+                    for _addr1 in other_sps:
+                        try:
+                            _pr1_nf = _node_log_open(_addr1, _pr1_log_dir,
+                                                     prefix="mode1_peer_reset")
+                            _pr1_node_logs[_addr1] = _pr1_nf
+                            print(f"  📝 [{_addr1}] Reset log → {_pr1_nf.name}")
+                            _session_log.log(f"[{_addr1}] reset log: {_pr1_nf.name}")
+                        except Exception as _pr1_e:
+                            _pr1_node_logs[_addr1] = None
+                            print(f"  ⚠️  [{_addr1}] Could not open reset log: {_pr1_e}")
+
+                    _pr1_results: dict = {}
+                    _pr1_lock = threading.Lock()
+
+                    def _pr1_worker(addr):
+                        creds = _peer_bmc_creds.get(
+                            addr, {"user": sp_user, "password": sp_pass}
+                        )
+                        ok = reset_peer_to_loader(
+                            addr, creds["user"], creds["password"],
+                            node_log=_pr1_node_logs.get(addr),
+                        )
+                        with _pr1_lock:
+                            _pr1_results[addr] = ok
+
+                    # Check primary LOADER state in parallel with peer resets so the
+                    # system-reset phase below can skip the reset if already at LOADER.
+                    def _mode1_primary_loader_worker():
+                        try:
+                            _primary_loader_result[0] = _already_at_loader(
+                                channel, label=sp_host
+                            )
+                        except RuntimeError:
+                            _primary_loader_result[0] = False
+
+                    _mode1_primary_thread = threading.Thread(
+                        target=_mode1_primary_loader_worker, daemon=True
+                    )
+                    _mode1_primary_thread.start()
+                    _run_parallel(other_sps, _pr1_worker)
+                    _mode1_primary_thread.join()
+
+                    # Auto-retry failed peers (same budget as mode 3).
+                    _pr1_retry_budget = 3
+                    _pr1_attempt = 1
+                    while True:
+                        _pr1_failed = [a for a in other_sps
+                                       if not _pr1_results.get(a, False)]
+                        if not _pr1_failed or _pr1_attempt >= _pr1_retry_budget:
+                            break
+                        print(f"\n  ⚠️  {len(_pr1_failed)} peer(s) did not reach LOADER: "
+                              f"{', '.join(_pr1_failed)}")
+                        _pr1_attempt += 1
+                        print(f"\n  🔁 Auto-retrying {len(_pr1_failed)} peer(s) "
+                              f"(attempt {_pr1_attempt}/{_pr1_retry_budget})...")
+                        _session_log.log(
+                            f"Auto-retrying LOADER reset for {_pr1_failed} "
+                            f"(attempt {_pr1_attempt}/{_pr1_retry_budget})"
+                        )
+                        for _addr1 in _pr1_failed:
+                            try:
+                                _pr1_nf = _node_log_open(_addr1, _pr1_log_dir,
+                                                         prefix="mode1_peer_reset_retry")
+                                _pr1_node_logs[_addr1] = _pr1_nf
+                                print(f"  📝 [{_addr1}] Retry log → {_pr1_nf.name}")
+                            except Exception:
+                                _pr1_node_logs[_addr1] = None
+                        _run_parallel(_pr1_failed, _pr1_worker)
+
+                    for _nf1 in _pr1_node_logs.values():
+                        if _nf1:
+                            try:
+                                _nf1.close()
+                            except Exception:
+                                pass
+
+                    print("")
+                    for _addr1 in other_sps:
+                        _ok1 = _pr1_results.get(_addr1, False)
+                        _sym1 = "✅" if _ok1 else "⚠️ "
+                        _session_log.log(
+                            f"[{_addr1}] pre-init peer reset "
+                            f"{'reached LOADER' if _ok1 else 'did NOT reach LOADER'}"
+                        )
+                        _ts_print(f"  {_sym1} [{_addr1}] "
+                                  f"{'At LOADER' if _ok1 else 'Could not reach LOADER'}")
+                    _session_log.end_phase()
+
                 # Reset every peer BMC to LOADER up-front (mode 3 needs peers parked at
-                # LOADER before the parallel auto-add kicks in). Mode 1 (1a/1b) only
-                # operates on the first node — skip peer resets entirely.
+                # LOADER before the parallel auto-add kicks in).
                 # Mode 3 at peer-add finalization: peers were already reset in prior run.
                 if other_sps and _operation_mode == 3 and not _mode3_skip_presets:
                     global _mode3_staged_loader_channels, _mode3_staged_loader_clients, _mode3_pipeline_state
@@ -31962,10 +32071,14 @@ def main():
             # Phase: System Reset (skipped if already at LOADER)
             _session_log.start_phase("System Reset")
             # _primary_loader_result is set by the parallel thread during the peer
-            # reset phase (mode 3). For all other modes (no peer resets), check now.
+            # reset phase (mode 1 or mode 3). For single-node mode 1 and all other
+            # modes, check now.
             _at_loader = (
                 _primary_loader_result[0]
-                if _operation_mode == 3 and other_sps and _primary_loader_result[0] is not None
+                if _primary_loader_result[0] is not None
+                    and other_sps
+                    and _operation_mode in (1, 3)
+                    and not _mode3_skip_presets
                 else _already_at_loader(channel, label=sp_host)
             )
             if _at_loader:
