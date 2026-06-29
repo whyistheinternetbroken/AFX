@@ -3519,6 +3519,24 @@ def select_operation_mode():
             print("  " + "─" * 58)
             confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
             if confirm == "yes":
+                print("")
+                print("  ℹ️  ONTAP requires the cluster admin password to be at least 8")
+                print("  characters AND contain both letters and numbers.")
+                while True:
+                    _reuse_bmc_pwd = input("  Reuse the BMC login password as the cluster admin password? [Y/n]: ").strip().lower()
+                    if _reuse_bmc_pwd in ("y", "n", ""):
+                        break
+                    print("  Please enter y or n.")
+                print("")
+                print("  " + "─" * 58)
+                while True:
+                    _proceed_init = input("  This will bring all cluster nodes to the LOADER prompt and begin\n  initialization of the first node in a new cluster. Continue? (y/N): ").strip().lower()
+                    if _proceed_init in ("y", "n", ""):
+                        break
+                    print("  Please enter y or N.")
+                if _proceed_init in ("n", ""):
+                    print("\n  ↩️  Returning to menu...\n")
+                    continue
                 while True:
                     _ssh_ans = input("  Set up passwordless SSH to cluster management after setup? [y/N]: ").strip().lower()
                     if _ssh_ans in ("y", "n", ""):
