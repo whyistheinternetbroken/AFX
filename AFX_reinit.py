@@ -22346,6 +22346,9 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                         sys.exit(1)
             else:
                 ch.send(cmd + "\r"); time.sleep(1)
+                print(f"   ⏳ [{label}] Node booting — takes approximately 3-5 minutes...")
+                if _session_log:
+                    _session_log.log(f"[{label}] boot_ontap menu sent; waiting for boot menu")
 
         # Wait for boot menu and send option 4.
         sig_lower = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
