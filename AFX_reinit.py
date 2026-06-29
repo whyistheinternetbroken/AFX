@@ -3381,13 +3381,11 @@ def select_operation_mode():
     """Return (operation_mode_int, auto_setup_bool, auto_add_bool).
 
     Modes:
-      1  -> Initial cluster creation
-        1a: format first node, interactive (auto_setup=False)
-        1b: format first node, automatic   (auto_setup=True)
+      1  -> Create single node cluster (automated)
       2  -> Add new nodes to an existing cluster
         2a: format new node, interactive   (auto_add=False)
         2b: format new node, automatic     (auto_add=True)
-      3  -> End-to-end auto initialize: 1b on primary + parallel auto-add
+      3  -> End-to-end auto initialize: primary + parallel auto-add peers
             for every other BMC discovered/entered.
       4  -> Install/manage ONTAP  (sub-menu)
         4a: Upgrade ONTAP (rolling takeover/giveback)
@@ -3404,9 +3402,8 @@ def select_operation_mode():
     while True:
         _print_banner("NetApp AFX BMC Console Automation 🤖")
         print("\n  What do you want to do?\n")
-        print("  1.  Initial cluster creation")
-        print("    1a. Format first node in cluster. Use interactive configuration.")
-        print("    1b. Format first node in cluster. Use automatic configuration.")
+        print("  1.  Create single node cluster")
+        print("     Initializes the first node in an ONTAP AFX cluster and creates a new cluster.")
         print("")
         print("  2.  Add new nodes")
         print("    2a. Format new nodes. Use interactive node add.")
@@ -3497,63 +3494,16 @@ def select_operation_mode():
                         print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 3.")
                         return 3, True, True
                     if _cp_mode == "1":
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 1b.")
+                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 1.")
                         return 1, True, False
                     print("  ⚠️  Checkpoint mode is not auto-routable from the start menu.")
-        choice = input("❯❯  Enter your choice from the menu above (ie, 1a, 2b, 3, etc.): ").strip().lower()
+        choice = input("❯❯  Enter your choice from the menu above (ie, 1, 2b, 3, etc.): ").strip().lower()
 
-        if choice == "1a":
+        if choice == "1":
             _print_banner("⚠️  WARNING ⚠️")
             print("")
-            print("  You will be destroying the storage availability zone on")
-            print("  this cluster, deleting all data and reinitializing the")
-            print("  entire cluster.")
-            print("")
-            print("  " + "*" * 58)
-            print("  * CAUTION: IF THIS IS NOT THE FIRST NODE IN THE        *")
-            print("  * CLUSTER DO NOT RUN THIS OPTION. RUN OPTION 2         *")
-            print("  * INSTEAD TO JOIN A NEW NODE TO THE CLUSTER.            *")
-            print("  " + "*" * 58)
-            print("")
-            print("  " + "─" * 58)
-            confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-            if confirm in ("yes", "y"):
-                while True:
-                    _ssh_ans = input("  Set up passwordless SSH to cluster management after setup? [y/N]: ").strip().lower()
-                    if _ssh_ans in ("y", "n", ""):
-                        break
-                    print("  Please enter y or N.")
-                _setup_passwordless_ssh = (_ssh_ans == "y")
-                while True:
-                    _nb_ans = input("  Do you want to install a specific version of ONTAP before re-creating the cluster? [y/N]: ").strip().lower()
-                    if _nb_ans in ("y", "n", ""):
-                        break
-                    print("  Please enter y or N.")
-                _netboot_before_reinit = (_nb_ans == "y")
-                if _netboot_before_reinit:
-                    print("  ℹ️   Netboot-install will run at LOADER before the cluster reinit.")
-                    while True:
-                        while True:
-                            _sip_ans = input("  Use static IP in LOADER instead of DHCP (ifconfig -auto)? [y/N]: ").strip().lower()
-                            if _sip_ans in ("y", "n", ""):
-                                break
-                            print("  Please enter y or N.")
-                        if _sip_ans in ("y", "n", ""):
-                            break
-                        print("  Please enter y or N.")
-                    _netboot_static_ip = (_sip_ans == "y")
-                print("\n  ✅ Confirmed. 1a: Format first node (interactive)")
-                print("     → LOADER: set-defaults + destroy storage pods + saveenv")
-                print("     → Boot menu: option 9 (Initialize); then interactive\n")
-                return 1, False, False
-            print("\n  ↩️  Returning to menu...\n")
-            continue
-
-        if choice == "1b":
-            _print_banner("⚠️  WARNING ⚠️")
-            print("")
-            print("  1b will FULLY AUTOMATE first-node initialization, format,")
-            print("  and cluster setup. The script will auto-answer:")
+            print("  This operation will FULLY AUTOMATE first-node initialization,")
+            print("  format, and cluster setup. The script will auto-answer:")
             print("    • storage-availability-zone destroy warning  → no")
             print("    • second boot menu (after option 9)          → 4")
             print("    • zero disks / erase / type-yes prompts      → yes")
@@ -3593,7 +3543,7 @@ def select_operation_mode():
                             break
                         print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
-                print("\n  ✅ Confirmed. 1b: Format first node + setup cluster (auto)")
+                print("\n  ✅ Confirmed. Option 1: Create single node cluster (automated)")
                 print("     → LOADER: set-defaults + destroy storage pods + saveenv")
                 print("     → Boot menu: option 9, then auto option 4 + auto setup\n")
                 return 1, True, False
@@ -3606,7 +3556,7 @@ def select_operation_mode():
             print("  " + "*" * 58)
             print("  * CAUTION: 2a FORMATS AND JOINS AN AFX NODE TO AN     *")
             print("  * EXISTING CLUSTER. IF THE CLUSTER DOES NOT EXIST     *")
-            print("  * ALREADY, CHOOSE NO AND SELECT OPTION 1a OR 1b.       *")
+            print("  * ALREADY, CHOOSE NO AND SELECT OPTION 1.               *")
             print("  " + "*" * 58)
             print("")
             print("  " + "─" * 58)
@@ -6334,7 +6284,7 @@ OPTIONS
             python3 AFX_reinit.py --print-completion-hook
 
     Mode shortcut flags (bypass interactive menu):
-        --first-node      Run mode 1b directly
+        --first-node      Run mode 1 directly
         --add-nodes       Run mode 2b directly
         --reinit          Run mode 3 directly
         --netboot-install Run mode 4b directly
@@ -27781,7 +27731,7 @@ def main():
                 _shortcut_auto_add = False
                 if args.first_node:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 1, True, False
-                    print("\n  ⚡ --first-node: launching mode 1b (automated first-node init).")
+                    print("\n  ⚡ --first-node: launching mode 1 (create single node cluster).")
                 elif args.add_nodes:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 2, False, True
                     print("\n  ⚡ --add-nodes: launching mode 2b (automated node add).")
@@ -30935,10 +30885,8 @@ def main():
 
             if _operation_mode == 3:
                 mode_desc = "End-to-end auto initialize (1b primary + parallel auto-add peers)"
-            elif _operation_mode == 1 and _auto_setup:
-                mode_desc = "Initialize + format + setup first node (1b, fully automated)"
             elif _operation_mode == 1:
-                mode_desc = "Initialize first node (1a, option 9, destroy storage pods)"
+                mode_desc = "Create single node cluster (fully automated)"
             elif _operation_mode == 41:
                 mode_desc = "ONTAP upgrade - rolling takeover/giveback (4a)"
             elif _operation_mode == 43:
