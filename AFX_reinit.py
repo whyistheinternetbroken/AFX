@@ -31903,6 +31903,232 @@ def main():
                     elif _session_log:
                         _session_log.log("Mode 2b: cluster lookup credentials already available")
 
+                # ── Cluster health check ──────────────────────────────────────────────
+                # If a cluster management IP is present in the config, SSH to it and
+                # run cluster identity show + cluster show to confirm a healthy cluster
+                # exists before proceeding with node-add.
+                if _initial_operation_mode == 2:
+                    _2hc_cfg_cl = (
+                        (_config_data.get("cluster") or {})
+                        if isinstance(_config_data, dict) else {}
+                    )
+                    _2hc_ip = (
+                        _cluster_config.get("mgmt_ip")
+                        or _2hc_cfg_cl.get("clus_mgmt_address")
+                        or _2hc_cfg_cl.get("cluster_mgmt_ip")
+                        or _2hc_cfg_cl.get("cluster_management_ip")
+                    )
+                    if _2hc_ip:
+                        _print_banner("🩺 Cluster health check")
+                        print(f"\n  Cluster management IP: {_2hc_ip}")
+
+                        # Use credentials already collected (2b), otherwise prompt.
+                        _2hc_user = _cluster_config.get("admin_user") or "admin"
+                        _2hc_pass = _cluster_config.get("admin_password") or ""
+                        if not _2hc_pass:
+                            print(f"\n  Credentials to connect to the cluster at {_2hc_ip}:")
+                            try:
+                                _2hc_user = (
+                                    input(f"    Username [{_2hc_user}]: ").strip()
+                                    or _2hc_user
+                                )
+                                _2hc_pass = getpass.getpass(
+                                    f"    Password for {_2hc_user}@{_2hc_ip}: "
+                                )
+                            except (EOFError, KeyboardInterrupt):
+                                _2hc_pass = ""
+
+                        if _2hc_pass:
+                            _2hc_do_retry = True
+                            while _2hc_do_retry:
+                                _2hc_do_retry = False
+                                print(f"\n  🔌 Connecting to cluster {_2hc_ip}...")
+                                _2hc_client = None
+                                _2hc_channel = None
+                                _2hc_conn_failed = False
+                                try:
+                                    _2hc_client, _2hc_user, _2hc_pass = _ssh_connect_with_retry(
+                                        _2hc_ip, _2hc_user, _2hc_pass,
+                                        label=f"mode2-health/{_2hc_ip}",
+                                        max_attempts=3, interactive=False,
+                                    )
+                                    _2hc_ch = _open_shell(_2hc_client)
+                                    if _login_primary_cluster_shell(_2hc_ch, _2hc_pass):
+                                        _2hc_channel = _2hc_ch
+                                        print("  ✅ Connected to cluster shell.")
+                                        _session_log.log(
+                                            f"Mode 2 health check: connected to {_2hc_ip}"
+                                        )
+                                    else:
+                                        print("  ⚠️  Cluster shell login failed.")
+                                        _session_log.log(
+                                            "Mode 2 health check: login failed",
+                                            prefix="WARN",
+                                        )
+                                        _2hc_conn_failed = True
+                                except paramiko.AuthenticationException:
+                                    print(f"  ❌ Authentication failed for {_2hc_user}@{_2hc_ip}.")
+                                    _session_log.log(
+                                        f"Mode 2 health check: auth failed ({_2hc_user}@{_2hc_ip})",
+                                        prefix="WARN",
+                                    )
+                                    _2hc_conn_failed = True
+                                except Exception as _2hc_e:
+                                    print(f"  ❌ Connection failed: {_2hc_e}")
+                                    _session_log.log(
+                                        f"Mode 2 health check: connection error: {_2hc_e}",
+                                        prefix="ERROR",
+                                    )
+                                    _2hc_conn_failed = True
+
+                                if _2hc_conn_failed:
+                                    try:
+                                        _2hc_diag_ans = input(
+                                            f"\n  Run SSH diagnostics for {_2hc_ip}? [Y/n]: "
+                                        ).strip().lower()
+                                    except (EOFError, KeyboardInterrupt):
+                                        _2hc_diag_ans = "n"
+                                    if _2hc_diag_ans not in ("n", "no"):
+                                        _2hc_ping_ok = _diagnostic_ping_precheck(
+                                            _2hc_ip, log=_session_log
+                                        )
+                                        with suppress(Exception):
+                                            _diagnose_stale_bmc_sessions(
+                                                _2hc_ip, log=_session_log
+                                            )
+                                        _print_ping_precheck_summary({_2hc_ip: _2hc_ping_ok})
+                                        if _2hc_ping_ok:
+                                            try:
+                                                _2hc_retry_ans = input(
+                                                    "\n  Retry cluster health check? [Y/n]: "
+                                                ).strip().lower()
+                                            except (EOFError, KeyboardInterrupt):
+                                                _2hc_retry_ans = "n"
+                                            if _2hc_retry_ans not in ("n", "no"):
+                                                _2hc_do_retry = True
+                                                continue
+                                    print(
+                                        "\n  ❌ Cluster verification failed."
+                                        " Check if a cluster exists and retry."
+                                    )
+                                    _session_log.log(
+                                        "Mode 2 health check: cluster verification failed",
+                                        prefix="ERROR",
+                                    )
+                                    break
+
+                            if _2hc_channel:
+                                try:
+                                    with _suppress_console():
+                                        _2hc_id_out = _run_cluster_command(
+                                            _2hc_channel,
+                                            "cluster identity show",
+                                            timeout=30,
+                                        )
+                                        _2hc_cs_out = _run_cluster_command(
+                                            _2hc_channel,
+                                            "cluster show",
+                                            timeout=30,
+                                        )
+
+                                    # Parse cluster name from identity show.
+                                    _2hc_name = ""
+                                    for _2hc_line in _2hc_id_out.splitlines():
+                                        _2hc_m = re.search(
+                                            r"Cluster\s+Name\s*:\s*(\S+)",
+                                            _2hc_line, re.IGNORECASE,
+                                        )
+                                        if _2hc_m:
+                                            _2hc_name = _2hc_m.group(1)
+                                            break
+
+                                    # Parse node rows from cluster show.
+                                    # Columns: Node  Health  Eligibility
+                                    _2hc_nodes = []
+                                    _2hc_dash = False
+                                    _2hc_done = False
+                                    for _2hc_line in _2hc_cs_out.splitlines():
+                                        _s = _2hc_line.strip()
+                                        if not _s:
+                                            if _2hc_dash:
+                                                _2hc_done = True
+                                            continue
+                                        if _2hc_done:
+                                            continue
+                                        if "::" in _s or _s.lower().startswith("cluster show"):
+                                            continue
+                                        if "entries were displayed" in _s.lower():
+                                            break
+                                        if set(_s) <= {"-", " "}:
+                                            _2hc_dash = True
+                                            continue
+                                        if _2hc_dash:
+                                            _tok = _s.split()
+                                            _node  = _tok[0] if len(_tok) > 0 else ""
+                                            _hlth  = _tok[1] if len(_tok) > 1 else ""
+                                            _elig  = _tok[2] if len(_tok) > 2 else ""
+                                            _2hc_nodes.append((_node, _hlth, _elig))
+
+                                    # Healthy = name present + all nodes health/eligibility true.
+                                    _2hc_ok = (
+                                        bool(_2hc_name)
+                                        and bool(_2hc_nodes)
+                                        and all(
+                                            h.lower() == "true" and e.lower() == "true"
+                                            for _, h, e in _2hc_nodes
+                                        )
+                                    )
+
+                                    print(f"\n  Cluster name : {_2hc_name or '(not found)'}")
+                                    for _2n, _2h, _2e in _2hc_nodes:
+                                        _2sym = "✅" if (
+                                            _2h.lower() == "true" and _2e.lower() == "true"
+                                        ) else "⚠️ "
+                                        print(
+                                            f"  {_2sym} Node: {_2n}  "
+                                            f"Health: {_2h}  Eligibility: {_2e}"
+                                        )
+
+                                    if _2hc_ok:
+                                        print(
+                                            f"\n  ✅ Cluster '{_2hc_name}' is healthy"
+                                            " — proceeding with node add."
+                                        )
+                                        _session_log.log(
+                                            f"Mode 2 health check: cluster '{_2hc_name}' "
+                                            f"healthy ({len(_2hc_nodes)} node(s))"
+                                        )
+                                    else:
+                                        print(
+                                            "\n  ⚠️  Cluster health check did not confirm"
+                                            " a fully healthy cluster."
+                                        )
+                                        _session_log.log(
+                                            "Mode 2 health check: cluster not healthy or "
+                                            "name not found",
+                                            prefix="WARN",
+                                        )
+                                except Exception as _2hc_cmd_e:
+                                    print(f"  ⚠️  Health check commands failed: {_2hc_cmd_e}")
+                                    _session_log.log(
+                                        f"Mode 2 health check: command error: {_2hc_cmd_e}",
+                                        prefix="WARN",
+                                    )
+                                finally:
+                                    try:
+                                        _2hc_channel.close()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        _2hc_client.close()
+                                    except Exception:
+                                        pass
+                        else:
+                            _session_log.log(
+                                "Mode 2 health check: no credentials provided, skipping",
+                                prefix="WARN",
+                            )
+
                 collect_node_mgmt_per_bmc(sp_host, [])
 
             # ── Mode 2b: run parallel add for all 2b configurations ────────────────
