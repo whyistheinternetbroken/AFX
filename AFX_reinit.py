@@ -3406,7 +3406,7 @@ def select_operation_mode():
         print("     Initializes the first node in an ONTAP AFX cluster and creates a new cluster.")
         print("")
         print("  2.  Add new nodes")
-        print("    2a. Format new nodes. Use interactive node add.")
+        print("    2a. Reinitialize cluster nodes and leave in un-added state for manual node additions.")
         print("    2b. Format new nodes. Use automatic add.")
         print("    2c. Resume interrupted node additions.")
         print("")
@@ -11141,8 +11141,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     _accumulated += _out.lower()
                     if not _autoboot_seen and "starting autoboot" in _accumulated:
                         _autoboot_seen = True
-                        _elapsed = int(time.monotonic() - _phase_start)
-                        print(f"   ⏳ {_pfx}Node booting (AUTOBOOT started, {_elapsed}s elapsed)...")
+                        print(f"   ⏳ {_pfx}Node booting...")
                         _slog("AUTOBOOT detected during zero-disks wait")
                         _last_heartbeat = time.monotonic()
                 elif _autoboot_seen and time.monotonic() - _last_heartbeat >= 60:
@@ -11191,6 +11190,9 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
         if _cc_done_ev is not None:
             _cc_done_ev.set()
             _cc_done_ev = None
+
+    if _node_add:
+        print(f"\n   ⏳ {_pfx}Node(s) resetting; takes 3-5 minutes.")
 
     # Checkpoint: disks have been formatted and ONTAP image installed
     if _checkpoint:
@@ -22527,7 +22529,45 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         print(f"   ⏱️  [{label}] Disk erase done at +{_t_disk_erase_done - _t_thread_start:.1f}s")
 
         cfg = _resolve_node_mgmt_config(peer_bmc)
-        _mgmt_residual = _auto_answer_node_mgmt(ch, cfg, node_log=node_file) or ""
+
+        # Monitor for wipeconfig/autoboot status messages during node reset.
+        _wipe_buf = ""
+        _wipe_seen = False
+        _autoboot_seen_wipe = False
+        _node_mgmt_sigs = [
+            "node management interface port",
+            "node management interface ip",
+            "enter node management",
+            "node-setup",
+            "create/join",
+            "::>",
+            "login:",
+        ]
+        _wipe_deadline = time.monotonic() + 600
+        while time.monotonic() < _wipe_deadline:
+            if ch.recv_ready():
+                _wc = ch.recv(4096).decode("utf-8", errors="replace")
+                _wipe_buf += _wc
+                if node_file:
+                    _par_write(node_file, _wc)
+                _wcl = _wipe_buf.lower()
+                if not _wipe_seen and "wipeconfig" in _wcl:
+                    _wipe_seen = True
+                    print(f"   🔧 [{label}] Wiping node configuration...")
+                    _slog(f"[{label}] wipeconfig detected")
+                if not _autoboot_seen_wipe and "autoboot" in _wcl:
+                    _autoboot_seen_wipe = True
+                    print(f"   ⏳ [{label}] Node booting...")
+                    _slog(f"[{label}] autoboot detected during wipe monitoring")
+                if any(s in _wcl for s in _node_mgmt_sigs):
+                    break
+                if len(_wipe_buf) > 16384:
+                    _wipe_buf = _wipe_buf[-8192:]
+            else:
+                time.sleep(0.1)
+
+        _mgmt_residual = _auto_answer_node_mgmt(ch, cfg, node_log=node_file,
+                                                initial_buf=_wipe_buf) or ""
         _t_node_mgmt_done = time.monotonic()
         print(f"   ⏱️  [{label}] Node mgmt applied at +{_t_node_mgmt_done - _t_thread_start:.1f}s")
 
@@ -23196,9 +23236,9 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
 
 def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
-    """Mode 2a: run nodes in parallel, each going through LOADER → option 4 →
-    disk erase → node-mgmt, then all nodes are joined via ONTAP's
-    ``cluster add-node`` command from the primary cluster.
+    """Mode 2a: run nodes in parallel through LOADER → option 4 → disk erase →
+    node-mgmt → cluster IP capture, then offer interactive selection of which
+    nodes to join via ``cluster add-node``.
 
     peer_bmcs    : ordered list of BMC IPs/hostnames
     bmc_user     : default BMC username
@@ -23208,11 +23248,9 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     if not peer_bmcs:
         return False
 
-    broker = _InteractivePromptBroker()
-
     # ── 1. Display nodes ─────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print(f"  ➕ Mode 2a: add the following {len(peer_bmcs)} node(s) interactively")
+    print(f"  🔄 Mode 2a: reinitialize {len(peer_bmcs)} node(s) (nodes will be left un-added)")
     print("  " + "─" * 58)
     _col_w = 18
     print(f"  {'#':<4} {'BMC IP':<{_col_w}} {'Node Mgmt IP':<{_col_w}} "
@@ -23225,8 +23263,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         _n_gw  = _nc.get("node_mgmt_gateway") or _nc.get("gateway") or "—"
         print(f"  {i:<4} {ip:<{_col_w}} {_n_ip:<{_col_w}} {_n_prt:<8} {_n_gw:<{_col_w}}")
     print("=" * 60)
-    print("\n  ℹ️   Nodes will boot in parallel. When user input is needed")
-    print("  the relevant node will pause and ask you here.\n")
+    print("\n  ℹ️   Nodes will boot in parallel. Disk erase prompts are auto-answered.\n")
     peer_bmcs = _omit_nodes_by_number(peer_bmcs, mode_label="2a", log=log)
     if not peer_bmcs:
         print("\n  ✅ No nodes selected for add. Nothing to do.")
@@ -23351,7 +23388,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
     # ── 4. Spawn threads ─────────────────────────────────────────────────────
     if log:
-        log.start_phase("2a – Interactive Parallel Node Add")
+        log.start_phase("2a – Reinitialize Nodes (un-added state)")
 
     _cluster_ips_out = {}   # peer_bmc -> cluster interface IP
     _2a_peer_timings: "dict[str, dict]" = {}
@@ -23374,7 +23411,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 try:
                     _batch_results[_ri] = _add_peer_node_thread(
                         _addr, _u, _p, primary_channel, admin_password,
-                        broker=broker,
+                        broker=None,
                         cluster_ips_out=_cluster_ips_out,
                         timings_record=_2a_peer_timings,
                         timings_lock=_2a_timings_lock,
@@ -23390,7 +23427,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             threads.append(t)
             print(f"  ▶️  [{addr}] Thread started.")
 
-        print(f"\n  ⏳ Nodes running in parallel. Answer prompts above when asked...")
+        print(f"\n  ⏳ Nodes reinitializing in parallel...")
         if not _join_threads_with_deadline(threads, label="mode 2a", log=log):
             return False
         _raise_pending_checkpoint_failure()
@@ -23414,24 +23451,70 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             break
         _pending = _failed
 
-    # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
+    # ── 5. Interactive node selection + cluster add-node ─────────────────────
     _2a_add_node_timings: "dict[str, float]" = {}
-    if primary_channel and _cluster_ips_out:
+    if _cluster_ips_out:
         _collected_ips = _ordered_cluster_entries_for_add(
             _cluster_ips_out, preferred_bmcs=peer_bmcs
         )
         if _collected_ips:
-            _cluster_add_nodes_bulk(primary_channel, _collected_ips, log=log,
-                                    node_timings_out=_2a_add_node_timings)
+            print("\n" + "=" * 60)
+            print("  ✅ Nodes initialized. Ready for cluster addition:")
+            print("  " + "─" * 58)
+            for _i, _e in enumerate(_collected_ips, 1):
+                _nm = _e.get("node_name") or "—"
+                _ip = _e.get("cluster_ip") or "—"
+                print(f"  {_i}.  {_nm:<20} {_ip}")
+            print("=" * 60)
+            _add_ans = _prompt(
+                "\n  Enter node numbers to add (comma-separated), "
+                "or press Enter to add all, or 'exit' to skip: "
+            ).strip().lower()
+            if _add_ans == "exit":
+                print("\n  ℹ️  Skipping cluster add-node. Add nodes manually:")
+                for _e in _collected_ips:
+                    print(f"     cluster add-node -cluster-ips {_e['cluster_ip']}")
+                if log:
+                    log.log("2a: operator chose to skip cluster add-node; nodes left un-added")
+            else:
+                _selected = _collected_ips
+                if _add_ans:
+                    _nums = []
+                    for _tok in _add_ans.split(","):
+                        _tok = _tok.strip()
+                        if _tok.isdigit():
+                            _nums.append(int(_tok))
+                    _selected = [
+                        _collected_ips[_n - 1]
+                        for _n in _nums
+                        if 1 <= _n <= len(_collected_ips)
+                    ]
+                if _selected:
+                    if primary_channel:
+                        _cluster_add_nodes_bulk(
+                            primary_channel, _selected, log=log,
+                            node_timings_out=_2a_add_node_timings,
+                        )
+                    else:
+                        print("\n  ℹ️  No primary cluster channel. Add nodes manually:")
+                        for _e in _selected:
+                            print(f"     cluster add-node -cluster-ips {_e['cluster_ip']}")
+                        if log:
+                            log.log("2a: no primary channel; printed manual add-node commands")
+                else:
+                    print("\n  ⚠️  No valid node numbers selected; nodes left un-added.")
+                    if log:
+                        log.log("2a: no valid node numbers selected; skipping cluster add-node",
+                                prefix="WARN")
         else:
             print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
             if log:
                 log.log("2a: no cluster IPs collected; skipping cluster add-node",
                         prefix="WARN")
-    elif not primary_channel:
-        print("\n  ℹ️  No primary channel; skipping cluster add-node.")
+    else:
+        print("\n  ℹ️  No cluster IPs captured; nodes may need manual addition.")
         if log:
-            log.log("2a: no primary channel; skipping cluster add-node")
+            log.log("2a: _cluster_ips_out empty after threads completed")
 
     if log:
         # Per-node detailed timing breakdown.
