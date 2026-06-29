@@ -21671,11 +21671,12 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                         log.log("cluster add-node: completed via cluster-show fallback "
                                 f"(count={_count}, target={_target_count}) in "
                                 f"{elapsed_total}s")
-                    for _ip in cluster_ips:
-                        if (node_timings_out is not None and _ip
-                                and _ip not in _already_succeeded):
-                            _already_succeeded.add(_ip)
-                            node_timings_out[_ip] = elapsed_total
+                    for _row in _rows:
+                        _row_ip = _row["cluster_ip"]
+                        if (node_timings_out is not None and _row_ip
+                                and _row_ip not in _already_succeeded):
+                            _already_succeeded.add(_row_ip)
+                            node_timings_out[_row_ip] = elapsed_total
                     return True
 
         elapsed = int(time.monotonic() - start)
