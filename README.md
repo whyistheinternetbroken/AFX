@@ -287,12 +287,11 @@ The script presents a menu at startup. Enter the number corresponding to the des
 
 | Mode | Short Name | Description |
 |---|---|---|
-| **1a** | Initialize First Node (interactive) | Boots to LOADER, sets `destroy-all-storage-pods` flag, selects boot menu option 9 (Clean System Configuration). Prompts the operator for all cluster setup wizard inputs. When complete, prompts whether to run **2a**, **2b**, or return to the main menu (**N**). |
-| **1b** | Initialize First Node (automated) | Same as 1a, but drives the full ONTAP cluster setup wizard automatically using values from config file or prompts. Clears the checkpoint file on completion. When complete, prompts whether to run **2a**, **2b**, or return to the main menu (**N**). |
+| **1** | Create single node cluster | Initializes the first node in an ONTAP AFX cluster and creates a new cluster. Boots to LOADER, sets `destroy-all-storage-pods` flag, selects boot menu option 9 (Clean System Configuration). Drives the full ONTAP cluster setup wizard automatically using values from config file or prompts. Clears the checkpoint file on completion. When complete, prompts whether to run **2a**, **2b**, or return to the main menu (**N**). |
 | **2a** | Add Node to Cluster (interactive) | Boots to LOADER, selects boot menu option 4 (Initialize and configure system). Operator completes the node-join wizard. In multi-node runs, supports numbered omit selection and auto-skips nodes already in cluster. Per-node credential collection can use password groups, and BMC auth attempts include silent fallback (including blank password). |
 | **2b** | Add Node to Cluster (automated) | Same as 2a, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel, numbered omit selection, and auto-skips nodes already in cluster. In this flow, "primary BMC" is used as the default credential context (use `PRIMARY` to reuse that password; blank means an actual blank password), not as a unique controller after parallel add starts. Per-node credential collection can use password groups, and BMC auth attempts include silent fallback (including blank password). |
 | **2c** | Resume Node Additions | Resumes interrupted node-join operations from the last successful checkpoint. Use when a previous mode 2b or mode 3 run was interrupted before all secondary nodes completed. Run `--checkpoint-status` to inspect the checkpoint state before resuming. |
-| **3** | End-to-End Auto Reinit | Runs mode 1b on the primary node, then runs mode 2b on all secondary nodes in parallel. Fully unattended with a config file. Peer-credential collection supports password groups, and peer BMC connect/reconnect paths use silent fallback credentials (including blank password). **Option 3 is reinit-only and assumes ONTAP is already at the target version; use 4b or 4c for image installs.** |
+| **3** | End-to-End Auto Reinit | Runs mode 1 on the primary node, then runs mode 2b on all secondary nodes in parallel. Fully unattended with a config file. Peer-credential collection supports password groups, and peer BMC connect/reconnect paths use silent fallback credentials (including blank password). **Option 3 is reinit-only and assumes ONTAP is already at the target version; use 4b or 4c for image installs.** |
 | **4a** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. See [Why 4a uses the BMC](#why-4a-uses-the-bmc). |
 | **4b** | Netboot Install + Optional Reinit | Runs netboot image install, then can continue into reinit flow (1a/1b/3) when selected. |
 | **4c** | Netboot Install Only | Runs the same netboot image install path as 4b, then stops before reinit, cluster create, or node add steps. |
@@ -693,9 +692,9 @@ kill -TERM $SCRIPT_PID
 
 | Mode | LOADER Commands |
 |---|---|
-| 1a / 1b | `set-defaults`, `setenv bootarg.destroy.all.storage.pods true`, `saveenv`, `boot_ontap menu` → Option 9 |
+| 1 | `set-defaults`, `setenv bootarg.destroy.all.storage.pods true`, `saveenv`, `boot_ontap menu` → Option 9 |
 | 2a / 2b / 2c | `set-defaults`, `setenv bootarg.init.unjoined true`, `saveenv`, `boot_ontap menu` → Option 4 |
-| 3 | Same as 1b for primary; same as 2a/2b for peer nodes (includes `setenv bootarg.init.unjoined true`) |
+| 3 | Same as 1 for primary; same as 2a/2b for peer nodes (includes `setenv bootarg.init.unjoined true`) |
 | 4b | `set-defaults`, `setenv AUTOBOOT false`, `saveenv`, netboot sequence |
 
 ---
@@ -742,7 +741,7 @@ These flags bypass the interactive menu and launch directly into the specified m
 
 | Flag | Mode | Description |
 |---|---|---|
-| `--first-node` | 1b | Initialize the first node and set up the cluster automatically. |
+| `--first-node` | 1 | Create single node cluster. |
 | `--add-nodes` | 2b | Add node(s) to an existing cluster automatically. |
 | `--reinit` | 3 | End-to-end automated reinit: 1b on primary + parallel node adds. Assumes ONTAP is already at the desired version (install via 4b/4c separately). |
 | `--netboot-install` | 4b | Netboot and install ONTAP. |

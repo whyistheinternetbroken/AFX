@@ -9,6 +9,13 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Options 1a and 1b consolidated into a single option 1.**
+  The interactive (1a) and automated (1b) first-node initialization options are
+  now combined into a single menu option 1: "Create single node cluster". The
+  new option runs in fully automated mode (equivalent to the old 1b behavior).
+  Users who previously needed interactive wizard prompts should use the config
+  file to pre-supply values or re-enter them when prompted during automated
+  execution. The `--first-node` shortcut flag still routes directly to mode 1.
 - **After 1a/1b completion, prompt to run 2a, 2b, or return to menu.**
   Options 1a and 1b no longer exit the script after the cluster setup wizard
   completes. Instead, the operator is shown a three-choice prompt (2a / 2b / N).
