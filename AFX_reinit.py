@@ -3701,7 +3701,13 @@ def select_operation_mode():
                         break
                     print("  Please enter y or N.")
                 _loader_env_stage_enabled = (_m3_skip_env in ("n", "no"))
-                print("\n  ✅ Confirmed. 3: End-to-end auto initialize\n")
+                print("\n  ✅ Confirmed. 3: End-to-end auto initialize")
+                print("")
+                print("  ℹ️  Recommendation: do not connect to node serial consoles")
+                print("  while this script is running — it may interrupt automation.")
+                print("  Monitor node progress via log files instead:")
+                print("    tail -f <session_log_dir>/<node>_*.log")
+                print("")
                 return 3, True, True
             print("\n  ↩️  Returning to menu...\n")
             continue
@@ -3752,7 +3758,13 @@ def select_operation_mode():
                         break
                     print("  Please enter y or N.")
                 if confirm == "y":
-                    print("\n  \u2705 Confirmed. 4b: Netboot + automated cluster reinit\n")
+                    print("\n  ✅ Confirmed. 4b: Netboot + automated cluster reinit")
+                    print("")
+                    print("  ℹ️  Recommendation: do not connect to node serial consoles")
+                    print("  while this script is running — it may interrupt automation.")
+                    print("  Monitor node progress via log files instead:")
+                    print("    tail -f <session_log_dir>/<node>_*.log")
+                    print("")
                     return 42, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
