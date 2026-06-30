@@ -4314,6 +4314,10 @@ _mode3_peer_netboot_done = False  # True when mode-3 peer netboot/install ran wi
 # to the primary node's LOADER commands so disks are physically zeroed.
 _physical_zeroing = False
 
+# When True (set by 1/3/4.2 prompt), responds 'yes' to the ONTAP AutoSupport
+# confirmation prompt ("Type yes to confirm and continue"). When False, responds 'no'.
+_enable_autosupport = True
+
 # When True (set by --diag flag), enables diagnostic bootarg injection at LOADER.
 _diag_mode = False
 
@@ -11195,7 +11199,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
          "zero disks confirmation"),
         ("this will erase all the data on the disks", "yes",
          "erase data confirmation"),
-        ("type yes to confirm and continue", "yes",
+        ("type yes to confirm and continue", "yes" if _enable_autosupport else "no",
          "type-yes confirmation"),
     ):
         if lbl == "type-yes confirmation":
@@ -14105,6 +14109,20 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if log:
             log.log(f"4.2: physical disk zeroing requested: {_physical_zeroing}")
 
+        global _enable_autosupport
+        if resuming and _checkpoint and _checkpoint.get_param("enable_autosupport") is not None:
+            _enable_autosupport = _checkpoint.get_param("enable_autosupport")
+            print(f"\n  🔖 Resuming: AutoSupport={'enabled' if _enable_autosupport else 'disabled'}.")
+        else:
+            _asup_q = _prompt(
+                "  Do you want to enable AutoSupport after reinit? [Y/n]: "
+            , "y").lower()
+            _enable_autosupport = (_asup_q != "n")
+            if not _enable_autosupport:
+                print("  ℹ️   AutoSupport will be disabled (will respond 'no' to AutoSupport prompt).")
+        if log:
+            log.log(f"4.2: AutoSupport: {'enabled' if _enable_autosupport else 'disabled'}")
+
         # Diagnostic bootargs: if --diag was passed, load/prompt for bootargs now.
         global _diag_mode, _diag_bootargs, _prevent_bios_fw_update
         if _diag_mode:
@@ -14220,6 +14238,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         _checkpoint.set_param("physical_zeroing",  _physical_zeroing)
         _checkpoint.set_param("netboot_static_ip", _netboot_static_ip)
         _checkpoint.set_param("prevent_bios_fw_update", _prevent_bios_fw_update)
+        _checkpoint.set_param("enable_autosupport", _enable_autosupport)
         if _diag_mode:
             _checkpoint.set_param("diag_bootargs", _diag_bootargs)
     if _checkpoint is not None:
@@ -15254,13 +15273,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     if _m3:
                         # Auto-answer "Type yes to confirm and continue" and keep waiting.
                         if "type yes to confirm and continue" in _m3:
-                            _status(f"  [{ip}] Option 6 boot confirmation prompt → yes")
+                            _asup_resp = "yes" if _enable_autosupport else "no"
+                            _status(f"  [{ip}] Option 6 boot confirmation prompt → {_asup_resp}")
                             if log:
-                                log.log(f"[{ip}] option 6 boot confirmation 'type yes to confirm' → yes")
+                                log.log(f"[{ip}] option 6 boot confirmation 'type yes to confirm' → {_asup_resp}")
                             if _nf6:
-                                _par_write(_nf6, "\n>>> yes (option 6 boot confirmation)\n")
+                                _par_write(_nf6, f"\n>>> {_asup_resp} (option 6 boot confirmation)\n")
                             try:
-                                ch.send("yes\r")
+                                ch.send(_asup_resp + "\r")
                             except OSError:
                                 pass
                             _m3 = None  # clear so we keep waiting for login:/boot-menu
@@ -15364,7 +15384,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     ("encrypting drives",                                    "y",   "encrypting drives re-key warning"),
                     ("zero disks, reset config and install a new file system", "yes", "zero disks"),
                     ("this will erase all the data on the disks",            "yes", "erase data"),
-                    ("type yes to confirm and continue",                     "yes", "type-yes confirm"),
+                    ("type yes to confirm and continue",                     "yes" if _enable_autosupport else "no", "type-yes confirm"),
                 ]
                 _answered = set()
                 _opt4_deadline = time.monotonic() + 300  # 5 min total for all prompts
@@ -15586,13 +15606,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                                 break
                         if _m3:
                             if "type yes to confirm and continue" in _m3:
-                                _status(f"  [{ip}] Option 4 boot confirmation prompt → yes")
+                                _asup_resp = "yes" if _enable_autosupport else "no"
+                                _status(f"  [{ip}] Option 4 boot confirmation prompt → {_asup_resp}")
                                 if log:
-                                    log.log(f"[{ip}] option 4 boot confirmation 'type yes to confirm' → yes")
+                                    log.log(f"[{ip}] option 4 boot confirmation 'type yes to confirm' → {_asup_resp}")
                                 if _nf6:
-                                    _par_write(_nf6, "\n>>> yes (option 4 boot confirmation)\n")
+                                    _par_write(_nf6, f"\n>>> {_asup_resp} (option 4 boot confirmation)\n")
                                 try:
-                                    ch.send("yes\r")
+                                    ch.send(_asup_resp + "\r")
                                 except OSError:
                                     pass
                                 _m3 = None
@@ -31499,6 +31520,17 @@ def main():
                 _physical_zeroing = (_pz_ans == "y")
                 if _physical_zeroing:
                     print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+                try:
+                    while True:
+                        _asup_ans = input("  Do you want to enable AutoSupport after reinit? [Y/n]: ").strip().lower()
+                        if _asup_ans in ("y", "n", ""):
+                            break
+                        print("  Please enter y or n.")
+                except (EOFError, KeyboardInterrupt):
+                    _asup_ans = ""
+                _enable_autosupport = (_asup_ans != "n")
+                if not _enable_autosupport:
+                    print("  ℹ️   AutoSupport will be disabled (will respond 'no' to AutoSupport prompt).")
                 if _diag_mode:
                     _diag_bootargs = _load_diag_bootargs()
             elif _operation_mode == 2 and _diag_mode:
