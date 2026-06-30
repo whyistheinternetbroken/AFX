@@ -14179,10 +14179,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             )
         else:
             _fw_q = _prompt(
-                "  Do you want to prevent BIOS firmware from updating? [Y/n]: ",
-                "y",
+                "  Do you want to prevent BIOS firmware from updating? [y/N]: ",
+                "n",
             ).lower()
-            _prevent_bios_fw_update = (_fw_q not in ("n", "no"))
+            _prevent_bios_fw_update = (_fw_q in ("y", "yes"))
         if _prevent_bios_fw_update:
             print("  ℹ️   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
         else:
@@ -31958,10 +31958,10 @@ def main():
 
             if _operation_mode in (1, 2, 3) and not _mode3_skip_presets:
                 _fw_ans = _prompt(
-                    "  Do you want to prevent BIOS firmware from updating? [Y/n]: ",
-                    "y",
+                    "  Do you want to prevent BIOS firmware from updating? [y/N]: ",
+                    "n",
                 ).lower()
-                _prevent_bios_fw_update = (_fw_ans not in ("n", "no"))
+                _prevent_bios_fw_update = (_fw_ans in ("y", "yes"))
                 if _prevent_bios_fw_update:
                     print("  ℹ️   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
                 else:
