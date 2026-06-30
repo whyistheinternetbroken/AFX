@@ -10827,51 +10827,60 @@ def collect_cluster_config():
                     prefix="WARN",
                 )
             admin_password = None
-        print(f"\n  \u2139\uFE0F  {pw_rule_msg}")
-        _candidate_bmc_pw = str(_primary_bmc_password or "").strip()
-        if not _candidate_bmc_pw:
-            _pn_cfg = _config_primary_node()
-            _cfg_bmc_pw = str((_pn_cfg or {}).get("bmc_password") or "").strip()
-            if _cfg_bmc_pw:
-                _candidate_bmc_pw = _cfg_bmc_pw
-        bmc_pw_available = bool(_candidate_bmc_pw)
-        _reuse_prompt = (
-            "  Reuse the BMC login password as the cluster admin password? [Y/n]: "
-            if bmc_pw_available else
-            "  Reuse the BMC login password as the cluster admin password? [y/N]: "
-        )
-        _reuse_default = "y" if bmc_pw_available else "n"
-        _reuse_bmc_pw = _prompt(
-            _reuse_prompt,
-            _reuse_default,
-        ).strip().lower()
-        if _reuse_bmc_pw not in ("n", "no"):
-            if not bmc_pw_available:
-                _candidate_bmc_pw = getpass.getpass(
-                    "  BMC password to reuse for cluster admin (hidden): "
-                )
-                bmc_pw_available = bool(_candidate_bmc_pw)
-            if _password_ok(_candidate_bmc_pw):
-                admin_password = _candidate_bmc_pw
-                print("    \u2705 Reusing BMC login password as cluster admin password (hidden).")
-                if _session_log:
-                    _session_log.log(
-                        "Operator reused BMC login password as cluster admin password"
+        # Check session cache before prompting.
+        admin_user = cc_cfg.get("user") or "admin"
+        _cc_ip = _config_cluster_ip() or "*"
+        _cached_cc_pw = _cred_lookup("cluster", _cc_ip, admin_user)
+        if _cached_cc_pw is not None and _password_ok(_cached_cc_pw):
+            print(f"  \U0001f511 Using cached password for {admin_user}@{_cc_ip}.")
+            admin_password = _cached_cc_pw
+        else:
+            print(f"\n  \u2139\uFE0F  {pw_rule_msg}")
+            _candidate_bmc_pw = str(_primary_bmc_password or "").strip()
+            if not _candidate_bmc_pw:
+                _pn_cfg = _config_primary_node()
+                _cfg_bmc_pw = str((_pn_cfg or {}).get("bmc_password") or "").strip()
+                if _cfg_bmc_pw:
+                    _candidate_bmc_pw = _cfg_bmc_pw
+            bmc_pw_available = bool(_candidate_bmc_pw)
+            _reuse_prompt = (
+                "  Reuse the BMC login password as the cluster admin password? [Y/n]: "
+                if bmc_pw_available else
+                "  Reuse the BMC login password as the cluster admin password? [y/N]: "
+            )
+            _reuse_default = "y" if bmc_pw_available else "n"
+            _reuse_bmc_pw = _prompt(
+                _reuse_prompt,
+                _reuse_default,
+            ).strip().lower()
+            if _reuse_bmc_pw not in ("n", "no"):
+                if not bmc_pw_available:
+                    _candidate_bmc_pw = getpass.getpass(
+                        "  BMC password to reuse for cluster admin (hidden): "
                     )
-            else:
-                print("    \u26A0\uFE0F  The BMC login password does not meet the ONTAP "
-                      "rule above, so it cannot be reused here.")
-        if not (admin_password and _password_ok(admin_password)):
-            while True:
-                admin_password = getpass.getpass("  Admin password to use for cluster: ")
-                if not admin_password:
-                    print("    \u26A0\uFE0F  Password cannot be empty.")
-                    continue
-                if not _password_ok(admin_password):
-                    print(f"    \u26A0\uFE0F  Password does not meet requirements. "
-                          f"{pw_rule_msg}")
-                    continue
-                break
+                    bmc_pw_available = bool(_candidate_bmc_pw)
+                if _password_ok(_candidate_bmc_pw):
+                    admin_password = _candidate_bmc_pw
+                    print("    \u2705 Reusing BMC login password as cluster admin password (hidden).")
+                    if _session_log:
+                        _session_log.log(
+                            "Operator reused BMC login password as cluster admin password"
+                        )
+                else:
+                    print("    \u26A0\uFE0F  The BMC login password does not meet the ONTAP "
+                          "rule above, so it cannot be reused here.")
+            if not (admin_password and _password_ok(admin_password)):
+                while True:
+                    admin_password = getpass.getpass("  Admin password to use for cluster: ")
+                    if not admin_password:
+                        print("    \u26A0\uFE0F  Password cannot be empty.")
+                        continue
+                    if not _password_ok(admin_password):
+                        print(f"    \u26A0\uFE0F  Password does not meet requirements. "
+                              f"{pw_rule_msg}")
+                        continue
+                    break
+            _cred_store("cluster", _cc_ip, admin_user, admin_password)
 
     admin_user = cc_cfg.get("user") or "admin"
     if cc_cfg.get("user"):
