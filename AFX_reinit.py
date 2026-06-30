@@ -38,6 +38,9 @@ import socket
 import shlex
 import textwrap
 import traceback
+import secrets as _secrets_mod
+import hashlib as _hashlib_mod
+import hmac as _hmac_mod
 from datetime import datetime
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
@@ -863,7 +866,73 @@ _config_data = {}
 # post-node-mgmt cluster setup wizard non-interactively).
 _cluster_config = {}
 
-# License settings populated by _collect_license_config().
+# ── Session credential cache ────────────────────────────────────────────────
+# A random 32-byte key generated once per process — never written to disk.
+# Credentials stored in _session_creds are encrypted with this key using an
+# HMAC-SHA256 stream cipher (CTR mode), so plaintext passwords never appear
+# in the dict or in any log/dump.
+_SESSION_KEY: bytes = _secrets_mod.token_bytes(32)
+_session_creds: "dict[tuple[str, str, str], bytes]" = {}
+
+
+def _cred_encrypt(plaintext: str) -> bytes:
+    nonce = _secrets_mod.token_bytes(16)
+    data = plaintext.encode("utf-8")
+    keystream = b""
+    blk = 0
+    while len(keystream) < len(data):
+        keystream += _hmac_mod.new(
+            _SESSION_KEY, nonce + blk.to_bytes(4, "big"), _hashlib_mod.sha256
+        ).digest()
+        blk += 1
+    ct = bytes(a ^ b for a, b in zip(data, keystream))
+    tag = _hmac_mod.new(_SESSION_KEY, nonce + ct, _hashlib_mod.sha256).digest()
+    return nonce + tag + ct
+
+
+def _cred_decrypt(ciphertext: bytes) -> "str | None":
+    if len(ciphertext) < 48:
+        return None
+    nonce, tag, ct = ciphertext[:16], ciphertext[16:48], ciphertext[48:]
+    expected = _hmac_mod.new(_SESSION_KEY, nonce + ct, _hashlib_mod.sha256).digest()
+    if not _hmac_mod.compare_digest(tag, expected):
+        return None
+    keystream = b""
+    blk = 0
+    while len(keystream) < len(ct):
+        keystream += _hmac_mod.new(
+            _SESSION_KEY, nonce + blk.to_bytes(4, "big"), _hashlib_mod.sha256
+        ).digest()
+        blk += 1
+    return bytes(a ^ b for a, b in zip(ct, keystream)).decode("utf-8")
+
+
+def _cred_store(cred_type: str, ip: str, user: str, password: str) -> None:
+    _session_creds[(cred_type, ip.lower().strip(), user.lower().strip())] = _cred_encrypt(password)
+
+
+def _cred_lookup(cred_type: str, ip: str, user: str) -> "str | None":
+    enc = _session_creds.get((cred_type, ip.lower().strip(), user.lower().strip()))
+    return _cred_decrypt(enc) if enc is not None else None
+
+
+def _prompt_or_cached_bmc_pass(user: str, prompt: str = "  BMC password: ",
+                                bmc_ip: str = "*") -> str:
+    _cached = _cred_lookup("bmc", bmc_ip, user)
+    if _cached is not None:
+        _yn = input(f"  🔑 Cached BMC password found for {user}. Use it? [Y/n]: ").strip().lower()
+        if _yn in ("", "y", "yes"):
+            return _cached
+    try:
+        _pw = getpass.getpass(prompt)
+    except (EOFError, KeyboardInterrupt):
+        _pw = ""
+    if _pw:
+        _cred_store("bmc", bmc_ip, user, _pw)
+    return _pw
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Initialised here so _run_cluster_setup_wizard / _apply_license can safely
 # reference them even when _collect_license_config() was never called.
 _license_mode      = None   # "key", "file", or None (skip)
@@ -3432,6 +3501,7 @@ def select_operation_mode():
         print("    5.12. Compare and correct cluster node names:IP addresses")
         print("    5.13. Show reinit-config.json (human-readable)")
         print("    5.14. Check cluster node join status")
+        print("    5.15. Manage session credentials")
         print("")
         print("    !!Disruptive commands!!")
         print("      5.99. Reset all nodes to LOADER prompt")
@@ -3802,7 +3872,7 @@ def select_operation_mode():
             print("")
             continue
 
-        if choice in ("5", "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.8", "5.9", "5.10", "5.11", "5.12", "5.13", "5.14", "5.99"):
+        if choice in ("5", "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.8", "5.9", "5.10", "5.11", "5.12", "5.13", "5.14", "5.15", "5.99"):
             if choice == "5":
                 _print_banner("🛠️ 5: Administration and maintenance")
                 print("\n  5.1. Install license file only")
@@ -3819,12 +3889,13 @@ def select_operation_mode():
                 print("  5.12. Compare and correct cluster node names:IP addresses")
                 print("  5.13. Show reinit-config.json (human-readable)")
                 print("  5.14. Check cluster node join status")
+                print("  5.15. Manage session credentials")
                 print("")
                 print("  !!Disruptive commands!!")
                 print("    5.99. Reset all nodes to LOADER prompt")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5.1–5.14, 5.99) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5.1–5.15, 5.99) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -4043,13 +4114,16 @@ def select_operation_mode():
 
             if choice == "5.14":
                 return 59, False, False
+
+            if choice == "5.15":
+                return 60, False, False
             continue
 
         if choice == "7":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  ⚠️  Invalid choice. Please enter 1.1, 1.2, 2.1, 2.2, 2.3, 3, 4.1-4.3, 5.1-5.14/5.99, 6, or 7.")
+        print("  ⚠️  Invalid choice. Please enter 1.1, 1.2, 2.1, 2.2, 2.3, 3, 4.1-4.3, 5.1-5.15/5.99, 6, or 7.")
 
 
 def get_loader_commands():
@@ -12727,7 +12801,9 @@ def _collect_netboot_bmcs():
                     "  Use the same password for all? [Y/n]: "
                 ).strip().lower()
                 if _same_ans != "n":
-                    _shared_pass = getpass.getpass("  BMC password: ")
+                    _shared_pass = _prompt_or_cached_bmc_pass(
+                        "admin", "  BMC password: "
+                    )
                     for _ip in _missing:
                         _bmc_passwords[_ip] = _shared_pass
                 else:
@@ -12812,7 +12888,7 @@ def _collect_netboot_bmcs():
         same_ans = input("  Use the same username/password for all BMCs? [Y/n]: ").strip().lower()
         bmc_user = input("  BMC username: ").strip() or "admin"
         if same_ans != "n":
-            bmc_pass = getpass.getpass("  BMC password: ")
+            bmc_pass = _prompt_or_cached_bmc_pass(bmc_user, "  BMC password: ")
             bmc_passwords = {ip: bmc_pass for ip in bmc_ips}
         else:
             _group_pw_map = _collect_password_groups_for_nodes(bmc_ips, prompt_prefix="  ")
@@ -13807,7 +13883,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         ).strip().lower()
         bmc_user = input("  BMC username [admin]: ").strip() or "admin"
         if _same != "n":
-            _shared_pw = getpass.getpass("  BMC password: ")
+            _shared_pw = _prompt_or_cached_bmc_pass(bmc_user, "  BMC password: ")
             bmc_passwords = {ip: _shared_pw for ip in bmc_ips}
         else:
             _group_pw_map = _collect_password_groups_for_nodes(bmc_ips, prompt_prefix="  ")
@@ -22798,10 +22874,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 _shared_pw = _primary_p
                 print("  ✅ Using primary node BMC password for all nodes.")
             else:
-                try:
-                    _shared_pw = getpass.getpass("  BMC password for all nodes: ")
-                except (EOFError, KeyboardInterrupt):
-                    _shared_pw = ""
+                _shared_pw = _prompt_or_cached_bmc_pass("admin", "  BMC password for all nodes: ")
         else:
             _group_targets = []
             for _ip in _needs_creds:
@@ -23308,10 +23381,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 _shared_pw = _primary_p
                 print("  ✅ Using primary node BMC password for all nodes.")
             else:
-                try:
-                    _shared_pw = getpass.getpass("  BMC password for all nodes: ")
-                except (EOFError, KeyboardInterrupt):
-                    _shared_pw = ""
+                _shared_pw = _prompt_or_cached_bmc_pass("admin", "  BMC password for all nodes: ")
         else:
             _group_targets = []
             for _ip in _needs_creds:
@@ -26283,10 +26353,17 @@ def _run_cluster_ip_manifest_mode():
         if _u_in:
             _admin_user = _u_in
         if not _admin_pw:
-            try:
-                _admin_pw = getpass.getpass(f"  Cluster admin password for {_admin_user}@{_mgmt_ip}: ")
-            except (EOFError, KeyboardInterrupt):
-                _admin_pw = ""
+            _cached_pw = _cred_lookup("cluster", _mgmt_ip, _admin_user)
+            if _cached_pw is not None:
+                print(f"  🔑 Cached cluster credentials available for {_admin_user}@{_mgmt_ip}.")
+                _yn = input("  Use cached password? [Y/n]: ").strip().lower()
+                if _yn in ("", "y", "yes"):
+                    _admin_pw = _cached_pw
+            if not _admin_pw:
+                try:
+                    _admin_pw = getpass.getpass(f"  Cluster admin password for {_admin_user}@{_mgmt_ip}: ")
+                except (EOFError, KeyboardInterrupt):
+                    _admin_pw = ""
 
         _client, _admin_user, _admin_pw = _ssh_connect_with_retry(
             _mgmt_ip,
@@ -26296,6 +26373,7 @@ def _run_cluster_ip_manifest_mode():
             max_attempts=3,
             interactive=False,
         )
+        _cred_store("cluster", _mgmt_ip, _admin_user, _admin_pw)
         _ch = _open_shell(_client)
         if not _login_primary_cluster_shell(_ch, _admin_pw):
             print("  ❌ Could not reach cluster shell (::>).")
@@ -26858,15 +26936,22 @@ def _run_5m_node_repair_mode():
     _u_in = input(f"  Cluster admin username [{_5m_user}]: ").strip()
     if _u_in:
         _5m_user = _u_in
-    try:
-        _5m_pass = _RAW_GETPASS(
-            f"  Cluster admin password for {_5m_user}@{_5m_mgmt_ip}: "
-        )
-    except (EOFError, KeyboardInterrupt):
-        _5m_pass = ""
+    _5m_cached_pw = _cred_lookup("cluster", _5m_mgmt_ip, _5m_user)
+    if _5m_cached_pw is not None:
+        print(f"  🔑 Cached cluster credentials available for {_5m_user}@{_5m_mgmt_ip}.")
+        _yn5m = input("  Use cached password? [Y/n]: ").strip().lower()
+        if _yn5m in ("", "y", "yes"):
+            _5m_pass = _5m_cached_pw
+    if not _5m_cached_pw or not _5m_pass:
+        try:
+            _5m_pass = _RAW_GETPASS(
+                f"  Cluster admin password for {_5m_user}@{_5m_mgmt_ip}: "
+            )
+        except (EOFError, KeyboardInterrupt):
+            _5m_pass = ""
 
     # ── Connect ───────────────────────────────────────────────────────────
-    print(f"\n  \U0001f50c Connecting to {_5m_mgmt_ip} as {_5m_user}...")
+    print(f"\n  🔌 Connecting to {_5m_mgmt_ip} as {_5m_user}...")
     _cl5m = None
     _ch5m = None
     try:
@@ -26875,6 +26960,7 @@ def _run_5m_node_repair_mode():
             label=f"5.12/{_5m_mgmt_ip}",
             max_attempts=3, interactive=False,
         )
+        _cred_store("cluster", _5m_mgmt_ip, _5m_user, _5m_pass)
     except Exception as _e5m:
         print(f"  \u274c Connection failed: {_e5m}")
         if _session_log:
@@ -26934,6 +27020,68 @@ def _run_5m_node_repair_mode():
 
     if _session_log:
         print(f"\n  \U0001f4dd Session log: {_session_log.log_file}")
+    try:
+        input("\n  Press Enter to return to the main menu...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def _run_5_15_manage_session_creds():
+    """Mode 5.15: View and clear session credential cache."""
+    _print_banner("🔐 5.15: Manage session credentials")
+    print("")
+
+    _cluster_entries = [(ip, user) for (ct, ip, user) in _session_creds if ct == "cluster"]
+    _bmc_entries = [(ip, user) for (ct, ip, user) in _session_creds if ct == "bmc"]
+
+    if not _cluster_entries and not _bmc_entries:
+        print("  ℹ️  No credentials are currently cached.")
+        try:
+            input("\n  Press Enter to return to the main menu...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+        return
+
+    print(f"  Cached cluster credentials ({len(_cluster_entries)}):")
+    if _cluster_entries:
+        for _ip, _user in _cluster_entries:
+            print(f"     {_user}@{_ip}")
+    else:
+        print("     (none)")
+
+    print(f"\n  Cached BMC credentials ({len(_bmc_entries)}):")
+    if _bmc_entries:
+        for _ip, _user in _bmc_entries:
+            _label = _ip if _ip != "*" else "(shared)"
+            print(f"     {_user}@{_label}")
+    else:
+        print("     (none)")
+
+    print("")
+    print("  1. Clear all cached credentials")
+    print("  2. Clear cluster credentials only")
+    print("  3. Clear BMC credentials only")
+    print("  Enter to go back without changes")
+    print("")
+    try:
+        _ans = input("  Choice: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        _ans = ""
+
+    if _ans == "1":
+        _session_creds.clear()
+        print("\n  ✅ All cached credentials cleared.")
+    elif _ans == "2":
+        for _k in [k for k in _session_creds if k[0] == "cluster"]:
+            del _session_creds[_k]
+        print("\n  ✅ Cluster credentials cleared.")
+    elif _ans == "3":
+        for _k in [k for k in _session_creds if k[0] == "bmc"]:
+            del _session_creds[_k]
+        print("\n  ✅ BMC credentials cleared.")
+    else:
+        print("\n  ↩️  No changes made.")
+
     try:
         input("\n  Press Enter to return to the main menu...")
     except (EOFError, KeyboardInterrupt):
@@ -27001,10 +27149,17 @@ def _run_5_14_cluster_join_status():
     _u_in = input(f"  Cluster admin username [{_5_14_user}]: ").strip()
     if _u_in:
         _5_14_user = _u_in
-    try:
-        _5_14_pass = _RAW_GETPASS(f"  Cluster admin password for {_5_14_user}@{_mgmt_ip}: ")
-    except (EOFError, KeyboardInterrupt):
-        _5_14_pass = ""
+    _5_14_cached_pw = _cred_lookup("cluster", _mgmt_ip, _5_14_user)
+    if _5_14_cached_pw is not None:
+        print(f"  🔑 Cached cluster credentials available for {_5_14_user}@{_mgmt_ip}.")
+        _yn14 = input("  Use cached password? [Y/n]: ").strip().lower()
+        if _yn14 in ("", "y", "yes"):
+            _5_14_pass = _5_14_cached_pw
+    if not _5_14_cached_pw or not _5_14_pass:
+        try:
+            _5_14_pass = _RAW_GETPASS(f"  Cluster admin password for {_5_14_user}@{_mgmt_ip}: ")
+        except (EOFError, KeyboardInterrupt):
+            _5_14_pass = ""
 
     # ── Connect ───────────────────────────────────────────────────────────
     print(f"\n  🔌 Connecting to {_mgmt_ip} as {_5_14_user}...")
@@ -27016,6 +27171,7 @@ def _run_5_14_cluster_join_status():
             label=f"5.14/{_mgmt_ip}",
             max_attempts=3, interactive=False,
         )
+        _cred_store("cluster", _mgmt_ip, _5_14_user, _5_14_pass)
     except Exception as _e:
         print(f"  ❌ Connection failed: {_e}")
         if _session_log:
@@ -28382,7 +28538,7 @@ def main():
                 if "bmc_password" in primary_node_44 and isinstance(primary_node_44["bmc_password"], str):
                     sp_pass = primary_node_44["bmc_password"]
                 else:
-                    sp_pass = getpass.getpass("  BMC password: ")
+                    sp_pass = _prompt_or_cached_bmc_pass(sp_user, "  BMC password: ", bmc_ip=sp_host)
 
                 _session_log.log(f"Target BMC: {sp_host} (user={sp_user})")
 
@@ -28408,6 +28564,15 @@ def main():
                 if not _wait_for_cluster_prompt(channel_44, timeout=60):
                     print("\n  \u26a0\ufe0f  Cluster prompt not detected; trying admin login...")
                     admin_pw_44 = _cluster_config.get("admin_password") or ""
+                    if not admin_pw_44:
+                        _44_mgmt = _cluster_config.get("mgmt_ip", "")
+                        _44_user = _cluster_config.get("admin_user", "admin")
+                        _44_cached = _cred_lookup("cluster", _44_mgmt, _44_user)
+                        if _44_cached is not None:
+                            print(f"  🔑 Cached cluster credentials available for {_44_user}.")
+                            _yn44 = input("  Use cached password? [Y/n]: ").strip().lower()
+                            if _yn44 in ("", "y", "yes"):
+                                admin_pw_44 = _44_cached
                     if not admin_pw_44:
                         admin_pw_44 = getpass.getpass("  Cluster admin password: ")
                     if not _login_primary_cluster_shell(channel_44, admin_pw_44):
@@ -29302,7 +29467,7 @@ def main():
                     ).strip().lower()
                     if _same_creds47 != "n":
                         _shared_user47 = input(f"  BMC username [{_default_user47}]: ").strip() or _default_user47
-                        _shared_pass47 = getpass.getpass("  BMC password (blank = none): ")
+                        _shared_pass47 = _prompt_or_cached_bmc_pass(_shared_user47, "  BMC password (blank = none): ")
                         for _ip47 in _missing47:
                             _creds47[_ip47] = (_shared_user47, _shared_pass47)
                     else:
@@ -29535,7 +29700,7 @@ def main():
                                 f"  BMC username [{_default_user47}]: ",
                                 _default_user47,
                             ).strip() or _default_user47
-                            _new_pass47 = getpass.getpass("  BMC password (blank = none): ")
+                            _new_pass47 = _prompt_or_cached_bmc_pass(_new_user47, "  BMC password (blank = none): ")
                             for _ip47 in _bmc_ips47:
                                 _creds47[_ip47] = (_new_user47, _new_pass47)
                         print("")
@@ -29642,7 +29807,7 @@ def main():
                     _same_creds48 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
                     if _same_creds48 != "n":
                         _shared_user48 = input("  BMC username [admin]: ").strip() or "admin"
-                        _shared_pass48 = getpass.getpass("  BMC password (blank = none): ")
+                        _shared_pass48 = _prompt_or_cached_bmc_pass(_shared_user48, "  BMC password (blank = none): ")
                         for _ip48 in _bmc_ips48:
                             _creds48[_ip48] = (_shared_user48, _shared_pass48)
                     else:
@@ -30133,7 +30298,7 @@ def main():
                     ).strip().lower()
                     if _same_creds50 != "n":
                         _shared_user50 = input("  BMC username [admin]: ").strip() or "admin"
-                        _shared_pass50 = getpass.getpass("  BMC password (blank = none): ")
+                        _shared_pass50 = _prompt_or_cached_bmc_pass(_shared_user50, "  BMC password (blank = none): ")
                         for _ip50 in _bmc_ips50:
                             _creds50[_ip50] = (_shared_user50, _shared_pass50)
                     else:
@@ -30289,7 +30454,7 @@ def main():
                 _creds51 = {}
                 if _same_creds51 != "n":
                     _shared_user51 = input("  BMC username [admin]: ").strip() or "admin"
-                    _shared_pass51 = getpass.getpass("  BMC password (blank = none): ")
+                    _shared_pass51 = _prompt_or_cached_bmc_pass(_shared_user51, "  BMC password (blank = none): ")
                     for _ip51 in _bmc_ips51:
                         _creds51[_ip51] = (_shared_user51, _shared_pass51)
                 else:
@@ -30504,7 +30669,7 @@ def main():
                 _creds52 = {}
                 if _same_creds52 != "n":
                     _shared_user52 = input("  BMC username [admin]: ").strip() or "admin"
-                    _shared_pass52 = getpass.getpass("  BMC password (blank = none): ")
+                    _shared_pass52 = _prompt_or_cached_bmc_pass(_shared_user52, "  BMC password (blank = none): ")
                     for _ip52 in _bmc_ips52:
                         _creds52[_ip52] = (_shared_user52, _shared_pass52)
                 else:
@@ -30651,7 +30816,7 @@ def main():
                 _creds53 = {}
                 if _same_creds53 != "n":
                     _shared_user53 = input("  BMC username [admin]: ").strip() or "admin"
-                    _shared_pass53 = getpass.getpass("  BMC password (blank = none): ")
+                    _shared_pass53 = _prompt_or_cached_bmc_pass(_shared_user53, "  BMC password (blank = none): ")
                     for _ip53 in _bmc_ips53:
                         _creds53[_ip53] = (_shared_user53, _shared_pass53)
                 else:
@@ -30768,6 +30933,11 @@ def main():
                 _run_5_14_cluster_join_status()
                 raise _ReturnToMenu
 
+            # ── Mode 60 (5.15): Manage session credentials ──────────────────────────
+            if _operation_mode == 60:
+                _run_5_15_manage_session_creds()
+                raise _ReturnToMenu
+
             # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
             if _operation_mode == 45:
                 import pathlib
@@ -30847,7 +31017,9 @@ def main():
                 if "bmc_password" in primary_node_45 and isinstance(primary_node_45["bmc_password"], str):
                     sp_pass_45 = primary_node_45["bmc_password"]
                 else:
-                    sp_pass_45 = getpass.getpass("  BMC password: ")
+                    sp_pass_45 = _prompt_or_cached_bmc_pass(
+                        sp_user_45 or "admin", "  BMC password: ", bmc_ip=sp_host_45
+                    )
 
                 _make_session_log("Mode 5.2: set up passwordless SSH")
 
