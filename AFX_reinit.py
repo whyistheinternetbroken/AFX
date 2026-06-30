@@ -912,7 +912,11 @@ def _cred_store(cred_type: str, ip: str, user: str, password: str) -> None:
 
 
 def _cred_lookup(cred_type: str, ip: str, user: str) -> "str | None":
-    enc = _session_creds.get((cred_type, ip.lower().strip(), user.lower().strip()))
+    _ip_key = ip.lower().strip()
+    _user_key = user.lower().strip()
+    enc = _session_creds.get((cred_type, _ip_key, _user_key))
+    if enc is None and _ip_key != "*":
+        enc = _session_creds.get((cred_type, "*", _user_key))
     return _cred_decrypt(enc) if enc is not None else None
 
 
@@ -27202,19 +27206,14 @@ def _add_cluster_creds() -> bool:
     if _ip:
         print(f"  Cluster management IP from config: {_ip}")
     else:
-        try:
-            _ip = input("  Cluster management IP or hostname: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n  ↩️  Cancelled.")
-            return False
-        if not _ip:
-            print("  ↩️  Cancelled.")
-            return False
-    _pair = _prompt_user_pass(_default_user, "Cluster", _ip)
+        print("  ℹ️  No cluster IP in config — credentials will be stored as shared (*).")
+        _ip = "*"
+    _pair = _prompt_user_pass(_default_user, "Cluster", _ip if _ip != "*" else "cluster")
     if not _pair:
         return False
     _cred_store("cluster", _ip, _pair[0], _pair[1])
-    print(f"\n  ✅ Cluster credentials stored for {_pair[0]}@{_ip}.")
+    _label = _ip if _ip != "*" else "(shared)"
+    print(f"\n  ✅ Cluster credentials stored for {_pair[0]}@{_label}.")
     return True
 
 
@@ -27222,20 +27221,12 @@ def _add_bmc_creds() -> bool:
     """Prompt for BMC credentials and store them. Returns True if at least one stored."""
     _entries = _config_bmc_entries()
     if not _entries:
-        try:
-            _ip = input("  BMC IP or hostname (or * for shared): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n  ↩️  Cancelled.")
-            return False
-        if not _ip:
-            print("  ↩️  Cancelled.")
-            return False
-        _pair = _prompt_user_pass("admin", "BMC", _ip if _ip != "*" else "all nodes")
+        print("  ℹ️  No BMC IPs in config — credentials will be stored as shared (*).")
+        _pair = _prompt_user_pass("admin", "BMC", "all nodes")
         if not _pair:
             return False
-        _cred_store("bmc", _ip, _pair[0], _pair[1])
-        _label = _ip if _ip != "*" else "(shared)"
-        print(f"\n  ✅ BMC credentials stored for {_pair[0]}@{_label}.")
+        _cred_store("bmc", "*", _pair[0], _pair[1])
+        print(f"\n  ✅ BMC credentials stored as shared for {_pair[0]}.")
         return True
 
     print("")
@@ -27323,27 +27314,14 @@ def _run_5_15_add_creds():
             if _cip:
                 print(f"  Cluster IP from config: {_cip}")
             else:
-                try:
-                    _cip = input("  Cluster management IP or hostname: ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    print("\n  ↩️  Cancelled.")
-                    return
-                if not _cip:
-                    print("  ↩️  Cancelled.")
-                    return
+                print("  ℹ️  No cluster IP in config — will store as shared (*).")
+                _cip = "*"
             if _bmc_entries:
                 print(f"  BMC IPs from config ({len(_bmc_entries)}): " +
                       ", ".join(ip for ip, _ in _bmc_entries))
             else:
-                try:
-                    _bip = input("  BMC IP or hostname (or * for shared): ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    print("\n  ↩️  Cancelled.")
-                    return
-                if not _bip:
-                    print("  ↩️  Cancelled.")
-                    return
-                _bmc_entries = [(_bip, "admin")]
+                print("  ℹ️  No BMC IPs in config — will store as shared (*).")
+                _bmc_entries = [("*", "admin")]
             try:
                 _user = input(f"  Username [{_default_user}]: ").strip() or _default_user
                 _pw = getpass.getpass(f"  Password for {_user}: ")
@@ -27353,8 +27331,9 @@ def _run_5_15_add_creds():
             _cred_store("cluster", _cip, _user, _pw)
             for _bip, _ in _bmc_entries:
                 _cred_store("bmc", _bip, _user, _pw)
-            _bmc_label = ", ".join(ip for ip, _ in _bmc_entries)
-            print(f"\n  ✅ Credentials stored for {_user}@{_cip} (cluster).")
+            _clabel = _cip if _cip != "*" else "(shared)"
+            _bmc_label = ", ".join(ip if ip != "*" else "(shared)" for ip, _ in _bmc_entries)
+            print(f"\n  ✅ Credentials stored for {_user}@{_clabel} (cluster).")
             print(f"  ✅ Credentials stored for {_user} on BMC(s): {_bmc_label}.")
 
 
