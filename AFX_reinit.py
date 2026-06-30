@@ -30821,27 +30821,44 @@ def main():
 
                 # ── Credentials ──────────────────────────────────────────────────
                 print("")
-                _same_creds51 = input("  Use the same username/password for all BMCs? [Y/n]: ").strip().lower()
+                _default_user51 = "admin"
                 _creds51 = {}
-                if _same_creds51 != "n":
-                    _shared_user51 = input("  BMC username [admin]: ").strip() or "admin"
-                    _shared_pass51 = _prompt_or_cached_bmc_pass(_shared_user51, "  BMC password (blank = none): ")
-                    for _ip51 in _bmc_ips51:
-                        _creds51[_ip51] = (_shared_user51, _shared_pass51)
+                _all_cached51 = {ip: _cred_lookup("bmc", ip, _default_user51)
+                                 for ip in _bmc_ips51}
+                if all(v is not None for v in _all_cached51.values()):
+                    print(f"  \U0001f511 Using cached credentials for all {len(_bmc_ips51)} BMC(s).")
+                    for _ip51, _pw51 in _all_cached51.items():
+                        _creds51[_ip51] = (_default_user51, _pw51)
                 else:
-                    _group_creds51 = _collect_password_groups_for_nodes(
-                        _bmc_ips51,
-                        prompt_prefix="  ",
-                        include_usernames=True,
-                        default_username="admin",
-                    )
-                    for _ip51 in _bmc_ips51:
-                        if _group_creds51 is not None and _ip51 in _group_creds51:
-                            _u51, _p51pw = _group_creds51[_ip51]
+                    _same_creds51 = input("  Use the same username/password for all BMCs? [Y/n]: ").strip().lower()
+                    if _same_creds51 != "n":
+                        _first_cached51 = _all_cached51.get(_bmc_ips51[0]) if _bmc_ips51 else None
+                        if _first_cached51 is not None:
+                            print(f"  \U0001f511 Using cached credentials for {_default_user51}.")
+                            _shared_user51, _shared_pass51 = _default_user51, _first_cached51
                         else:
-                            _u51 = input(f"  Username for {_ip51} [admin]: ").strip() or "admin"
-                            _p51pw = getpass.getpass(f"  Password for {_ip51}: ")
-                        _creds51[_ip51] = (_u51, _p51pw)
+                            _shared_user51 = input("  BMC username [admin]: ").strip() or "admin"
+                            _shared_pass51 = _prompt_or_cached_bmc_pass(_shared_user51, "  BMC password (blank = none): ")
+                        for _ip51 in _bmc_ips51:
+                            _creds51[_ip51] = (_shared_user51, _shared_pass51)
+                    else:
+                        _group_creds51 = _collect_password_groups_for_nodes(
+                            _bmc_ips51,
+                            prompt_prefix="  ",
+                            include_usernames=True,
+                            default_username="admin",
+                        )
+                        for _ip51 in _bmc_ips51:
+                            if _group_creds51 is not None and _ip51 in _group_creds51:
+                                _u51, _p51pw = _group_creds51[_ip51]
+                            else:
+                                _cached51i = _cred_lookup("bmc", _ip51, _default_user51)
+                                if _cached51i is not None:
+                                    _u51, _p51pw = _default_user51, _cached51i
+                                else:
+                                    _u51 = input(f"  Username for {_ip51} [admin]: ").strip() or "admin"
+                                    _p51pw = getpass.getpass(f"  Password for {_ip51}: ")
+                            _creds51[_ip51] = (_u51, _p51pw)
 
                 # ── Probe each node in parallel ───────────────────────────────────
                 _STATUS_LOADER    = "LOADER prompt"
