@@ -27145,9 +27145,24 @@ def _run_5_15_manage_session_creds():
         pass
 
 
+def _effective_config_data() -> dict:
+    """Return _config_data if populated; otherwise try to load the config file from disk."""
+    if isinstance(_config_data, dict) and _config_data:
+        return _config_data
+    _paths = _find_config_files()
+    if _paths:
+        try:
+            with open(_paths[0], "r", encoding="utf-8") as _f:
+                return json.load(_f)
+        except Exception:
+            pass
+    return {}
+
+
 def _config_cluster_ip() -> str:
     """Return cluster management IP from loaded config, or empty string."""
-    _cfg_cl = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
+    _data = _effective_config_data()
+    _cfg_cl = (_data.get("cluster") or {}) if isinstance(_data, dict) else {}
     return (
         _cluster_config.get("mgmt_ip")
         or _cfg_cl.get("clus_mgmt_address")
@@ -27158,7 +27173,8 @@ def _config_cluster_ip() -> str:
 
 def _config_cluster_user() -> str:
     """Return cluster admin username from loaded config, defaulting to 'admin'."""
-    _cfg_cl = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
+    _data = _effective_config_data()
+    _cfg_cl = (_data.get("cluster") or {}) if isinstance(_data, dict) else {}
     return (
         _cluster_config.get("admin_user")
         or _cfg_cl.get("user")
@@ -27169,11 +27185,12 @@ def _config_cluster_user() -> str:
 
 def _config_bmc_entries() -> "list[tuple[str, str]]":
     """Return [(bmc_ip, default_user), ...] for all nodes in loaded config."""
-    if not isinstance(_config_data, dict):
+    _data = _effective_config_data()
+    if not isinstance(_data, dict):
         return []
-    _pn = _config_data.get("primary_node")
-    _sns = _config_data.get("secondary_nodes")
-    _nodes = _config_data.get("nodes")
+    _pn = _data.get("primary_node")
+    _sns = _data.get("secondary_nodes")
+    _nodes = _data.get("nodes")
     _raw = []
     if isinstance(_pn, dict) or isinstance(_sns, list):
         if isinstance(_pn, dict) and _pn.get("bmc"):
