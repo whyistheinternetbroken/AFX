@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/25/2026
+**Updated:** 6/30/2026
 
 ---
 
@@ -49,6 +49,8 @@ Before running this script, ensure the following are in place:
 - BMC addresses are reachable from the client (port 22/TCP)
 - Cluster management IP and credentials are known (for modes that interact with ONTAP)
 - For config-file-driven runs: a valid `reinit-config.json` is prepared (see [Configuration File](#configuration-file))
+
+**Session credential caching:** Once you enter BMC or cluster credentials during a session, the script caches them in memory and reuses them automatically for subsequent operations in the same run. You will not be prompted again for the same credentials within a session.
 
 **Terminology note:** Throughout this documentation, "BMC" (Baseboard Management Controller) refers to the out-of-band management interface. On older NetApp systems (prior to ONTAP 9.x), this component is called the "SP" (Service Processor). The terms are interchangeable — they refer to the same out-of-band console access path. When connecting via SSH or `system console`, you are connecting to the BMC/SP.
 
@@ -295,20 +297,22 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **4a** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. See [Why 4a uses the BMC](#why-4a-uses-the-bmc). |
 | **4b** | Netboot Install + Optional Reinit | Runs netboot image install, then can continue into reinit flow (1a/1b/3) when selected. |
 | **4c** | Netboot Install Only | Runs the same netboot image install path as 4b, then stops before reinit, cluster create, or node add steps. |
-| **5a** | License Install | Installs ONTAP licenses on an existing cluster. |
-| **5b** | SSH Key Setup | Configures passwordless SSH from the script host to the cluster management interface. |
-| **5c** | Config Backup | Connects to the cluster and captures its current configuration (name, IPs, licenses, nodes) to a JSON file. Can also build a config file manually from user prompts. Gather/build paths that connect to an existing cluster also write `configs/cluster_IP.json` for node-add ordering reuse. |
-| **5d** | BMC Auth Verify | Tests BMC SSH authentication for configured nodes and reports pass/fail. Shows a numbered target list, supports all-or-subset selection, and a rerun can re-open the target picker to test a different selection. |
-| **5f** | Check Node Status | Connects to each BMC and reports whether nodes are at LOADER, ONTAP shell, login prompt, boot menu, or unknown state. |
-| **5g** | Cluster Health Check | Connects to the cluster management LIF via SSH and checks health/version. |
-| **5h** | Stale BMC Session Cleanup | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. SSH diagnostics one-IP targeting uses a numbered, labeled config-IP picker (BMC/cluster mgmt/node mgmt) with a custom-IP option. Includes a dedicated known_hosts reset action (`ssh-keygen -R <BMC IP>`). |
-| **5i** | Backup LOADER Environment Variables | Backs up current LOADER bootenv variables to a timestamped JSON file (e.g., `loader_env_backup_YYYYMMDD_HHMMSS.json`) for comparison and troubleshooting. Part of LOADER environment utilities (experimental). |
-| **5j** | Compare LOADER Environment | Compares current LOADER bootenv variables against NetApp defaults and displays a diff showing customizations and deviations. Helps identify bootenv changes and troubleshoot configuration issues (experimental). |
-| **5k** | Check Boot DNA | Loads target IPs from JSON config and shows a numbered selector: **1)** all discovered BMC IPs, **2)** cluster management IP, **3)** custom IP. It evaluates each target's runtime state (**At LOADER** or **At cluster shell**), runs the matching DNA command path, and reports `bootarg.init.dna` with a per-target state/value summary when multiple nodes are checked. Targets are shown as `node_name (IP)` when names are available from the config file. |
-| **5l** | Build Cluster IP Manifest | Connects to cluster management and runs cluster-role interface queries to write `configs/cluster_IP.json`. Stores one cluster IP per node (the first seen per node), preserving file order so 2a/2b/3/4b can reuse this manifest for ordered `cluster add-node -cluster-ips` arguments. Supports hostname or IP as the cluster target. **Status: EXPERIMENTAL/IN PROGRESS.** |
-| **5m** | Node Name / LIF Repair | Compares current cluster node names and node-management LIF names against the config file, using BMC (SP) IP addresses as the ground truth for node identity. Detects mismatches that occur when nodes join a cluster in a different order than the config expects, reports the required renames, and optionally applies them. Handles permutation cycles safely using a temporary intermediate name. Prompts for confirmation before making any changes. |
-| **5n** | Show Config | Displays the current `reinit-config.json` in a human-readable format — cluster settings, primary node, secondary nodes, and any extra fields. Passwords are masked as `[set]` or `[none]`. Also available via `--show-config` CLI flag. Press Enter to return to the main menu. |
-| **5z** | Reset to LOADER | Connects to configured BMC addresses in parallel, issues a system reset on each selected node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. The script exits when every selected node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging nodes before a manual reinit or netboot run. |
+| **5.1** | License Install | Installs ONTAP licenses on an existing cluster. |
+| **5.2** | SSH Key Setup | Configures passwordless SSH from the script host to the cluster management interface. |
+| **5.3** | Config Backup | Connects to the cluster and captures its current configuration (name, IPs, licenses, nodes) to a JSON file. Can also build a config file manually from user prompts. Gather/build paths that connect to an existing cluster also write `configs/cluster_IP.json` for node-add ordering reuse. |
+| **5.4** | BMC Auth Verify | Tests BMC SSH authentication for configured nodes and reports pass/fail. Shows a numbered target list, supports all-or-subset selection, and a rerun can re-open the target picker to test a different selection. |
+| **5.5** | Check Node Status | Connects to each BMC and reports whether nodes are at LOADER, ONTAP shell, login prompt, boot menu, or unknown state. |
+| **5.6** | Cluster Health Check | Connects to the cluster management LIF via SSH and checks health/version. |
+| **5.7** | SSH Diagnostics & Cleanup | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. SSH diagnostics one-IP targeting uses a numbered, labeled config-IP picker (BMC/cluster mgmt/node mgmt) with a custom-IP option. Includes a dedicated known_hosts reset action (`ssh-keygen -R <BMC IP>`). |
+| **5.8** | Backup LOADER Environment Variables | Backs up current LOADER bootenv variables to a timestamped JSON file (e.g., `loader_env_backup_YYYYMMDD_HHMMSS.json`) for comparison and troubleshooting. Part of LOADER environment utilities (experimental). |
+| **5.9** | Compare LOADER Environment | Compares current LOADER bootenv variables against NetApp defaults and displays a diff showing customizations and deviations. Helps identify bootenv changes and troubleshoot configuration issues (experimental). |
+| **5.10** | Check Boot DNA | Loads target IPs from JSON config and shows a numbered selector: **1)** all discovered BMC IPs, **2)** cluster management IP, **3)** custom IP. It evaluates each target's runtime state (**At LOADER** or **At cluster shell**), runs the matching DNA command path, and reports `bootarg.init.dna` with a per-target state/value summary when multiple nodes are checked. Targets are shown as `node_name (IP)` when names are available from the config file. |
+| **5.11** | Build Cluster IP Manifest | Connects to the cluster and queries cluster-role interfaces to write `configs/cluster_IP.json`. Supports connecting via cluster management IP or BMC (`system console`). When no configuration file is found, offers to run option 5.3 first to gather one. Stores one cluster IP per node in output order for deterministic `cluster add-node -cluster-ips` ordering in 2a/2b/3/4b. Supports hostname or IP as the cluster target. **Status: EXPERIMENTAL/IN PROGRESS.** |
+| **5.12** | Node Name / LIF Repair | Compares current cluster node names and node-management LIF names against the config file, using BMC (SP) IP addresses as the ground truth for node identity. Detects mismatches that occur when nodes join a cluster in a different order than the config expects, reports the required renames, and optionally applies them. Handles permutation cycles safely using a temporary intermediate name. Prompts for confirmation before making any changes. |
+| **5.13** | Show Config | Displays the current `reinit-config.json` in a human-readable format — cluster settings, primary node, secondary nodes, and any extra fields. Passwords are masked as `[set]` or `[none]`. Also available via `--show-config` CLI flag. Press Enter to return to the main menu. |
+| **5.14** | Check Cluster Node Join Status | Connects to the cluster and reports the join status of all nodes. |
+| **5.15** | Manage Session Credentials | View and manage credentials stored in the in-session cache. Credentials entered during a run are cached in memory and reused automatically for subsequent prompts within the same session. |
+| **5.99** | Reset to LOADER | Connects to configured BMC addresses in parallel, issues a system reset on each selected node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. The script exits when every selected node has reached the `LOADER>` prompt (or reports failure per node). Useful for staging nodes before a manual reinit or netboot run. |
 
 ### Password Groups (modes 2a, 2b, and 3)
 
@@ -355,16 +359,16 @@ Some capabilities are marked **experimental** and are still being refined.
 - In reinit workflows that offer LOADER env restore/apply behavior, treat it as
   best-effort and verify values on console before proceeding with destructive steps.
 
-### Cluster IP manifest builder (5l)
+### Cluster IP manifest builder (5.11)
 
-- Option **5l** is marked **EXPERIMENTAL/IN PROGRESS**.
+- Option **5.11** is marked **EXPERIMENTAL/IN PROGRESS**.
 - It is useful for deterministic `cluster add-node -cluster-ips` ordering, but
   operators should still validate generated `configs/cluster_IP.json` content
   before large-scale runs.
 
 ---
 
-### Node Name / LIF Repair (5m and automatic)
+### Node Name / LIF Repair (5.12 and automatic)
 
 When nodes reinitialize and rejoin a cluster, they sometimes join in a different
 order than the config file expects. Because ONTAP assigns node names based on join
@@ -406,9 +410,9 @@ match the config, nothing is changed and the health check proceeds normally.
 The repair result (needed, elapsed, success, per-rename timings) is recorded in
 the session summary as a **Node Name / LIF Repair** phase entry.
 
-#### Standalone repair (5m)
+#### Standalone repair (5.12)
 
-Option **5m** lets you run the comparison and repair manually against an existing
+Option **5.12** lets you run the comparison and repair manually against an existing
 cluster:
 
 1. Prompts for cluster credentials (or reuses BMC credentials if available).
@@ -745,11 +749,11 @@ These flags bypass the interactive menu and launch directly into the specified m
 | `--add-nodes` | 2b | Add node(s) to an existing cluster automatically. |
 | `--reinit` | 3 | End-to-end automated reinit: 1b on primary + parallel node adds. Assumes ONTAP is already at the desired version (install via 4b/4c separately). |
 | `--netboot-install` | 4b | Netboot and install ONTAP. |
-| `--add-lic` | 5a | Install license file only. |
-| `--passwordless` | 5b | Configure passwordless SSH to cluster management. |
-| `--backup` | 5c | Create a backup cluster configuration file. |
-| `--verify` | 5d | Verify BMC authentication for all configured nodes. |
-| `--loader` | 5z | Reset all nodes to the LOADER prompt in parallel via BMC. |
+| `--add-lic` | 5.1 | Install license file only. |
+| `--passwordless` | 5.2 | Configure passwordless SSH to cluster management. |
+| `--backup` | 5.3 | Create a backup cluster configuration file. |
+| `--verify` | 5.4 | Verify BMC authentication for all configured nodes. |
+| `--loader` | 5.99 | Reset all nodes to the LOADER prompt in parallel via BMC. |
 
 **Examples:**
 
@@ -839,7 +843,7 @@ cd ~/afx-reinit
 
 For automated or multi-node runs, create a `reinit-config.json`. There are three ways:
 
-> **Tip:** If no config file or `BMC_IP.json` is found when you start modes 1 (initialize) or 3 (full reinit), the script will automatically ask whether you'd like to generate one from an existing cluster before proceeding — choosing **Y** launches option 5c inline.
+> **Tip:** If no config file or `BMC_IP.json` is found when you start modes 1 (initialize) or 3 (full reinit), the script will automatically ask whether you'd like to generate one from an existing cluster before proceeding — choosing **Y** launches option 5.3 inline.
 
 **Option A — Back up from a live cluster (recommended):** If the cluster is currently running, use `--backup` to capture its configuration automatically:
 
@@ -1398,7 +1402,7 @@ For mode 4b, the validated bootarg list is saved to the checkpoint file. On `--r
 
 ---
 
-## Reset to LOADER (`--loader` / mode 5z)
+## Reset to LOADER (`--loader` / mode 5.99)
 
 Mode 5z resets selected configured nodes to the `LOADER>` prompt in parallel via BMC. It is a lightweight staging utility — it does not begin a reinit, install software, or modify any configuration. Use it to prepare all nodes or a chosen subset before starting a manual reinit, netboot, or any workflow that requires nodes to be sitting at LOADER.
 
@@ -1484,29 +1488,29 @@ current `[Unreleased]` working set.
 | ONTAP Upgrade (4a) | Rolling upgrade via automated takeover/giveback sequence using structured `-fields` polling. Connects directly to the cluster management LIF via SSH (from `reinit-config.json` or a prompted IP) for all ONTAP CLI operations; BMC console is used only as a fallback when direct SSH is unavailable. SSH reconnects automatically if the channel drops mid-upgrade. Post-upgrade version verification and cluster health checks also use the direct SSH channel for reliable, noise-free output. |
 | Netboot Install (4b) | Automated ONTAP netboot/software install with optional post-install reinit. |
 | Netboot Install Only (4c) | Runs netboot/software install only and stops before reinit or node-add workflows. |
-| Install License (5a) | Connects via BMC console and applies a pre-staged license file without running any reinit steps. |
-| SSH Key Setup (5b) | Configures passwordless SSH from the script host to cluster management. |
-| Config Backup (5c) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. After gather/build paths that connect to an existing cluster, the script also writes `configs/cluster_IP.json` (first cluster-role IP per node, in command-output order) alongside `reinit-config.json`. The retained configuration summary displays Cluster LIFs and Management LIFs in separate tables. |
-| BMC Auth Verify (5d) | Batch-tests BMC SSH credentials for loaded BMCs. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. |
-| Reset to LOADER (5z) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
-| **Cluster Health Check (5g)** | Connects to the cluster management LIF via SSH and runs `cluster show`, `storage failover show`, `network port show -ipspace Cluster`, and `system image show` to confirm all nodes are healthy and report the running ONTAP version. Cluster-port validation fails the check if any cluster port is not `Link=up` or `Health=healthy`, with detailed per-port warnings. Auto-loads connection details from `reinit-config.json`; if no config is present it offers to run 5c (config gather) first, then returns to the health check automatically. If the cluster shell is not reached or node discovery fails, the check now reports **not healthy** (no false healthy pass). |
-| **Stale BMC Session Cleanup (5h)** | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. For SSH diagnostics, **one-IP** selection now shows a numbered list of IPs from config (BMC, cluster management, and node management) with labels, and supports entering a custom IP/hostname. Includes explicit actions for `ipmitool sol deactivate` and **Remove BMC from known hosts** (`ssh-keygen -R <BMC IP>`), plus full cleanup (known_hosts reset + drop in-process clients + ipmitool + optional stale-PID SIGTERM). Returns to main menu when done. |
-| **Cluster IP manifest builder (5l)** | Adds utility mode **5l** to query cluster-role interfaces (`-role cluster`) from cluster shell and write `configs/cluster_IP.json`. The manifest keeps the first cluster IP per node in command-output order and is used by node-add workflows for deterministic `cluster add-node -cluster-ips` ordering. This mode is currently **EXPERIMENTAL/IN PROGRESS**. |
+| Install License (5.1) | Connects via BMC console and applies a pre-staged license file without running any reinit steps. |
+| SSH Key Setup (5.2) | Configures passwordless SSH from the script host to cluster management. |
+| Config Backup (5.3) | Saves or constructs cluster configuration (cluster name, IPs, NTP servers, licenses, nodes) to a JSON file for use in future runs. Accepts a BMC address, cluster management IP, or cluster hostname as the connection target. Captured NTP servers are written to the config; if none are found the operator is offered `pool.ntp.org` as a default. After gather/build paths that connect to an existing cluster, the script also writes `configs/cluster_IP.json` (first cluster-role IP per node, in command-output order) alongside `reinit-config.json`. The retained configuration summary displays Cluster LIFs and Management LIFs in separate tables. |
+| BMC Auth Verify (5.4) | Batch-tests BMC SSH credentials for loaded BMCs. Shows a numbered target list and supports running against all entries or a comma-separated subset of selected numbers. |
+| Reset to LOADER (5.99) | Connects to all configured BMC addresses in parallel, issues a system reset on each node, enters the system console, and sends Ctrl+C to interrupt AUTOBOOT. The script exits when every node has reached the LOADER> prompt (or reports failure). Useful for staging all nodes before a manual reinit or netboot run. |
+| **Cluster Health Check (5.6)** | Connects to the cluster management LIF via SSH and runs `cluster show`, `storage failover show`, `network port show -ipspace Cluster`, and `system image show` to confirm all nodes are healthy and report the running ONTAP version. Cluster-port validation fails the check if any cluster port is not `Link=up` or `Health=healthy`, with detailed per-port warnings. Auto-loads connection details from `reinit-config.json`; if no config is present it offers to run 5.3 (config gather) first, then returns to the health check automatically. If the cluster shell is not reached or node discovery fails, the check now reports **not healthy** (no false healthy pass). |
+| **SSH Diagnostics & Cleanup (5.7)** | Interactive tool to list and clean up stale SSH/SOL connections to BMC/SP addresses. For SSH diagnostics, **one-IP** selection now shows a numbered list of IPs from config (BMC, cluster management, and node management) with labels, and supports entering a custom IP/hostname. Includes explicit actions for `ipmitool sol deactivate` and **Remove BMC from known hosts** (`ssh-keygen -R <BMC IP>`), plus full cleanup (known_hosts reset + drop in-process clients + ipmitool + optional stale-PID SIGTERM). Returns to main menu when done. |
+| **Cluster IP manifest builder (5.11)** | Adds utility mode **5.11** to query cluster-role interfaces (`-role cluster`) from cluster shell and write `configs/cluster_IP.json`. The manifest keeps the first cluster IP per node in command-output order and is used by node-add workflows for deterministic `cluster add-node -cluster-ips` ordering. Supports connecting via cluster management IP or BMC. This mode is currently **EXPERIMENTAL/IN PROGRESS**. |
 | **2b upfront cluster-auth decision** | Mode 2b now asks before node-add work begins whether to use current BMC credentials for cluster-network IP lookup, so join automation does not stop later for a mid-run credential prompt. |
 | **2b "Add another node" timeout** | The post-join `Add another node to the cluster? [Y/N]` prompt now times out after 5 minutes and defaults to **No**. |
 | **Password groups for per-node BMC credentials** | In per-node credential flows, choosing **not** to use the same password now offers `Use password groups? (y/n)`. You can define reusable password groups, assign nodes by numbered list, review a manifest, and restart grouping before proceeding. |
 | **2a/2b/3 BMC auth now inherits 4b fallback behavior** | Node-add and end-to-end connect/reconnect paths now silently try fallback credentials (including blank password) before prompting again, reducing manual retries when nodes differ between blank/non-blank passwords. |
 | **Blank-password retry handling (1a/1b/2a/2b/3 + utilities)** | Credential retry paths now treat a blank password as an intentional value to try (instead of aborting or silently replacing it with fallback credentials). To skip a retry explicitly, enter `SKIP` where prompted. |
-| **Result-screen pause before menu return (5d/5g)** | After BMC auth verify (5d) and cluster health check (5g), the script now waits for **Enter** before returning to the menu so operators can review output without it scrolling away. |
+| **Result-screen pause before menu return (5.4/5.6)** | After BMC auth verify (5.4) and cluster health check (5.6), the script now waits for **Enter** before returning to the menu so operators can review output without it scrolling away. |
 | **2a/2b selective node omission + auto-skip joined nodes** | Modes 2a and 2b now show numbered secondary-node lists and allow comma-separated omission by number before add starts. During add, the script queries `network interface show -role node-mgmt` and automatically omits nodes already present in the cluster. |
-| **5b known_hosts opt-in auto-accept** | In manual SSH key setup (5b), the operator can choose to auto-accept known_hosts addition; when enabled, acceptance is performed at the end of the workflow before final SSH verification. |
+| **5b known_hosts opt-in auto-accept** | In manual SSH key setup (5.2), the operator can choose to auto-accept known_hosts addition; when enabled, acceptance is performed at the end of the workflow before final SSH verification. |
 | Session Logging | Captures per-phase and per-step timing, outcome (PASS/FAIL/WARN), and a complete warning and error inventory in the summary file. |
 | **Screen output log** | Every line printed to the terminal during a run is captured to `screen_output_<timestamp>.log` in the session log directory. ANSI codes are stripped for clean plain-text reading. |
 | Background Mode | `--bg` flag: handles SIGHUP cleanly so the script can run unattended in a detached or screen session. |
 | Screen Mode | `--screen` flag: automatically re-launches the script inside a detached GNU screen session. Protects against SSH disconnections and terminal timeouts. Implies `--bg`. |
 | Node add resume | Resumes interrupted node add processes. |
 | Physical disk zeroing | Adds option to physically zero disks rather than fast zero (which helps ensure performance consistency). |
-| BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 5d offers interactive remediation when BMC verification fails, including known_hosts reset (`ssh-keygen -R <BMC IP>`). Use option 5h for standalone diagnostics/cleanup with the same known_hosts remediation action. |
+| BMC SSH stale session diagnostics | On every banner-retry attempt the script automatically diagnoses stale SSH session slots, closes its own in-process clients, and runs `ipmitool sol deactivate`. `--auto-clear-stale-bmc` adds SIGTERM of other-Python PIDs holding sockets to the BMC. Mode 5.4 offers interactive remediation when BMC verification fails, including known_hosts reset (`ssh-keygen -R <BMC IP>`). Use option 5.7 for standalone diagnostics/cleanup with the same known_hosts remediation action. |
 | Diagnostic bootarg injection (`--diag`) | Injects custom LOADER `setenv` bootargs (from a `bootargs.txt` or `bootargs` file in `configs/` or the script directory, or interactive prompt) after `set-defaults` and before `saveenv` on all nodes. Accepts any `option_name value` format (not just `bootarg.` prefix). All entries printed and confirmed before proceeding. Validates format, detects LOADER errors on apply, and checkpoints the bootarg list for resume. |
 
 </details>
