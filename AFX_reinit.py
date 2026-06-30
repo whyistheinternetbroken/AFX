@@ -1550,6 +1550,17 @@ def _suppress_console():
         _console_quiet = _prev
 
 
+def _menu_confirm(prompt: str = "  Enter 'yes' to continue or 'no' to go back: ") -> bool:
+    """Return True if user types 'yes'. Re-prompt on blank Enter; return False on any non-yes input."""
+    while True:
+        try:
+            _ans = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        if _ans:
+            return _ans == "yes"
+
+
 def _print_banner(title: str, *, width: int = 60) -> None:
     """Print a ``"=" * width`` divider, a ``"  <title>"`` line, then another
     divider. Equivalent to the common 3-line banner block sprinkled across
@@ -3518,7 +3529,7 @@ def select_operation_mode():
         print("    5.8. Backup LOADER environment variables (experimental)")
         print("    5.9. Compare LOADER env to defaults (diff) (experimental)")
         print("    5.10. Check boot DNA (cluster shell or LOADER)")
-        print("    5.11. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
+        print("    5.11. Build cluster_IP manifest for node add")
         print("    5.12. Compare and correct cluster node names:IP addresses")
         print("    5.13. Show reinit-config.json (human-readable)")
         print("    5.14. Check cluster node join status")
@@ -3609,8 +3620,7 @@ def select_operation_mode():
             print("  " + "*" * 58)
             print("")
             print("  " + "─" * 58)
-            confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-            if confirm == "yes":
+            if _menu_confirm():
                 print("")
                 print("  ℹ️  ONTAP requires the cluster admin password to be at least 8")
                 print("  characters AND contain both letters and numbers.")
@@ -3670,8 +3680,7 @@ def select_operation_mode():
             print("  " + "*" * 58)
             print("")
             print("  " + "─" * 58)
-            confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-            if confirm == "yes":
+            if _menu_confirm():
                 while True:
                     _nb_ans = input("  Do you want to install a specific version of ONTAP before adding this node? [y/N]: ").strip().lower()
                     if _nb_ans in ("y", "n", ""):
@@ -3715,8 +3724,7 @@ def select_operation_mode():
             print("  " + "*" * 58)
             print("")
             print("  " + "─" * 58)
-            confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-            if confirm == "yes":
+            if _menu_confirm():
                 while True:
                     _nb_ans = input("  Do you want to install a specific version of ONTAP before adding this node? [y/N]: ").strip().lower()
                     if _nb_ans in ("y", "n", ""):
@@ -3764,8 +3772,7 @@ def select_operation_mode():
             print("  " + "*" * 58)
             print("")
             print("  " + "─" * 58)
-            confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-            if confirm == "yes":
+            if _menu_confirm():
                 while True:
                     _ssh_ans = input("  Set up passwordless SSH to cluster management after setup? [y/N]: ").strip().lower()
                     if _ssh_ans in ("y", "n", ""):
@@ -3825,8 +3832,7 @@ def select_operation_mode():
                 print("  Provide a .tgz package or a URL.")
                 print("")
                 print("  " + "\u2500" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 4.1: ONTAP upgrade\n")
                     return 41, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
@@ -3906,7 +3912,7 @@ def select_operation_mode():
                 print("  5.8. Backup LOADER environment variables (experimental)")
                 print("  5.9. Compare LOADER env to defaults (diff) (experimental)")
                 print("  5.10. Check boot DNA (cluster shell or LOADER)")
-                print("  5.11. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
+                print("  5.11. Build cluster_IP manifest for node add")
                 print("  5.12. Compare and correct cluster node names:IP addresses")
                 print("  5.13. Show reinit-config.json (human-readable)")
                 print("  5.14. Check cluster node join status")
@@ -3928,8 +3934,7 @@ def select_operation_mode():
                 print("  file (or license keys) without running any reinit steps.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 5.1: Install license file only\n")
                     return 44, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
@@ -3943,8 +3948,7 @@ def select_operation_mode():
                 print("  for the specified user.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 5.2: Set up passwordless SSH\n")
                     return 45, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
@@ -3958,8 +3962,7 @@ def select_operation_mode():
                 print("  reinit-config.json snapshot file for future use.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 5.3: Create backup cluster configuration\n")
                     return 46, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
@@ -3973,8 +3976,7 @@ def select_operation_mode():
                 print("  reports PASS/FAIL per node.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 5.4: Verify BMC authentication\n")
                     return 47, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
@@ -3992,8 +3994,7 @@ def select_operation_mode():
                 print("  BMC_IP.json if present, otherwise entered manually.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 5.99: Reset all nodes to LOADER prompt\n")
                     return 56, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
@@ -4010,8 +4011,7 @@ def select_operation_mode():
                 print("  or entered manually.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  ✅ Confirmed. 5.5: Check node status\n")
                     return 51, False, False
                 print("\n  ↩️  Returning to menu...\n")
@@ -4025,8 +4025,7 @@ def select_operation_mode():
                 print("  ONTAP version from the 'version' command.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 5.6: Cluster health and version check\n")
                     return 49, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
@@ -4042,8 +4041,7 @@ def select_operation_mode():
                 print("  open TCP connections to the BMC.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 5.7: List and clean up stale BMC SSH sessions\n")
                     return 50, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
@@ -4059,8 +4057,7 @@ def select_operation_mode():
                 print("  or entered manually.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 5.8: Backup LOADER environment variables\n")
                     return 52, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
@@ -4077,8 +4074,7 @@ def select_operation_mode():
                 print("  or entered manually.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 5.9: Compare LOADER env to defaults (diff)\n")
                     return 53, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
@@ -4093,14 +4089,13 @@ def select_operation_mode():
                 print("  automatically based on the prompt it finds there.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  \u2705 Confirmed. 5.10: Check boot DNA\n")
                     return 54, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
             if choice == "5.11":
-                _print_banner("🧭 5.11: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)")
+                _print_banner("🧭 5.11: Build cluster_IP manifest for node add")
                 print("")
                 print("  Connects to the cluster management shell and collects")
                 print("  all cluster-role interface IP addresses in command output")
@@ -4108,9 +4103,8 @@ def select_operation_mode():
                 print("  workflows and deterministic cluster add-node ordering.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
-                    print("\n  ✅ Confirmed. 5.11: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)\n")
+                if _menu_confirm():
+                    print("\n  ✅ Confirmed. 5.11: Build cluster_IP manifest for node add\n")
                     return 55, False, False
                 print("\n  ↩️  Returning to menu...\n")
 
@@ -4124,8 +4118,7 @@ def select_operation_mode():
                 print("  and net int rename commands.")
                 print("")
                 print("  " + "─" * 58)
-                confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
-                if confirm == "yes":
+                if _menu_confirm():
                     print("\n  ✅ Confirmed. 5.12: Compare and correct cluster node names\n")
                     return 57, False, False
                 print("\n  ↩️  Returning to menu...\n")
@@ -9909,8 +9902,18 @@ def _run_boot_dna_check_mode():
         print("  ⚠️  Invalid selection. Enter 1, 2, or 3.")
 
     _default_user54 = _cluster_config.get("admin_user") or "admin"
-    _user54 = input(f"  Username [{_default_user54}]: ").strip() or _default_user54
-    _pass54 = getpass.getpass("  Password (blank = none): ")
+    _ctype54 = "cluster" if _sel54 == "2" else "bmc"
+    _first54 = _targets54[0] if _targets54 else ""
+    _cached54 = _cred_lookup(_ctype54, _first54, _default_user54) if _first54 else None
+    if _cached54 is None and _first54:
+        _cached54 = _cred_lookup("cluster", _first54, _default_user54)
+    if _cached54 is not None:
+        print(f"  \U0001f511 Using cached credentials for {_default_user54}@{_first54}.")
+        _user54 = _default_user54
+        _pass54 = _cached54
+    else:
+        _user54 = input(f"  Username [{_default_user54}]: ").strip() or _default_user54
+        _pass54 = getpass.getpass("  Password (blank = none): ")
 
     _cluster_config["admin_user"] = _user54
     _cluster_config["admin_password"] = _pass54
@@ -26374,7 +26377,7 @@ def _get_cluster_role_ips(channel):
 
 def _run_cluster_ip_manifest_mode():
     """Mode 5.11: fetch cluster-role IPs from cluster shell and write manifest."""
-    _print_banner("🧭 5.11: Build cluster IP manifest (EXPERIMENTAL/IN PROGRESS)")
+    _print_banner("🧭 5.11: Build cluster IP manifest for node add")
     _make_session_log("Mode 5.11: cluster IP manifest")
 
     _cluster_cfg = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
@@ -26411,10 +26414,15 @@ def _run_cluster_ip_manifest_mode():
             print("  ❌ Cluster management IP or hostname is required.")
             return
 
-        _u_in = _prompt(f"  Cluster admin username [{_admin_user}]: ", "").strip()
-        if _u_in:
-            _admin_user = _u_in
         if not _admin_pw:
+            _cached_pw = _cred_lookup("cluster", _mgmt_ip, _admin_user)
+            if _cached_pw is not None:
+                print(f"  🔑 Using cached credentials for {_admin_user}@{_mgmt_ip}.")
+                _admin_pw = _cached_pw
+        if not _admin_pw:
+            _u_in = _prompt(f"  Cluster admin username [{_admin_user}]: ", "").strip()
+            if _u_in:
+                _admin_user = _u_in
             _cached_pw = _cred_lookup("cluster", _mgmt_ip, _admin_user)
             if _cached_pw is not None:
                 print(f"  🔑 Using cached password for {_admin_user}@{_mgmt_ip}.")
@@ -27032,13 +27040,18 @@ def _run_5m_node_repair_mode():
             pass
         return
 
-    _u_in = input(f"  Cluster admin username [{_5m_user}]: ").strip()
-    if _u_in:
-        _5m_user = _u_in
     _5m_cached_pw = _cred_lookup("cluster", _5m_mgmt_ip, _5m_user)
     if _5m_cached_pw is not None:
-        print(f"  🔑 Using cached password for {_5m_user}@{_5m_mgmt_ip}.")
+        print(f"  🔑 Using cached credentials for {_5m_user}@{_5m_mgmt_ip}.")
         _5m_pass = _5m_cached_pw
+    else:
+        _u_in = input(f"  Cluster admin username [{_5m_user}]: ").strip()
+        if _u_in:
+            _5m_user = _u_in
+        _5m_cached_pw = _cred_lookup("cluster", _5m_mgmt_ip, _5m_user)
+        if _5m_cached_pw is not None:
+            print(f"  🔑 Using cached password for {_5m_user}@{_5m_mgmt_ip}.")
+            _5m_pass = _5m_cached_pw
     if not _5m_pass:
         try:
             _5m_pass = _RAW_GETPASS(
@@ -27466,13 +27479,18 @@ def _run_5_14_cluster_join_status():
             pass
         return
 
-    _u_in = input(f"  Cluster admin username [{_5_14_user}]: ").strip()
-    if _u_in:
-        _5_14_user = _u_in
     _5_14_cached_pw = _cred_lookup("cluster", _mgmt_ip, _5_14_user)
     if _5_14_cached_pw is not None:
-        print(f"  🔑 Using cached password for {_5_14_user}@{_mgmt_ip}.")
+        print(f"  🔑 Using cached credentials for {_5_14_user}@{_mgmt_ip}.")
         _5_14_pass = _5_14_cached_pw
+    else:
+        _u_in = input(f"  Cluster admin username [{_5_14_user}]: ").strip()
+        if _u_in:
+            _5_14_user = _u_in
+        _5_14_cached_pw = _cred_lookup("cluster", _mgmt_ip, _5_14_user)
+        if _5_14_cached_pw is not None:
+            print(f"  🔑 Using cached password for {_5_14_user}@{_mgmt_ip}.")
+            _5_14_pass = _5_14_cached_pw
     if not _5_14_pass:
         try:
             _5_14_pass = _RAW_GETPASS(f"  Cluster admin password for {_5_14_user}@{_mgmt_ip}: ")
@@ -29020,14 +29038,21 @@ def main():
                         print("  No address entered. Exiting.")
                         sys.exit(0)
 
-                    # Generic credential prompt (works for both BMC and cluster mgmt SSH).
-                    sp_user46 = (_cfg_str(_pn46.get("bmc_user"))
-                                 or input("  Username [admin]: ").strip()
-                                 or "admin")
-                    if "bmc_password" in _pn46 and isinstance(_pn46["bmc_password"], str):
-                        sp_pass46 = _pn46["bmc_password"]
+                    # Generic credential prompt - use cached BMC creds if available.
+                    _bmc_usr46 = _cfg_str(_pn46.get("bmc_user")) or "admin"
+                    _bmc_cached46 = _cred_lookup("bmc", sp_host46, _bmc_usr46)
+                    if _bmc_cached46 is not None:
+                        sp_user46 = _bmc_usr46
+                        sp_pass46 = _bmc_cached46
+                        print(f"  \U0001f511 Using cached credentials for {sp_user46}@{sp_host46}.")
                     else:
-                        sp_pass46 = getpass.getpass("  Password (blank = none): ")
+                        sp_user46 = (_cfg_str(_pn46.get("bmc_user"))
+                                     or input("  Username [admin]: ").strip()
+                                     or "admin")
+                        if "bmc_password" in _pn46 and isinstance(_pn46["bmc_password"], str):
+                            sp_pass46 = _pn46["bmc_password"]
+                        else:
+                            sp_pass46 = getpass.getpass("  Password (blank = none): ")
 
                     _session_log.log(f"4e gather: target={sp_host46} (user={sp_user46})")
 
@@ -29036,7 +29061,7 @@ def main():
                     try:
                         _client46, sp_user46, sp_pass46 = _ssh_connect_with_retry(
                             sp_host46, sp_user46, sp_pass46,
-                            label=f"4e/{sp_host46}", max_attempts=1, interactive=False,
+                            label=f"5.3/{sp_host46}", max_attempts=1, interactive=False,
                         )
                     except Exception as _e46:
                         print(f"  \u274c SSH connection failed: {_e46}")
@@ -29778,8 +29803,13 @@ def main():
                     if len(_missing47) == 1:
                         _only_ip47 = _missing47[0]
                         print(f"\n  Credentials for {_only_ip47}:")
-                        _u47 = input(f"    Username [{_default_user47}]: ").strip() or _default_user47
-                        _p47 = getpass.getpass("    Password (blank = none): ")
+                        _cached47s = _cred_lookup("bmc", _only_ip47, _default_user47)
+                        if _cached47s is not None:
+                            print(f"  \U0001f511 Using cached credentials for {_default_user47}@{_only_ip47}.")
+                            _u47, _p47 = _default_user47, _cached47s
+                        else:
+                            _u47 = input(f"    Username [{_default_user47}]: ").strip() or _default_user47
+                            _p47 = getpass.getpass("    Password (blank = none): ")
                         _creds47[_only_ip47] = (_u47, _p47)
                         return
                     _same_creds47 = input(
@@ -29787,8 +29817,13 @@ def main():
                         "selected BMC(s)? [Y/n]: "
                     ).strip().lower()
                     if _same_creds47 != "n":
-                        _shared_user47 = input(f"  BMC username [{_default_user47}]: ").strip() or _default_user47
-                        _shared_pass47 = _prompt_or_cached_bmc_pass(_shared_user47, "  BMC password (blank = none): ")
+                        _cached47m = _cred_lookup("bmc", _missing47[0], _default_user47)
+                        if _cached47m is not None:
+                            print(f"  \U0001f511 Using cached credentials for {_default_user47}.")
+                            _shared_user47, _shared_pass47 = _default_user47, _cached47m
+                        else:
+                            _shared_user47 = input(f"  BMC username [{_default_user47}]: ").strip() or _default_user47
+                            _shared_pass47 = _prompt_or_cached_bmc_pass(_shared_user47, "  BMC password (blank = none): ")
                         for _ip47 in _missing47:
                             _creds47[_ip47] = (_shared_user47, _shared_pass47)
                     else:
@@ -29803,8 +29838,13 @@ def main():
                                 _u47, _p47 = _group_creds47[_ip47]
                             else:
                                 print(f"\n  Credentials for {_ip47}:")
-                                _u47 = input(f"    Username [{_default_user47}]: ").strip() or _default_user47
-                                _p47 = getpass.getpass("    Password (blank = none): ")
+                                _cached47i = _cred_lookup("bmc", _ip47, _default_user47)
+                                if _cached47i is not None:
+                                    print(f"  \U0001f511 Using cached credentials for {_default_user47}@{_ip47}.")
+                                    _u47, _p47 = _default_user47, _cached47i
+                                else:
+                                    _u47 = input(f"    Username [{_default_user47}]: ").strip() or _default_user47
+                                    _p47 = getpass.getpass("    Password (blank = none): ")
                             _creds47[_ip47] = (_u47, _p47)
 
                 _ensure_creds47(_bmc_ips47)
@@ -30354,15 +30394,20 @@ def main():
                             pass
                         raise _ReturnToMenu
 
-                _ch49_user_in = input(f"  Cluster admin username [{_ch49_user}]: ").strip()
-                if _ch49_user_in:
-                    _ch49_user = _ch49_user_in
                 _cached_pw_49 = _cred_lookup("cluster", _ch49_ip, _ch49_user)
                 if _cached_pw_49 is not None:
-                    print(f"  \U0001f511 Using cached password for {_ch49_user}@{_ch49_ip}.")
+                    print(f"  \U0001f511 Using cached credentials for {_ch49_user}@{_ch49_ip}.")
                     _ch49_pass = _cached_pw_49
                 else:
-                    _ch49_pass = _gp49.getpass(f"  Cluster admin password for {_ch49_user}@{_ch49_ip}: ")
+                    _ch49_user_in = input(f"  Cluster admin username [{_ch49_user}]: ").strip()
+                    if _ch49_user_in:
+                        _ch49_user = _ch49_user_in
+                    _cached_pw_49 = _cred_lookup("cluster", _ch49_ip, _ch49_user)
+                    if _cached_pw_49 is not None:
+                        print(f"  \U0001f511 Using cached password for {_ch49_user}@{_ch49_ip}.")
+                        _ch49_pass = _cached_pw_49
+                    else:
+                        _ch49_pass = _gp49.getpass(f"  Cluster admin password for {_ch49_user}@{_ch49_ip}: ")
 
                 # ── Connect ──────────────────────────────────────────────────────
                 print(f"\n  \U0001f50c Connecting to {_ch49_ip} as {_ch49_user}...")
