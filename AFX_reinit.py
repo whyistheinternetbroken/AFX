@@ -3422,6 +3422,9 @@ _4a_pending_after_4e = False
 # Set to True when 5.5 redirects to 4e for config creation; causes 4e to
 # return to 5.5 after the config is written.
 _5f_pending_after_4e = False
+# Set to True when 5.11 redirects to 4e for config creation; causes the
+# dispatch loop to run mode 46 instead of returning to the menu.
+_46_pending_after_511 = False
 # When True (1.2 / 3 primary), the script auto-answers all post-option-9
 # prompts and drives the cluster setup wizard non-interactively.
 _auto_setup = False
@@ -26418,7 +26421,9 @@ def _run_cluster_ip_manifest_mode():
         print("  gathers IP and node information, and saves a config file that this")
         print("  mode (and others) can use automatically.")
         print("")
-        if _prompt("  Return to menu to run 5.3? [Y/n]: ", "y").strip().lower() != "n":
+        if _prompt("  Run option 5.3 now? [Y/n]: ", "y").strip().lower() != "n":
+            global _46_pending_after_511
+            _46_pending_after_511 = True
             return
 
     _client = None
@@ -31522,7 +31527,11 @@ def main():
             # ── Mode 55 (5.11): Build cluster_IP manifest ───────────────────────────
             if _operation_mode == 55:
                 _run_cluster_ip_manifest_mode()
-                raise _ReturnToMenu
+                if _46_pending_after_511:
+                    _46_pending_after_511 = False
+                    _operation_mode = 46
+                else:
+                    raise _ReturnToMenu
 
             # ── Mode 57 (5.12): Compare and correct cluster node names ──────────────
             if _operation_mode == 57:

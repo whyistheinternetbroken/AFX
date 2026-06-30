@@ -9,6 +9,29 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Session credential cache now persists across all 5.x modes and option 1.**
+  Modes 5.5, 5.7, 5.8, 5.9, and 5.99 (and the option 1 node-reinit and cluster
+  config flows) now store credentials in the in-memory session cache after every
+  manual entry and reuse cached values on subsequent prompts within the same
+  session. Prior to this change, only `_prompt_or_cached_bmc_pass` stored
+  credentials; direct `getpass` / `input` paths never called `_cred_store`,
+  so the cache was always empty on re-entry.
+- **BIOS firmware update prevention prompt now defaults to N.**
+  The "Do you want to prevent BIOS firmware from updating?" prompt changed from
+  `[Y/n]` (default yes) to `[y/N]` (default no) at both prompt sites (mode 5.3
+  and mode 5.99). Pressing Enter without input no longer enables prevention.
+- **5.11 BMC connection option added.**
+  Option 5.11 (Build cluster_IP manifest) now offers a choice between connecting
+  via the cluster management IP or via BMC. The BMC path SSH-connects to the
+  BMC, sends `system console`, handles the takeover `y/n` prompt, and logs into
+  the cluster shell before running the manifest query.
+- **5.11 no-config prompt now runs option 5.3 directly.**
+  When no configuration file is found on entry to 5.11, the script now offers
+  to run option 5.3 immediately ("Run option 5.3 now? [Y/n]") rather than just
+  returning to the menu. Answering Y launches the full 5.3 config-gather flow
+  inline; answering N continues into 5.11 without a config file.
+
+
 - **Options 1a and 1b consolidated into a single option 1.**
   The interactive (1a) and automated (1b) first-node initialization options are
   now combined into a single menu option 1: "Create single node cluster". The
