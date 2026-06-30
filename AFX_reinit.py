@@ -32070,8 +32070,17 @@ def main():
                     sp_host = _prompt_bmc_host(
                         "Enter BMC hostname/IP or primary node (this will be the first node in the cluster): "
                     )
-            sp_user = _cfg_str(primary_node.get("bmc_user")) or input("Enter BMC username [admin]: ").strip() or "admin"
-            sp_pass = _cfg_get_or_prompt("bmc_password", "Enter BMC password: ", hidden=True)
+            sp_user = _cfg_str(primary_node.get("bmc_user")) or "admin"
+            _cached_bmc = _cred_lookup("bmc", sp_host, sp_user)
+            if _cached_bmc is not None:
+                print(f"  \U0001f511 Using cached credentials for {sp_user}@{sp_host}.")
+                sp_pass = _cached_bmc
+            else:
+                _sp_user_in = input(f"Enter BMC username [{sp_user}]: ").strip()
+                if _sp_user_in:
+                    sp_user = _sp_user_in
+                sp_pass = _cfg_get_or_prompt("bmc_password", "Enter BMC password: ", hidden=True)
+                _cred_store("bmc", sp_host, sp_user, sp_pass)
             if primary_node.get("bmc"):
                 _pn_src = "primary_node" if isinstance(_config_data.get("primary_node"), dict) else "nodes[0]"
                 print(f"📄 Using primary BMC from config {_pn_src}: {sp_host} (user={sp_user})")
