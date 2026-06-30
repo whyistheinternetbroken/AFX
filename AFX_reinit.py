@@ -26412,49 +26412,157 @@ def _run_cluster_ip_manifest_mode():
     _client = None
     _ch = None
     try:
-        if _mgmt_ip:
-            print(f"\n  Cluster management IP or hostname [{_mgmt_ip}]")
-            _in = _prompt("  Press Enter to use this value, or type a different IP/hostname: ", "").strip()
-            if _in:
-                _mgmt_ip = _in
-        else:
-            _mgmt_ip = _prompt("  Cluster management IP or hostname: ").strip()
-        if not _mgmt_ip:
-            print("  ❌ Cluster management IP or hostname is required.")
-            return
+        # ── Connection type ──────────────────────────────────────────────────
+        print("")
+        print("  Connect via:")
+        print("    1) Cluster management IP/hostname")
+        print("    2) BMC interface")
+        _use_bmc = _prompt("  Choice [1/2]: ", "1").strip() == "2"
 
-        if not _admin_pw:
-            _cached_pw = _cred_lookup("cluster", _mgmt_ip, _admin_user)
-            if _cached_pw is not None:
-                print(f"  🔑 Using cached credentials for {_admin_user}@{_mgmt_ip}.")
-                _admin_pw = _cached_pw
-        if not _admin_pw:
-            _u_in = _prompt(f"  Cluster admin username [{_admin_user}]: ", "").strip()
-            if _u_in:
-                _admin_user = _u_in
-            _cached_pw = _cred_lookup("cluster", _mgmt_ip, _admin_user)
-            if _cached_pw is not None:
-                print(f"  🔑 Using cached password for {_admin_user}@{_mgmt_ip}.")
-                _admin_pw = _cached_pw
+        if not _use_bmc:
+            # ── Cluster management path ──────────────────────────────────────
+            if _mgmt_ip:
+                print(f"\n  Cluster management IP or hostname [{_mgmt_ip}]")
+                _in = _prompt("  Press Enter to use this value, or type a different IP/hostname: ", "").strip()
+                if _in:
+                    _mgmt_ip = _in
+            else:
+                _mgmt_ip = _prompt("  Cluster management IP or hostname: ").strip()
+            if not _mgmt_ip:
+                print("  ❌ Cluster management IP or hostname is required.")
+                return
+
             if not _admin_pw:
-                try:
-                    _admin_pw = getpass.getpass(f"  Cluster admin password for {_admin_user}@{_mgmt_ip}: ")
-                except (EOFError, KeyboardInterrupt):
-                    _admin_pw = ""
+                _cached_pw = _cred_lookup("cluster", _mgmt_ip, _admin_user)
+                if _cached_pw is not None:
+                    print(f"  \U0001f511 Using cached credentials for {_admin_user}@{_mgmt_ip}.")
+                    _admin_pw = _cached_pw
+            if not _admin_pw:
+                _u_in = _prompt(f"  Cluster admin username [{_admin_user}]: ", "").strip()
+                if _u_in:
+                    _admin_user = _u_in
+                _cached_pw = _cred_lookup("cluster", _mgmt_ip, _admin_user)
+                if _cached_pw is not None:
+                    print(f"  \U0001f511 Using cached password for {_admin_user}@{_mgmt_ip}.")
+                    _admin_pw = _cached_pw
+                if not _admin_pw:
+                    try:
+                        _admin_pw = getpass.getpass(f"  Cluster admin password for {_admin_user}@{_mgmt_ip}: ")
+                    except (EOFError, KeyboardInterrupt):
+                        _admin_pw = ""
 
-        _client, _admin_user, _admin_pw = _ssh_connect_with_retry(
-            _mgmt_ip,
-            _admin_user,
-            _admin_pw,
-            label=f"cluster/{_mgmt_ip}",
-            max_attempts=3,
-            interactive=False,
-        )
-        _cred_store("cluster", _mgmt_ip, _admin_user, _admin_pw)
-        _ch = _open_shell(_client)
-        if not _login_primary_cluster_shell(_ch, _admin_pw):
-            print("  ❌ Could not reach cluster shell (::>).")
-            return
+            _client, _admin_user, _admin_pw = _ssh_connect_with_retry(
+                _mgmt_ip,
+                _admin_user,
+                _admin_pw,
+                label=f"cluster/{_mgmt_ip}",
+                max_attempts=3,
+                interactive=False,
+            )
+            _cred_store("cluster", _mgmt_ip, _admin_user, _admin_pw)
+            _ch = _open_shell(_client)
+            if not _login_primary_cluster_shell(_ch, _admin_pw):
+                print("  ❌ Could not reach cluster shell (::>).")
+                return
+
+        else:
+            # ── BMC path ─────────────────────────────────────────────────────
+            _pn_cfg = _config_primary_node() or {}
+            _bmc_ip_default = _cfg_str(_pn_cfg.get("bmc")) or ""
+            if _bmc_ip_default:
+                print(f"\n  BMC hostname/IP [{_bmc_ip_default}]")
+                _in = _prompt("  Press Enter to use this value, or type a different IP/hostname: ", "").strip()
+                _bmc_ip = _in or _bmc_ip_default
+            else:
+                _bmc_ip = _prompt("  BMC hostname/IP: ").strip()
+            if not _bmc_ip:
+                print("  ❌ BMC hostname/IP is required.")
+                return
+
+            # BMC credentials
+            _bmc_user = _cfg_str(_pn_cfg.get("bmc_user")) or "admin"
+            _bmc_cached = _cred_lookup("bmc", _bmc_ip, _bmc_user)
+            if _bmc_cached is not None:
+                print(f"  \U0001f511 Using cached BMC credentials for {_bmc_user}@{_bmc_ip}.")
+                _bmc_pass = _bmc_cached
+            else:
+                _u_in = _prompt(f"  BMC username [{_bmc_user}]: ", "").strip()
+                if _u_in:
+                    _bmc_user = _u_in
+                try:
+                    _bmc_pass = getpass.getpass(f"  BMC password for {_bmc_user}@{_bmc_ip}: ")
+                except (EOFError, KeyboardInterrupt):
+                    _bmc_pass = ""
+                _cred_store("bmc", _bmc_ip, _bmc_user, _bmc_pass)
+
+            # Cluster admin credentials (for console login)
+            if not _admin_pw:
+                _cached_cl = _cred_lookup("cluster", _mgmt_ip or "*", _admin_user)
+                if _cached_cl is not None:
+                    print(f"  \U0001f511 Using cached cluster credentials for {_admin_user}.")
+                    _admin_pw = _cached_cl
+            if not _admin_pw:
+                _u_in = _prompt(f"  Cluster admin username (for console login) [{_admin_user}]: ", "").strip()
+                if _u_in:
+                    _admin_user = _u_in
+                _cached_cl = _cred_lookup("cluster", _mgmt_ip or "*", _admin_user)
+                if _cached_cl is not None:
+                    _admin_pw = _cached_cl
+                if not _admin_pw:
+                    try:
+                        _admin_pw = getpass.getpass(f"  Cluster admin password for {_admin_user}: ")
+                    except (EOFError, KeyboardInterrupt):
+                        _admin_pw = ""
+
+            # Connect to BMC
+            _client, _bmc_user, _bmc_pass = _ssh_connect_with_retry(
+                _bmc_ip, _bmc_user, _bmc_pass,
+                label=f"5.11/bmc/{_bmc_ip}",
+                max_attempts=3, interactive=True,
+            )
+            _cred_store("bmc", _bmc_ip, _bmc_user, _bmc_pass)
+            _ch = _open_shell(_client)
+
+            # Detect initial prompt: cluster shell or BMC
+            drain_channel(_ch, seconds=0.5)
+            _ch.send("\r")
+            _init_out, _init_m = direct_read_until_any(
+                _ch, ["::>", "::*>", ">"], timeout=15,
+            )
+            _combined = (_init_out or "") + (_init_m or "")
+            if "::>" not in _combined and "::*>" not in _combined:
+                # At BMC prompt — enter system console
+                if not _reach_bmc_prompt(_ch):
+                    print("  ❌ Could not reach BMC prompt.")
+                    return
+                _ch.send("system console\r")
+                _sc_out, _sc_m = direct_read_until_any(
+                    _ch, ["::>", "::*>", "login:", "y/n"], timeout=25,
+                )
+                if _sc_m and "y/n" in _sc_m.lower():
+                    _ch.send("y\r")
+                    _sc_out2, _sc_m = direct_read_until_any(
+                        _ch, ["::>", "::*>", "login:"], timeout=20,
+                    )
+                    _sc_out += _sc_out2
+                _sc_combined = (_sc_out or "") + (_sc_m or "")
+                if "::>" in _sc_combined or "::*>" in _sc_combined:
+                    pass  # already in cluster shell
+                elif _sc_m and "login:" in _sc_m.lower():
+                    _ch.send(f"{_admin_user}\r")
+                    _, _pw_m = direct_read_until_any(_ch, ["password:", "Password:"], timeout=10)
+                    if _pw_m:
+                        _ch.send(f"{_admin_pw}\r")
+                    _fin_out, _fin_m = direct_read_until_any(
+                        _ch, ["::>", "::*>", "login:"], timeout=20,
+                    )
+                    if "::>" not in ((_fin_out or "") + (_fin_m or "")):
+                        print("  ❌ Could not log in to cluster shell via system console.")
+                        return
+                else:
+                    print("  ❌ Unexpected state after 'system console'. Could not reach cluster shell.")
+                    return
+
         _rows = _get_cluster_role_ips(_ch)
         if not _rows:
             print("  ⚠️  No cluster-role interface IPs were parsed.")
