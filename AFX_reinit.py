@@ -26389,10 +26389,8 @@ def _run_cluster_ip_manifest_mode():
         if not _admin_pw:
             _cached_pw = _cred_lookup("cluster", _mgmt_ip, _admin_user)
             if _cached_pw is not None:
-                print(f"  🔑 Cached cluster credentials available for {_admin_user}@{_mgmt_ip}.")
-                _yn = input("  Use cached password? [Y/n]: ").strip().lower()
-                if _yn in ("", "y", "yes"):
-                    _admin_pw = _cached_pw
+                print(f"  🔑 Using cached password for {_admin_user}@{_mgmt_ip}.")
+                _admin_pw = _cached_pw
             if not _admin_pw:
                 try:
                     _admin_pw = getpass.getpass(f"  Cluster admin password for {_admin_user}@{_mgmt_ip}: ")
@@ -27011,11 +27009,9 @@ def _run_5m_node_repair_mode():
         _5m_user = _u_in
     _5m_cached_pw = _cred_lookup("cluster", _5m_mgmt_ip, _5m_user)
     if _5m_cached_pw is not None:
-        print(f"  🔑 Cached cluster credentials available for {_5m_user}@{_5m_mgmt_ip}.")
-        _yn5m = input("  Use cached password? [Y/n]: ").strip().lower()
-        if _yn5m in ("", "y", "yes"):
-            _5m_pass = _5m_cached_pw
-    if not _5m_cached_pw or not _5m_pass:
+        print(f"  🔑 Using cached password for {_5m_user}@{_5m_mgmt_ip}.")
+        _5m_pass = _5m_cached_pw
+    if not _5m_pass:
         try:
             _5m_pass = _RAW_GETPASS(
                 f"  Cluster admin password for {_5m_user}@{_5m_mgmt_ip}: "
@@ -27145,22 +27141,141 @@ def _run_5_15_manage_session_creds():
         pass
 
 
-def _prompt_cred_pair(label: str, ip_prompt: str) -> "tuple[str, str, str] | None":
-    """Prompt for IP/hostname, username, and password. Returns (ip, user, pw) or None on cancel."""
+def _config_cluster_ip() -> str:
+    """Return cluster management IP from loaded config, or empty string."""
+    _cfg_cl = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
+    return (
+        _cluster_config.get("mgmt_ip")
+        or _cfg_cl.get("clus_mgmt_address")
+        or _cfg_cl.get("mgmt_ip")
+        or ""
+    )
+
+
+def _config_cluster_user() -> str:
+    """Return cluster admin username from loaded config, defaulting to 'admin'."""
+    _cfg_cl = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
+    return (
+        _cluster_config.get("admin_user")
+        or _cfg_cl.get("user")
+        or _cfg_cl.get("admin_user")
+        or "admin"
+    )
+
+
+def _config_bmc_entries() -> "list[tuple[str, str]]":
+    """Return [(bmc_ip, default_user), ...] for all nodes in loaded config."""
+    if not isinstance(_config_data, dict):
+        return []
+    _pn = _config_data.get("primary_node")
+    _sns = _config_data.get("secondary_nodes")
+    _nodes = _config_data.get("nodes")
+    _raw = []
+    if isinstance(_pn, dict) or isinstance(_sns, list):
+        if isinstance(_pn, dict) and _pn.get("bmc"):
+            _raw.append(_pn)
+        for _sn in (_sns or []):
+            if isinstance(_sn, dict) and _sn.get("bmc"):
+                _raw.append(_sn)
+    elif isinstance(_nodes, list):
+        for _n in _nodes:
+            if isinstance(_n, dict) and _n.get("bmc"):
+                _raw.append(_n)
+    return [(str(n["bmc"]), n.get("bmc_user") or "admin") for n in _raw]
+
+
+def _prompt_user_pass(default_user: str, label: str, target: str) -> "tuple[str, str] | None":
+    """Prompt for username (with default) and password. Returns (user, pw) or None on cancel."""
     try:
-        _ip = input(f"  {ip_prompt}: ").strip()
-        if not _ip:
-            print("  ↩️  Cancelled.")
-            return None
-        _user = input(f"  {label} username: ").strip()
-        if not _user:
-            print("  ↩️  Cancelled.")
-            return None
-        _pw = getpass.getpass(f"  {label} password: ")
+        _u = input(f"  {label} username [{default_user}]: ").strip() or default_user
+        _pw = getpass.getpass(f"  {label} password for {_u}@{target}: ")
     except (EOFError, KeyboardInterrupt):
         print("\n  ↩️  Cancelled.")
         return None
-    return _ip, _user, _pw
+    return _u, _pw
+
+
+def _add_cluster_creds() -> bool:
+    """Prompt for cluster credentials and store them. Returns True if stored."""
+    _ip = _config_cluster_ip()
+    _default_user = _config_cluster_user()
+    if _ip:
+        print(f"  Cluster management IP from config: {_ip}")
+    else:
+        try:
+            _ip = input("  Cluster management IP or hostname: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  ↩️  Cancelled.")
+            return False
+        if not _ip:
+            print("  ↩️  Cancelled.")
+            return False
+    _pair = _prompt_user_pass(_default_user, "Cluster", _ip)
+    if not _pair:
+        return False
+    _cred_store("cluster", _ip, _pair[0], _pair[1])
+    print(f"\n  ✅ Cluster credentials stored for {_pair[0]}@{_ip}.")
+    return True
+
+
+def _add_bmc_creds() -> bool:
+    """Prompt for BMC credentials and store them. Returns True if at least one stored."""
+    _entries = _config_bmc_entries()
+    if not _entries:
+        try:
+            _ip = input("  BMC IP or hostname (or * for shared): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  ↩️  Cancelled.")
+            return False
+        if not _ip:
+            print("  ↩️  Cancelled.")
+            return False
+        _pair = _prompt_user_pass("admin", "BMC", _ip if _ip != "*" else "all nodes")
+        if not _pair:
+            return False
+        _cred_store("bmc", _ip, _pair[0], _pair[1])
+        _label = _ip if _ip != "*" else "(shared)"
+        print(f"\n  ✅ BMC credentials stored for {_pair[0]}@{_label}.")
+        return True
+
+    print("")
+    for _i, (_ip, _user) in enumerate(_entries, 1):
+        print(f"  {_i}. {_ip}  (default user: {_user})")
+    print(f"  {len(_entries) + 1}. Use same username/password for all BMCs")
+    print("  Enter to go back")
+    print("")
+    try:
+        _pick = input("  Choice: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if not _pick:
+        return False
+
+    if _pick == str(len(_entries) + 1):
+        _default_user = _entries[0][1] if _entries else "admin"
+        _pair = _prompt_user_pass(_default_user, "BMC", "all nodes")
+        if not _pair:
+            return False
+        for _bip, _ in _entries:
+            _cred_store("bmc", _bip, _pair[0], _pair[1])
+        print(f"\n  ✅ BMC credentials stored for {_pair[0]} on {len(_entries)} node(s).")
+        return True
+
+    try:
+        _idx = int(_pick) - 1
+    except ValueError:
+        print("  Invalid choice.")
+        return False
+    if _idx < 0 or _idx >= len(_entries):
+        print("  Invalid choice.")
+        return False
+    _bip, _default_user = _entries[_idx]
+    _pair = _prompt_user_pass(_default_user, "BMC", _bip)
+    if not _pair:
+        return False
+    _cred_store("bmc", _bip, _pair[0], _pair[1])
+    print(f"\n  ✅ BMC credentials stored for {_pair[0]}@{_bip}.")
+    return True
 
 
 def _run_5_15_add_creds():
@@ -27177,19 +27292,10 @@ def _run_5_15_add_creds():
         return
 
     if _ans == "1":
-        _pair = _prompt_cred_pair("Cluster", "Cluster management IP or hostname")
-        if _pair:
-            _ip, _user, _pw = _pair
-            _cred_store("cluster", _ip, _user, _pw)
-            print(f"\n  ✅ Cluster credentials stored for {_user}@{_ip}.")
+        _add_cluster_creds()
 
     elif _ans == "2":
-        _pair = _prompt_cred_pair("BMC", "BMC IP or hostname (or * for shared)")
-        if _pair:
-            _ip, _user, _pw = _pair
-            _cred_store("bmc", _ip, _user, _pw)
-            _label = _ip if _ip != "*" else "(shared)"
-            print(f"\n  ✅ BMC credentials stored for {_user}@{_label}.")
+        _add_bmc_creds()
 
     elif _ans == "3":
         print("")
@@ -27204,38 +27310,52 @@ def _run_5_15_add_creds():
 
         if _both == "1":
             print("\n  --- Cluster credentials ---")
-            _cpair = _prompt_cred_pair("Cluster", "Cluster management IP or hostname")
-            if not _cpair:
+            if not _add_cluster_creds():
                 return
             print("\n  --- BMC credentials ---")
-            _bpair = _prompt_cred_pair("BMC", "BMC IP or hostname (or * for shared)")
-            if not _bpair:
-                return
-            _cred_store("cluster", _cpair[0], _cpair[1], _cpair[2])
-            _cred_store("bmc", _bpair[0], _bpair[1], _bpair[2])
-            _blabel = _bpair[0] if _bpair[0] != "*" else "(shared)"
-            print(f"\n  ✅ Cluster credentials stored for {_cpair[1]}@{_cpair[0]}.")
-            print(f"  ✅ BMC credentials stored for {_bpair[1]}@{_blabel}.")
+            _add_bmc_creds()
 
         elif _both == "2":
-            _cip = input("  Cluster management IP or hostname: ").strip()
-            _bip = input("  BMC IP or hostname (or * for shared): ").strip()
-            if not _cip or not _bip:
-                print("  ↩️  Cancelled.")
-                return
-            try:
-                _user = input("  Username: ").strip()
-                if not _user:
+            _cip = _config_cluster_ip()
+            _bmc_entries = _config_bmc_entries()
+            _default_user = _config_cluster_user()
+            print("")
+            if _cip:
+                print(f"  Cluster IP from config: {_cip}")
+            else:
+                try:
+                    _cip = input("  Cluster management IP or hostname: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\n  ↩️  Cancelled.")
+                    return
+                if not _cip:
                     print("  ↩️  Cancelled.")
                     return
-                _pw = getpass.getpass("  Password: ")
+            if _bmc_entries:
+                print(f"  BMC IPs from config ({len(_bmc_entries)}): " +
+                      ", ".join(ip for ip, _ in _bmc_entries))
+            else:
+                try:
+                    _bip = input("  BMC IP or hostname (or * for shared): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\n  ↩️  Cancelled.")
+                    return
+                if not _bip:
+                    print("  ↩️  Cancelled.")
+                    return
+                _bmc_entries = [(_bip, "admin")]
+            try:
+                _user = input(f"  Username [{_default_user}]: ").strip() or _default_user
+                _pw = getpass.getpass(f"  Password for {_user}: ")
             except (EOFError, KeyboardInterrupt):
                 print("\n  ↩️  Cancelled.")
                 return
             _cred_store("cluster", _cip, _user, _pw)
-            _cred_store("bmc", _bip, _user, _pw)
-            _blabel = _bip if _bip != "*" else "(shared)"
-            print(f"\n  ✅ Credentials stored for {_user}@{_cip} (cluster) and {_user}@{_blabel} (BMC).")
+            for _bip, _ in _bmc_entries:
+                _cred_store("bmc", _bip, _user, _pw)
+            _bmc_label = ", ".join(ip for ip, _ in _bmc_entries)
+            print(f"\n  ✅ Credentials stored for {_user}@{_cip} (cluster).")
+            print(f"  ✅ Credentials stored for {_user} on BMC(s): {_bmc_label}.")
 
 
 def _run_5_15_clear_creds():
@@ -27331,11 +27451,9 @@ def _run_5_14_cluster_join_status():
         _5_14_user = _u_in
     _5_14_cached_pw = _cred_lookup("cluster", _mgmt_ip, _5_14_user)
     if _5_14_cached_pw is not None:
-        print(f"  🔑 Cached cluster credentials available for {_5_14_user}@{_mgmt_ip}.")
-        _yn14 = input("  Use cached password? [Y/n]: ").strip().lower()
-        if _yn14 in ("", "y", "yes"):
-            _5_14_pass = _5_14_cached_pw
-    if not _5_14_cached_pw or not _5_14_pass:
+        print(f"  🔑 Using cached password for {_5_14_user}@{_mgmt_ip}.")
+        _5_14_pass = _5_14_cached_pw
+    if not _5_14_pass:
         try:
             _5_14_pass = _RAW_GETPASS(f"  Cluster admin password for {_5_14_user}@{_mgmt_ip}: ")
         except (EOFError, KeyboardInterrupt):
@@ -28749,10 +28867,8 @@ def main():
                         _44_user = _cluster_config.get("admin_user", "admin")
                         _44_cached = _cred_lookup("cluster", _44_mgmt, _44_user)
                         if _44_cached is not None:
-                            print(f"  🔑 Cached cluster credentials available for {_44_user}.")
-                            _yn44 = input("  Use cached password? [Y/n]: ").strip().lower()
-                            if _yn44 in ("", "y", "yes"):
-                                admin_pw_44 = _44_cached
+                            print(f"  🔑 Using cached password for {_44_user}@{_44_mgmt}.")
+                            admin_pw_44 = _44_cached
                     if not admin_pw_44:
                         admin_pw_44 = getpass.getpass("  Cluster admin password: ")
                     if not _login_primary_cluster_shell(channel_44, admin_pw_44):
@@ -32656,14 +32772,22 @@ def main():
                                 f"(user={sp_user or 'admin'})"
                             )
                         else:
+                            _2c_mgmt = (_cluster_config.get("mgmt_ip")
+                                        or cfg_cluster_2.get("clus_mgmt_address") or "")
                             try:
                                 _pre_cl_user = input(
                                     "\n  Cluster admin username [admin]: "
                                 ).strip() or "admin"
-                                _pre_cl_pass = getpass.getpass(
-                                    f"  Cluster admin password for {_pre_cl_user}@"
-                                    f"{_cluster_config.get('mgmt_ip') or cfg_cluster_2.get('clus_mgmt_address') or '<cluster-mgmt>'}: "
-                                )
+                                _2c_cached = (_cred_lookup("cluster", _2c_mgmt, _pre_cl_user)
+                                              if _2c_mgmt else None)
+                                if _2c_cached is not None:
+                                    print(f"  🔑 Using cached password for {_pre_cl_user}@{_2c_mgmt}.")
+                                    _pre_cl_pass = _2c_cached
+                                else:
+                                    _pre_cl_pass = getpass.getpass(
+                                        f"  Cluster admin password for {_pre_cl_user}@"
+                                        f"{_2c_mgmt or '<cluster-mgmt>'}: "
+                                    )
                             except (EOFError, KeyboardInterrupt):
                                 _pre_cl_user = "admin"
                                 _pre_cl_pass = ""
