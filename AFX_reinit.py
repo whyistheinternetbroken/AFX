@@ -26409,6 +26409,18 @@ def _run_cluster_ip_manifest_mode():
         or ""
     )
 
+    # ── Config availability check ────────────────────────────────────────────
+    _pn_cfg_check = _config_primary_node() or {}
+    _has_config = bool(_mgmt_ip or _pn_cfg_check.get("bmc"))
+    if not _has_config:
+        print("\n  \u2139\ufe0f  No configuration file found.")
+        print("  Running option 5.3 first is recommended — it connects to the cluster,")
+        print("  gathers IP and node information, and saves a config file that this")
+        print("  mode (and others) can use automatically.")
+        print("")
+        if _prompt("  Return to menu to run 5.3? [Y/n]: ", "y").strip().lower() != "n":
+            return
+
     _client = None
     _ch = None
     try:
