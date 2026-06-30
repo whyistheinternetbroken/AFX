@@ -26245,13 +26245,20 @@ def _cluster_role_rows_from_net_rows(net_rows):
 
 
 def _get_cluster_role_ips(channel):
-    """Return first cluster-role IP per node in command output order."""
+    """Return cluster-role IP + current-node per LIF from 'net int show -role cluster'.
+
+    Parses the full (non-fields) table output. Each LIF entry spans multiple lines;
+    the line that contains the ip/mask also has the Current Node immediately after it.
+    Returns [{"node_name": str, "cluster_ip": str}, ...] deduplicated by IP.
+    """
     _cmds = [
-        "set -rows 0; net int show -role cluster -fields home-node,address",
-        "net int show -role cluster -fields home-node,address",
-        "set -rows 0; network interface show -role cluster -fields home-node,address",
-        "network interface show -role cluster -fields home-node,address",
+        "set -rows 0; net int show -role cluster",
+        "net int show -role cluster",
+        "set -rows 0; network interface show -role cluster",
+        "network interface show -role cluster",
     ]
+    # Match "ip/prefix  current-node" — the two tokens right after the address/mask field.
+    _ip_mask_re = re.compile(r'\b(\d+\.\d+\.\d+\.\d+)/\d+\s+(\S+)')
     for _cmd in _cmds:
         try:
             with _primary_shell_lock:
@@ -26263,7 +26270,8 @@ def _get_cluster_role_ips(channel):
         _rows = []
         _dashes_seen = False
         for _line in (_out or "").splitlines():
-            _s = _line.strip()
+            _clean = _ANSI_RE.sub("", _line).replace("\x08", "")
+            _s = _clean.strip()
             if not _s:
                 continue
             _ll = _s.lower()
@@ -26276,35 +26284,23 @@ def _get_cluster_role_ips(channel):
                 continue
             if not _dashes_seen:
                 continue
-            _parts = _s.split()
-            _ip = next((p for p in reversed(_parts) if _is_valid_ipv4(p)), "")
-            if not _ip:
+            _m = _ip_mask_re.search(_clean)
+            if not _m:
                 continue
-            _node = ""
-            for _cand in _parts:
-                _lc = _cand.lower()
-                if _cand == _ip or _is_valid_ipv4(_cand):
-                    continue
-                if _lc in ("node", "vserver", "lif", "address"):
-                    continue
-                _node = _cand
-                break
+            _ip = _m.group(1)
+            _node = _m.group(2)
+            if not _is_valid_ipv4(_ip) or not _node:
+                continue
             _rows.append({"node_name": _node, "cluster_ip": _ip})
         if _rows:
             _deduped = []
-            _seen_nodes = set()
             _seen_ips = set()
             for _row in _rows:
-                _node = str(_row.get("node_name") or "").strip()
                 _ip = str(_row.get("cluster_ip") or "").strip()
                 if not _ip or _ip in _seen_ips:
                     continue
-                if _node:
-                    if _node in _seen_nodes:
-                        continue
-                    _seen_nodes.add(_node)
                 _seen_ips.add(_ip)
-                _deduped.append({"node_name": _node, "cluster_ip": _ip})
+                _deduped.append({"node_name": _row["node_name"], "cluster_ip": _ip})
             if _deduped:
                 return _deduped
     return []
@@ -26383,8 +26379,47 @@ def _run_cluster_ip_manifest_mode():
             print("  ⚠️  No cluster-role interface IPs were parsed.")
             return
 
+        # Filter out nodes already fully joined (health=true, eligibility=true in cluster show).
+        # The manifest is for nodes that still need to be added via cluster add-node.
+        print("  ⏳ Checking cluster membership...")
+        with _primary_shell_lock:
+            with _suppress_console():
+                _show_out = _run_cluster_command(_ch, "cluster show", timeout=30)
+        _healthy_nodes = set()
+        _cs_dashes = False
+        _cs_done = False
+        for _raw in _show_out.splitlines():
+            _cs = _ANSI_RE.sub("", _raw).replace("\x08", "").strip()
+            if not _cs:
+                if _cs_dashes:
+                    _cs_done = True
+                continue
+            if _cs_done:
+                continue
+            if "::" in _cs or _cs.lower().startswith("cluster show"):
+                continue
+            if "entries were displayed" in _cs.lower() or _cs.lower().startswith("warning"):
+                _cs_done = True
+                continue
+            if set(_cs) <= {"-", " "}:
+                _cs_dashes = True
+                continue
+            if _cs_dashes:
+                _toks = _cs.split()
+                if len(_toks) >= 3 and _toks[1].lower() == "true" and _toks[2].lower() == "true":
+                    _healthy_nodes.add(_toks[0])
+
+        _filtered = [r for r in _rows if r["node_name"] not in _healthy_nodes]
+        _skipped = [r for r in _rows if r["node_name"] in _healthy_nodes]
+        if _skipped:
+            print(f"  ℹ️  Skipping {len(_skipped)} node(s) already in cluster: "
+                  f"{', '.join(r['node_name'] for r in _skipped)}")
+        if not _filtered:
+            print("  ✅ All discovered nodes are already in the cluster. Nothing to write.")
+            return
+
         _entries = []
-        for _row in _rows:
+        for _row in _filtered:
             _entries.append({
                 "cluster_ip": str(_row.get("cluster_ip") or "").strip(),
                 "node_name": str(_row.get("node_name") or "").strip(),
