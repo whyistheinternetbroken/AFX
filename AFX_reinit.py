@@ -27100,20 +27100,12 @@ def _run_5m_node_repair_mode():
 
 
 def _run_5_15_manage_session_creds():
-    """Mode 5.15: View and clear session credential cache."""
+    """Mode 5.15: View and add/clear session credential cache."""
     _print_banner("🔐 5.15: Manage session credentials")
     print("")
 
     _cluster_entries = [(ip, user) for (ct, ip, user) in _session_creds if ct == "cluster"]
     _bmc_entries = [(ip, user) for (ct, ip, user) in _session_creds if ct == "bmc"]
-
-    if not _cluster_entries and not _bmc_entries:
-        print("  ℹ️  No credentials are currently cached.")
-        try:
-            input("\n  Press Enter to return to the main menu...")
-        except (EOFError, KeyboardInterrupt):
-            pass
-        return
 
     print(f"  Cached cluster credentials ({len(_cluster_entries)}):")
     if _cluster_entries:
@@ -27131,15 +27123,133 @@ def _run_5_15_manage_session_creds():
         print("     (none)")
 
     print("")
-    print("  1. Clear all cached credentials")
-    print("  2. Clear cluster credentials only")
-    print("  3. Clear BMC credentials only")
-    print("  Enter to go back without changes")
+    print("  1. Add new credentials")
+    print("  2. Clear credential cache")
+    print("  Enter to go back")
+    print("")
+    try:
+        _top = input("  Choice: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        _top = ""
+
+    if _top == "1":
+        _run_5_15_add_creds()
+    elif _top == "2":
+        _run_5_15_clear_creds()
+    else:
+        print("\n  ↩️  No changes made.")
+
+    try:
+        input("\n  Press Enter to return to the main menu...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def _prompt_cred_pair(label: str, ip_prompt: str) -> "tuple[str, str, str] | None":
+    """Prompt for IP/hostname, username, and password. Returns (ip, user, pw) or None on cancel."""
+    try:
+        _ip = input(f"  {ip_prompt}: ").strip()
+        if not _ip:
+            print("  ↩️  Cancelled.")
+            return None
+        _user = input(f"  {label} username: ").strip()
+        if not _user:
+            print("  ↩️  Cancelled.")
+            return None
+        _pw = getpass.getpass(f"  {label} password: ")
+    except (EOFError, KeyboardInterrupt):
+        print("\n  ↩️  Cancelled.")
+        return None
+    return _ip, _user, _pw
+
+
+def _run_5_15_add_creds():
+    """Sub-menu: add cluster, BMC, or both credentials to the session cache."""
+    print("")
+    print("  1. Add cluster credentials")
+    print("  2. Add BMC credentials")
+    print("  3. Add both")
+    print("  Enter to go back")
     print("")
     try:
         _ans = input("  Choice: ").strip()
     except (EOFError, KeyboardInterrupt):
-        _ans = ""
+        return
+
+    if _ans == "1":
+        _pair = _prompt_cred_pair("Cluster", "Cluster management IP or hostname")
+        if _pair:
+            _ip, _user, _pw = _pair
+            _cred_store("cluster", _ip, _user, _pw)
+            print(f"\n  ✅ Cluster credentials stored for {_user}@{_ip}.")
+
+    elif _ans == "2":
+        _pair = _prompt_cred_pair("BMC", "BMC IP or hostname (or * for shared)")
+        if _pair:
+            _ip, _user, _pw = _pair
+            _cred_store("bmc", _ip, _user, _pw)
+            _label = _ip if _ip != "*" else "(shared)"
+            print(f"\n  ✅ BMC credentials stored for {_user}@{_label}.")
+
+    elif _ans == "3":
+        print("")
+        print("  1. Enter unique credentials for BMC and Cluster")
+        print("  2. Use the same credentials for both")
+        print("  Enter to go back")
+        print("")
+        try:
+            _both = input("  Choice: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+
+        if _both == "1":
+            print("\n  --- Cluster credentials ---")
+            _cpair = _prompt_cred_pair("Cluster", "Cluster management IP or hostname")
+            if not _cpair:
+                return
+            print("\n  --- BMC credentials ---")
+            _bpair = _prompt_cred_pair("BMC", "BMC IP or hostname (or * for shared)")
+            if not _bpair:
+                return
+            _cred_store("cluster", _cpair[0], _cpair[1], _cpair[2])
+            _cred_store("bmc", _bpair[0], _bpair[1], _bpair[2])
+            _blabel = _bpair[0] if _bpair[0] != "*" else "(shared)"
+            print(f"\n  ✅ Cluster credentials stored for {_cpair[1]}@{_cpair[0]}.")
+            print(f"  ✅ BMC credentials stored for {_bpair[1]}@{_blabel}.")
+
+        elif _both == "2":
+            _cip = input("  Cluster management IP or hostname: ").strip()
+            _bip = input("  BMC IP or hostname (or * for shared): ").strip()
+            if not _cip or not _bip:
+                print("  ↩️  Cancelled.")
+                return
+            try:
+                _user = input("  Username: ").strip()
+                if not _user:
+                    print("  ↩️  Cancelled.")
+                    return
+                _pw = getpass.getpass("  Password: ")
+            except (EOFError, KeyboardInterrupt):
+                print("\n  ↩️  Cancelled.")
+                return
+            _cred_store("cluster", _cip, _user, _pw)
+            _cred_store("bmc", _bip, _user, _pw)
+            _blabel = _bip if _bip != "*" else "(shared)"
+            print(f"\n  ✅ Credentials stored for {_user}@{_cip} (cluster) and {_user}@{_blabel} (BMC).")
+
+
+def _run_5_15_clear_creds():
+    """Sub-menu: selectively clear cached credentials."""
+    print("")
+    print("  1. Clear all cached credentials")
+    print("  2. Clear cluster credentials only")
+    print("  3. Clear BMC credentials only")
+    print("  Enter to go back")
+    print("")
+    try:
+        _ans = input("  Choice: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
 
     if _ans == "1":
         _session_creds.clear()
@@ -27155,10 +27265,7 @@ def _run_5_15_manage_session_creds():
     else:
         print("\n  ↩️  No changes made.")
 
-    try:
-        input("\n  Press Enter to return to the main menu...")
-    except (EOFError, KeyboardInterrupt):
-        pass
+
 
 
 def _run_5_14_cluster_join_status():
