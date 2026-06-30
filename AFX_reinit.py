@@ -3431,9 +3431,10 @@ def select_operation_mode():
         print("    5.11. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
         print("    5.12. Compare and correct cluster node names:IP addresses")
         print("    5.13. Show reinit-config.json (human-readable)")
+        print("    5.14. Check cluster node join status")
         print("")
         print("    !!Disruptive commands!!")
-        print("      5.14. Reset all nodes to LOADER prompt")
+        print("      5.99. Reset all nodes to LOADER prompt")
         print("")
         print("  6.  Script help and instructions")
         print("  7.  Exit")
@@ -3801,7 +3802,7 @@ def select_operation_mode():
             print("")
             continue
 
-        if choice in ("5", "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.8", "5.9", "5.10", "5.11", "5.12", "5.13", "5.14"):
+        if choice in ("5", "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.8", "5.9", "5.10", "5.11", "5.12", "5.13", "5.14", "5.99"):
             if choice == "5":
                 _print_banner("🛠️ 5: Administration and maintenance")
                 print("\n  5.1. Install license file only")
@@ -3817,12 +3818,13 @@ def select_operation_mode():
                 print("  5.11. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
                 print("  5.12. Compare and correct cluster node names:IP addresses")
                 print("  5.13. Show reinit-config.json (human-readable)")
+                print("  5.14. Check cluster node join status")
                 print("")
                 print("  !!Disruptive commands!!")
-                print("    5.14. Reset all nodes to LOADER prompt")
+                print("    5.99. Reset all nodes to LOADER prompt")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5.1–5.13, 5.14) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5.1–5.14, 5.99) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
@@ -3886,8 +3888,8 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice == "5.14":
-                _print_banner("\U0001f504 5.14: Reset all nodes to LOADER prompt")
+            if choice == "5.99":
+                _print_banner("\U0001f504 5.99: Reset all nodes to LOADER prompt")
                 print("")
                 print("  Connects to all BMC addresses in parallel, issues a")
                 print("  system reset on each node, enters the system console,")
@@ -3900,7 +3902,7 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5.14: Reset all nodes to LOADER prompt\n")
+                    print("\n  \u2705 Confirmed. 5.99: Reset all nodes to LOADER prompt\n")
                     return 56, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
@@ -4038,13 +4040,16 @@ def select_operation_mode():
 
             if choice == "5.13":
                 return 58, False, False
+
+            if choice == "5.14":
+                return 59, False, False
             continue
 
         if choice == "7":
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  ⚠️  Invalid choice. Please enter 1.1, 1.2, 2.1, 2.2, 2.3, 3, 4.1-4.3, 5.1-5.13/5.14, 6, or 7.")
+        print("  ⚠️  Invalid choice. Please enter 1.1, 1.2, 2.1, 2.2, 2.3, 3, 4.1-4.3, 5.1-5.14/5.99, 6, or 7.")
 
 
 def get_loader_commands():
@@ -6167,7 +6172,7 @@ DESCRIPTION
       5.11   Build cluster_IP.json manifest for node-add workflows
       5.12   Compare and correct cluster node names and LIF IP addresses
       5.13   Show reinit-config.json in human-readable format
-      5.14   Reset all nodes to LOADER prompt (parallel; disruptive command)
+      5.99   Reset all nodes to LOADER prompt (parallel; disruptive command)
 
 OPTIONS
     -h, --help
@@ -6322,7 +6327,7 @@ OPTIONS
         --passwordless    Run mode 5.2 directly
         --backup          Run mode 5.3 directly
         --verify          Run mode 5.4 directly
-        --loader          Run mode 5.14 directly
+        --loader          Run mode 5.99 directly
 
 INTERACTIVE FEATURES
 
@@ -6721,7 +6726,7 @@ def parse_args():
                         help="Skip the menu and run mode 5.4: verify BMC "
                              "authentication for all configured nodes.")
     parser.add_argument("--loader", action="store_true", default=False,
-                        help="Skip the menu and run mode 5.14: reset all nodes "
+                        help="Skip the menu and run mode 5.99: reset all nodes "
                              "to the LOADER prompt in parallel.")
     parser.add_argument("--test", action="store_true", default=False,
                         help="Interactive checkpoint failure injection for "
@@ -26935,6 +26940,306 @@ def _run_5m_node_repair_mode():
         pass
 
 
+def _run_5_14_cluster_join_status():
+    """Mode 5.14: Check cluster node join status against cluster_IP.json manifest."""
+    _print_banner("🔍 5.14: Check cluster node join status")
+    _make_session_log("Mode 5.14: cluster node join status")
+    print("")
+
+    # ── Load manifest ─────────────────────────────────────────────────────
+    _manifest = _load_cluster_ip_manifest_entries()
+    if not _manifest:
+        print("  ⚠️  cluster_IP.json not found or empty. Run option 5.11 first.")
+        try:
+            input("\n  Press Enter to return to the main menu...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+        return
+
+    _manifest_by_name = {e["node_name"].lower(): e for e in _manifest if e["node_name"]}
+    _manifest_by_ip = {e["cluster_ip"]: e for e in _manifest if e["cluster_ip"]}
+    print(f"  📄 Manifest: {len(_manifest)} node(s)")
+    for _e in _manifest:
+        _nm = _e["node_name"] or "(no name)"
+        _ip = _e["cluster_ip"] or "(no IP)"
+        print(f"     {_nm:<24} {_ip}")
+    print("")
+
+    # ── Get cluster mgmt IP ───────────────────────────────────────────────
+    _mgmt_ip = ""
+    _5_14_user = "admin"
+    _cfg_files = _find_config_files(deep_scan=True)
+    _cfg_data_local = {}
+    if _cfg_files:
+        try:
+            with open(_cfg_files[0], "r", encoding="utf-8") as _f:
+                _cfg_data_local = json.load(_f)
+        except Exception:
+            pass
+    if isinstance(_cfg_data_local, dict) and _cfg_data_local:
+        _mgmt_ip = ((_cfg_data_local.get("cluster") or {}).get("clus_mgmt_address")
+                    or _cluster_config.get("mgmt_ip") or "")
+        _5_14_user = ((_cfg_data_local.get("cluster") or {}).get("username") or "admin")
+    elif isinstance(_config_data, dict) and _config_data:
+        _mgmt_ip = ((_config_data.get("cluster") or {}).get("clus_mgmt_address")
+                    or _cluster_config.get("mgmt_ip") or "")
+
+    if _mgmt_ip:
+        _in = input(f"  Cluster management IP [{_mgmt_ip}]: ").strip()
+        if _in:
+            _mgmt_ip = _in
+    else:
+        _mgmt_ip = input("  Cluster management LIF IP: ").strip()
+    if not _mgmt_ip:
+        print("  No IP entered. Returning to menu.")
+        try:
+            input("  Press Enter to return to the main menu...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+        return
+
+    _u_in = input(f"  Cluster admin username [{_5_14_user}]: ").strip()
+    if _u_in:
+        _5_14_user = _u_in
+    try:
+        _5_14_pass = _RAW_GETPASS(f"  Cluster admin password for {_5_14_user}@{_mgmt_ip}: ")
+    except (EOFError, KeyboardInterrupt):
+        _5_14_pass = ""
+
+    # ── Connect ───────────────────────────────────────────────────────────
+    print(f"\n  🔌 Connecting to {_mgmt_ip} as {_5_14_user}...")
+    _cl14 = None
+    _ch14 = None
+    try:
+        _cl14, _, _ = _ssh_connect_with_retry(
+            _mgmt_ip, _5_14_user, _5_14_pass,
+            label=f"5.14/{_mgmt_ip}",
+            max_attempts=3, interactive=False,
+        )
+    except Exception as _e:
+        print(f"  ❌ Connection failed: {_e}")
+        if _session_log:
+            _session_log.log(f"5.14: connection failed: {_e}", prefix="ERROR")
+        try:
+            input("  Press Enter to return to the main menu...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+        return
+
+    try:
+        _ch14 = _open_shell(_cl14)
+        with suppress(Exception):
+            _ch14.resize_pty(width=256, height=50)
+
+        with _suppress_console():
+            _at_cluster = _wait_for_cluster_prompt(_ch14, timeout=30)
+        if not _at_cluster:
+            print(f"  ❌ Could not reach the cluster shell on {_mgmt_ip}.")
+            if _session_log:
+                _session_log.log(f"5.14: cluster shell not reached on {_mgmt_ip}", prefix="ERROR")
+            try:
+                input("  Press Enter to return to the main menu...")
+            except (EOFError, KeyboardInterrupt):
+                pass
+            return
+
+        # ── Run cluster show ──────────────────────────────────────────────
+        print("  ⏳ Running cluster show...")
+        with _primary_shell_lock:
+            with _suppress_console():
+                _show_out = _run_cluster_command(_ch14, "cluster show", timeout=30)
+
+        # Parse per-node health/eligibility from cluster show
+        _show_nodes = {}  # node_name_lower -> {"name": str, "health": bool, "eligible": bool}
+        _dashes_seen = False
+        _table_done = False
+        for _raw_line in _show_out.splitlines():
+            _s = _ANSI_RE.sub("", _raw_line).replace("\x08", "").strip()
+            if not _s:
+                if _dashes_seen:
+                    _table_done = True
+                continue
+            if _table_done:
+                continue
+            if "::" in _s or _s.lower().startswith("cluster show"):
+                continue
+            if "entries were displayed" in _s.lower():
+                _table_done = True
+                continue
+            if _s.lower().startswith("warning"):
+                _table_done = True
+                continue
+            if set(_s) <= {"-", " "}:
+                _dashes_seen = True
+                continue
+            if _dashes_seen:
+                _tokens = _s.split()
+                if not _tokens:
+                    continue
+                _nm = _tokens[0]
+                _health = len(_tokens) > 1 and _tokens[1].lower() == "true"
+                _eligible = len(_tokens) > 2 and _tokens[2].lower() == "true"
+                _show_nodes[_nm.lower()] = {"name": _nm, "health": _health, "eligible": _eligible}
+
+        # ── Run cluster add-node-status ───────────────────────────────────
+        print("  ⏳ Running cluster add-node-status...")
+        with _primary_shell_lock:
+            with _suppress_console():
+                _add_status_out = _run_cluster_command(
+                    _ch14, "cluster add-node-status", timeout=30
+                )
+
+        # Parse per-node add-node-status rows (same pattern as _cluster_add_nodes_bulk)
+        _add_status_nodes = {}  # node_name_lower -> {"name": str, "cluster_ip": str, "status": str, "error": str}
+        _in_table = False
+        _current_row = None
+        _parsed_add_rows = []
+        for _sl in _add_status_out.splitlines():
+            _raw = _sl.rstrip("\r\n")
+            _clean = _ANSI_RE.sub("", _raw).replace("\x08", "")
+            _stripped = "".join(ch for ch in _clean if ch.isprintable()).strip()
+            if not _stripped:
+                continue
+            if set(_stripped) <= {'-', ' '}:
+                _in_table = True
+                continue
+            if _in_table and '::' not in _stripped:
+                if 'entries were displayed' in _stripped.lower():
+                    if _current_row is not None:
+                        _parsed_add_rows.append(_current_row)
+                        _current_row = None
+                    continue
+                if _stripped.lower().startswith('node') and 'status' in _stripped.lower():
+                    continue
+                if _clean[:1].isspace():
+                    if _current_row is not None and _stripped:
+                        _current_row["error"] = (
+                            f"{_current_row['error']} {_stripped}".strip()
+                            if _current_row["error"] else _stripped
+                        )
+                    continue
+                if _current_row is not None:
+                    _parsed_add_rows.append(_current_row)
+                    _current_row = None
+                _cols = [c.strip() for c in re.split(r"\s{2,}", _stripped) if c.strip()]
+                if len(_cols) >= 3:
+                    _current_row = {
+                        "node": _cols[0],
+                        "cluster_ip": _cols[1],
+                        "status": _cols[2],
+                        "error": " ".join(_cols[3:]).strip() if len(_cols) > 3 else "",
+                    }
+        if _current_row is not None:
+            _parsed_add_rows.append(_current_row)
+
+        for _ar in _parsed_add_rows:
+            _add_status_nodes[_ar["node"].lower()] = _ar
+
+        # ── Classify manifest nodes ───────────────────────────────────────
+        _not_added = []        # in manifest, not in cluster show
+        _unhealthy = []        # in cluster show but health/eligibility false, or add-node-status not success/failure
+        _failed = []           # add-node-status == "failure"
+        _healthy = []          # health=true, eligibility=true, add-node-status success or absent
+
+        for _entry in _manifest:
+            _nm = _entry["node_name"]
+            _ip = _entry["cluster_ip"]
+            _nm_lower = _nm.lower() if _nm else ""
+
+            # Check cluster show by name; also try by IP match in add-node-status
+            _in_show = _nm_lower and _nm_lower in _show_nodes
+            _show_row = _show_nodes.get(_nm_lower)
+            _add_row = _add_status_nodes.get(_nm_lower)
+            # Also try matching add-node-status by cluster_ip if name lookup missed
+            if not _add_row and _ip:
+                for _ar in _parsed_add_rows:
+                    if _ar.get("cluster_ip") == _ip:
+                        _add_row = _ar
+                        break
+
+            _add_status_str = (_add_row["status"].lower() if _add_row else "").strip()
+
+            if not _in_show:
+                # Node not visible in cluster show at all
+                _not_added.append({"node_name": _nm, "cluster_ip": _ip})
+            else:
+                _show_health = _show_row["health"]
+                _show_eligible = _show_row["eligible"]
+                if _add_status_str == "failure":
+                    _failed.append({"node_name": _nm, "cluster_ip": _ip, "error": _add_row.get("error", "")})
+                elif not _show_health or not _show_eligible:
+                    _unhealthy.append({"node_name": _nm, "cluster_ip": _ip,
+                                       "health": _show_health, "eligible": _show_eligible,
+                                       "add_status": _add_status_str})
+                elif _add_status_str and _add_status_str not in ("success", "failure", ""):
+                    # Still in progress (e.g. "in-progress", "initializing")
+                    _unhealthy.append({"node_name": _nm, "cluster_ip": _ip,
+                                       "health": _show_health, "eligible": _show_eligible,
+                                       "add_status": _add_status_str})
+                else:
+                    _healthy.append({"node_name": _nm, "cluster_ip": _ip})
+
+        # ── Print results ─────────────────────────────────────────────────
+        print("\n" + "=" * 60)
+        print("  Cluster node join status")
+        print("=" * 60)
+
+        if _healthy:
+            print(f"\n  ✅ Healthy nodes ({len(_healthy)}):")
+            for _n in _healthy:
+                print(f"     {_n['node_name']:<24} {_n['cluster_ip']}")
+
+        if _not_added:
+            print(f"\n  ℹ️  Node not yet added ({len(_not_added)}):")
+            for _n in _not_added:
+                print(f"     {_n['node_name']:<24} {_n['cluster_ip']}")
+
+        if _failed:
+            print(f"\n  ❌ Failed node join — retry required ({len(_failed)}):")
+            for _n in _failed:
+                _err = f"  [{_n['error']}]" if _n.get("error") else ""
+                print(f"     {_n['node_name']:<24} {_n['cluster_ip']}  (failed; retry node join){_err}")
+
+        if _unhealthy:
+            print(f"\n  ⚠️  Unhealthy nodes / possibly still joining ({len(_unhealthy)}):")
+            for _n in _unhealthy:
+                _flags = []
+                if not _n.get("health"):
+                    _flags.append("health=false")
+                if not _n.get("eligible"):
+                    _flags.append("eligibility=false")
+                if _n.get("add_status") and _n["add_status"] not in ("success", "failure", ""):
+                    _flags.append(f"add-status={_n['add_status']}")
+                _flag_str = ", ".join(_flags)
+                print(f"     {_n['node_name']:<24} {_n['cluster_ip']}  ({_flag_str})")
+
+        if not _not_added and not _failed and not _unhealthy:
+            print("\n  ✅ All manifest nodes are healthy and fully joined.")
+
+        print("\n" + "=" * 60)
+
+        if _session_log:
+            _session_log.log(
+                f"5.14: healthy={len(_healthy)} not_added={len(_not_added)} "
+                f"failed={len(_failed)} unhealthy={len(_unhealthy)}"
+            )
+
+    finally:
+        if _ch14:
+            with suppress(Exception):
+                _ch14.close()
+        if _cl14:
+            with suppress(Exception):
+                _cl14.close()
+
+    if _session_log:
+        print(f"\n  📝 Session log: {_session_log.log_file}")
+    try:
+        input("\n  Press Enter to return to the main menu...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
 def _run_show_config_mode(config_path=None):
     """Mode 5.13 / --show-config: display reinit-config.json in human-readable format."""
     _print_banner("📋 5.13: Show reinit-config")
@@ -27872,7 +28177,7 @@ def main():
                     print("\n  ⚡ --verify: launching mode 5.4 (BMC auth verify).")
                 elif args.loader:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 56, False, False
-                    print("\n  ⚡ --loader: launching mode 5.14 (reset all nodes to LOADER).")
+                    print("\n  ⚡ --loader: launching mode 5.99 (reset all nodes to LOADER).")
 
                 if _shortcut_mode is not None:
                     _operation_mode = _shortcut_mode
@@ -29243,9 +29548,9 @@ def main():
                     pass
                 raise _ReturnToMenu
 
-            # ── Mode 56 (5.14): reset all nodes to LOADER prompt ─────────────────────
+            # ── Mode 56 (5.99): reset all nodes to LOADER prompt ─────────────────────
             if _operation_mode == 56:
-                _print_banner("\U0001f504 5.14: Reset all nodes to LOADER prompt")
+                _print_banner("\U0001f504 5.99: Reset all nodes to LOADER prompt")
                 print("")
 
                 # ── Locate BMC IP list (same logic as mode 47) ───────────────────
@@ -29357,7 +29662,7 @@ def main():
                             _creds48[_ip48] = (_u48, _p48)
                 print("")
 
-                _make_session_log("5.14: reset all nodes to LOADER")
+                _make_session_log("5.99: reset all nodes to LOADER")
 
                 # ── Reset each node to LOADER in parallel ────────────────────────
                 _print_banner(f"\U0001f504 Resetting {len(_bmc_ips48)} node(s) to LOADER prompt")
@@ -30456,6 +30761,11 @@ def main():
             # ── Mode 58 (5.13): Show reinit-config ─────────────────────────────────
             if _operation_mode == 58:
                 _run_show_config_mode()
+                raise _ReturnToMenu
+
+            # ── Mode 59 (5.14): Check cluster node join status ──────────────────────
+            if _operation_mode == 59:
+                _run_5_14_cluster_join_status()
                 raise _ReturnToMenu
 
             # ── Mode 45 (4d): set up passwordless SSH to cluster management ────────
