@@ -2291,13 +2291,30 @@ class SessionLogger:
     _HEARTBEAT_INTERVAL = 15.0
     _DEFAULT_NON_PHASE_REASON = "startup / inter-phase transition"
 
-    def __init__(self, bg_mode: bool = False):
+    @staticmethod
+    def _dir_suffix_from_label(label: str) -> str:
+        """Return a '_optionX.Y' dir suffix derived from *label*, or ''."""
+        if not label:
+            return ""
+        # "option 5.12", "option 3", "option4.1" — explicit user-facing number
+        _m = re.search(r'\boption\s*(\d+(?:\.\d+)?)\b', label, re.IGNORECASE)
+        if _m:
+            return f"_option{_m.group(1)}"
+        # "Mode 5.12:", "5.99:", "Mode 2.3:", etc. — dotted number in label
+        _m = re.search(r'\b(\d+\.\d+)\b', label)
+        if _m:
+            return f"_option{_m.group(1)}"
+        return ""
+
+    def __init__(self, bg_mode: bool = False, label: str = ""):
         try:
             _script_dir = os.path.dirname(os.path.abspath(__file__))
         except NameError:
             _script_dir = os.getcwd()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_dir = os.path.join(_script_dir, "logs", timestamp)
+        self.log_dir = os.path.join(
+            _script_dir, "logs", timestamp + self._dir_suffix_from_label(label)
+        )
         os.makedirs(self.log_dir, exist_ok=True)
         self.log_file = _build_numbered_log_path(
             self.log_dir, f"bmc_session_{timestamp}.log", scope_dir=self.log_dir
@@ -25757,7 +25774,7 @@ def _make_session_log(label: str) -> "SessionLogger":
     appeared inline in each mode section of ``main()``.
     """
     global _session_log
-    _session_log = SessionLogger(bg_mode=_bg_mode)
+    _session_log = SessionLogger(bg_mode=_bg_mode, label=label)
     _banner = _version_banner_line()
     print(f"\n🚀 {_banner}")
 
@@ -28516,7 +28533,7 @@ def main():
 
             # ── Mode 41 (4.1): ONTAP upgrade ────────────────────────────────────────
             if _operation_mode == 41:
-                _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
+                _make_session_log("Mode 41: ONTAP upgrade (option 4.1)")
                 ok = _run_ontap_upgrade(_session_log)
                 if ok is None and _operation_mode == 46:
                     # User chose to run 4e config-gather first; fall through to mode 46.
@@ -29373,7 +29390,7 @@ def main():
                     _4a_pending_after_4e = False
                     _operation_mode = 41
                     print("\n  \u2705 Config created. Continuing with 4.1 upgrade workflow...\n")
-                    _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
+                    _make_session_log("Mode 41: ONTAP upgrade (option 4.1)")
                     ok = _run_ontap_upgrade(_session_log)
                     _session_log.record_completion(normal_exit=ok)
                     print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
@@ -31512,7 +31529,15 @@ def main():
             if _operation_mode in (1, 3):
                 _collect_license_config(_run_context)
 
-            _make_session_log("Session start")
+            if _operation_mode == 3:
+                _sl = "Session start (option 3)"
+            elif _operation_mode == 1:
+                _sl = "Session start (option 1)"
+            elif _operation_mode == 2:
+                _sl = f"Session start (option {'2.2' if _auto_add else '2.1'})"
+            else:
+                _sl = "Session start"
+            _make_session_log(_sl)
 
             if _config_data:
                 _session_log.log(f"Loaded config file: {config_path}")
