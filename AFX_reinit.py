@@ -30174,6 +30174,7 @@ def main():
                         print(f"\n  Credentials for {_only_ip48}:")
                         _u48 = input("    Username [admin]: ").strip() or "admin"
                         _p48 = getpass.getpass("    Password (blank = none): ")
+                        _cred_store("bmc", _only_ip48, _u48, _p48)
                         _creds48[_only_ip48] = (_u48, _p48)
                 else:
                     _same_creds48 = input("  Use the same username and password for all BMCs? [Y/n]: ").strip().lower()
@@ -30184,7 +30185,9 @@ def main():
                             _shared_user48, _shared_pass48 = _default_user48, _first_cached48
                         else:
                             _shared_user48 = input("  BMC username [admin]: ").strip() or "admin"
-                            _shared_pass48 = _prompt_or_cached_bmc_pass(_shared_user48, "  BMC password (blank = none): ")
+                            _shared_pass48 = getpass.getpass("  BMC password (blank = none): ")
+                            for _ip48 in _bmc_ips48:
+                                _cred_store("bmc", _ip48, _shared_user48, _shared_pass48)
                         for _ip48 in _bmc_ips48:
                             _creds48[_ip48] = (_shared_user48, _shared_pass48)
                     else:
@@ -30205,6 +30208,7 @@ def main():
                                     print(f"\n  Credentials for {_ip48}:")
                                     _u48 = input("    Username [admin]: ").strip() or "admin"
                                     _p48 = getpass.getpass("    Password (blank = none): ")
+                            _cred_store("bmc", _ip48, _u48, _p48)
                             _creds48[_ip48] = (_u48, _p48)
                 print("")
 
@@ -30693,6 +30697,7 @@ def main():
                         print(f"\n  Credentials for {_only_ip50}:")
                         _u50 = input("    Username [admin]: ").strip() or "admin"
                         _p50pw = getpass.getpass("    Password (blank = none): ")
+                        _cred_store("bmc", _only_ip50, _u50, _p50pw)
                         _creds50[_only_ip50] = (_u50, _p50pw)
                 else:
                     _same_creds50 = input(
@@ -30705,7 +30710,9 @@ def main():
                             _shared_user50, _shared_pass50 = _default_user50, _first_cached50
                         else:
                             _shared_user50 = input("  BMC username [admin]: ").strip() or "admin"
-                            _shared_pass50 = _prompt_or_cached_bmc_pass(_shared_user50, "  BMC password (blank = none): ")
+                            _shared_pass50 = getpass.getpass("  BMC password (blank = none): ")
+                            for _ip50 in _bmc_ips50:
+                                _cred_store("bmc", _ip50, _shared_user50, _shared_pass50)
                         for _ip50 in _bmc_ips50:
                             _creds50[_ip50] = (_shared_user50, _shared_pass50)
                     else:
@@ -30726,6 +30733,7 @@ def main():
                                     print(f"\n  Credentials for {_ip50}:")
                                     _u50 = input("    Username [admin]: ").strip() or "admin"
                                     _p50pw = getpass.getpass("    Password (blank = none): ")
+                            _cred_store("bmc", _ip50, _u50, _p50pw)
                             _creds50[_ip50] = (_u50, _p50pw)
 
                 # ── Interactive loop ──────────────────────────────────────────────
@@ -30878,7 +30886,9 @@ def main():
                             _shared_user51, _shared_pass51 = _default_user51, _first_cached51
                         else:
                             _shared_user51 = input("  BMC username [admin]: ").strip() or "admin"
-                            _shared_pass51 = _prompt_or_cached_bmc_pass(_shared_user51, "  BMC password (blank = none): ")
+                            _shared_pass51 = getpass.getpass("  BMC password (blank = none): ")
+                            for _ip51 in _bmc_ips51:
+                                _cred_store("bmc", _ip51, _shared_user51, _shared_pass51)
                         for _ip51 in _bmc_ips51:
                             _creds51[_ip51] = (_shared_user51, _shared_pass51)
                     else:
@@ -30898,6 +30908,7 @@ def main():
                                 else:
                                     _u51 = input(f"  Username for {_ip51} [admin]: ").strip() or "admin"
                                     _p51pw = getpass.getpass(f"  Password for {_ip51}: ")
+                            _cred_store("bmc", _ip51, _u51, _p51pw)
                             _creds51[_ip51] = (_u51, _p51pw)
 
                 # ── Probe each node in parallel ───────────────────────────────────
@@ -31109,7 +31120,9 @@ def main():
                             _shared_user52, _shared_pass52 = _default_user52, _first_cached52
                         else:
                             _shared_user52 = input("  BMC username [admin]: ").strip() or "admin"
-                            _shared_pass52 = _prompt_or_cached_bmc_pass(_shared_user52, "  BMC password (blank = none): ")
+                            _shared_pass52 = getpass.getpass("  BMC password (blank = none): ")
+                            for _ip52 in _bmc_ips52:
+                                _cred_store("bmc", _ip52, _shared_user52, _shared_pass52)
                         for _ip52 in _bmc_ips52:
                             _creds52[_ip52] = (_shared_user52, _shared_pass52)
                     else:
@@ -31129,6 +31142,7 @@ def main():
                                 else:
                                     _u52 = input(f"  Username for {_ip52} [admin]: ").strip() or "admin"
                                     _p52pw = getpass.getpass(f"  Password for {_ip52}: ")
+                            _cred_store("bmc", _ip52, _u52, _p52pw)
                             _creds52[_ip52] = (_u52, _p52pw)
 
                 _ld52_log_dir = _session_log.log_dir if _session_log else os.getcwd()
@@ -31272,7 +31286,9 @@ def main():
                             _shared_user53, _shared_pass53 = _default_user53, _first_cached53
                         else:
                             _shared_user53 = input("  BMC username [admin]: ").strip() or "admin"
-                            _shared_pass53 = _prompt_or_cached_bmc_pass(_shared_user53, "  BMC password (blank = none): ")
+                            _shared_pass53 = getpass.getpass("  BMC password (blank = none): ")
+                            for _ip53 in _bmc_ips53:
+                                _cred_store("bmc", _ip53, _shared_user53, _shared_pass53)
                         for _ip53 in _bmc_ips53:
                             _creds53[_ip53] = (_shared_user53, _shared_pass53)
                     else:
@@ -31292,6 +31308,7 @@ def main():
                                 else:
                                     _u53 = input(f"  Username for {_ip53} [admin]: ").strip() or "admin"
                                     _p53pw = getpass.getpass(f"  Password for {_ip53}: ")
+                            _cred_store("bmc", _ip53, _u53, _p53pw)
                             _creds53[_ip53] = (_u53, _p53pw)
 
                 _ld53_log_dir = _session_log.log_dir if _session_log else os.getcwd()
