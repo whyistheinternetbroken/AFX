@@ -198,7 +198,7 @@ def _build_numbered_log_path(log_dir: str, filename: str, scope_dir: str = "") -
 # ---------------------------------------------------------------------------
 
 class CheckpointManager:
-    """Persists run state to a JSON file so a 4b run can resume from the last
+    """Persists run state to a JSON file so a 4.2 run can resume from the last
     completed phase rather than starting over from scratch.
 
     Phases tracked (per-node unless noted):
@@ -215,11 +215,11 @@ class CheckpointManager:
       ``reinit_loader``       — Reconnected to BMC for reinit; back at LOADER
       ``primary_node_mgmt_done`` — (global) primary node-management prompts
                                 were answered and the cluster-setup wizard is
-                                about to begin. Used by 4b resume so the
+                                about to begin. Used by 4.2 resume so the
                                 primary does not get reset again after node
                                 configuration is already complete.
       ``primary_bootmenu_done`` — (global) primary node has cleared the
-                                  ONTAP boot menu (option 9 for mode 1b/3,
+                                  ONTAP boot menu (option 9 for mode 1.2/3,
                                   option 4 for mode 2). Cluster setup
                                   wizard is about to begin.
       ``cluster_formed``      — (global) ``cluster create`` succeeded;
@@ -243,7 +243,7 @@ class CheckpointManager:
     Usage::
 
         cp = CheckpointManager()
-        cp.init_run(mode="4b", bmc_ips=["10.x.x.x"], log_dir="/path")
+        cp.init_run(mode="4.2", bmc_ips=["10.x.x.x"], log_dir="/path")
         cp.mark_node_done("install_done", "10.x.x.x")
         cp.mark_done("cluster_formed")
 
@@ -509,12 +509,12 @@ class CheckpointManager:
             }
             _primary_ip = bmc_ips[0] if bmc_ips else ""
             _wizard_waiting_mode3 = (
-                _mode_raw == "4b-3"
+                _mode_raw == "4.2-3"
                 and _cur_state == "in_progress"
                 and _cur_name in {
-                    "Cluster Setup Wizard (1b)",
-                    "4b – Cluster Initialization (primary)",
-                    "4b – Cluster Initialization (primary resume)",
+                    "Cluster Setup Wizard (1.2)",
+                    "4.2 – Cluster Initialization (primary)",
+                    "4.2 – Cluster Initialization (primary resume)",
                 }
                 and bool(phases.get("primary_node_mgmt_done", {}).get("done"))
                 and not bool(phases.get("cluster_formed", {}).get("done"))
@@ -536,7 +536,7 @@ class CheckpointManager:
                         node_current = _cur_name
                     else:
                         node_current = "(waiting on primary cluster setup)"
-                    node_next = _next_phase or "2b – Parallel Node Add"
+                    node_next = _next_phase or "2.2 – Parallel Node Add"
                 elif pending:
                     _pending_phase = pending[0]
                     _peer_progress_on_pending = _phase_done_counts.get(_pending_phase, 0) > 0
@@ -647,36 +647,36 @@ def _format_checkpoint_mode(mode: str) -> str:
     display = raw
     desc = ""
 
-    if raw.startswith("4b-"):
+    if raw.startswith("4.2-"):
         suffix = raw.split("-", 1)[1]
         if suffix == "3":
-            display = "4b+3"
+            display = "4.2+3"
             desc = "Netboot install + automated cluster reinit"
         elif suffix == "1":
-            display = "4b+1"
+            display = "4.2+1"
             desc = "Netboot install + interactive first-node reinit"
         elif suffix == "no-reinit":
-            display = "4b"
+            display = "4.2"
             desc = "Netboot install only (no reinit)"
         else:
-            display = f"4b+{suffix}"
+            display = f"4.2+{suffix}"
             desc = "Netboot install + reinit"
-    elif raw.startswith("4c-"):
+    elif raw.startswith("4.3-"):
         suffix = raw.split("-", 1)[1]
         if suffix == "no-reinit":
-            display = "4c"
+            display = "4.3"
             desc = "Netboot install image only (no reinit)"
         else:
-            display = f"4c+{suffix}"
+            display = f"4.3+{suffix}"
             desc = "Netboot install image path"
     else:
         desc = {
             "1": "Initialize first node",
             "2": "Add node to existing cluster",
             "3": "End-to-end auto initialize",
-            "4a": "ONTAP upgrade",
-            "4b": "Netboot install",
-            "4c": "Netboot install image only",
+            "4.1": "ONTAP upgrade",
+            "4.2": "Netboot install",
+            "4.3": "Netboot install image only",
         }.get(raw, "")
 
     return f"{display} ({desc})" if desc else display
@@ -769,7 +769,7 @@ _retain_preselected = None  # None or tuple(retain_name: bool, retain_network: b
 
 # Per-BMC node management network config gathered up-front. Keyed by BMC
 # host/IP. Each value is a dict with keys: port, ip, netmask, gateway. Used by
-# mode 1b auto-init to answer node-management setup prompts for the node
+# mode 1.2 auto-init to answer node-management setup prompts for the node
 # whose BMC we're driving.
 _node_mgmt_by_bmc = {}
 
@@ -791,7 +791,7 @@ _mode3_pipeline_state = None
 # _run_cluster_setup_wizard to display log paths at the node-add transition.
 _peer_log_paths: dict = {}
 
-# Mode 2b: tracks BMC hosts that have already been added in the current run so
+# Mode 2.2: tracks BMC hosts that have already been added in the current run so
 # they are not offered again when prompting for the next node to add.
 _2b_processed_bmcs: set = set()
 
@@ -805,7 +805,7 @@ _initial_node_count = 0
 _netboot_static_ip = False
 
 # Path to the most recently written node-add manifest file (set by
-# _write_node_add_manifest). Used by option 2c to locate the last run.
+# _write_node_add_manifest). Used by option 2.3 to locate the last run.
 _last_node_add_manifest: str = ""
 _cluster_ip_manifest_lock = threading.Lock()
 
@@ -818,11 +818,11 @@ _pending_checkpoint_test_failure: "Exception | None" = None
 _checkpoint_test_lock = threading.Lock()
 
 # Set to True by _run_4b_standalone when the operator selected a reinit
-# sub-mode (1a/1b/3).  Read by main() to decide whether to offer the
-# post-completion script runner after a successful 4b run.
+# sub-mode (1.1/1.2/3).  Read by main() to decide whether to offer the
+# post-completion script runner after a successful 4.2 run.
 _4b_did_reinit: bool = False
 
-# Set to True when the operator requests passwordless SSH setup during 1a/1b.
+# Set to True when the operator requests passwordless SSH setup during 1.1/1.2.
 _setup_passwordless_ssh = False
 
 # Serializes the join step across parallel peer-add threads. Only one peer
@@ -859,7 +859,7 @@ _auto_clear_stale_bmc = False
 # dict when not provided. Schema described in _CONFIG_FILE_EXAMPLE below.
 _config_data = {}
 
-# Cluster-level setup config gathered up-front (used by mode 1b to drive the
+# Cluster-level setup config gathered up-front (used by mode 1.2 to drive the
 # post-node-mgmt cluster setup wizard non-interactively).
 _cluster_config = {}
 
@@ -870,7 +870,7 @@ _license_mode      = None   # "key", "file", or None (skip)
 _license_keys      = []     # list of key strings (mode "key")
 _license_file_path = None   # path to .nlf bundle (mode "file")
 
-# Mode 2b: when set after a successful node join, signals main() to drive a
+# Mode 2.2: when set after a successful node join, signals main() to drive a
 # fresh BMC through the same join pipeline. Tuple of (bmc_host, user, pass).
 _add_another_node_request = None
 
@@ -887,9 +887,9 @@ empty string ("").
     other fields it means the empty string will be sent verbatim.
   * Field present with a non-empty value        -> used directly.
 
-"primary_node" is the node used to initialize the cluster (options 1a/1b/3).
+"primary_node" is the node used to initialize the cluster (options 1.1/1.2/3).
 "secondary_nodes" is the list of nodes that are added to the cluster
-(options 2a/2b and the node-add phase of option 3).
+(options 2.1/2.2 and the node-add phase of option 3).
 The primary node is NEVER included in secondary_nodes and vice-versa.
 
 Legacy format: a flat "nodes" array (position 0 = primary) is still
@@ -1176,16 +1176,16 @@ def _checkpoint_test_mode_name(operation_mode: int) -> str:
         1: "1",
         2: "2",
         3: "3",
-        41: "4a",
-        42: "4b",
-        43: "4c",
+        41: "4.1",
+        42: "4.2",
+        43: "4.3",
     }.get(operation_mode, str(operation_mode))
 
 
 def _describe_4b_resume_stage(cp) -> str:
-    """Return a human-readable resume stage summary for a 4b checkpoint."""
+    """Return a human-readable resume stage summary for a 4.2 checkpoint."""
     if not cp:
-        return "Start of 4b workflow (no checkpoint context)."
+        return "Start of 4.2 workflow (no checkpoint context)."
 
     _bmc_ips = list(getattr(cp, "bmc_ips", []) or [])
     _install_done = set(cp.nodes_done_for("install_done"))
@@ -1558,7 +1558,7 @@ def load_config_file(path: str) -> dict:
 
 # ── Config file discovery helpers ───────────────────────────────────────────
 # Multiple code paths (modes 1/3 startup, mode 44 license-only, mode 46
-# gather/add, mode 47 BMC list, the 4b reinit re-prompt) all need to locate a
+# gather/add, mode 47 BMC list, the 4.2 reinit re-prompt) all need to locate a
 # reinit-style JSON config. Previously the same search loop was copy-pasted in
 # 4+ places with subtle variants (different filename lists, different search
 # dirs, some with interactive selection, some with silent first-match). These
@@ -1786,13 +1786,13 @@ def _discover_and_prompt_config(ctx):
 
     Writes ``ctx.config_data`` and ``ctx.retain_preselected`` and syncs back
     to the legacy module globals via ``ctx.apply_to_globals()``. Used by the
-    4b reinit path so that the same config file that drives a normal
-    1a/1b/3 run is offered when reinit is triggered from within 4b.
+    4.2 reinit path so that the same config file that drives a normal
+    1.1/1.2/3 run is offered when reinit is triggered from within 4.2.
 
     Returns the config path that was loaded, or None.
     """
     # Pull current globals into ctx so the final apply_to_globals() does not
-    # clobber fields that legacy code (e.g. 4b's reinit-mode selection that
+    # clobber fields that legacy code (e.g. 4.2's reinit-mode selection that
     # set _operation_mode / _auto_setup / _auto_add) updated since the ctx
     # was last snapshotted.
     ctx.refresh_from_globals()
@@ -2100,7 +2100,7 @@ class _NodeLogWriter:
     file only.
 
     In *pass-through* mode (``interactive=True``, set around
-    InteractiveSession.run() and for the interactive-only modes 1a/2a) every
+    InteractiveSession.run() and for the interactive-only modes 1.1/2.1) every
     byte is written to both the log file *and* the real terminal, preserving
     the existing interactive experience.
     """
@@ -2109,7 +2109,7 @@ class _NodeLogWriter:
         "✅", "❌", "⚠️", "🤖", "🔄", "📋", "🔢", "🔒",
         "📡", "📝", "🌐", "🧩", "🔁", "🛑", "⏳", "↻",
         "Now monitoring boot output",
-        "Mode 1b", "Mode 2b", "Auto-init", "Auto-join",
+        "Mode 1.2", "Mode 2.2", "Auto-init", "Auto-join",
         "Monitoring for AUTOBOOT", "Detected LOADER prompt",
         "Boot menu", "Selecting option",
     )
@@ -2298,7 +2298,7 @@ class SessionLogger:
         # Explicit overall outcome – set via set_outcome() before close().
         # None means "not yet set; derive at close() time".
         self._final_outcome: "tuple[str, str] | None" = None
-        # Operation label set by _make_session_log (e.g. "Mode 2c: resume…").
+        # Operation label set by _make_session_log (e.g. "Mode 2.3: resume…").
         self._operation_label: str = ""
         # Per-phase outcomes: phase_name -> (status, note)
         # Phases that call end_phase() without set_phase_outcome() get PASS.
@@ -3315,33 +3315,33 @@ def _slog(msg, prefix="INFO"):
 # ---------------------------------------------------------------------------
 
 _operation_mode = None
-# Set to True when 4a redirects to 4e for config creation; causes 4e to
-# continue directly into 4a after the config is written.
+# Set to True when 4.1 redirects to 4e for config creation; causes 4e to
+# continue directly into 4.1 after the config is written.
 _4a_pending_after_4e = False
-# Set to True when 5f redirects to 4e for config creation; causes 4e to
-# return to 5f after the config is written.
+# Set to True when 5.5 redirects to 4e for config creation; causes 4e to
+# return to 5.5 after the config is written.
 _5f_pending_after_4e = False
-# When True (1b / 3 primary), the script auto-answers all post-option-9
+# When True (1.2 / 3 primary), the script auto-answers all post-option-9
 # prompts and drives the cluster setup wizard non-interactively.
 _auto_setup = False
-# When True (2b / 3 peers), the script auto-drives the join wizard for an
+# When True (2.2 / 3 peers), the script auto-drives the join wizard for an
 # existing cluster after option 4.
 _auto_add = False
-# Set when the start menu checkpoint prompt has already confirmed a 4b resume.
+# Set when the start menu checkpoint prompt has already confirmed a 4.2 resume.
 _resume_from_start_menu = False
 
 
 def _checkpoint_menu_option_label(cp_mode: str) -> str:
     """Best-effort menu-option label for a checkpoint mode string."""
     _m = str(cp_mode or "").strip().lower()
-    if _m.startswith("4b"):
-        return "4b"
+    if _m.startswith("4.2"):
+        return "4.2"
     if _m == "3":
         return "3"
     if _m == "2":
-        return "2c"
+        return "2.3"
     if _m == "1":
-        return "1b"
+        return "1.2"
     return cp_mode or "unknown"
 
 
@@ -3350,7 +3350,7 @@ def _checkpoint_resume_stage_label(cp) -> str:
     if not cp:
         return "Unknown stage"
     _mode = str(getattr(cp, "mode", "") or "").strip().lower()
-    if _mode.startswith("4b"):
+    if _mode.startswith("4.2"):
         return _describe_4b_resume_stage(cp)
     if _mode == "2":
         if cp.is_done("node_joined"):
@@ -3383,14 +3383,14 @@ def select_operation_mode():
     Modes:
       1  -> Create single node cluster (automated)
       2  -> Add new nodes to an existing cluster
-        2a: format new node, interactive   (auto_add=False)
-        2b: format new node, automatic     (auto_add=True)
+        2.1: format new node, interactive   (auto_add=False)
+        2.2: format new node, automatic     (auto_add=True)
       3  -> End-to-end auto initialize: primary + parallel auto-add peers
             for every other BMC discovered/entered.
       4  -> Install/manage ONTAP  (sub-menu)
-        4a: Upgrade ONTAP (rolling takeover/giveback)
-        4b: Netboot + automated cluster reinit (strict sequencing)
-        4c: Netboot and install image only (no cluster create/node add)
+        4.1: Upgrade ONTAP (rolling takeover/giveback)
+        4.2: Netboot + automated cluster reinit (strict sequencing)
+        4.3: Netboot and install image only (no cluster create/node add)
       6  -> Script help and instructions
       7  -> Exit.
     """
@@ -3406,34 +3406,34 @@ def select_operation_mode():
         print("     Initializes the first node in an ONTAP AFX cluster and creates a new cluster.")
         print("")
         print("  2.  Add new nodes")
-        print("    2a. Reinitialize cluster nodes and leave in un-added state for manual node additions.")
-        print("    2b. Format new nodes. Use automatic add.")
-        print("    2c. Resume interrupted node additions.")
+        print("    2.1. Reinitialize cluster nodes and leave in un-added state for manual node additions.")
+        print("    2.2. Format new nodes. Use automatic add.")
+        print("    2.3. Resume interrupted node additions.")
         print("")
         print("  3.  End to end auto initialize")
         print("")
         print("  4.  Install ONTAP")
-        print("    4a. Upgrade ONTAP (rolling takeover/giveback)")
-        print("    4b. Netboot + automated cluster reinit")
-        print("    4c. Netboot and install image only (no cluster create/node add)")
+        print("    4.1. Upgrade ONTAP (rolling takeover/giveback)")
+        print("    4.2. Netboot + automated cluster reinit")
+        print("    4.3. Netboot and install image only (no cluster create/node add)")
         print("")
         print("  5.  Administration and maintenance")
-        print("    5a. Install license file only")
-        print("    5b. Set up passwordless SSH to cluster management")
-        print("    5c. Create backup cluster configuration")
-        print("    5d. Verify BMC authentication")
-        print("    5f. Check node status (LOADER / cluster prompt)")
-        print("    5g. Cluster health and version check")
-        print("    5h. SSH diagnostics, cleanup, and known_hosts reset")
-        print("    5i. Backup LOADER environment variables (experimental)")
-        print("    5j. Compare LOADER env to defaults (diff) (experimental)")
-        print("    5k. Check boot DNA (cluster shell or LOADER)")
-        print("    5l. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
-        print("    5m. Compare and correct cluster node names:IP addresses")
-        print("    5n. Show reinit-config.json (human-readable)")
+        print("    5.1. Install license file only")
+        print("    5.2. Set up passwordless SSH to cluster management")
+        print("    5.3. Create backup cluster configuration")
+        print("    5.4. Verify BMC authentication")
+        print("    5.5. Check node status (LOADER / cluster prompt)")
+        print("    5.6. Cluster health and version check")
+        print("    5.7. SSH diagnostics, cleanup, and known_hosts reset")
+        print("    5.8. Backup LOADER environment variables (experimental)")
+        print("    5.9. Compare LOADER env to defaults (diff) (experimental)")
+        print("    5.10. Check boot DNA (cluster shell or LOADER)")
+        print("    5.11. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
+        print("    5.12. Compare and correct cluster node names:IP addresses")
+        print("    5.13. Show reinit-config.json (human-readable)")
         print("")
         print("    !!Disruptive commands!!")
-        print("      5z. Reset all nodes to LOADER prompt")
+        print("      5.14. Reset all nodes to LOADER prompt")
         print("")
         print("  6.  Script help and instructions")
         print("  7.  Exit")
@@ -3469,12 +3469,12 @@ def select_operation_mode():
                     timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
                 ).strip().lower()
                 if _resume_now == "y":
-                    if _cp_mode.lower().startswith("4b"):
+                    if _cp_mode.lower().startswith("4.2"):
                         _resume_from_start_menu = True
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 4b.")
+                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 4.2.")
                         return 42, False, False
                     if _cp_mode == "2":
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2c.")
+                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2.3.")
                         return 26, False, False
                     if _cp_mode == "3":
                         _mode3_peer_opt4 = bool(_cp_start.nodes_done_for("peer_option4_done"))
@@ -3487,7 +3487,7 @@ def select_operation_mode():
                         )
                         if _mode3_replay_risk:
                             print(
-                                "\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2c "
+                                "\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2.3 "
                                 "(safe add-node continuation)."
                             )
                             return 26, False, False
@@ -3497,7 +3497,7 @@ def select_operation_mode():
                         print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 1.")
                         return 1, True, False
                     print("  ⚠️  Checkpoint mode is not auto-routable from the start menu.")
-        choice = input("❯❯  Enter your choice from the menu above (ie, 1, 2b, 3, etc.): ").strip().lower()
+        choice = input("❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.): ").strip().lower()
 
         if choice == "1":
             _print_banner("⚠️  WARNING ⚠️")
@@ -3568,11 +3568,11 @@ def select_operation_mode():
             print("\n  ↩️  Returning to menu...\n")
             continue
 
-        if choice == "2a":
+        if choice == "2.1":
             _print_banner("⚠️  NOTICE ⚠️")
             print("")
             print("  " + "*" * 58)
-            print("  * CAUTION: 2a FORMATS AND JOINS AN AFX NODE TO AN     *")
+            print("  * CAUTION: 2.1 FORMATS AND JOINS AN AFX NODE TO AN     *")
             print("  * EXISTING CLUSTER. IF THE CLUSTER DOES NOT EXIST     *")
             print("  * ALREADY, CHOOSE NO AND SELECT OPTION 1.               *")
             print("  " + "*" * 58)
@@ -3598,17 +3598,17 @@ def select_operation_mode():
                             break
                         print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
-                print("\n  ✅ Confirmed. 2a: Add node (interactive)")
+                print("\n  ✅ Confirmed. 2.1: Add node (interactive)")
                 print("     → LOADER: set-defaults + saveenv (no destroy storage pods)")
                 print("     → Boot menu: option 4 (Initialize and configure system)\n")
                 return 2, False, False
             print("\n  ↩️  Returning to menu...\n")
             continue
 
-        if choice == "2b":
+        if choice == "2.2":
             _print_banner("⚠️  NOTICE ⚠️")
             print("")
-            print("  2b will FULLY AUTOMATE adding a node to an existing")
+            print("  2.2 will FULLY AUTOMATE adding a node to an existing")
             print("  cluster. The script auto-answers zero/erase/yes prompts,")
             print("  populates node-management info from the config or prompts,")
             print("  and answers 'join' at the create/join step.")
@@ -3618,8 +3618,8 @@ def select_operation_mode():
             print("  passwords (including blank) before re-prompting.")
             print("")
             print("  " + "*" * 58)
-            print("  * CAUTION: 2b REQUIRES AN EXISTING CLUSTER. IF NONE    *")
-            print("  * EXISTS, USE 1a OR 1b INSTEAD.                        *")
+            print("  * CAUTION: 2.2 REQUIRES AN EXISTING CLUSTER. IF NONE    *")
+            print("  * EXISTS, USE 1.1 OR 1.2 INSTEAD.                        *")
             print("  " + "*" * 58)
             print("")
             print("  " + "─" * 58)
@@ -3643,22 +3643,22 @@ def select_operation_mode():
                             break
                         print("  Please enter y or N.")
                     _netboot_static_ip = (_sip_ans == "y")
-                print("\n  ✅ Confirmed. 2b: Add node (auto)")
+                print("\n  ✅ Confirmed. 2.2: Add node (auto)")
                 print("     → LOADER: set-defaults + saveenv")
                 print("     → Boot menu: option 4 + auto join wizard\n")
                 return 2, False, True
             print("\n  ↩️  Returning to menu...\n")
             continue
 
-        if choice == "2c":
-            print("\n  ✅ Confirmed. 2c: Resume node additions\n")
+        if choice == "2.3":
+            print("\n  ✅ Confirmed. 2.3: Resume node additions\n")
             return 26, False, False
 
         if choice == "3":
             _print_banner("⚠️  WARNING ⚠️")
             print("")
             print("  Option 3: End-to-end auto initialize.")
-            print("    1) Format + setup the FIRST node automatically (1b).")
+            print("    1) Format + setup the FIRST node automatically (1.2).")
             print("    2) Once the cluster is created, format and JOIN every")
             print("       additional BMC in PARALLEL. The 'create or join'")
             print("       step is serialized so each node is fully added")
@@ -3688,7 +3688,7 @@ def select_operation_mode():
                 if _nb_ans == "y":
                     _netboot_before_reinit = False
                     _netboot_pkg_preselected = None
-                    input("\n  Use the install options in the menu (options 4a/4b/4c) to install a new version of ONTAP. Hit enter to return to menu.")
+                    input("\n  Use the install options in the menu (options 4.1/4.2/4.3) to install a new version of ONTAP. Hit enter to return to menu.")
                     print("\n  ↩️  Returning to menu...\n")
                     continue
                 _netboot_before_reinit = False
@@ -3712,21 +3712,21 @@ def select_operation_mode():
             print("\n  ↩️  Returning to menu...\n")
             continue
 
-        if choice in ("4", "4a", "4b", "4c"):
+        if choice in ("4", "4.1", "4.2", "4.3"):
             if choice == "4":
                 # Show the sub-menu and re-prompt.
                 _print_banner("\U0001f4e6 4: Install ONTAP")
-                print("\n  4a. Upgrade ONTAP (rolling takeover/giveback)")
-                print("  4b. Netboot + automated cluster reinit")
-                print("  4c. Netboot and install image only (no cluster create/node add)")
+                print("\n  4.1. Upgrade ONTAP (rolling takeover/giveback)")
+                print("  4.2. Netboot + automated cluster reinit")
+                print("  4.3. Netboot and install image only (no cluster create/node add)")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (4a, 4b, 4c) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (4.1, 4.2, 4.3) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
-            if choice == "4a":
-                _print_banner("\U0001f4e6 4a: Upgrade ONTAP")
+            if choice == "4.1":
+                _print_banner("\U0001f4e6 4.1: Upgrade ONTAP")
                 print("")
                 print("  Performs a rolling upgrade via storage failover")
                 print("  takeover/giveback. Only upgrades are supported.")
@@ -3735,21 +3735,21 @@ def select_operation_mode():
                 print("  " + "\u2500" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 4a: ONTAP upgrade\n")
+                    print("\n  \u2705 Confirmed. 4.1: ONTAP upgrade\n")
                     return 41, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice == "4b":
-                # 4b: Netboot + automated cluster reinit
-                _print_banner("\U0001f4e6 4b: Netboot and automated cluster reinitialization")
+            if choice == "4.2":
+                # 4.2: Netboot + automated cluster reinit
+                _print_banner("\U0001f4e6 4.2: Netboot and automated cluster reinitialization")
                 print("")
                 print("  Runs netboot + automated cluster reinit with strict")
                 print("  sequencing workflow.")
                 print("  Nodes are rebooted to LOADER and this is disruptive.")
                 print("")
                 print("  If you have an existing cluster you wish to upgrade")
-                print("  without taking the nodes down, use option 4a instead.")
+                print("  without taking the nodes down, use option 4.1 instead.")
                 print("")
                 print("  " + "\u2500" * 58)
                 while True:
@@ -3758,7 +3758,7 @@ def select_operation_mode():
                         break
                     print("  Please enter y or N.")
                 if confirm == "y":
-                    print("\n  ✅ Confirmed. 4b: Netboot + automated cluster reinit")
+                    print("\n  ✅ Confirmed. 4.2: Netboot + automated cluster reinit")
                     print("")
                     print("  ℹ️  Recommendation: do not connect to node serial consoles")
                     print("  while this script is running — it may interrupt automation.")
@@ -3769,11 +3769,11 @@ def select_operation_mode():
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice == "4c":
-                # 4c: Netboot and install ONTAP only (no reinit/create/add)
-                _print_banner("\U0001f4e6 4c: Netboot and install image only")
+            if choice == "4.3":
+                # 4.3: Netboot and install ONTAP only (no reinit/create/add)
+                _print_banner("\U0001f4e6 4.3: Netboot and install image only")
                 print("")
-                print("  Runs the same netboot + ONTAP image install path as 4b,")
+                print("  Runs the same netboot + ONTAP image install path as 4.2,")
                 print("  but stops after install. It does not run reinit,")
                 print("  cluster create, or node add workflows.")
                 print("")
@@ -3784,7 +3784,7 @@ def select_operation_mode():
                         break
                     print("  Please enter y or N.")
                 if confirm == "y":
-                    print("\n  \u2705 Confirmed. 4c: Netboot and install image only\n")
+                    print("\n  \u2705 Confirmed. 4.3: Netboot and install image only\n")
                     return 43, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
@@ -3801,33 +3801,33 @@ def select_operation_mode():
             print("")
             continue
 
-        if choice in ("5", "5a", "5b", "5c", "5d", "5e", "5f", "5g", "5h", "5i", "5j", "5k", "5l", "5m", "5n", "5z"):
+        if choice in ("5", "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.8", "5.9", "5.10", "5.11", "5.12", "5.13", "5.14"):
             if choice == "5":
                 _print_banner("🛠️ 5: Administration and maintenance")
-                print("\n  5a. Install license file only")
-                print("  5b. Set up passwordless SSH to cluster management")
-                print("  5c. Create backup cluster configuration")
-                print("  5d. Verify BMC authentication")
-                print("  5f. Check node status (LOADER / cluster prompt)")
-                print("  5g. Cluster health and version check")
-                print("  5h. SSH diagnostics, cleanup, and known_hosts reset")
-                print("  5i. Backup LOADER environment variables (experimental)")
-                print("  5j. Compare LOADER env to defaults (diff) (experimental)")
-                print("  5k. Check boot DNA (cluster shell or LOADER)")
-                print("  5l. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
-                print("  5m. Compare and correct cluster node names:IP addresses")
-                print("  5n. Show reinit-config.json (human-readable)")
+                print("\n  5.1. Install license file only")
+                print("  5.2. Set up passwordless SSH to cluster management")
+                print("  5.3. Create backup cluster configuration")
+                print("  5.4. Verify BMC authentication")
+                print("  5.5. Check node status (LOADER / cluster prompt)")
+                print("  5.6. Cluster health and version check")
+                print("  5.7. SSH diagnostics, cleanup, and known_hosts reset")
+                print("  5.8. Backup LOADER environment variables (experimental)")
+                print("  5.9. Compare LOADER env to defaults (diff) (experimental)")
+                print("  5.10. Check boot DNA (cluster shell or LOADER)")
+                print("  5.11. Build cluster_IP manifest for node-add ordering (EXPERIMENTAL/IN PROGRESS)")
+                print("  5.12. Compare and correct cluster node names:IP addresses")
+                print("  5.13. Show reinit-config.json (human-readable)")
                 print("")
                 print("  !!Disruptive commands!!")
-                print("    5z. Reset all nodes to LOADER prompt")
+                print("    5.14. Reset all nodes to LOADER prompt")
                 print("")
                 print("  " + "─" * 58)
-                choice = input("  Enter sub-option (5a–5n, 5z) or blank to go back: ").strip().lower()
+                choice = input("  Enter sub-option (5.1–5.13, 5.14) or blank to go back: ").strip().lower()
                 if not choice:
                     continue
 
-            if choice == "5a":
-                _print_banner("\U0001f4dc 5a: Install license file only")
+            if choice == "5.1":
+                _print_banner("\U0001f4dc 5.1: Install license file only")
                 print("")
                 print("  Connects to the BMC, enters the system console, logs in")
                 print("  to the cluster shell, and applies a pre-staged license")
@@ -3836,13 +3836,13 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5a: Install license file only\n")
+                    print("\n  \u2705 Confirmed. 5.1: Install license file only\n")
                     return 44, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice == "5b":
-                _print_banner("\U0001f511 5b: Set up passwordless SSH to cluster management")
+            if choice == "5.2":
+                _print_banner("\U0001f511 5.2: Set up passwordless SSH to cluster management")
                 print("")
                 print("  Generates an RSA-4096 key pair on this host (if needed),")
                 print("  then configures the cluster to accept public-key login")
@@ -3851,13 +3851,13 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5b: Set up passwordless SSH\n")
+                    print("\n  \u2705 Confirmed. 5.2: Set up passwordless SSH\n")
                     return 45, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice == "5c":
-                _print_banner("\U0001f4be 5c: Create backup cluster configuration")
+            if choice == "5.3":
+                _print_banner("\U0001f4be 5.3: Create backup cluster configuration")
                 print("")
                 print("  Connects to the primary node BMC and reads the current")
                 print("  cluster configuration, then writes it to a local")
@@ -3866,13 +3866,13 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5c: Create backup cluster configuration\n")
+                    print("\n  \u2705 Confirmed. 5.3: Create backup cluster configuration\n")
                     return 46, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice == "5d":
-                _print_banner("\U0001f50d 5d: Verify BMC authentication")
+            if choice == "5.4":
+                _print_banner("\U0001f50d 5.4: Verify BMC authentication")
                 print("")
                 print("  Loads BMC IP addresses from BMC_IP.json (or prompts),")
                 print("  attempts SSH login to each BMC, runs 'bmc status', and")
@@ -3881,13 +3881,13 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5d: Verify BMC authentication\n")
+                    print("\n  \u2705 Confirmed. 5.4: Verify BMC authentication\n")
                     return 47, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
                 continue
 
-            if choice in ("5z", "5e"):
-                _print_banner("\U0001f504 5z: Reset all nodes to LOADER prompt")
+            if choice == "5.14":
+                _print_banner("\U0001f504 5.14: Reset all nodes to LOADER prompt")
                 print("")
                 print("  Connects to all BMC addresses in parallel, issues a")
                 print("  system reset on each node, enters the system console,")
@@ -3900,12 +3900,12 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5z: Reset all nodes to LOADER prompt\n")
+                    print("\n  \u2705 Confirmed. 5.14: Reset all nodes to LOADER prompt\n")
                     return 56, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
-            if choice == "5f":
-                _print_banner("🔍 5f: Check node status")
+            if choice == "5.5":
+                _print_banner("🔍 5.5: Check node status")
                 print("")
                 print("  Connects to each BMC via SSH, enters the system console,")
                 print("  and reports whether the node is at a LOADER prompt, an")
@@ -3918,12 +3918,12 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  ✅ Confirmed. 5f: Check node status\n")
+                    print("\n  ✅ Confirmed. 5.5: Check node status\n")
                     return 51, False, False
                 print("\n  ↩️  Returning to menu...\n")
 
-            if choice == "5g":
-                _print_banner("\U0001f4ca 5g: Cluster health and version check")
+            if choice == "5.6":
+                _print_banner("\U0001f4ca 5.6: Cluster health and version check")
                 print("")
                 print("  Connects directly to the cluster management LIF via SSH")
                 print("  and checks that all nodes are healthy (Connected, takeover-")
@@ -3933,12 +3933,12 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5g: Cluster health and version check\n")
+                    print("\n  \u2705 Confirmed. 5.6: Cluster health and version check\n")
                     return 49, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
-            if choice == "5h":
-                _print_banner("\U0001f9f9 5h: List and clean up stale BMC SSH sessions")
+            if choice == "5.7":
+                _print_banner("\U0001f9f9 5.7: List and clean up stale BMC SSH sessions")
                 print("")
                 print("  Diagnoses stale SSH socket connections to BMC/SP ports,")
                 print("  can remove stale local known_hosts entries via")
@@ -3950,12 +3950,12 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5h: List and clean up stale BMC SSH sessions\n")
+                    print("\n  \u2705 Confirmed. 5.7: List and clean up stale BMC SSH sessions\n")
                     return 50, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
-            if choice == "5i":
-                _print_banner("\U0001f4be 5i: Backup LOADER environment variables")
+            if choice == "5.8":
+                _print_banner("\U0001f4be 5.8: Backup LOADER environment variables")
                 print("")
                 print("  Connects to each BMC via SSH, enters the system console,")
                 print("  runs 'printenv' at the LOADER prompt, and saves the output")
@@ -3967,12 +3967,12 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5i: Backup LOADER environment variables\n")
+                    print("\n  \u2705 Confirmed. 5.8: Backup LOADER environment variables\n")
                     return 52, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
-            if choice == "5j":
-                _print_banner("\U0001f50d 5j: Compare LOADER env to defaults (diff)")
+            if choice == "5.9":
+                _print_banner("\U0001f50d 5.9: Compare LOADER env to defaults (diff)")
                 print("")
                 print("  Connects to each BMC, captures the current LOADER env,")
                 print("  runs set-defaults, captures the new env, and shows a diff.")
@@ -3985,12 +3985,12 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5j: Compare LOADER env to defaults (diff)\n")
+                    print("\n  \u2705 Confirmed. 5.9: Compare LOADER env to defaults (diff)\n")
                     return 53, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
-            if choice == "5k":
-                _print_banner("\U0001f9ec 5k: Check boot DNA")
+            if choice == "5.10":
+                _print_banner("\U0001f9ec 5.10: Check boot DNA")
                 print("")
                 print("  Connects to a cluster management IP or a BMC IP, then")
                 print("  reads bootarg.init.dna from the cluster shell or LOADER.")
@@ -4001,12 +4001,12 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  \u2705 Confirmed. 5k: Check boot DNA\n")
+                    print("\n  \u2705 Confirmed. 5.10: Check boot DNA\n")
                     return 54, False, False
                 print("\n  \u21a9\ufe0f  Returning to menu...\n")
 
-            if choice == "5l":
-                _print_banner("🧭 5l: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)")
+            if choice == "5.11":
+                _print_banner("🧭 5.11: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)")
                 print("")
                 print("  Connects to the cluster management shell and collects")
                 print("  all cluster-role interface IP addresses in command output")
@@ -4016,12 +4016,12 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  ✅ Confirmed. 5l: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)\n")
+                    print("\n  ✅ Confirmed. 5.11: Build cluster_IP manifest (EXPERIMENTAL/IN PROGRESS)\n")
                     return 55, False, False
                 print("\n  ↩️  Returning to menu...\n")
 
-            if choice == "5m":
-                _print_banner("\U0001f527 5m: Compare and correct cluster node names")
+            if choice == "5.12":
+                _print_banner("\U0001f527 5.12: Compare and correct cluster node names")
                 print("")
                 print("  Connects to the cluster management LIF, compares current")
                 print("  node names and management LIF names against the reinit_config")
@@ -4032,11 +4032,11 @@ def select_operation_mode():
                 print("  " + "─" * 58)
                 confirm = input("  Enter 'yes' to continue or 'no' to go back: ").strip().lower()
                 if confirm == "yes":
-                    print("\n  ✅ Confirmed. 5m: Compare and correct cluster node names\n")
+                    print("\n  ✅ Confirmed. 5.12: Compare and correct cluster node names\n")
                     return 57, False, False
                 print("\n  ↩️  Returning to menu...\n")
 
-            if choice == "5n":
+            if choice == "5.13":
                 return 58, False, False
             continue
 
@@ -4044,7 +4044,7 @@ def select_operation_mode():
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  ⚠️  Invalid choice. Please enter 1a, 1b, 2a, 2b, 2c, 3, 4a-4c, 5a-5n/5z, 6, or 7.")
+        print("  ⚠️  Invalid choice. Please enter 1.1, 1.2, 2.1, 2.2, 2.3, 3, 4.1-4.3, 5.1-5.13/5.14, 6, or 7.")
 
 
 def get_loader_commands():
@@ -4208,13 +4208,13 @@ logging.getLogger("paramiko.transport").setLevel(logging.CRITICAL)
 # Global state
 # ---------------------------------------------------------------------------
 
-# When True (set by 1a/1b "install specific ONTAP?" prompt), netboot-install
+# When True (set by 1.1/1.2 "install specific ONTAP?" prompt), netboot-install
 # is performed at LOADER before the normal boot-menu/reinit flow continues.
 _netboot_before_reinit = False
 _netboot_pkg_preselected = None  # tuple(src_type, src_value) captured at menu-time
 _mode3_peer_netboot_done = False  # True when mode-3 peer netboot/install ran with primary
 
-# When True (set by 1a/1b/3 prompt), adds 'setenv raid.use-physical-zeroing? true'
+# When True (set by 1.1/1.2/3 prompt), adds 'setenv raid.use-physical-zeroing? true'
 # to the primary node's LOADER commands so disks are physically zeroed.
 _physical_zeroing = False
 
@@ -6141,33 +6141,33 @@ DESCRIPTION
 
     Operation modes (selected interactively at startup):
 
-      1a   Initialize first node — interactive wizard
-      1b   Initialize first node — fully automated
-      2a   Add node to existing cluster — interactive wizard
+      1.1   Initialize first node — interactive wizard
+      1.2   Initialize first node — fully automated
+      2.1   Add node to existing cluster — interactive wizard
            (supports password groups + blank-password fallback retries)
-      2b   Add node to existing cluster — automated (parallel multi-node)
+      2.2   Add node to existing cluster — automated (parallel multi-node)
            (supports password groups + blank-password fallback retries)
-       3   End-to-end reinit: mode 1b on primary + mode 2b on all peers
-           (same credential-grouping/fallback behavior as 2b; reinit-only)
-           ONTAP installs are handled by 4b/4c before running mode 3
+       3   End-to-end reinit: mode 1.2 on primary + mode 2.2 on all peers
+           (same credential-grouping/fallback behavior as 2.2; reinit-only)
+           ONTAP installs are handled by 4.2/4.3 before running mode 3
            includes per-node join-status output during bulk add-node polling
-      4a   ONTAP rolling upgrade (takeover / software update / giveback)
-      4b   Netboot + automated cluster reinit (strict sequencing)
-      4c   Netboot and install ONTAP image only (no reinit)
-      5a   Standalone license install
-      5b   Set up passwordless SSH to cluster management
-      5c   Create / save cluster configuration backup (JSON)
-      5d   Verify BMC SSH authentication for selected/all nodes
-      5f   Check node status (LOADER / cluster prompt)
-      5g   Cluster health and version check
-      5h   SSH diagnostics, cleanup, and known_hosts reset
-      5i   Backup LOADER environment variables (experimental)
-      5j   Compare LOADER env to defaults (diff) (experimental)
-      5k   Check boot DNA (config target picker + state-aware query)
-      5l   Build cluster_IP.json manifest for node-add workflows
-      5m   Compare and correct cluster node names and LIF IP addresses
-      5n   Show reinit-config.json in human-readable format
-      5z   Reset all nodes to LOADER prompt (parallel; disruptive command)
+      4.1   ONTAP rolling upgrade (takeover / software update / giveback)
+      4.2   Netboot + automated cluster reinit (strict sequencing)
+      4.3   Netboot and install ONTAP image only (no reinit)
+      5.1   Standalone license install
+      5.2   Set up passwordless SSH to cluster management
+      5.3   Create / save cluster configuration backup (JSON)
+      5.4   Verify BMC SSH authentication for selected/all nodes
+      5.5   Check node status (LOADER / cluster prompt)
+      5.6   Cluster health and version check
+      5.7   SSH diagnostics, cleanup, and known_hosts reset
+      5.8   Backup LOADER environment variables (experimental)
+      5.9   Compare LOADER env to defaults (diff) (experimental)
+      5.10   Check boot DNA (config target picker + state-aware query)
+      5.11   Build cluster_IP.json manifest for node-add workflows
+      5.12   Compare and correct cluster node names and LIF IP addresses
+      5.13   Show reinit-config.json in human-readable format
+      5.14   Reset all nodes to LOADER prompt (parallel; disruptive command)
 
 OPTIONS
     -h, --help
@@ -6248,7 +6248,7 @@ OPTIONS
         use WSL or a Linux jump host for equivalent functionality.
 
     --resume
-        EXPERIMENTAL (mode 4b only).  Resume the previous 4b run from its saved
+        EXPERIMENTAL (mode 4.2 only).  Resume the previous 4.2 run from its saved
         checkpoint (checkpoints/afx_checkpoint.json, located alongside this script).
         Phases already completed are skipped — when every BMC IP is
         marked install_done the run jumps straight to Step 6b
@@ -6260,7 +6260,7 @@ OPTIONS
         existing cluster and asks for explicit confirmation.
 
         Checkpoints older than 72 hours are ignored.  The file is
-        deleted automatically on successful completion of mode 4b.
+        deleted automatically on successful completion of mode 4.2.
 
     --checkpoint-status
         EXPERIMENTAL. Print a summary of the saved checkpoint (checkpoints/afx_checkpoint.json)
@@ -6315,14 +6315,14 @@ OPTIONS
 
     Mode shortcut flags (bypass interactive menu):
         --first-node      Run mode 1 directly
-        --add-nodes       Run mode 2b directly
+        --add-nodes       Run mode 2.2 directly
         --reinit          Run mode 3 directly
-        --netboot-install Run mode 4b directly
-        --add-lic         Run mode 5a directly
-        --passwordless    Run mode 5b directly
-        --backup          Run mode 5c directly
-        --verify          Run mode 5d directly
-        --loader          Run mode 5z directly
+        --netboot-install Run mode 4.2 directly
+        --add-lic         Run mode 5.1 directly
+        --passwordless    Run mode 5.2 directly
+        --backup          Run mode 5.3 directly
+        --verify          Run mode 5.4 directly
+        --loader          Run mode 5.14 directly
 
 INTERACTIVE FEATURES
 
@@ -6339,9 +6339,9 @@ INTERACTIVE FEATURES
 
         Works for:
           • Config file paths (--config or interactive prompts)
-          • ONTAP image paths (mode 4b netboot/reinit)
+          • ONTAP image paths (mode 4.2 netboot/reinit)
           • Bootargs files (--diag)
-          • License file paths (mode 5a)
+          • License file paths (mode 5.1)
           • Any other file/URL input
 
         Example:
@@ -6375,10 +6375,10 @@ EXAMPLES
         nohup python3 AFX_reinit.py --bg --config configs/reinit-config.json \\
               > nohup.out 2>&1 &
 
-    Inspect a saved 4b checkpoint (EXPERIMENTAL):
+    Inspect a saved 4.2 checkpoint (EXPERIMENTAL):
         python3 AFX_reinit.py --checkpoint-status
 
-    Resume an interrupted 4b run (EXPERIMENTAL):
+    Resume an interrupted 4.2 run (EXPERIMENTAL):
         python3 AFX_reinit.py --resume --config configs/reinit-config.json
 
     Check the result of the most recent run:
@@ -6406,7 +6406,7 @@ FILES
         timing, warnings inventory, and errors inventory.
 
     checkpoints/afx_checkpoint.json
-        EXPERIMENTAL mode 4b resume checkpoint.  Written under the script's checkpoints/
+        EXPERIMENTAL mode 4.2 resume checkpoint.  Written under the script's checkpoints/
         directory; deleted automatically on successful completion.  Inspect with
         --checkpoint-status; resume with --resume.  Ignored if older than
         72 hours.
@@ -6647,7 +6647,7 @@ def parse_args():
                              "'screen -r afx-reinit' to reattach. "
                              "No-op if already running inside screen.")
     parser.add_argument("--resume", action="store_true", default=False,
-                        help="EXPERIMENTAL: Resume a previous 4b run from its last saved "
+                        help="EXPERIMENTAL: Resume a previous 4.2 run from its last saved "
                              "checkpoint (checkpoints/afx_checkpoint.json). Skips phases "
                              "already completed so you do not have to restart "
                              "from scratch after a failure.")
@@ -6696,20 +6696,20 @@ def parse_args():
                              "LOADER stage.")
     # ── Mode shortcut flags (bypass the interactive menu) ──────────────────
     parser.add_argument("--first-node", action="store_true", default=False,
-                        help="Skip the menu and run mode 1b: initialize the "
+                        help="Skip the menu and run mode 1.2: initialize the "
                              "first node and set up the cluster automatically.")
     parser.add_argument("--add-nodes", action="store_true", default=False,
-                        help="Skip the menu and run mode 2b: add node(s) to "
+                        help="Skip the menu and run mode 2.2: add node(s) to "
                              "an existing cluster automatically.")
     parser.add_argument("--reinit", action="store_true", default=False,
                         help="Skip the menu and run mode 3: end-to-end "
-                             "automated reinit (1b on primary + parallel "
+                             "automated reinit (1.2 on primary + parallel "
                              "node adds).")
     parser.add_argument("--netboot-install", action="store_true", default=False,
-                        help="Skip the menu and run mode 4b: netboot and "
+                        help="Skip the menu and run mode 4.2: netboot and "
                              "automated cluster reinit.")
     parser.add_argument("--add-lic", action="store_true", default=False,
-                        help="Skip the menu and run mode 5a: install license "
+                        help="Skip the menu and run mode 5.1: install license "
                              "file only.")
     parser.add_argument("--passwordless", action="store_true", default=False,
                         help="Skip the menu and run mode 4d: configure "
@@ -6718,10 +6718,10 @@ def parse_args():
                         help="Skip the menu and run mode 4e: create a backup "
                              "cluster configuration file.")
     parser.add_argument("--verify", action="store_true", default=False,
-                        help="Skip the menu and run mode 5d: verify BMC "
+                        help="Skip the menu and run mode 5.4: verify BMC "
                              "authentication for all configured nodes.")
     parser.add_argument("--loader", action="store_true", default=False,
-                        help="Skip the menu and run mode 5z: reset all nodes "
+                        help="Skip the menu and run mode 5.14: reset all nodes "
                              "to the LOADER prompt in parallel.")
     parser.add_argument("--test", action="store_true", default=False,
                         help="Interactive checkpoint failure injection for "
@@ -8662,13 +8662,13 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
 
 
 # ---------------------------------------------------------------------------
-# Interactive prompt broker (mode 2a parallel)
+# Interactive prompt broker (mode 2.1 parallel)
 # ---------------------------------------------------------------------------
 
 class _InteractivePromptBroker:
     """Thread-safe serializer for user prompts from parallel node threads.
 
-    When mode 2a runs nodes in parallel, threads call ``broker.ask()`` to
+    When mode 2.1 runs nodes in parallel, threads call ``broker.ask()`` to
     pause and collect a single line of user input without interleaving
     output from other running threads.
     """
@@ -8705,7 +8705,7 @@ class _InteractivePromptBroker:
 def _interactive_disk_erase_prompts(channel, broker, label, node_log=None,
                                     reconnect_ctx=None):
     """Wait for each of the three disk-erase confirmation prompts and ask the
-    operator via *broker* rather than auto-answering.  Used by mode 2a.
+    operator via *broker* rather than auto-answering.  Used by mode 2.1.
     """
     _pfx = f"[{label}]" if label else ""
     for trigger, short_label in (
@@ -9455,7 +9455,7 @@ def _print_boot_dna_records(records, *, source_label):
 
 
 def _run_boot_dna_check_target(_target54, _user54, _pass54):
-    """Run mode-5k boot-DNA detection/check against a single target."""
+    """Run mode-5.10 boot-DNA detection/check against a single target."""
     _result54 = {
         "target": _target54,
         "state": "Unknown",
@@ -9466,7 +9466,7 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
     try:
         _cl54, _user54, _pass54 = _ssh_connect_with_retry(
             _target54, _user54, _pass54,
-            label=f"5k/{_target54}", max_attempts=3, interactive=True,
+            label=f"5.10/{_target54}", max_attempts=3, interactive=True,
         )
         _ch54 = _open_shell(_cl54)
         try:
@@ -9629,7 +9629,7 @@ def _run_boot_dna_check_target(_target54, _user54, _pass54):
 
 
 def _run_boot_dna_check_mode():
-    """Mode 5k helper: detect cluster-shell vs LOADER and print DNA values."""
+    """Mode 5.10 helper: detect cluster-shell vs LOADER and print DNA values."""
     _bmc_ips54 = []
     _bmc_names54 = {}   # BMC IP -> node name (populated from reinit-config)
     _cluster_mgmt54 = ""
@@ -9845,7 +9845,7 @@ def _run_boot_dna_check_mode():
 
 
 # ---------------------------------------------------------------------------
-# Mode 1b: fully-automated post-option-9 cluster initialization
+# Mode 1.2: fully-automated post-option-9 cluster initialization
 # ---------------------------------------------------------------------------
 
 def _resolve_mgmt_lif_from_retained(lif_type: str):
@@ -10214,7 +10214,7 @@ def _normalize_node_mgmt_config(cfg):
     """Return node-mgmt config with canonical port/ip/netmask/gateway keys.
 
     Some callers persist node-management values with ``node_mgmt_*`` field
-    names (for example in the node-add manifest used by option 2c), while the
+    names (for example in the node-add manifest used by option 2.3), while the
     prompt automation consumes the shorter ``port/ip/netmask/gateway`` keys.
     Normalize both spellings here so resume paths stay non-interactive.
     """
@@ -10250,7 +10250,7 @@ def _resolve_node_mgmt_config(bmc_host=None):
 
     If the operator pre-populated values via `collect_node_mgmt_per_bmc()`,
     those are returned. Otherwise we fall back to retained-cluster defaults
-    (legacy behaviour) so single-BMC mode 1b still works without the new
+    (legacy behaviour) so single-BMC mode 1.2 still works without the new
     pre-collection step.
     """
     if bmc_host and bmc_host in _node_mgmt_by_bmc:
@@ -10353,7 +10353,7 @@ def _fetch_existing_cluster_ip(bmc_user=None, bmc_password=None, prompt_before_a
     `network interface show -role cluster -fields address`.
 
     Credential sources, tried silently in order:
-      1. `_cluster_config` admin_user/admin_password (mode 1b path).
+      1. `_cluster_config` admin_user/admin_password (mode 1.2 path).
       2. The loaded JSON config file's `cluster.admin_user`/`admin_password`.
       3. The BMC creds passed in (typically what the operator entered when
          connecting to the primary BMC).
@@ -10546,7 +10546,7 @@ def collect_node_mgmt_per_bmc(primary_bmc, peer_bmcs):
 
     _print_banner("\U0001F310 Node Management Network Configuration")
     print("\n  Enter node-management network details for each BMC.")
-    print("  These will be auto-answered during cluster setup (mode 1b).")
+    print("  These will be auto-answered during cluster setup (mode 1.2).")
     print("  Press Enter to accept the [default] shown in brackets.")
 
     if _session_log:
@@ -10639,7 +10639,7 @@ def collect_node_mgmt_per_bmc(primary_bmc, peer_bmcs):
 
 
 def collect_cluster_config():
-    """Gather cluster-level setup values used by mode 1b's wizard automation.
+    """Gather cluster-level setup values used by mode 1.2's wizard automation.
 
     Sources, in order of precedence:
       1. The loaded config file's `cluster` section.
@@ -10652,7 +10652,7 @@ def collect_cluster_config():
 
     _print_banner("\U0001F3DB\uFE0F  Cluster Setup Configuration")
     print("\n  These values will be used to drive the cluster setup wizard")
-    print("  after option 4 (mode 1b only). Press Enter to accept defaults.")
+    print("  after option 4 (mode 1.2 only). Press Enter to accept defaults.")
 
     if _session_log:
         _session_log.start_phase("Collect Cluster Setup Config")
@@ -11062,9 +11062,9 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
     """Auto-answer the three disk-zero/erase/confirm prompts after option 4.
 
     ``is_node_add`` controls the progress messaging:
-      * ``True``  -> peer is joining an existing cluster (mode 2a/2b, mode 3
-                     peer-add phase, mode 2c resume).
-      * ``False`` -> primary node is creating a new cluster (mode 1a/1b, mode
+      * ``True``  -> peer is joining an existing cluster (mode 2.1/2.2, mode 3
+                     peer-add phase, mode 2.3 resume).
+      * ``False`` -> primary node is creating a new cluster (mode 1.1/1.2, mode
                      3 primary phase).
       * ``None``  -> fall back to the legacy ``_operation_mode == 2`` check.
                      This preserves prior behavior for any caller that hasn't
@@ -12020,7 +12020,7 @@ def _apply_ntp_servers(channel):
 
 
 # ---------------------------------------------------------------------------
-# Mode 42 (4b): Netboot + automated cluster reinit
+# Mode 42 (4.2): Netboot + automated cluster reinit
 # ---------------------------------------------------------------------------
 
 def _classify_auth_failure(exc: BaseException) -> str:
@@ -12638,8 +12638,8 @@ def _collect_netboot_bmcs():
 
         if _auto_idx is not None or (_sel.isdigit() and int(_sel) > 0):
             # Filter the BMC list by role based on operation mode:
-            #   modes 1a/1b   -> primary only
-            #   mode  2a/2b   -> secondary only
+            #   modes 1.1/1.2   -> primary only
+            #   mode  2.1/2.2   -> secondary only
             #   mode  3 / 42  -> all (primary first, then secondaries)
             # For new-format configs extract per-role; legacy uses position.
             _has_new_fmt = (isinstance(_data.get("primary_node"), dict)
@@ -12648,9 +12648,9 @@ def _collect_netboot_bmcs():
                 _pn_bmc = (_data.get("primary_node") or {}).get("bmc")
                 _sn_bmcs = [str(n["bmc"]) for n in (_data.get("secondary_nodes") or [])
                             if isinstance(n, dict) and n.get("bmc")]
-                if _operation_mode in (1,):           # 1a / 1b
+                if _operation_mode in (1,):           # 1.1 / 1.2
                     _role_ips = [_pn_bmc] if _pn_bmc else _bmc_ips
-                elif _operation_mode == 2:            # 2a / 2b
+                elif _operation_mode == 2:            # 2.1 / 2.2
                     _role_ips = _sn_bmcs if _sn_bmcs else _bmc_ips
                 else:                                 # 3, 42, or unknown
                     _role_ips = ([_pn_bmc] if _pn_bmc else []) + _sn_bmcs or _bmc_ips
@@ -13025,7 +13025,7 @@ def _bmc_attach_console_without_reset(host, username, password, node_log=None,
 # ---------------------------------------------------------------------------
 # Per-node parallel I/O helpers
 # Raw channel I/O that writes to a per-node file instead of stdout.
-# Used by the 4b parallel workers so screen output stays clean.
+# Used by the 4.2 parallel workers so screen output stays clean.
 # ---------------------------------------------------------------------------
 
 def _par_write(nf, text):
@@ -13470,7 +13470,7 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
 
 
 def _peer_reinit_worker(ip, ctx):
-    """Module-level worker for the mode-4b + mode-3 parallel peer auto-join.
+    """Module-level worker for the mode-4.2 + mode-3 parallel peer auto-join.
 
     ``ctx`` is a dict produced by ``_run_4b_standalone`` containing the
     per-run state that each thread needs:
@@ -13655,7 +13655,7 @@ def _peer_reinit_worker(ip, ctx):
         _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
         time.sleep(2)
 
-        # Auto-answer disk-erase and node-mgmt prompts (same as mode 2b).
+        # Auto-answer disk-erase and node-mgmt prompts (same as mode 2.2).
         _auto_answer_disk_erase_prompts(
             peer_ch, node_log=_pnf, label=ip, is_node_add=True,
             reconnect_ctx=_peer_rc_ctx,
@@ -13713,10 +13713,10 @@ def _format_status_line(node=None, message="", level="INFO"):
 
 
 def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
-    """Standalone netboot workflow used by 4b/4c.
+    """Standalone netboot workflow used by 4.2/4.3.
 
-    4b runs netboot + automated cluster reinit (strict sequencing).
-    4c runs netboot install only and always exits before reinit.
+    4.2 runs netboot + automated cluster reinit (strict sequencing).
+    4.3 runs netboot install only and always exits before reinit.
     If *resuming* is True the module-level ``_checkpoint`` is used to skip
     already-completed phases. Returns True on success.
     """
@@ -13758,7 +13758,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             else:
                 _lvl = "INFO"
             _m = re.search(r"\[([^\]]+)\]", stripped)
-            _node = _m.group(1) if _m else "4b"
+            _node = _m.group(1) if _m else "4.2"
             _txt = re.sub(r"^.*?\]\s*", "", stripped)
             _ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             stripped = f"[{_node}] | {_ts} | [{_lvl}] {_txt}"
@@ -13813,14 +13813,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 else:
                     bmc_passwords[_ip] = getpass.getpass(f"  Password for {_ip}: ")
         if log:
-            log.log(f"4b resume: using {len(bmc_ips)} BMC(s) from checkpoint: {bmc_ips}")
+            log.log(f"4.2 resume: using {len(bmc_ips)} BMC(s) from checkpoint: {bmc_ips}")
     else:
         bmc_ips, bmc_user, bmc_passwords = _collect_netboot_bmcs()
         if bmc_ips is None:
-            print("\n  Aborting 4b.")
+            print("\n  Aborting 4.2.")
             return False
         if log:
-            log.log(f"4b: {len(bmc_ips)} node(s): {bmc_ips}")
+            log.log(f"4.2: {len(bmc_ips)} node(s): {bmc_ips}")
     _4b_primary_node_ip = bmc_ips[0] if bmc_ips else None
 
     # If any BMC password was left empty, ask for the cluster admin password
@@ -13841,12 +13841,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 _cluster_config["admin_password"] = _pre_cluster_pw
                 _ctx_sync_from_globals()
                 if log:
-                    log.log("4b: cluster admin password pre-collected (BMC password was empty)")
+                    log.log("4.2: cluster admin password pre-collected (BMC password was empty)")
                 break
 
-    # ── Step 1b: Package selection (ask now, before operations begin) ──────
+    # ── Step 1.2: Package selection (ask now, before operations begin) ──────
     if log:
-        log.start_phase("4b – Package Selection")
+        log.start_phase("4.2 – Package Selection")
     _cp_src_type  = _checkpoint.get_param("netboot_src_type")  if (resuming and _checkpoint) else None
     _cp_src_value = _checkpoint.get_param("netboot_src_value") if (resuming and _checkpoint) else None
     if resuming and _cp_src_type is not None:
@@ -13871,7 +13871,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         _do_reinit = False
         _mode_sel = None
         _cp_skip_env = None
-        print("\n  ✅ Package selected. Mode 4c will stop after netboot/install (no reinit).")
+        print("\n  ✅ Package selected. Mode 4.3 will stop after netboot/install (no reinit).")
     else:
         _cp_do_reinit   = _checkpoint.get_param("do_reinit") if (resuming and _checkpoint) else None
         _cp_mode_sel    = _checkpoint.get_param("reinit_mode") if (resuming and _checkpoint) else None
@@ -13882,8 +13882,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _mode_sel  = _cp_mode_sel
             print(f"\n  🔖 Resuming: do_reinit={_do_reinit}, reinit_mode={_mode_sel or 'none'}")
         elif not install_only:
-            # 4b always uses strict end-to-end reinit mode.
-            print("\n  ✅ Package selected. 4b mode: proceeding with end-to-end initialization (mode 3).")
+            # 4.2 always uses strict end-to-end reinit mode.
+            print("\n  ✅ Package selected. 4.2 mode: proceeding with end-to-end initialization (mode 3).")
             _do_reinit = True
             _mode_sel = "3"
         else:
@@ -13900,23 +13900,23 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
     if _do_reinit and _mode_sel is None and not resuming:
         print("\n  Select reinit mode:")
-        print("    1a. Format first node (interactive)")
-        print("    1b. Format first node + cluster setup (automatic)")
-        print("     3. End-to-end auto initialize (1b + auto-add all peer nodes)")
+        print("    1.1. Format first node (interactive)")
+        print("    1.2. Format first node + cluster setup (automatic)")
+        print("     3. End-to-end auto initialize (1.2 + auto-add all peer nodes)")
         print("")
         while True:
-            _mode_sel = _prompt("  Enter 1a, 1b, or 3: ").lower()
-            if _mode_sel in ("1a", "1b", "3"):
+            _mode_sel = _prompt("  Enter 1.1, 1.2, or 3: ").lower()
+            if _mode_sel in ("1.1", "1.2", "3"):
                 break
             print("  ⚠️  Invalid choice.")
 
     if _do_reinit:
         global _operation_mode, _auto_setup, _auto_add
-        if _mode_sel == "1a":
+        if _mode_sel == "1.1":
             _operation_mode = 1
             _auto_setup = False
             _auto_add = False
-        elif _mode_sel == "1b":
+        elif _mode_sel == "1.2":
             _operation_mode = 1
             _auto_setup = True
             _auto_add = False
@@ -13926,7 +13926,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _auto_add = True
 
         if log:
-            log.log(f"4b: reinit mode selected: {_mode_sel}")
+            log.log(f"4.2: reinit mode selected: {_mode_sel}")
 
         if resuming and _cp_skip_env is not None:
             _loader_env_stage_enabled = (not bool(_cp_skip_env))
@@ -13936,12 +13936,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             )
         else:
             _skip_env_q = _prompt(
-                "\n  Skip LOADER backup/printenv capture during 4b reinit? [Y/n]: "
+                "\n  Skip LOADER backup/printenv capture during 4.2 reinit? [Y/n]: "
             , "y").lower()
             _loader_env_stage_enabled = (_skip_env_q not in ("y", "yes"))
         if log:
             log.log(
-                "4b: LOADER bootarg backup/printenv stage "
+                "4.2: LOADER bootarg backup/printenv stage "
                 f"{'enabled' if _loader_env_stage_enabled else 'skipped'}"
             )
 
@@ -13951,20 +13951,20 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         _cfg_loaded = _discover_and_prompt_config(_run_context)
         if _cfg_loaded:
             if log:
-                log.log(f"4b: reinit config loaded: {_cfg_loaded}")
+                log.log(f"4.2: reinit config loaded: {_cfg_loaded}")
         else:
             print("  ℹ️  No config file loaded; wizard will prompt for all values.")
             if log:
-                log.log("4b: no config file loaded; wizard will use manual prompts")
+                log.log("4.2: no config file loaded; wizard will use manual prompts")
 
         # Collect node-management IP details for every node.
         collect_node_mgmt_per_bmc(bmc_ips[0], bmc_ips[1:])
 
-        # For automatic modes (1b/3), collect the cluster-level setup answers.
+        # For automatic modes (1.2/3), collect the cluster-level setup answers.
         if _auto_setup:
             collect_cluster_config()
 
-        # Ask about passwordless SSH for automatic modes (1b/3) up-front so
+        # Ask about passwordless SSH for automatic modes (1.2/3) up-front so
         # nothing needs to be asked mid-run.
         if _auto_setup:
             global _setup_passwordless_ssh
@@ -13973,24 +13973,24 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             , "n").lower()
             _setup_passwordless_ssh = (_ssh_q == "y")
             if log:
-                log.log(f"4b: passwordless SSH requested: {_setup_passwordless_ssh}")
+                log.log(f"4.2: passwordless SSH requested: {_setup_passwordless_ssh}")
 
             # License: collect key(s) or validate the license file path now,
             # before the BMC reinit/install begins, so the operator can fix
-            # issues early. Direct mode 1/3 does this in main(); the 4b path
+            # issues early. Direct mode 1/3 does this in main(); the 4.2 path
             # dispatches before that block so we ask here instead.
             _collect_license_config(_run_context)
             if log and _license_mode:
-                log.log(f"4b: ONTAP license configured (mode={_license_mode})")
+                log.log(f"4.2: ONTAP license configured (mode={_license_mode})")
 
         # ────────────────────────────────────────────────────────────────────
         # Node pre-configuration
         # ────────────────────────────────────────────────────────────────────
         _print_banner("Node pre-config")
 
-        # Physical disk zeroing applies to every reinit sub-mode (1a/1b/3);
+        # Physical disk zeroing applies to every reinit sub-mode (1.1/1.2/3);
         # it is set by the LOADER stage on the primary node. The direct
-        # mode 1/3 menu entries prompt for this up-front, so 4b's reinit
+        # mode 1/3 menu entries prompt for this up-front, so 4.2's reinit
         # path must do the same to avoid silently skipping the option.
         global _physical_zeroing
         if resuming and _checkpoint and _checkpoint.get_param("physical_zeroing") is not None:
@@ -14005,7 +14005,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             if _physical_zeroing:
                 print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
         if log:
-            log.log(f"4b: physical disk zeroing requested: {_physical_zeroing}")
+            log.log(f"4.2: physical disk zeroing requested: {_physical_zeroing}")
 
         # Diagnostic bootargs: if --diag was passed, load/prompt for bootargs now.
         global _diag_mode, _diag_bootargs, _prevent_bios_fw_update
@@ -14017,7 +14017,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             else:
                 _diag_bootargs = _load_diag_bootargs()
             if log:
-                log.log(f"4b: diag bootargs: {_diag_bootargs}")
+                log.log(f"4.2: diag bootargs: {_diag_bootargs}")
 
         # Firmware-update behavior: this controls whether LOADER sets
         # AUTO_FW_UPDATE false.
@@ -14038,7 +14038,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         else:
             print("  ℹ️   BIOS firmware auto-update prevention disabled.")
         if log:
-            log.log(f"4b: prevent BIOS firmware update: {_prevent_bios_fw_update}")
+            log.log(f"4.2: prevent BIOS firmware update: {_prevent_bios_fw_update}")
 
     # ── Static vs DHCP ifconfig in LOADER ─────────────────────────────────
     global _netboot_static_ip
@@ -14078,28 +14078,28 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             print(f"  ⚠️  No complete static IP config found for: {', '.join(_missing_static)}")
             print("     These nodes will fall back to 'ifconfig -auto'.")
         if log:
-            log.log(f"4b: static LOADER ifconfig enabled for {len(bmc_ips) - len(_missing_static)}/{len(bmc_ips)} node(s)")
+            log.log(f"4.2: static LOADER ifconfig enabled for {len(bmc_ips) - len(_missing_static)}/{len(bmc_ips)} node(s)")
     if log:
-        log.log(f"4b: static ifconfig in LOADER: {_netboot_static_ip}")
+        log.log(f"4.2: static ifconfig in LOADER: {_netboot_static_ip}")
 
     print("\n  ✅ All setup information collected. Starting operations...")
     _print_autopilot_banner()
     if log:
-        log.log(f"4b: all upfront questions answered; do_reinit={_do_reinit}, mode={_mode_sel}")
+        log.log(f"4.2: all upfront questions answered; do_reinit={_do_reinit}, mode={_mode_sel}")
 
     # ── Initialise / update checkpoint ────────────────────────────────────
     if resuming and _checkpoint is not None:
         # On resume: update metadata only — do NOT call init_run(), which
         # would wipe all the install_done/option6_done phase data we loaded.
         _checkpoint.resume_run(
-            mode=f"{'4c' if install_only else '4b'}-{_mode_sel or 'no-reinit'}",
+            mode=f"{'4.3' if install_only else '4.2'}-{_mode_sel or 'no-reinit'}",
             log_dir=_log_dir,
         )
     else:
         if _checkpoint is None:
             _checkpoint = CheckpointManager()
         _checkpoint.init_run(
-            mode=f"{'4c' if install_only else '4b'}-{_mode_sel or 'no-reinit'}",
+            mode=f"{'4.3' if install_only else '4.2'}-{_mode_sel or 'no-reinit'}",
             bmc_ips=bmc_ips,
             log_dir=_log_dir,
             config_path=getattr(log, "log_file", "") or "",
@@ -14130,7 +14130,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             bool(_do_reinit and _loader_env_stage_enabled is False),
         )
     if log:
-        log.log(f"4b: checkpoint {'resumed' if resuming else 'initialised'} at {_checkpoint._path}")
+        log.log(f"4.2: checkpoint {'resumed' if resuming else 'initialised'} at {_checkpoint._path}")
 
     # ── Resume status display ────────────────────────────────────────────
     # The checkpoint records each phase as it completes; on a resumed run
@@ -14170,7 +14170,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             print("     option3_complete      : ✅")
         if log:
             log.log(
-                "4b resume: prior progress — install_done="
+                "4.2 resume: prior progress — install_done="
                 f"{_install_done_ips}, option6_done={_opt6_done_ips}, "
                 f"reinit_loader={_reinit_done_ips}, "
                 f"peer_option4_done={_opt4_done_ips}, "
@@ -14191,8 +14191,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _node_files[ip] = None
 
     # ── Decide whether to skip the install phase (Steps 2–6a) ────────────
-    # For mode 4b (strict reinit), install_done alone gates resume skips.
-    # For mode 4c (install_only), option6_done is also accepted because
+    # For mode 4.2 (strict reinit), install_done alone gates resume skips.
+    # For mode 4.3 (install_only), option6_done is also accepted because
     # option 6 completion marks successful post-install transition.
     _install_done_ips_set = (
         set(_checkpoint.nodes_done_for("install_done")) if _checkpoint else set()
@@ -14215,7 +14215,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         )
         if log:
             log.log(
-                "4b resume: skipping install phase — "
+                "4.2 resume: skipping install phase — "
                 + ("install_done/option6_done" if install_only else "install_done")
                 + " for all nodes"
             )
@@ -14245,7 +14245,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 f"{', '.join(_skipped)}"
             )
             if log:
-                log.log(f"4b resume: skipping install for {_skipped}; "
+                log.log(f"4.2 resume: skipping install for {_skipped}; "
                         f"re-running for {_install_bmc_ips}")
         else:
             _install_bmc_ips = list(bmc_ips)
@@ -14253,7 +14253,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         # ── Step 2: SSH to all BMCs in parallel, verify BMC prompt ────────────
         print(f"\n  Connecting to {len(_install_bmc_ips)} BMC(s) in parallel...")
         if log:
-            log.start_phase("4b – BMC SSH Connections")
+            log.start_phase("4.2 – BMC SSH Connections")
 
         bmc_clients = {}   # {ip: paramiko.SSHClient}
         bmc_channels = {}  # {ip: channel}
@@ -14318,7 +14318,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         # ── Step 3: Simultaneously reset all nodes and reach LOADER ──────────
         print(f"\n  Resetting {len(_install_bmc_ips)} node(s) to LOADER (output → per-node logs)...")
         if log:
-            log.start_phase("4b – Reset to LOADER")
+            log.start_phase("4.2 – Reset to LOADER")
 
         loader_channels = {}   # {ip: channel}  at LOADER prompt
         loader_clients = {}    # {ip: client}
@@ -14446,7 +14446,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
         # ── Step 4: Start HTTP server if serving a local file ─────────────────
         if log:
-            log.start_phase("4b – HTTP Server")
+            log.start_phase("4.2 – HTTP Server")
         httpd = None
         if src_type == "file":
             _ht, pkg_url, httpd = _start_http_server(src_value)
@@ -14463,7 +14463,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         print(f"\n  Starting netboot-install on {len(_install_bmc_ips)} node(s) in parallel"
               f" (output → per-node logs)...")
         if log:
-            log.start_phase("4b – Netboot Install")
+            log.start_phase("4.2 – Netboot Install")
 
         install_results = {}  # {ip: True/False}
 
@@ -14478,7 +14478,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     ch, pkg_url, node_label=ip, log=log,
                     boot_menu_timeout=900, node_file=nf, status_cb=_scb,
                     static_ifconfig=_static,
-                    phase_name="4b \u2013 Netboot Install",
+                    phase_name="4.2 \u2013 Netboot Install",
                 )
             except _InjectedCheckpointFailure:
                 with connect_lock:
@@ -14530,7 +14530,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         first_ip = bmc_ips[0]
 
         if log:
-            log.log(f"4b: netboot install complete on {len(_install_bmc_ips)} node(s)")
+            log.log(f"4.2: netboot install complete on {len(_install_bmc_ips)} node(s)")
 
         print(f"\n  ✅ Netboot complete on all {len(_install_bmc_ips)} node(s).")
         # (_do_reinit and _mode_sel were collected upfront before operations began)
@@ -14545,14 +14545,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     pass
         _node_files.clear()
 
-        # ── Step 6a: Option 6 on all nodes (4c install-only path) ────────────
-        # 4b strict mode no longer uses option 6. Keep this flow for 4c where
+        # ── Step 6a: Option 6 on all nodes (4.3 install-only path) ────────────
+        # 4.2 strict mode no longer uses option 6. Keep this flow for 4.3 where
         # the run stops after install and validates ONTAP login readiness.
         if install_only:
            print("\n  Selecting boot menu option 6 (Update flash from backup config) on all nodes"
                  " to complete the netboot/install...")
            if log:
-               log.log(f"4c: running option 6 on all nodes to finish install (do_reinit={_do_reinit})")
+               log.log(f"4.3: running option 6 on all nodes to finish install (do_reinit={_do_reinit})")
 
         _menu_sigs_lower = [
                 "selection (1-", "(1-9)?", "(1-11)?", "(1-12)?",
@@ -15751,7 +15751,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 except Exception:
                     pass
 
-        # 4b strict mode skips option 6 entirely; peers proceed via option 4
+        # 4.2 strict mode skips option 6 entirely; peers proceed via option 4
         # after primary option 9.
         opt6_threads = [
             threading.Thread(
@@ -15790,7 +15790,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         # and let the operator confirm before wiping everything.
         # Skip this block when VLDB timeout caused nodes to be marked as
         # "login" — those nodes are NOT actually at a login prompt.
-        # 4b strict mode skips this check since it does not run option 6.
+        # 4.2 strict mode skips this check since it does not run option 6.
         if (install_only
                 and _opt6_login_nodes == set(_install_bmc_ips)
                 and not _vldb_timeout_nodes
@@ -15867,7 +15867,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
                 ).strip().lower()
             if log:
-                log.log(f"4b: version check prompt answered '{_cont_ans}' "
+                log.log(f"4.2: version check prompt answered '{_cont_ans}' "
                         f"(version={_ver_str!r})")
             if _cont_ans != "y":
                 print("\n  Aborting reinit – install succeeded, cluster left running.")
@@ -15890,7 +15890,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             )
             if log:
                 log.log(
-                    "4b: skipping cluster-level continue prompt due to NVRAM/sysid "
+                    "4.2: skipping cluster-level continue prompt due to NVRAM/sysid "
                     f"mismatch on nodes: {sorted(_nvram_mismatch_nodes)}",
                     prefix="WARN",
                 )
@@ -15920,7 +15920,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     # through into Step 6b.
     if _skip_install and not _do_reinit:
         if log:
-            log.log("4b resume: install already done and no reinit requested; exiting cleanly")
+            log.log("4.2 resume: install already done and no reinit requested; exiting cleanly")
         return True
 
     _resume_primary_from_wizard = bool(
@@ -15966,7 +15966,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     _resume_ready_peer_ips[_peer_ip] = _saved_ip
 
     # ── Step 6b: Reinit – reconnect to all BMCs and reach LOADER ──────────
-    # All nodes are now at the ONTAP login prompt (4b install finished).
+    # All nodes are now at the ONTAP login prompt (4.2 install finished).
     # Reconnect via BMC, reset each node to LOADER, send the boot commands
     # that bring up the boot menu, and then run the selected init flow.
     _reconnect_targets = list(bmc_ips)
@@ -16034,12 +16034,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 )
                 if log:
                     log.log(
-                        "4b resume: skipped peer reinit replay for option4-complete peers "
+                        "4.2 resume: skipped peer reinit replay for option4-complete peers "
                         f"{sorted(_protected_peers)}"
                     )
             elif log:
                 log.log(
-                    "4b resume: operator confirmed peer reinit replay for option4-complete peers "
+                    "4.2 resume: operator confirmed peer reinit replay for option4-complete peers "
                     f"{sorted(_protected_peers)}",
                     prefix="WARN",
                 )
@@ -16068,11 +16068,11 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
               f"{len(_reconnect_targets)} BMC(s) for cluster reinit (mode {_mode_sel})...")
     if log:
         if _resume_mode3_add_only:
-            log.log("4b resume: cluster_formed/primary_setup_done set; skipping reinit reconnect")
+            log.log("4.2 resume: cluster_formed/primary_setup_done set; skipping reinit reconnect")
         elif _resume_cluster_already_created:
-            log.log("4b resume: primary cluster already created; skipping primary reconnect/reset")
+            log.log("4.2 resume: primary cluster already created; skipping primary reconnect/reset")
         else:
-            log.start_phase("4b – Reinit Reconnect to LOADER")
+            log.start_phase("4.2 – Reinit Reconnect to LOADER")
 
     _reconnect_errors = []
     _reconnect_lock = threading.Lock()
@@ -16407,13 +16407,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     if _reconnect_errors:
         print(f"\n  ⚠️  Reconnect failed for: {', '.join(_reconnect_errors)}")
         if log:
-            log.log(f"4b: reinit reconnect failed: {_reconnect_errors}", prefix="WARN")
+            log.log(f"4.2: reinit reconnect failed: {_reconnect_errors}", prefix="WARN")
         # If the primary node failed to reconnect, there is nothing to do.
         if first_ip in _reconnect_errors:
             print(f"\n  ❌ Authentication/connection failed for primary node {first_ip}."
                   f" Aborting.")
             if log:
-                log.log(f"4b: primary node {first_ip} reconnect failed; aborting",
+                log.log(f"4.2: primary node {first_ip} reconnect failed; aborting",
                         prefix="ERROR")
             return False
     if log and not (_resume_mode3_add_only or _resume_cluster_already_created):
@@ -16433,13 +16433,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     if first_ch is None and not (_resume_mode3_add_only or _resume_cluster_already_created):
         print("\n  ❌ No channel available for first node. Cannot start reinit.")
         if log:
-            log.log("4b: no channel for primary reinit after reconnect", prefix="ERROR")
+            log.log("4.2: no channel for primary reinit after reconnect", prefix="ERROR")
         return False
 
     if _mode_sel == "3" and _peers_for_reinit:
         print(f"\n  Mode 3: auto-joining {len(_peers_for_reinit)} peer node(s) in parallel...")
         if log:
-            log.log(f"4b: mode 3 peer auto-join for {_peers_for_reinit}")
+            log.log(f"4.2: mode 3 peer auto-join for {_peers_for_reinit}")
 
         _menu_sigs_lower = [
             "selection (1-", "(1-9)?", "(1-11)?", "(1-12)?",
@@ -16483,11 +16483,11 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 print(f"     [{_peer_ip}] cluster IP { _cluster_ip }")
             if log:
                 log.log(
-                    "4b resume: reusing peer_option4_done state for peers: "
+                    "4.2 resume: reusing peer_option4_done state for peers: "
                     f"{sorted(_resume_ready_peer_ips)}"
                 )
 
-        # Write node-add manifest so option 2c can resume if interrupted.
+        # Write node-add manifest so option 2.3 can resume if interrupted.
         _write_node_add_manifest(
             nodes=[
                 dict(
@@ -16534,14 +16534,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             log.log(f"[{first_ip}] resume: primary cluster already created; skipping option 9/4 replay")
     elif not _resume_primary_from_wizard:
         if log:
-            log.start_phase("4b – Boot Menu Selection")
+            log.start_phase("4.2 – Boot Menu Selection")
         _first_rc_ctx = _make_reconnect_ctx(
             first_ip,
             bmc_user,
             bmc_passwords.get(first_ip, ""),
             client=first_cl,
             channel=first_ch,
-            label=f"4b/bootmenu/{first_ip}",
+            label=f"4.2/bootmenu/{first_ip}",
         )
         _primary_option9_selected = wait_for_boot_menu_and_select(
             first_ch, node_log=_pnf_primary, reconnect_ctx=_first_rc_ctx
@@ -16562,7 +16562,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             try:
                 _checkpoint.mark_done("primary_bootmenu_done")
                 if log:
-                    log.log("4b: checkpoint: primary_bootmenu_done saved")
+                    log.log("4.2: checkpoint: primary_bootmenu_done saved")
             except _InjectedCheckpointFailure:
                 raise
             except Exception:
@@ -16595,7 +16595,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         elif _resume_primary_from_wizard:
             print(f"\n  [{first_ip}] Resuming cluster setup wizard without reset...")
             if log:
-                log.start_phase("4b – Cluster Initialization (primary resume)")
+                log.start_phase("4.2 – Cluster Initialization (primary resume)")
             _wizard_ok = _run_cluster_setup_wizard(
                 first_ch, primary_bmc=first_ip, initial_buf=_primary_resume_buf,
                 node_log=_pnf_primary,
@@ -16607,14 +16607,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         elif _auto_setup:
             print(f"\n  [{first_ip}] Starting automatic cluster initialization...")
             if log:
-                log.start_phase("4b – Cluster Initialization (primary)")
+                log.start_phase("4.2 – Cluster Initialization (primary)")
             _auto_init_rc = _make_reconnect_ctx(
                 first_ip,
                 bmc_user,
                 bmc_passwords.get(first_ip, ""),
                 client=first_cl,
                 channel=first_ch,
-                label=f"4b/primary/{first_ip}",
+                label=f"4.2/primary/{first_ip}",
             )
             auto_complete_initialization(
                 first_ch, bmc_host=first_ip, reconnect_ctx=_auto_init_rc
@@ -16622,12 +16622,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             if log:
                 log.end_phase()
         else:
-            # 1a: interactive session — pass-through mode so operator sees everything
+            # 1.1: interactive session — pass-through mode so operator sees everything
             if _primary_nlw:
                 _primary_nlw.interactive = True
             print(f"\n  [{first_ip}] Switching to interactive session...")
             if log:
-                log.start_phase("4b – Interactive Session")
+                log.start_phase("4.2 – Interactive Session")
             session = InteractiveSession(
                 first_ch, first_cl, first_ip,
                 bmc_user, bmc_passwords.get(first_ip, ""),
@@ -16690,7 +16690,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 _pcl.close()
 
     _t_4b_post_cluster_auto_add_start = time.monotonic()
-    _4b_post_cluster_phase_name = "4b – Post-Cluster Auto Add (mode 3)"
+    _4b_post_cluster_phase_name = "4.2 – Post-Cluster Auto Add (mode 3)"
 
     # ── Mode 3: auto-join peer nodes ───────────────────────────────────────
     if _mode_sel == "3" and _peers_for_reinit:
@@ -16733,7 +16733,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             print(f"  ⚠️  Peer reinit issues: {_peer_errors}")
             _run_ok = False
             if log:
-                log.log(f"4b mode 3: peer reinit issues: {_peer_errors}", prefix="ERROR")
+                log.log(f"4.2 mode 3: peer reinit issues: {_peer_errors}", prefix="ERROR")
 
         # ── Bulk cluster add via the primary node's cluster shell ──────────
         _4b_pch = None
@@ -16803,12 +16803,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 if not _add_ok:
                     _run_ok = False
                     if log:
-                        log.log("4b mode 3: cluster add-node did not complete", prefix="ERROR")
+                        log.log("4.2 mode 3: cluster add-node did not complete", prefix="ERROR")
             else:
                 _status("  ⚠️  No cluster shell available; skipping cluster add-node.")
                 _run_ok = False
                 if log:
-                    log.log("4b mode 3: cluster shell unavailable; skipping cluster add-node",
+                    log.log("4.2 mode 3: cluster shell unavailable; skipping cluster add-node",
                             prefix="ERROR")
         else:
             if _resume_mode3_add_only:
@@ -16817,12 +16817,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     "nothing to add."
                 )
                 if log:
-                    log.log("4b mode 3 resume: no pending add-node candidates")
+                    log.log("4.2 mode 3 resume: no pending add-node candidates")
             else:
                 _status("  ⚠️  No cluster IPs collected from peers; skipping cluster add-node.")
                 _run_ok = False
                 if log:
-                    log.log("4b mode 3: no cluster IPs; skipping cluster add-node",
+                    log.log("4.2 mode 3: no cluster IPs; skipping cluster add-node",
                             prefix="ERROR")
 
         # Repair node names if nodes joined out of expected order
@@ -16842,13 +16842,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 target_count=_target_nodes,
                 total_timeout=1800,
                 poll_interval=120,
-                label="4b mode 3",
+                label="4.2 mode 3",
                 final_count=_target_nodes,
             )
             if not _healthy_nodes:
                 _run_ok = False
                 if log:
-                    log.log("4b mode 3: cluster show health check failed", prefix="ERROR")
+                    log.log("4.2 mode 3: cluster show health check failed", prefix="ERROR")
 
             _fo_out = ""
             try:
@@ -16859,7 +16859,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             except Exception as _fo_exc:
                 _run_ok = False
                 if log:
-                    log.log(f"4b mode 3: could not query storage failover show: {_fo_exc}",
+                    log.log(f"4.2 mode 3: could not query storage failover show: {_fo_exc}",
                             prefix="ERROR")
             _expected_nodes = []
             if _fo_out:
@@ -16872,12 +16872,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 ):
                     _run_ok = False
                     if log:
-                        log.log("4b mode 3: final failover/giveback check failed", prefix="ERROR")
+                        log.log("4.2 mode 3: final failover/giveback check failed", prefix="ERROR")
             else:
                 _run_ok = False
                 if log:
                     log.log(
-                        f"4b mode 3: expected {_target_nodes} nodes in storage failover show, "
+                        f"4.2 mode 3: expected {_target_nodes} nodes in storage failover show, "
                         f"found {len(_expected_nodes)}",
                         prefix="ERROR",
                     )
@@ -16893,7 +16893,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                             after_by_node=_after4b_nodes,
                         )
                 except Exception as _ver4b_exc:
-                    log.log(f"4b mode 3: ONTAP version capture failed: {_ver4b_exc}",
+                    log.log(f"4.2 mode 3: ONTAP version capture failed: {_ver4b_exc}",
                             prefix="WARN")
             try:
                 _4b_pch.close()
@@ -16947,9 +16947,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     if _checkpoint and _run_ok:
         _checkpoint.mark_done("cluster_formed")
         if log:
-            log.log("4b: checkpoint: cluster_formed saved")
+            log.log("4.2: checkpoint: cluster_formed saved")
     elif _checkpoint and log:
-        log.log("4b: cluster not fully formed; checkpoint retained for resume", prefix="WARN")
+        log.log("4.2: cluster not fully formed; checkpoint retained for resume", prefix="WARN")
 
     global _4b_did_reinit
     _4b_did_reinit = _do_reinit
@@ -16958,7 +16958,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
 
 
 # ---------------------------------------------------------------------------
-# Mode 41 (4a): ONTAP software upgrade via rolling takeover/giveback
+# Mode 41 (4.1): ONTAP software upgrade via rolling takeover/giveback
 # ---------------------------------------------------------------------------
 
 def _find_upgrade_package():
@@ -17699,7 +17699,7 @@ def _parse_sfo_fields(out, node):
 def _run_with_lif_reconnect_retry(operation, *, log=None, context="cluster poll"):
     """Run *operation* with 3 reconnect-style retries, 60s apart.
 
-    Mirrors the option 4a poll-channel hardening behavior for places that
+    Mirrors the option 4.1 poll-channel hardening behavior for places that
     operate on an existing cluster shell channel and should tolerate brief
     cluster LIF migration windows.
     """
@@ -17962,7 +17962,7 @@ def _wait_for_cluster_healthy(channel, expected_nodes, total_timeout=1800,
 
 
 def _pick_bmc_from_existing_config():
-    """4a helper: scan for known config / BMC files and let the operator
+    """4.1 helper: scan for known config / BMC files and let the operator
     pick a single BMC (with its stored credentials) instead of typing the
     hostname.
 
@@ -18113,12 +18113,12 @@ def _pick_bmc_from_existing_config():
 
 
 def _run_ontap_upgrade(log):
-    """Full ONTAP upgrade workflow (mode 41 / option 4a).
+    """Full ONTAP upgrade workflow (mode 41 / option 4.1).
 
     `log` is a SessionLogger instance (may be None in tests).
     Returns True on success, False on any fatal error, None if redirecting to 4e.
     """
-    _print_banner("\U0001f4e6 ONTAP Software Upgrade (4a)")
+    _print_banner("\U0001f4e6 ONTAP Software Upgrade (4.1)")
     print("\n  Note: only upgrades are supported (not downgrades).\n")
 
     # ── Step 0: check for config files before doing anything else ───────────
@@ -18129,7 +18129,7 @@ def _run_ontap_upgrade(log):
     if not _has_any_config:
         print("  \u26a0\ufe0f  No config files (reinit-config.json / BMC_IP.json) "
               "found on disk.")
-        print("     Option 5c can connect to your existing cluster and generate "
+        print("     Option 5.3 can connect to your existing cluster and generate "
               "them automatically.")
         _ans_4e = _prompt(
             "  Run the 4e config-gather workflow now? [Y/n]: ", "n"
@@ -18193,7 +18193,7 @@ def _run_ontap_upgrade(log):
             bmc_user = input("  BMC username [admin]: ").strip() or "admin"
             bmc_pass = getpass.getpass(f"  BMC password for {bmc_user}@{bmc_host}: ")
         if log:
-            log.log(f"4a: credentials: {bmc_user}@{bmc_host}")
+            log.log(f"4.1: credentials: {bmc_user}@{bmc_host}")
 
         # Publish creds for silent cluster-login candidates.
         global _primary_bmc_user, _primary_bmc_password
@@ -18475,7 +18475,7 @@ def _run_ontap_upgrade(log):
                 for _ip in _node_mgmt_pool:
                     print(f"     • {_ip}")
                 if log:
-                    log.log(f"4a: node mgmt IPs from config: {_node_mgmt_pool}")
+                    log.log(f"4.1: node mgmt IPs from config: {_node_mgmt_pool}")
                 _validate_targets = list(_node_mgmt_pool)
             else:
                 # No node mgmt IPs anywhere on disk — try to discover them
@@ -18509,7 +18509,7 @@ def _run_ontap_upgrade(log):
                 except Exception as _disc_err:
                     _discovered_ips = []
                     if log:
-                        log.log(f"4a: node-mgmt LIF query failed: {_disc_err}",
+                        log.log(f"4.1: node-mgmt LIF query failed: {_disc_err}",
                                 prefix="WARN")
 
                 if _discovered_ips:
@@ -18518,12 +18518,12 @@ def _run_ontap_upgrade(log):
                     for _ip in _discovered_ips:
                         print(f"     \u2022 {_ip}")
                     if log:
-                        log.log(f"4a: node mgmt IPs from live cluster: {_discovered_ips}")
+                        log.log(f"4.1: node mgmt IPs from live cluster: {_discovered_ips}")
                     _node_mgmt_pool = _discovered_ips
                     _validate_targets = list(_node_mgmt_pool)
                 else:
                     print("  \u2139\ufe0f  Could not auto-discover node-mgmt IPs. "
-                          "You can also run option 5c to generate a config file "
+                          "You can also run option 5.3 to generate a config file "
                           "containing these IPs for future runs.")
                     _manual_ip = _prompt(
                         "  Enter a node (or cluster) management IP to use "
@@ -18537,7 +18537,7 @@ def _run_ontap_upgrade(log):
                         _cl_mgmt_ip = _manual_ip
                         print(f"  \U0001f4cd Using management IP: {_cl_mgmt_ip}")
                         if log:
-                            log.log(f"4a: parallel SSH fallback IP: {_cl_mgmt_ip}")
+                            log.log(f"4.1: parallel SSH fallback IP: {_cl_mgmt_ip}")
                         _validate_targets = [_cl_mgmt_ip]
 
             # Ping + auth validation: confirm every target is reachable and
@@ -18581,7 +18581,7 @@ def _run_ontap_upgrade(log):
                     for _ip, _why in _bad:
                         print(f"     • {_ip}: {_why}")
                     if log:
-                        log.log(f"4a: parallel target validation failures: {_bad}",
+                        log.log(f"4.1: parallel target validation failures: {_bad}",
                                 prefix="ERROR")
                     _ans = _prompt(
                         "  Proceed anyway with only the healthy target(s)? "
@@ -18623,7 +18623,7 @@ def _run_ontap_upgrade(log):
             for _i, (nodename, _, _) in enumerate(_update_tasks):
                 _node_ssh_targets[nodename] = _ssh_target_pool[_i % len(_ssh_target_pool)]
             if log:
-                log.log(f"4a: per-node SSH target map: {_node_ssh_targets}")
+                log.log(f"4.1: per-node SSH target map: {_node_ssh_targets}")
 
         if _parallel_update:
             # ── Parallel helper ────────────────────────────────────────────
@@ -20233,7 +20233,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     """
     global _operation_mode, _auto_add
 
-    # If _cluster_config was never populated (e.g. called from the 4b reinit
+    # If _cluster_config was never populated (e.g. called from the 4.2 reinit
     # path which only runs _discover_and_prompt_config, not collect_cluster_config),
     # try to build it now from the already-loaded _config_data.  If that also
     # fails, offer the operator another chance to supply a config file before
@@ -20269,15 +20269,15 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
 
     print("\n🤖 Driving ONTAP cluster setup wizard from collected values...")
     if _session_log:
-        _session_log.start_phase("Cluster Setup Wizard (1b)")
+        _session_log.start_phase("Cluster Setup Wizard (1.2)")
         loggable = {k: ("<hidden>" if k == "admin_password" else v) for k, v in cc.items()}
         _session_log.log(f"Wizard inputs: {loggable}")
     if _checkpoint and _operation_mode == 1 and _auto_add:
         with suppress(Exception):
             _checkpoint.set_current_phase(
-                "Cluster Setup Wizard (1b)",
+                "Cluster Setup Wizard (1.2)",
                 state="in_progress",
-                next_phase="2b – Parallel Node Add",
+                next_phase="2.2 – Parallel Node Add",
             )
 
     # Some ONTAP builds show "Press Enter to complete cluster setup" first;
@@ -20622,9 +20622,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _session_log.end_phase()
 
     # Checkpoint: cluster create has succeeded and the primary is at the
-    # ONTAP login prompt. Mode 4b's standalone wrapper writes this same
+    # ONTAP login prompt. Mode 4.2's standalone wrapper writes this same
     # marker at its own completion point; writing it here covers the
-    # direct mode-1b / mode-3 entry path that uses _run_cluster_setup_wizard.
+    # direct mode-1.2 / mode-3 entry path that uses _run_cluster_setup_wizard.
     if _checkpoint:
         try:
             _checkpoint.mark_done("cluster_formed")
@@ -20671,7 +20671,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     prefix="WARN",
                 )
 
-    # Set up passwordless SSH if the operator requested it during 1a/1b.
+    # Set up passwordless SSH if the operator requested it during 1.1/1.2.
     if _setup_passwordless_ssh:
         _ssh_mgmt_ip = cc.get("mgmt_ip") or ""
         if not _ssh_mgmt_ip:
@@ -20722,7 +20722,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 pass
         sys.exit(1)
 
-    # Mode 1 (1a/1b): prompt whether to run node add (2a/2b) or return to menu.
+    # Mode 1 (1.1/1.2): prompt whether to run node add (2.1/2.2) or return to menu.
     _came_from_mode1 = False
     if _operation_mode == 1:
         mgmt_ip = cc.get("mgmt_ip") or "<cluster-management-ip>"
@@ -20734,7 +20734,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             try:
                 if _auto_setup:
                     _checkpoint.clear()
-                    _slog("checkpoint: cleared after 1b complete")
+                    _slog("checkpoint: cleared after 1.2 complete")
                 else:
                     _checkpoint.mark_done("option1_complete")
                     _slog("checkpoint: option1_complete saved")
@@ -20745,20 +20745,20 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _print_banner("➕ Add Nodes")
         print("  Would you like to add peer nodes now?")
         print("")
-        print("  2a. Add nodes interactively  (manual prompts at each step)")
-        print("  2b. Add nodes automatically  (auto-answer all prompts)")
+        print("  2.1. Add nodes interactively  (manual prompts at each step)")
+        print("  2.2. Add nodes automatically  (auto-answer all prompts)")
         print("  N.  Return to main menu")
         print("")
         while True:
             print("  " + "─" * 58)
             node_choice = _prompt_with_timeout(
-                "  Enter choice (2a / 2b / N): ",
+                "  Enter choice (2.1 / 2.2 / N): ",
                 default="n",
                 timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
             ).strip().lower()
-            if node_choice in ("2a", "2b", "n", ""):
+            if node_choice in ("2.1", "2.2", "n", ""):
                 break
-            print("  ⚠️  Please enter 2a, 2b, or N.")
+            print("  ⚠️  Please enter 2.1, 2.2, or N.")
         if node_choice in ("n", ""):
             if _session_log:
                 _session_log.log("Mode 1 complete; user chose to return to main menu")
@@ -20775,7 +20775,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
 
     # Ask the operator whether to continue (e.g. into interactive add-node
     # flow) or stop the script with a friendly summary.
-    # For automated modes (2b, 3) answer yes automatically.
+    # For automated modes (2.2, 3) answer yes automatically.
     if _came_from_mode1:
         ans = "y"
     elif _auto_add or _operation_mode == 3:
@@ -20811,24 +20811,24 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     if not (_auto_add or _operation_mode == 3):
         print("\n✅ Cluster configuration complete. Moving on to add nodes.")
 
-    # Ask whether to add nodes interactively (2a) or automatically (2b).
-    # Mode 3 always auto-selects 2b (no prompt needed).
+    # Ask whether to add nodes interactively (2.1) or automatically (2.2).
+    # Mode 3 always auto-selects 2.2 (no prompt needed).
     if _came_from_mode1:
         pass  # node_choice already set in mode 1 block above
     elif _operation_mode == 3:
-        node_choice = "2b"
-        print("\n✅ Mode 3: auto-selecting 2b (automatic node add).")
-        _slog("Mode 3: auto-selected 2b for node add")
+        node_choice = "2.2"
+        print("\n✅ Mode 3: auto-selecting 2.2 (automatic node add).")
+        _slog("Mode 3: auto-selected 2.2 for node add")
     else:
         _print_banner("➕ Add Nodes")
         print("")
-        print("  2a. Add nodes interactively  (manual prompts at each step)")
-        print("  2b. Add nodes automatically  (auto-answer all prompts)")
+        print("  2.1. Add nodes interactively  (manual prompts at each step)")
+        print("  2.2. Add nodes automatically  (auto-answer all prompts)")
         print("")
         while True:
             print("  " + "─" * 58)
             node_choice = _prompt_with_timeout(
-                "  Enter sub-option (2a / 2b) or blank to end session: ",
+                "  Enter sub-option (2.1 / 2.2) or blank to end session: ",
                 default="",
                 timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
             ).strip().lower()
@@ -20836,12 +20836,12 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 print("\n  Ending session.")
                 _slog("User chose not to add nodes; ending session")
                 return
-            if node_choice in ("2a", "2b"):
+            if node_choice in ("2.1", "2.2"):
                 break
-            print("  ⚠️  Please enter 2a or 2b.")
+            print("  ⚠️  Please enter 2.1 or 2.2.")
 
     _operation_mode = 2
-    _auto_add = (node_choice == "2b")
+    _auto_add = (node_choice == "2.2")
     print(
         f"\n  \u2705 Confirmed. {node_choice.upper()}: "
         f"{'Automatic' if _auto_add else 'Interactive'} node add.\n"
@@ -20849,7 +20849,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     if _checkpoint:
         with suppress(Exception):
             _checkpoint.set_current_phase(
-                "2b – Parallel Node Add" if _auto_add else "2a – Interactive Parallel Node Add",
+                "2.2 – Parallel Node Add" if _auto_add else "2.1 – Interactive Parallel Node Add",
                 state="in_progress",
                 next_phase="Node join finalization",
             )
@@ -20871,7 +20871,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
 
 
 # ---------------------------------------------------------------------------
-# Mode 2b / Mode 3 peer: auto join wizard
+# Mode 2.2 / Mode 3 peer: auto join wizard
 # ---------------------------------------------------------------------------
 
 def _run_join_wizard(channel, label="join wizard", initial_buf: str = ""):
@@ -20894,7 +20894,7 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = ""):
         print(f"\n❌ [{label}] Timed out waiting for cluster setup wizard start.")
         _slog(f"[{label}] Timeout waiting for wizard start", prefix="ERROR")
         return False
-    # Always send one Enter after wizard-start detection. As with mode 1b,
+    # Always send one Enter after wizard-start detection. As with mode 1.2,
     # residual create/join text can appear before ONTAP consumes the required
     # Enter from the "Otherwise, press Enter..." screen.
     if "press enter" in _which.lower():
@@ -20925,25 +20925,25 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = ""):
             time.sleep(0.5)
         # Some builds re-prompt for confirmation.
         # We don't wait for cluster_show here when run from the primary
-        # channel (mode 2b single add); verification is the caller's choice.
+        # channel (mode 2.2 single add); verification is the caller's choice.
     return True
 
 
 def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None,
                        no_add_another=False):
-    """Mode 2b: auto-drive the post-option-4 prompts to add this node to an
+    """Mode 2.2: auto-drive the post-option-4 prompts to add this node to an
     existing cluster. Runs on the primary BMC channel. Drives every prompt
     through the final `login:` line, then asks the operator whether to add
     another node.
     """
     global _add_another_node_request
-    print("\n🤖 Mode 2b: automated node-add in progress...")
+    print("\n🤖 Mode 2.2: automated node-add in progress...")
     if _session_log:
         _session_log.start_phase("Auto Join")
-        _session_log.log("Mode 2b automated join starting after option 4 sent")
+        _session_log.log("Mode 2.2 automated join starting after option 4 sent")
     _join_reconnect_ctx = _make_reconnect_ctx(
         sp_host, sp_user, sp_pass,
-        client=client, channel=channel, label=f"2b/{bmc_host or sp_host or 'node'}",
+        client=client, channel=channel, label=f"2.2/{bmc_host or sp_host or 'node'}",
     )
 
     # Yes confirmations after option 4.
@@ -20962,7 +20962,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
 
     # Drive the join wizard (sends "join" at create-or-join prompt).
-    _run_join_wizard(channel, label=f"2b/{bmc_host or 'this node'}",
+    _run_join_wizard(channel, label=f"2.2/{bmc_host or 'this node'}",
                      initial_buf=_mgmt_residual)
 
     # ---- Post-create/join: drive every remaining prompt through "login:".
@@ -21148,7 +21148,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
                 print(f"  \u2705 Using config BMC: {_cfg_bmc} (user={_cfg_user})")
                 if _session_log:
                     _session_log.log(
-                        f"Mode 2b: using config BMC {_cfg_bmc} (user={_cfg_user})"
+                        f"Mode 2.2: using config BMC {_cfg_bmc} (user={_cfg_user})"
                     )
                 break
 
@@ -22030,7 +22030,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             _fb_init = _bmc_fallback_passwords(peer_bmc, {peer_bmc: peer_password})
             client, peer_user, peer_password = _ssh_connect_with_retry(
                 peer_bmc, peer_user, peer_password,
-                # Threaded 2a/2b worker path: never block on hidden
+                # Threaded 2.1/2.2 worker path: never block on hidden
                 # credential re-prompts; fail this node and surface retry
                 # selection at the batch level instead.
                 label=label, max_attempts=5, interactive=False,
@@ -22203,7 +22203,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     _session_log.log_console(f"[{label}] {chunk}")
                 if "y/n" in buf.lower():
                     # Some BMCs re-emit a takeover prompt mid-stream after
-                    # reconnects; always auto-accept in 2a/2b worker mode.
+                    # reconnects; always auto-accept in 2.1/2.2 worker mode.
                     ch.send("y\r")
                     if _session_log:
                         _session_log.log_sent("y")
@@ -22735,7 +22735,7 @@ def _omit_already_joined_nodes(peer_bmcs, primary_channel, mode_label="", log=No
 
 
 def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
-    """Mode 2b with multiple nodes: reset all peers to LOADER in parallel,
+    """Mode 2.2 with multiple nodes: reset all peers to LOADER in parallel,
     run option 4, disk erase, and node-mgmt for all in parallel, then use
     ONTAP's ``cluster add-node`` to add all nodes at once.
 
@@ -22749,7 +22749,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
     # ── 1. Display nodes and confirm ────────────────────────────────────────
     print("\n" + "=" * 60)
-    print(f"  ➕ Mode 2b: add the following {len(peer_bmcs)} node(s) to the cluster?")
+    print(f"  ➕ Mode 2.2: add the following {len(peer_bmcs)} node(s) to the cluster?")
     print("  " + "─" * 58)
     _col_w = 18
     print(f"  {'#':<4} {'BMC IP':<{_col_w}} {'Node Mgmt IP':<{_col_w}} "
@@ -22762,11 +22762,11 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         _n_gw  = _nc.get("node_mgmt_gateway") or _nc.get("gateway") or "—"
         print(f"  {i:<4} {ip:<{_col_w}} {_n_ip:<{_col_w}} {_n_prt:<8} {_n_gw:<{_col_w}}")
     print("=" * 60)
-    peer_bmcs = _omit_nodes_by_number(peer_bmcs, mode_label="2b", log=log)
+    peer_bmcs = _omit_nodes_by_number(peer_bmcs, mode_label="2.2", log=log)
     if not peer_bmcs:
         print("\n  ✅ No nodes selected for add. Nothing to do.")
         if log:
-            log.log("2b: operator omitted all listed nodes; no-op")
+            log.log("2.2: operator omitted all listed nodes; no-op")
         return True
 
     # ── 2. BMC credentials ─────────────────────────────────────────────────
@@ -22833,7 +22833,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     _ep_p = ""
             _peer_bmc_creds[ip] = {"user": _ep_u, "password": _ep_p}
             if log:
-                log.log(f"2b: resolved BMC creds for {ip} (user={_ep_u})")
+                log.log(f"2.2: resolved BMC creds for {ip} (user={_ep_u})")
 
     # ── 3. Ping all BMC IPs ────────────────────────────────────────────────
     print(f"\n  🏓 Pinging {len(peer_bmcs)} BMC(s)...")
@@ -22849,7 +22849,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         print("  Aborting — resolve connectivity before retrying.")
         if log:
             log.log(
-                f"2b parallel add aborted: unreachable BMCs: {_unreachable}",
+                f"2.2 parallel add aborted: unreachable BMCs: {_unreachable}",
                 prefix="ERROR",
             )
         return False
@@ -22880,12 +22880,12 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 _peer_bmc_creds[_ip] = {"user": _u, "password": _p}
                 print(f"    ✅ {_ip} (user={_u})")
                 if log:
-                    log.log(f"2b pre-auth OK: {_ip} (user={_u})")
+                    log.log(f"2.2 pre-auth OK: {_ip} (user={_u})")
                 break
             except Exception as _ae:
                 print(f"    ❌ {_ip} — authentication failed: {_ae}")
                 if log:
-                    log.log(f"2b pre-auth FAIL: {_ip}: {_ae}", prefix="WARN")
+                    log.log(f"2.2 pre-auth FAIL: {_ip}: {_ae}", prefix="WARN")
                 print(
                     f"    Re-enter credentials for {_ip} "
                     "(blank password will be tried; type 'skip' for username to skip):"
@@ -22912,17 +22912,17 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             if not peer_bmcs:
                 print("  No nodes remaining after removing failed ones. Aborting.")
                 if log:
-                    log.log("2b: no nodes remain after auth failures; aborting",
+                    log.log("2.2: no nodes remain after auth failures; aborting",
                             prefix="ERROR")
                 return False
             print(f"  Continuing with {len(peer_bmcs)} node(s).")
             if log:
-                log.log(f"2b: removed {_auth_failed_nodes} (auth fail); "
+                log.log(f"2.2: removed {_auth_failed_nodes} (auth fail); "
                         f"continuing with {peer_bmcs}")
         else:
             print("  Aborting.")
             if log:
-                log.log(f"2b: aborted due to auth failure on {_auth_failed_nodes}",
+                log.log(f"2.2: aborted due to auth failure on {_auth_failed_nodes}",
                         prefix="ERROR")
             return False
 
@@ -22934,12 +22934,12 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     if _confirm != "y":
         print("\n  Aborting.")
         if log:
-            log.log("Mode 2b parallel add: operator declined confirmation")
+            log.log("Mode 2.2 parallel add: operator declined confirmation")
         return False
     if log:
-        log.log(f"Mode 2b parallel add confirmed for {len(peer_bmcs)} node(s): {peer_bmcs}")
+        log.log(f"Mode 2.2 parallel add confirmed for {len(peer_bmcs)} node(s): {peer_bmcs}")
 
-    # Write node-add manifest so option 2c can resume if this run is interrupted.
+    # Write node-add manifest so option 2.3 can resume if this run is interrupted.
     _write_node_add_manifest(
         nodes=[
             dict(
@@ -23004,19 +23004,19 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     baseline = _cluster_show_node_count(primary_channel)
                     print(f"  ✅ Connected; current cluster node count: {baseline}")
                     if log:
-                        log.log(f"2b parallel: cluster mgmt OK; baseline={baseline}")
+                        log.log(f"2.2 parallel: cluster mgmt OK; baseline={baseline}")
                 else:
                     primary_client.close()
                     primary_client = None
                     print("  ⚠️  Could not log into cluster shell; join verification skipped.")
                     if log:
-                        log.log("2b parallel: cluster shell login failed; verification skipped",
+                        log.log("2.2 parallel: cluster shell login failed; verification skipped",
                                 prefix="WARN")
                 break
             except paramiko.AuthenticationException:
                 print(f"  ❌ Cluster mgmt authentication failed for {_cm_user}@{mgmt_ip}.")
                 if log:
-                    log.log(f"2b parallel: cluster mgmt auth failed for {_cm_user}@{mgmt_ip}",
+                    log.log(f"2.2 parallel: cluster mgmt auth failed for {_cm_user}@{mgmt_ip}",
                             prefix="WARN")
                 try:
                     _cm_user = _prompt_with_timeout(
@@ -23038,30 +23038,30 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             except Exception as _ce:
                 print(f"  ⚠️  Cluster mgmt connection failed ({_ce}); verification skipped.")
                 if log:
-                    log.log(f"2b parallel: cluster mgmt connection failed: {_ce}", prefix="WARN")
+                    log.log(f"2.2 parallel: cluster mgmt connection failed: {_ce}", prefix="WARN")
                 primary_channel = None
                 primary_client = None
                 break
     else:
         print("  ℹ️  Cluster mgmt IP not set; join verification will be skipped.")
         if log:
-            log.log("2b parallel: no cluster mgmt IP; verification skipped")
+            log.log("2.2 parallel: no cluster mgmt IP; verification skipped")
 
     if primary_channel:
         peer_bmcs = _omit_already_joined_nodes(
-            peer_bmcs, primary_channel, mode_label="2b", log=log
+            peer_bmcs, primary_channel, mode_label="2.2", log=log
         )
         if not peer_bmcs:
             print("\n  ✅ All selected nodes are already in cluster. Nothing to add.")
             if log:
-                log.log("2b: all selected nodes already in cluster; no-op")
+                log.log("2.2: all selected nodes already in cluster; no-op")
             if primary_client:
                 try:
                     primary_client.close()
                 except Exception:
                     pass
             return True
-        # Refresh manifest after cluster comparison so 2c resumes only pending nodes.
+        # Refresh manifest after cluster comparison so 2.3 resumes only pending nodes.
         _write_node_add_manifest(
             nodes=[
                 dict(
@@ -23092,7 +23092,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
     # ── 4. Spawn one thread per peer ────────────────────────────────────────
     if log:
-        log.start_phase("2b – Parallel Node Add")
+        log.start_phase("2.2 – Parallel Node Add")
 
     _cluster_ips_out = {}   # peer_bmc -> cluster interface IP (populated by threads)
     _2b_peer_timings: "dict[str, dict]" = {}
@@ -23123,7 +23123,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             t = threading.Thread(
                 target=_run_with_result,
                 daemon=True,
-                name=f"2b-add-{addr}",
+                name=f"2.2-add-{addr}",
             )
             t.start()
             threads.append(t)
@@ -23131,7 +23131,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
         print(f"\n  ⏳ Waiting for {_n} node(s) to complete "
               f"(parallel LOADER/format/node-mgmt, then bulk cluster join)...")
-        if not _join_threads_with_deadline(threads, label="mode 2b", log=log):
+        if not _join_threads_with_deadline(threads, label="mode 2.2", log=log):
             return False
         _raise_pending_checkpoint_failure()
 
@@ -23146,7 +23146,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
         print(f"\n  ⚠️  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
         if log:
-            log.log(f"2b: {len(_failed)} node(s) failed: {_failed}", prefix="WARN")
+            log.log(f"2.2: {len(_failed)} node(s) failed: {_failed}", prefix="WARN")
         _retry_ans = _prompt_with_timeout(
             "  Retry failed node(s)? [y/n]: ", "n", timeout=60
         ).lower()
@@ -23154,7 +23154,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             break
         print(f"\n  🔁 Retrying {len(_failed)} node(s)...")
         if log:
-            log.log(f"2b: operator chose to retry: {_failed}")
+            log.log(f"2.2: operator chose to retry: {_failed}")
         _pending = _failed
 
     # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
@@ -23169,16 +23169,16 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         else:
             print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
             if log:
-                log.log("2b: no cluster IPs collected; skipping cluster add-node",
+                log.log("2.2: no cluster IPs collected; skipping cluster add-node",
                         prefix="WARN")
     elif not primary_channel:
         print("\n  ℹ️  No primary channel; skipping cluster add-node.")
         if log:
-            log.log("2b: no primary channel; skipping cluster add-node")
+            log.log("2.2: no primary channel; skipping cluster add-node")
 
     if log:
         # Per-node detailed timing breakdown.
-        _2B_PHASE = "2b – Parallel Node Add"
+        _2B_PHASE = "2.2 – Parallel Node Add"
         for _bmc in peer_bmcs:
             _t = _2b_peer_timings.get(_bmc)
             if not _t:
@@ -23216,7 +23216,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         _wait_for_cluster_nodes_healthy(
             primary_channel, target_count=_target,
             total_timeout=1800, poll_interval=120,
-            label="2b", final_count=_target,
+            label="2.2", final_count=_target,
         )
         _fo_out = ""
         try:
@@ -23242,14 +23242,14 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         except Exception:
             pass
 
-    print("\n  ✅ Mode 2b parallel add complete.")
+    print("\n  ✅ Mode 2.2 parallel add complete.")
     if log:
-        log.log("Mode 2b parallel add: all threads finished")
+        log.log("Mode 2.2 parallel add: all threads finished")
     return True
 
 
 def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
-    """Mode 2a: run nodes in parallel through LOADER → option 4 → disk erase →
+    """Mode 2.1: run nodes in parallel through LOADER → option 4 → disk erase →
     node-mgmt → cluster IP capture, then offer interactive selection of which
     nodes to join via ``cluster add-node``.
 
@@ -23263,7 +23263,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
     # ── 1. Display nodes ─────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print(f"  🔄 Mode 2a: reinitialize {len(peer_bmcs)} node(s) (nodes will be left un-added)")
+    print(f"  🔄 Mode 2.1: reinitialize {len(peer_bmcs)} node(s) (nodes will be left un-added)")
     print("  " + "─" * 58)
     _col_w = 18
     print(f"  {'#':<4} {'BMC IP':<{_col_w}} {'Node Mgmt IP':<{_col_w}} "
@@ -23277,11 +23277,11 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         print(f"  {i:<4} {ip:<{_col_w}} {_n_ip:<{_col_w}} {_n_prt:<8} {_n_gw:<{_col_w}}")
     print("=" * 60)
     print("\n  ℹ️   Nodes will boot in parallel. Disk erase prompts are auto-answered.\n")
-    peer_bmcs = _omit_nodes_by_number(peer_bmcs, mode_label="2a", log=log)
+    peer_bmcs = _omit_nodes_by_number(peer_bmcs, mode_label="2.1", log=log)
     if not peer_bmcs:
         print("\n  ✅ No nodes selected for add. Nothing to do.")
         if log:
-            log.log("2a: operator omitted all listed nodes; no-op")
+            log.log("2.1: operator omitted all listed nodes; no-op")
         return True
 
     # ── 2. Collect BMC credentials ───────────────────────────────────────────
@@ -23342,7 +23342,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     _ep_p = ""
             _peer_bmc_creds[ip] = {"user": _ep_u, "password": _ep_p}
             if log:
-                log.log(f"2a: resolved BMC creds for {ip} (user={_ep_u})")
+                log.log(f"2.1: resolved BMC creds for {ip} (user={_ep_u})")
 
     # ── 3. Connect to cluster mgmt for join verification ─────────────────────
     admin_password = (
@@ -23386,12 +23386,12 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
     if primary_channel:
         peer_bmcs = _omit_already_joined_nodes(
-            peer_bmcs, primary_channel, mode_label="2a", log=log
+            peer_bmcs, primary_channel, mode_label="2.1", log=log
         )
         if not peer_bmcs:
             print("\n  ✅ All selected nodes are already in cluster. Nothing to add.")
             if log:
-                log.log("2a: all selected nodes already in cluster; no-op")
+                log.log("2.1: all selected nodes already in cluster; no-op")
             if primary_client:
                 try:
                     primary_client.close()
@@ -23401,7 +23401,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
     # ── 4. Spawn threads ─────────────────────────────────────────────────────
     if log:
-        log.start_phase("2a – Reinitialize Nodes (un-added state)")
+        log.start_phase("2.1 – Reinitialize Nodes (un-added state)")
 
     _cluster_ips_out = {}   # peer_bmc -> cluster interface IP
     _2a_peer_timings: "dict[str, dict]" = {}
@@ -23434,14 +23434,14 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             t = threading.Thread(
                 target=_run_2a,
                 daemon=True,
-                name=f"2a-add-{addr}",
+                name=f"2.1-add-{addr}",
             )
             t.start()
             threads.append(t)
             print(f"  ▶️  [{addr}] Thread started.")
 
         print(f"\n  ⏳ Nodes reinitializing in parallel...")
-        if not _join_threads_with_deadline(threads, label="mode 2a", log=log):
+        if not _join_threads_with_deadline(threads, label="mode 2.1", log=log):
             return False
         _raise_pending_checkpoint_failure()
 
@@ -23456,7 +23456,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
         print(f"\n  ⚠️  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
         if log:
-            log.log(f"2a: {len(_failed)} node(s) failed: {_failed}", prefix="WARN")
+            log.log(f"2.1: {len(_failed)} node(s) failed: {_failed}", prefix="WARN")
         _retry_ans = _prompt_with_timeout(
             "  Retry failed node(s)? [y/n]: ", "n", timeout=60
         ).lower()
@@ -23488,7 +23488,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                 for _e in _collected_ips:
                     print(f"     cluster add-node -cluster-ips {_e['cluster_ip']}")
                 if log:
-                    log.log("2a: operator chose to skip cluster add-node; nodes left un-added")
+                    log.log("2.1: operator chose to skip cluster add-node; nodes left un-added")
             else:
                 _selected = _collected_ips
                 if _add_ans:
@@ -23513,25 +23513,25 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                         for _e in _selected:
                             print(f"     cluster add-node -cluster-ips {_e['cluster_ip']}")
                         if log:
-                            log.log("2a: no primary channel; printed manual add-node commands")
+                            log.log("2.1: no primary channel; printed manual add-node commands")
                 else:
                     print("\n  ⚠️  No valid node numbers selected; nodes left un-added.")
                     if log:
-                        log.log("2a: no valid node numbers selected; skipping cluster add-node",
+                        log.log("2.1: no valid node numbers selected; skipping cluster add-node",
                                 prefix="WARN")
         else:
             print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
             if log:
-                log.log("2a: no cluster IPs collected; skipping cluster add-node",
+                log.log("2.1: no cluster IPs collected; skipping cluster add-node",
                         prefix="WARN")
     else:
         print("\n  ℹ️  No cluster IPs captured; nodes may need manual addition.")
         if log:
-            log.log("2a: _cluster_ips_out empty after threads completed")
+            log.log("2.1: _cluster_ips_out empty after threads completed")
 
     if log:
         # Per-node detailed timing breakdown.
-        _2A_PHASE = "2a – Interactive Parallel Node Add"
+        _2A_PHASE = "2.1 – Interactive Parallel Node Add"
         for _bmc in peer_bmcs:
             _t = _2a_peer_timings.get(_bmc)
             if not _t:
@@ -23569,7 +23569,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         _wait_for_cluster_nodes_healthy(
             primary_channel, target_count=_target,
             total_timeout=1800, poll_interval=120,
-            label="2a", final_count=_target,
+            label="2.1", final_count=_target,
         )
         _fo_out = ""
         try:
@@ -23595,9 +23595,9 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         except Exception:
             pass
 
-    print("\n  ✅ Mode 2a interactive parallel add complete.")
+    print("\n  ✅ Mode 2.1 interactive parallel add complete.")
     if log:
-        log.log("Mode 2a parallel add: all threads finished")
+        log.log("Mode 2.1 parallel add: all threads finished")
     return True
 
 
@@ -23613,7 +23613,7 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
     If a prior checkpoint shows the primary node already had its cluster
     created (``primary_setup_done`` set, ``option3_complete`` not set), warn
     the operator that re-running option 3 will destroy the cluster and
-    suggest option 2c instead. On confirmation (or no destructive risk) the
+    suggest option 2.3 instead. On confirmation (or no destructive risk) the
     prior checkpoint is cleared and a fresh one initialised.
 
     Mutates ``ctx.checkpoint`` and syncs back to the legacy ``_checkpoint``
@@ -23668,7 +23668,7 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
             print("      Re-running option 3 may SYSTEM RESET the primary")
             print("      and can DESTROY an existing cluster.")
             print("      To finish adding the remaining peer(s) without")
-            print("      re-resetting the primary, exit now and run option 2c")
+            print("      re-resetting the primary, exit now and run option 2.3")
             print("      (Resume node additions) instead.")
             ans = _prompt_with_timeout(
                 "\n  Proceed with full option 3 (destroys cluster) [y/N]: ",
@@ -23676,7 +23676,7 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
                 timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
             ).lower()
             if ans != "y":
-                print("  ↩️  Aborting option 3. Run option 2c to resume node additions.")
+                print("  ↩️  Aborting option 3. Run option 2.3 to resume node additions.")
                 if session_log:
                     session_log.log(
                         "option 3 aborted by operator at resume prompt; cluster already up"
@@ -24039,7 +24039,7 @@ def _extract_version_from_package_path(pkg_path: str) -> str:
 def _netboot_peers_parallel(peer_bmcs, pkg_url, version, log=None):
     """Netboot-install (option 7) all peer nodes in parallel.
 
-    This mirrors the mode-4b install path: each peer reaches LOADER, runs
+    This mirrors the mode-4.2 install path: each peer reaches LOADER, runs
     netboot, selects option 7, installs the image, and reboots.
     """
     if not peer_bmcs or not pkg_url:
@@ -24255,7 +24255,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
 
     # Checkpoint: primary is up and we're about to add peers. Record this
     # milestone now so a re-run can detect that the cluster already exists
-    # and steer the operator to option 2c rather than re-running option 3
+    # and steer the operator to option 2.3 rather than re-running option 3
     # (which would system-reset the primary and destroy the cluster).
     if _checkpoint:
         try:
@@ -24352,7 +24352,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                 with suppress(Exception):
                     _nb_httpd.shutdown()
 
-    # Write node-add manifest so option 2c can resume if this run is interrupted.
+    # Write node-add manifest so option 2.3 can resume if this run is interrupted.
     _write_node_add_manifest(
         nodes=[
             dict(
@@ -24547,7 +24547,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
 
 
 def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
-    """Drive option-9 → option-4 cluster init non-interactively for mode 1b.
+    """Drive option-9 → option-4 cluster init non-interactively for mode 1.2.
 
     Sequence:
       1. Auto-answer 'no' to the storage-availability-zone destroy warning.
@@ -24559,10 +24559,10 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
     Remaining setup-wizard prompts (cluster name, admin password, etc.) are
     left to the interactive session that runs after this function returns.
     """
-    print(f"\n🤖 {_node_pfx(bmc_host)}Mode 1b: automated cluster initialization in progress...{_elapsed_str()}")
+    print(f"\n🤖 {_node_pfx(bmc_host)}Mode 1.2: automated cluster initialization in progress...{_elapsed_str()}")
     if _session_log:
-        _session_log.start_phase("Auto Cluster Init (1b)")
-        _session_log.log("Mode 1b automated init starting after option 9 sent")
+        _session_log.start_phase("Auto Cluster Init (1.2)")
+        _session_log.log("Mode 1.2 automated init starting after option 9 sent")
     _boot_log = None
     _boot_log_dir = _session_log.log_dir if _session_log and hasattr(_session_log, "log_dir") else os.getcwd()
     try:
@@ -24660,7 +24660,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
                 _pipeline_peers = [ip for ip in _pipeline_peers if ip not in _already_joined]
                 _fallback_peers = [ip for ip in _fallback_peers if ip not in _already_joined]
         if _pipeline_peers:
-            print(f"\n  🚀 Mode 3: starting 4b-style peer pipeline for {len(_pipeline_peers)} staged node(s)...")
+            print(f"\n  🚀 Mode 3: starting 4.2-style peer pipeline for {len(_pipeline_peers)} staged node(s)...")
             _mode3_peer_node_logs = {}
             _mode3_peer_timings = {}
             _mode3_timings_lock = threading.Lock()
@@ -24900,7 +24900,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         except Exception:
             pass
 
-    print("\n✅ Mode 1b auto-init complete; driving cluster setup wizard...")
+    print("\n✅ Mode 1.2 auto-init complete; driving cluster setup wizard...")
     if _session_log:
         _session_log.log("Auto-init phase complete; transitioning to wizard automation")
         _session_log.end_phase()
@@ -25298,7 +25298,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             time.sleep(1)
 
     # ── Netboot-before-reinit hook ─────────────────────────────────────────
-    # When the operator answered 'y' to the 1a/1b ONTAP-version prompt, skip
+    # When the operator answered 'y' to the 1.1/1.2 ONTAP-version prompt, skip
     # boot_ontap menu and instead do ifconfig + netboot on the primary node.
     # After the install completes and the node reboots, the normal boot-menu
     # selection below will pick up the new ONTAP boot menu (option 9 → init).
@@ -25452,7 +25452,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
         _session_log.end_phase()  # End Boot Menu Selection
 
     # Checkpoint: primary cleared the ONTAP boot menu (option 9 for mode
-    # 1b/3, option 4 for mode 2). Wizard is about to begin. Mode 3 init
+    # 1.2/3, option 4 for mode 2). Wizard is about to begin. Mode 3 init
     # always creates a checkpoint at L14952; other modes only have one
     # if --resume was supplied.
     if _checkpoint:
@@ -25465,7 +25465,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
             pass
 
     if _auto_setup:
-        # Mode 1b / 3: auto_complete_initialization drives the full cluster
+        # Mode 1.2 / 3: auto_complete_initialization drives the full cluster
         # setup wizard (and, for mode 3, parallel peer auto-add) internally.
         # Nothing remains for an interactive session, so return without
         # entering InteractiveSession (which would print the misleading
@@ -25708,7 +25708,7 @@ def _make_session_log(label: str) -> "SessionLogger":
 
 
 # ---------------------------------------------------------------------------
-# Node-add manifest  (option 2c: Resume node additions)
+# Node-add manifest  (option 2.3: Resume node additions)
 # ---------------------------------------------------------------------------
 
 def _write_node_add_manifest(nodes, cluster_mgmt_ip="",
@@ -25717,7 +25717,7 @@ def _write_node_add_manifest(nodes, cluster_mgmt_ip="",
     """Write (or overwrite) the node-add manifest JSON.
 
     Called just before parallel add threads start so that a run interrupted
-    mid-flight can be resumed with option 2c.
+    mid-flight can be resumed with option 2.3.
 
     *nodes* is a list of dicts, each containing:
       bmc, bmc_user, bmc_password,
@@ -25727,7 +25727,7 @@ def _write_node_add_manifest(nodes, cluster_mgmt_ip="",
       1. {script_dir}/configs/node_add_manifest.json  (canonical location)
       2. {script_dir}/configs/last_node_add_manifest.json  (pointer / latest)
 
-    Note: bmc_password is stored in the manifest so that 2c can re-authenticate
+    Note: bmc_password is stored in the manifest so that 2.3 can re-authenticate
     without prompting. The manifest lives alongside other log files that should
     be stored on a secured admin host. Remove the file when no longer needed.
     """
@@ -25825,7 +25825,7 @@ def _update_node_add_manifest_node(bmc, *, cluster_ip="", node_name=""):
     """Best-effort in-place update of saved node-add manifests for one BMC.
 
     Used to persist runtime-discovered peer metadata (especially cluster-role
-    IPs captured after option 4) so option 2c can resume directly at
+    IPs captured after option 4) so option 2.3 can resume directly at
     cluster add-node without replaying the destructive reinit steps.
     """
     _bmc = str(bmc or "").strip()
@@ -26236,9 +26236,9 @@ def _get_cluster_role_ips(channel):
 
 
 def _run_cluster_ip_manifest_mode():
-    """Mode 5l: fetch cluster-role IPs from cluster shell and write manifest."""
-    _print_banner("🧭 5l: Build cluster IP manifest (EXPERIMENTAL/IN PROGRESS)")
-    _make_session_log("Mode 5l: cluster IP manifest")
+    """Mode 5.11: fetch cluster-role IPs from cluster shell and write manifest."""
+    _print_banner("🧭 5.11: Build cluster IP manifest (EXPERIMENTAL/IN PROGRESS)")
+    _make_session_log("Mode 5.11: cluster IP manifest")
 
     _cluster_cfg = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
     _mgmt_ip = (
@@ -26306,9 +26306,9 @@ def _run_cluster_ip_manifest_mode():
                 "cluster_ip": str(_row.get("cluster_ip") or "").strip(),
                 "node_name": str(_row.get("node_name") or "").strip(),
                 "bmc": "",
-                "source": "5l cluster query",
+                "source": "5.11 cluster query",
             })
-        _path = _write_cluster_ip_manifest_entries(_entries, reason="mode 5l")
+        _path = _write_cluster_ip_manifest_entries(_entries, reason="mode 5.11")
         if not _path:
             print("  ❌ Could not write cluster_IP.json.")
             return
@@ -26332,7 +26332,7 @@ def _run_cluster_ip_manifest_mode():
             pass
 
 
-# ── Node name / LIF repair helpers (option 5m) ──────────────────────────────
+# ── Node name / LIF repair helpers (option 5.12) ──────────────────────────────
 
 def _parse_net_int_node_mgmt_table(output):
     """Parse 'net int show -role node-mgmt -fields address,home-node' output.
@@ -26514,7 +26514,7 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
             log.log(msg, **kw)
 
     print("\n  \U0001f50d Checking cluster node names against config file...")
-    _slog("5m: gathering node names via service-processor show and net int show")
+    _slog("5.12: gathering node names via service-processor show and net int show")
 
     # ── Gather current SP (BMC) → node mapping ────────────────────────────
     try:
@@ -26616,7 +26616,7 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
     # ── Report ────────────────────────────────────────────────────────────
     if not node_mismatches and not lif_mismatches:
         print("  \u2705 All node names and LIF names match the config file.")
-        _slog("5m: no node name or LIF mismatches found")
+        _slog("5.12: no node name or LIF mismatches found")
         return _result(False, True)
 
     print("\n  Found node:address mismatches; repairing.")
@@ -26627,7 +26627,7 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
         print("\n  LIF name mismatches:")
         for curr, exp in lif_mismatches.items():
             print(f"    {curr}  \u2192  {exp}")
-    _slog(f"5m: node mismatches={node_mismatches}; LIF mismatches={lif_mismatches}")
+    _slog(f"5.12: node mismatches={node_mismatches}; LIF mismatches={lif_mismatches}")
 
     # Pre-compute address→expected_lif so verification can check by IP, not name.
     # (Name-based checks break in cycles where target names == old names.)
@@ -26643,20 +26643,20 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
         _ans = input("\n  Apply corrections? [y/N]: ").strip().lower()
         if _ans != "y":
             print("  \u21a9\ufe0f  No changes made.")
-            _slog("5m: user declined to apply corrections")
+            _slog("5.12: user declined to apply corrections")
             return _result(True, False, skipped=True)
 
     print("")
 
     # ── Node renames ──────────────────────────────────────────────────────
     node_rename_seq = _compute_rename_sequence(node_mismatches)
-    _slog(f"5m: node rename sequence: {node_rename_seq}")
+    _slog(f"5.12: node rename sequence: {node_rename_seq}")
     _node_renames_done = []
     if node_rename_seq:
         print("  Correcting node name order")
     for old_name, new_name in node_rename_seq:
         _cmd = f"node rename -node {old_name} -newname {new_name}"
-        _slog(f"5m: {_cmd}")
+        _slog(f"5.12: {_cmd}")
         _rt0 = time.monotonic()
         try:
             with _suppress_console():
@@ -26667,34 +26667,34 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
                 print(f"     Output: {_out.strip()[:200]}")
             else:
                 print(f"  \u2705 {old_name} \u2192 {new_name}")
-            _slog(f"5m: rename output: {_out.strip()[:400]}")
+            _slog(f"5.12: rename output: {_out.strip()[:400]}")
             _node_renames_done.append((old_name, new_name, _rt))
         except Exception as _e:
             print(f"  \u274c Rename failed: {_e}")
-            _slog(f"5m: rename failed: {_e}", prefix="ERROR")
+            _slog(f"5.12: rename failed: {_e}", prefix="ERROR")
             _node_renames_done.append((old_name, new_name, time.monotonic() - _rt0))
 
     # ── LIF renames ───────────────────────────────────────────────────────
     _lif_renames_done = []
     if lif_mismatches:
         lif_rename_seq = _compute_rename_sequence(lif_mismatches)
-        _slog(f"5m: LIF rename sequence: {lif_rename_seq}")
+        _slog(f"5.12: LIF rename sequence: {lif_rename_seq}")
         print("  Renaming node management LIFs")
         for old_lif, new_lif in lif_rename_seq:
             _cmd = (f"net int rename -vserver {lif_vserver} "
                     f"-lif {old_lif} -newname {new_lif}")
-            _slog(f"5m: {_cmd}")
+            _slog(f"5.12: {_cmd}")
             _rt0 = time.monotonic()
             try:
                 with _suppress_console():
                     _out = _run_cluster_command(channel, _cmd, timeout=60)
                 _rt = time.monotonic() - _rt0
                 print(f"  \u2705 LIF {old_lif} \u2192 {new_lif}")
-                _slog(f"5m: LIF rename output: {_out.strip()[:400]}")
+                _slog(f"5.12: LIF rename output: {_out.strip()[:400]}")
                 _lif_renames_done.append((old_lif, new_lif, _rt))
             except Exception as _e:
                 print(f"  \u274c LIF rename failed: {_e}")
-                _slog(f"5m: LIF rename failed: {_e}", prefix="ERROR")
+                _slog(f"5.12: LIF rename failed: {_e}", prefix="ERROR")
                 _lif_renames_done.append((old_lif, new_lif, time.monotonic() - _rt0))
 
     # ── Final verification ────────────────────────────────────────────────
@@ -26725,7 +26725,7 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
             print(f"  \u26a0\ufe0f  {len(remaining_mismatches)} node mismatch(es) remain after repair:")
             for curr, exp in remaining_mismatches.items():
                 print(f"    {curr}  \u2192  {exp}")
-            _slog(f"5m: remaining mismatches after repair: {remaining_mismatches}",
+            _slog(f"5.12: remaining mismatches after repair: {remaining_mismatches}",
                   prefix="WARN")
 
         lif_rows2 = _parse_net_int_node_mgmt_table(ni_raw2)
@@ -26743,7 +26743,7 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
             for lif, exp in lif_remaining.items():
                 print(f"    {lif}  \u2192  {exp}")
         else:
-            _slog("5m: all LIF names correct after repair")
+            _slog("5.12: all LIF names correct after repair")
 
         if not remaining_mismatches and not lif_remaining:
             print("  \u2705 All node names now match the config file.")
@@ -26751,11 +26751,11 @@ def _repair_node_names_and_lifs(channel, config_data, log=None,
             for sp_addr in sorted(sp_to_node_expected):
                 curr_name = sp_to_node2.get(sp_addr, "<not found>")
                 print(f"    BMC {sp_addr}: {curr_name}")
-            _slog("5m: repair complete; all names match config")
+            _slog("5.12: repair complete; all names match config")
 
     except Exception as _ve:
         print(f"  \u26a0\ufe0f  Final verification failed: {_ve}")
-        _slog(f"5m: final verification error: {_ve}", prefix="WARN")
+        _slog(f"5.12: final verification error: {_ve}", prefix="WARN")
         return _result(True, False, _node_renames_done, _lif_renames_done)
 
     return _result(
@@ -26804,12 +26804,12 @@ def _record_node_repair_to_log(log, result):
 
 
 def _run_5m_node_repair_mode():
-    """Mode 5m: Compare and correct cluster node names / LIF names.
+    """Mode 5.12: Compare and correct cluster node names / LIF names.
 
     Prompts for cluster credentials, runs comparison, optionally repairs.
     """
-    _print_banner("\U0001f527 5m: Compare and correct cluster node names")
-    _make_session_log("Mode 5m: node name / LIF repair")
+    _print_banner("\U0001f527 5.12: Compare and correct cluster node names")
+    _make_session_log("Mode 5.12: node name / LIF repair")
     print("")
 
     # ── Load config ───────────────────────────────────────────────────────
@@ -26867,13 +26867,13 @@ def _run_5m_node_repair_mode():
     try:
         _cl5m, _, _ = _ssh_connect_with_retry(
             _5m_mgmt_ip, _5m_user, _5m_pass,
-            label=f"5m/{_5m_mgmt_ip}",
+            label=f"5.12/{_5m_mgmt_ip}",
             max_attempts=3, interactive=False,
         )
     except Exception as _e5m:
         print(f"  \u274c Connection failed: {_e5m}")
         if _session_log:
-            _session_log.log(f"5m: connection failed: {_e5m}", prefix="ERROR")
+            _session_log.log(f"5.12: connection failed: {_e5m}", prefix="ERROR")
         try:
             input("  Press Enter to return to the main menu...")
         except (EOFError, KeyboardInterrupt):
@@ -26891,7 +26891,7 @@ def _run_5m_node_repair_mode():
             print(f"  \u274c Could not reach the cluster shell on {_5m_mgmt_ip}.")
             if _session_log:
                 _session_log.log(
-                    f"5m: cluster shell not reached on {_5m_mgmt_ip}", prefix="ERROR"
+                    f"5.12: cluster shell not reached on {_5m_mgmt_ip}", prefix="ERROR"
                 )
             try:
                 input("  Press Enter to return to the main menu...")
@@ -26936,8 +26936,8 @@ def _run_5m_node_repair_mode():
 
 
 def _run_show_config_mode(config_path=None):
-    """Mode 5n / --show-config: display reinit-config.json in human-readable format."""
-    _print_banner("📋 5n: Show reinit-config")
+    """Mode 5.13 / --show-config: display reinit-config.json in human-readable format."""
+    _print_banner("📋 5.13: Show reinit-config")
 
     def _pw(val):
         return "[set]" if str(val or "").strip() else "[none]"
@@ -27104,11 +27104,11 @@ def _run_show_config_mode(config_path=None):
 
 
 def _run_2c_resume():
-    """Drive option 2c: locate a node-add manifest and retry any nodes that
+    """Drive option 2.3: locate a node-add manifest and retry any nodes that
     have not yet joined the cluster.
 
     Workflow:
-      1. Locate and load a manifest written by a previous 2b/3 run.
+      1. Locate and load a manifest written by a previous 2.2/3 run.
       2. Connect to the cluster management IP.
       3. Use `cluster show` + `net int show` to determine which manifest
          nodes are already present in the cluster (matched by node-mgmt IP).
@@ -27116,8 +27116,8 @@ def _run_2c_resume():
 
     Returns True on success, False on abort or hard failure.
     """
-    _make_session_log("Mode 2c: resume node additions")
-    _print_banner("↩️   2c: Resume node additions")
+    _make_session_log("Mode 2.3: resume node additions")
+    _print_banner("↩️   2.3: Resume node additions")
 
     # ── 1. Locate manifest ────────────────────────────────────────────────
     try:
@@ -27187,7 +27187,7 @@ def _run_2c_resume():
     _manifest_source: str        = ""   # for display only
 
     if manifest_path:
-        # ── 2a. Load chosen file (manifest or reconfig JSON) ───────────────
+        # ── 2.1. Load chosen file (manifest or reconfig JSON) ───────────────
         try:
             with open(manifest_path, "r", encoding="utf-8") as _mf:
                 _mdata = json.load(_mf)
@@ -27227,7 +27227,7 @@ def _run_2c_resume():
             _manifest_source       = f"{manifest_path} (reconfig)"
             print(f"\n  Config   : {manifest_path}")
     else:
-        # ── 2b. Try config-file secondary nodes ────────────────────────────
+        # ── 2.2. Try config-file secondary nodes ────────────────────────────
         _cfg_secondary = _config_secondary_nodes()
         _cfg_cluster   = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
         _cfg_mgmt_ip   = (_cluster_config.get("mgmt_ip")
@@ -27255,7 +27255,7 @@ def _run_2c_resume():
                                       or _cfg_cluster.get("password") or "")
             _manifest_source       = "(config file)"
         else:
-            # ── 2c. Last resort: ask operator for a path ───────────────────
+            # ── 2.3. Last resort: ask operator for a path ───────────────────
             print("\n  No manifest file or config secondary nodes were found.")
             print("  Enter the path to a node-add manifest (created by option 3)")
             print("  or to the reinit config JSON file used during the original run.")
@@ -27378,7 +27378,7 @@ def _run_2c_resume():
             _cp = cluster_admin_password
             primary_client, _cu, _cp = _ssh_connect_with_retry(
                 cluster_mgmt_ip, _cu, _cp,
-                label=f"2c/{cluster_mgmt_ip}",
+                label=f"2.3/{cluster_mgmt_ip}",
                 max_attempts=1, interactive=False,
             )
             cluster_admin_user    = _cu
@@ -27387,12 +27387,12 @@ def _run_2c_resume():
             if _login_primary_cluster_shell(_pch, cluster_admin_password):
                 primary_channel = _pch
                 print("  ✅ Connected to cluster shell.")
-                _session_log.log(f"2c: cluster shell connected to {cluster_mgmt_ip}")
+                _session_log.log(f"2.3: cluster shell connected to {cluster_mgmt_ip}")
             else:
                 primary_client.close()
                 primary_client = None
                 print("  ⚠️  Cluster shell login failed.")
-                _session_log.log("2c: cluster shell login failed", prefix="WARN")
+                _session_log.log("2.3: cluster shell login failed", prefix="WARN")
                 _ask_skip = _prompt(
                     "  Continue without cluster comparison (retry all nodes)? [y/N]: "
                 , "n").lower()
@@ -27402,7 +27402,7 @@ def _run_2c_resume():
         except paramiko.AuthenticationException:
             print(f"  ❌ Authentication failed for {cluster_admin_user}@{cluster_mgmt_ip}.")
             _session_log.log(
-                f"2c: auth failed for {cluster_admin_user}@{cluster_mgmt_ip}",
+                f"2.3: auth failed for {cluster_admin_user}@{cluster_mgmt_ip}",
                 prefix="WARN",
             )
             try:
@@ -27424,7 +27424,7 @@ def _run_2c_resume():
                 return False
         except Exception as _ce:
             print(f"  ❌ Connection failed: {_ce}")
-            _session_log.log(f"2c: connection to {cluster_mgmt_ip} failed: {_ce}",
+            _session_log.log(f"2.3: connection to {cluster_mgmt_ip} failed: {_ce}",
                              prefix="ERROR")
             return False
 
@@ -27442,11 +27442,11 @@ def _run_2c_resume():
             for _nn, _nip in sorted(cluster_node_ips.items()):
                 print(f"    ✅ {_nn}: {_nip}")
             _session_log.log(
-                f"2c: cluster nodes: {dict(cluster_node_ips)}"
+                f"2.3: cluster nodes: {dict(cluster_node_ips)}"
             )
         else:
             print("  ⚠️  No node-mgmt IPs found in cluster.")
-            _session_log.log("2c: net int show returned no node-mgmt IPs", prefix="WARN")
+            _session_log.log("2.3: net int show returned no node-mgmt IPs", prefix="WARN")
 
     # ── 5. Compare manifest vs cluster ───────────────────────────────────
     already_joined_ips = set(cluster_node_ips.values())
@@ -27476,7 +27476,7 @@ def _run_2c_resume():
 
     if not nodes_to_retry:
         print("\n  ✅ All manifest nodes are already in the cluster. Nothing to do.")
-        _session_log.log("2c: all manifest nodes already joined; nothing to retry")
+        _session_log.log("2.3: all manifest nodes already joined; nothing to retry")
         if primary_client:
             try:
                 primary_client.close()
@@ -27491,7 +27491,7 @@ def _run_2c_resume():
     , "n").lower()
     if _ans_retry != "y":
         print("  Aborting.")
-        _session_log.log("2c: operator declined retry")
+        _session_log.log("2.3: operator declined retry")
         if primary_client:
             try:
                 primary_client.close()
@@ -27531,25 +27531,25 @@ def _run_2c_resume():
             _saved_ip = _recover_cluster_ip_from_checkpoint_log(_cp2c, _bmc)
             if _is_valid_ipv4(_saved_ip):
                 _session_log.log(
-                    f"2c: recovered cluster IP for {_bmc} from checkpoint log_dir -> {_saved_ip}"
+                    f"2.3: recovered cluster IP for {_bmc} from checkpoint log_dir -> {_saved_ip}"
                 )
                 _update_node_add_manifest_node(_bmc, cluster_ip=_saved_ip, node_name=_saved_node)
                 _record_cluster_ip_manifest_entry(
                     _saved_ip,
                     node_name=_saved_node,
                     bmc=_bmc,
-                    source="2c checkpoint log recovery",
+                    source="2.3 checkpoint log recovery",
                 )
 
         if _is_valid_ipv4(_saved_ip):
             _nodes_ready_for_add.append(_nd)
             _session_log.log(
-                f"2c: checkpoint reuse for {_bmc} -> cluster_ip={_saved_ip}"
+                f"2.3: checkpoint reuse for {_bmc} -> cluster_ip={_saved_ip}"
             )
         else:
             _nodes_needing_replay.append(_nd)
             _session_log.log(
-                f"2c: {_bmc} marked peer_option4_done but no saved cluster IP was found; "
+                f"2.3: {_bmc} marked peer_option4_done but no saved cluster IP was found; "
                 "replaying reinit path",
                 prefix="WARN",
             )
@@ -27566,7 +27566,7 @@ def _run_2c_resume():
 
     # ── 8. Seed in-memory state from manifest and launch threads ──────────
     # Populate credential + node-mgmt caches so _add_peer_node_thread can
-    # look up the same data it would have from a fresh 2b run.
+    # look up the same data it would have from a fresh 2.2 run.
     _cluster_config["mgmt_ip"]          = cluster_mgmt_ip
     _cluster_config["admin_user"]        = cluster_admin_user
     _cluster_config["admin_password"]    = cluster_admin_password
@@ -27609,11 +27609,11 @@ def _run_2c_resume():
                 "node_mgmt_gateway": _nd.get("node_mgmt_gateway") or "",
             }
         retry_bmc_list.append(_bmc)
-        _session_log.log(f"2c: will retry BMC {_bmc} (user={_bu})")
+        _session_log.log(f"2.3: will retry BMC {_bmc} (user={_bu})")
 
     if not retry_bmc_list and not _2c_cluster_ips_out:
         print("  ❌ No valid BMC IPs to retry. Aborting.")
-        _session_log.log("2c: no valid BMCs to retry", prefix="ERROR")
+        _session_log.log("2.3: no valid BMCs to retry", prefix="ERROR")
         if primary_client:
             try:
                 primary_client.close()
@@ -27626,7 +27626,7 @@ def _run_2c_resume():
     _2c_peer_timings: "dict[str, dict]" = {}
     _2c_timings_lock = threading.Lock()
 
-    _session_log.start_phase("2c – Resume Node Add")
+    _session_log.start_phase("2.3 – Resume Node Add")
     threads = []
     for _idx, _bmc in enumerate(retry_bmc_list):
         _creds = _peer_bmc_creds.get(_bmc) or {}
@@ -27645,7 +27645,7 @@ def _run_2c_resume():
         _t = threading.Thread(
             target=_run_2c,
             daemon=True,
-            name=f"2c-resume-{_bmc}",
+            name=f"2.3-resume-{_bmc}",
         )
         _t.start()
         threads.append(_t)
@@ -27653,7 +27653,7 @@ def _run_2c_resume():
 
     if _n2c:
         print(f"\n  ⏳ Waiting for {_n2c} node(s) to complete...")
-        if not _join_threads_with_deadline(threads, label="mode 2c", log=_session_log):
+        if not _join_threads_with_deadline(threads, label="mode 2.3", log=_session_log):
             return False
         _raise_pending_checkpoint_failure()
     else:
@@ -27674,11 +27674,11 @@ def _run_2c_resume():
                                 node_timings_out=_2c_add_node_timings)
     elif not _2c_ips:
         print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
-        _session_log.log("2c: no cluster IPs collected; skipping cluster add-node",
+        _session_log.log("2.3: no cluster IPs collected; skipping cluster add-node",
                          prefix="WARN")
 
     # Per-node detailed timing breakdown.
-    _2C_PHASE = "2c – Resume Node Add"
+    _2C_PHASE = "2.3 – Resume Node Add"
     for _bmc in retry_bmc_list:
         _t = _2c_peer_timings.get(_bmc)
         if not _t:
@@ -27702,9 +27702,9 @@ def _run_2c_resume():
                 _2C_PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
 
     _session_log.end_phase()
-    print("\n  ✅ 2c resume complete.")
-    _session_log.log("2c resume: all threads finished")
-    _session_log.set_outcome("PASS", "2c resume complete")
+    print("\n  ✅ 2.3 resume complete.")
+    _session_log.log("2.3 resume: all threads finished")
+    _session_log.set_outcome("PASS", "2.3 resume complete")
 
     if primary_client:
         try:
@@ -27787,8 +27787,8 @@ def main():
     if _diag_mode:
         print("🔬 --diag mode enabled: custom LOADER bootargs will be applied.")
         # Bootarg collection is deferred: for modes 1/2/3 it happens inside
-        # select_operation_mode() after physical zeroing; for mode 4b it
-        # happens in the 4b upfront config phase. We just initialise the
+        # select_operation_mode() after physical zeroing; for mode 4.2 it
+        # happens in the 4.2 upfront config phase. We just initialise the
         # list here so _diag_bootargs is always defined.
         _diag_bootargs = []
 
@@ -27822,13 +27822,13 @@ def main():
         _resume_cp = CheckpointManager()
         if _resume_cp.load():
             _cp_mode = (_resume_cp.mode or "").strip()
-            if _cp_mode.startswith("4b"):
-                # Mode 4b (optionally with a reinit sub-mode like "4b-3").
+            if _cp_mode.startswith("4.2"):
+                # Mode 4.2 (optionally with a reinit sub-mode like "4.2-3").
                 _operation_mode = 42
                 _auto_setup = False
                 _auto_add = False
                 _resume_autodispatch = True
-                print(f"\n  🔖 --resume (EXPERIMENTAL): auto-dispatching to mode 4b "
+                print(f"\n  🔖 --resume (EXPERIMENTAL): auto-dispatching to mode 4.2 "
                       f"from checkpoint (mode={_cp_mode}).")
             else:
                 print(f"\n  ⚠️  --resume (EXPERIMENTAL): checkpoint mode {_cp_mode!r} cannot "
@@ -27851,16 +27851,16 @@ def main():
                     print("\n  ⚡ --first-node: launching mode 1 (create single node cluster).")
                 elif args.add_nodes:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 2, False, True
-                    print("\n  ⚡ --add-nodes: launching mode 2b (automated node add).")
+                    print("\n  ⚡ --add-nodes: launching mode 2.2 (automated node add).")
                 elif args.reinit:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 3, True, True
                     print("\n  ⚡ --reinit: launching mode 3 (end-to-end automated reinit).")
                 elif args.netboot_install:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 42, False, False
-                    print("\n  ⚡ --netboot-install: launching mode 4b (netboot + automated cluster reinit).")
+                    print("\n  ⚡ --netboot-install: launching mode 4.2 (netboot + automated cluster reinit).")
                 elif args.add_lic:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 44, False, False
-                    print("\n  ⚡ --add-lic: launching mode 5a (install license).")
+                    print("\n  ⚡ --add-lic: launching mode 5.1 (install license).")
                 elif args.passwordless:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 45, False, False
                     print("\n  ⚡ --passwordless: launching mode 4d (passwordless SSH setup).")
@@ -27869,10 +27869,10 @@ def main():
                     print("\n  ⚡ --backup: launching mode 4e (config backup).")
                 elif args.verify:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 47, False, False
-                    print("\n  ⚡ --verify: launching mode 5d (BMC auth verify).")
+                    print("\n  ⚡ --verify: launching mode 5.4 (BMC auth verify).")
                 elif args.loader:
                     _shortcut_mode, _shortcut_auto_setup, _shortcut_auto_add = 56, False, False
-                    print("\n  ⚡ --loader: launching mode 5z (reset all nodes to LOADER).")
+                    print("\n  ⚡ --loader: launching mode 5.14 (reset all nodes to LOADER).")
 
                 if _shortcut_mode is not None:
                     _operation_mode = _shortcut_mode
@@ -27886,7 +27886,7 @@ def main():
                 pass  # _resume_autodispatch already set _operation_mode above
             _configure_checkpoint_test_for_mode(_operation_mode, args.test)
             # Remember the mode the operator explicitly chose at startup.  Mid-run
-            # transitions (e.g. 1b → add nodes) change _operation_mode but leave
+            # transitions (e.g. 1.2 → add nodes) change _operation_mode but leave
             # _initial_operation_mode intact so mode-specific up-front prompts only
             # fire when the operator actually started in that mode.
             _initial_operation_mode = _operation_mode
@@ -27907,7 +27907,7 @@ def main():
                 print("  Please check back in a future release.")
                 sys.exit(0)
 
-            # ── Mode 26 (2c): Resume interrupted node additions ───────────────────
+            # ── Mode 26 (2.3): Resume interrupted node additions ───────────────────
             if _operation_mode == 26:
                 ok = _run_2c_resume()
                 if _session_log:
@@ -27915,7 +27915,7 @@ def main():
                     print(f"\n📝 Session log saved to: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
-            # ── Mode 42 (4b): Netboot + automated cluster reinit ───────────────────
+            # ── Mode 42 (4.2): Netboot + automated cluster reinit ───────────────────
             if _operation_mode == 42:
                 # ── Resume detection ──────────────────────────────────────────────
                 # Reuse the checkpoint already loaded by the --resume auto-dispatch
@@ -27989,7 +27989,7 @@ def main():
                 if not _resuming:
                     _checkpoint = CheckpointManager()
 
-                _make_session_log("Mode 42: netboot + automated cluster reinit (4b)")
+                _make_session_log("Mode 42: netboot + automated cluster reinit (4.2)")
                 # If resuming, register the gap between previous run exit and now
                 if _resuming and _checkpoint and _session_log:
                     _prev_updated = _checkpoint.get_param("updated")
@@ -28001,16 +28001,16 @@ def main():
                     _checkpoint.clear()
                     if _session_log and hasattr(_session_log, "log_dir"):
                         _archive_node_add_manifests_to_log_dir(
-                            _session_log.log_dir, reason="4b: reinit/add success"
+                            _session_log.log_dir, reason="4.2: reinit/add success"
                         )
                     if _4b_did_reinit:
                         _prompt_and_run_post_script(session_log=_session_log)
                 print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
-            # ── Mode 43 (4c): Netboot/install image only (no reinit) ──────────────
+            # ── Mode 43 (4.3): Netboot/install image only (no reinit) ──────────────
             if _operation_mode == 43:
-                _make_session_log("Mode 43: netboot and install image only (4c)")
+                _make_session_log("Mode 43: netboot and install image only (4.3)")
                 ok = _run_4b_standalone(_session_log, resuming=False, install_only=True)
                 _session_log.record_completion(normal_exit=ok)
                 if ok:
@@ -28018,7 +28018,7 @@ def main():
                 print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
-            # ── Mode 41 (4a): ONTAP upgrade ────────────────────────────────────────
+            # ── Mode 41 (4.1): ONTAP upgrade ────────────────────────────────────────
             if _operation_mode == 41:
                 _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
                 ok = _run_ontap_upgrade(_session_log)
@@ -28030,7 +28030,7 @@ def main():
                     print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
                     sys.exit(0 if ok else 1)
 
-            # ── Mode 44 (5a): standalone license-only install ──────────────────────
+            # ── Mode 44 (5.1): standalone license-only install ──────────────────────
             if _operation_mode == 44:
                 _collect_license_config(_run_context)
                 if not _license_mode:
@@ -28057,7 +28057,7 @@ def main():
                     _config_data = {}
                 _ctx_sync_from_globals()
 
-                _make_session_log("Mode 5a: standalone license install")
+                _make_session_log("Mode 5.1: standalone license install")
 
                 # BMC credentials from config or interactive prompts.
                 primary_node_44 = {}
@@ -28149,7 +28149,7 @@ def main():
                     try:
                         _gen_ans = input(
                             "  Would you like to generate them from an existing cluster"
-                            " (option 5c)? [Y/n]: "
+                            " (option 5.3)? [Y/n]: "
                         ).strip().lower()
                     except (EOFError, KeyboardInterrupt):
                         _gen_ans = "n"
@@ -28158,9 +28158,9 @@ def main():
 
             # ── Mode 46 (4e): create backup cluster configuration ──────────────────
             if _operation_mode == 46:
-                _print_banner("\U0001f4be 5c: Create backup cluster configuration")
+                _print_banner("\U0001f4be 5.3: Create backup cluster configuration")
                 print("")
-                _make_session_log("Mode 5c: backup cluster configuration")
+                _make_session_log("Mode 5.3: backup cluster configuration")
                 _cluster_ip_rows46 = []
 
                 # Resolve output dir early — needed throughout.
@@ -28280,7 +28280,7 @@ def main():
                     if _is_direct46:
                         # Direct cluster-mgmt SSH: already at cluster shell or login
                         # prompt. Authenticate if needed, then run inventory commands.
-                        _session_log.log("5c: direct cluster SSH detected; skipping BMC console path")
+                        _session_log.log("5.3: direct cluster SSH detected; skipping BMC console path")
                         print("  ✅ Cluster management SSH detected.")
                         if "login:" in _probe46.lower() and "::>" not in _probe46:
                             # Genuine login: prompt (not just banner text like "Last login:")
@@ -28309,12 +28309,12 @@ def main():
                         # entering system console.  The probe above may have already
                         # consumed it (direct read until '>'), so only call
                         # wait_for_bmc_prompt when the probe did NOT see '>'.
-                        _session_log.log("5c: BMC connection detected; entering system console")
+                        _session_log.log("5.3: BMC connection detected; entering system console")
                         _bmc_prompt_in_probe = ">" in _probe46
                         if _bmc_prompt_in_probe:
                             print("  ✅ BMC prompt detected.")
                             _session_log.log(
-                                "5c: BMC prompt already consumed by probe; skipping wait"
+                                "5.3: BMC prompt already consumed by probe; skipping wait"
                             )
                         elif not wait_for_bmc_prompt(_ch46, auto_takeover=True):
                             print("  \u274c BMC prompt not received. Exiting.")
@@ -28334,11 +28334,11 @@ def main():
                         _cluster_ip_rows46 = _cluster_role_rows_from_net_rows(_net46)
                         if _cluster_ip_rows46:
                             _session_log.log(
-                                f"5c: captured {len(_cluster_ip_rows46)} cluster-role IP row(s)"
+                                f"5.3: captured {len(_cluster_ip_rows46)} cluster-role IP row(s)"
                             )
                     except Exception as _cip46_err:
                         _session_log.log(
-                            f"5c: cluster-role IP capture failed: {_cip46_err}",
+                            f"5.3: cluster-role IP capture failed: {_cip46_err}",
                             prefix="WARN",
                         )
                     _session_log.end_phase()
@@ -28391,18 +28391,18 @@ def main():
                                 _sp_node_pairs.sort(key=lambda x: x[1])
                                 _matched_bmc = _sp_node_pairs[0][0]
                                 _session_log.log(
-                                    f"5c: primary BMC resolved by node name sort: "
+                                    f"5.3: primary BMC resolved by node name sort: "
                                     f"{_matched_bmc} -> {_sp_node_pairs[0][1]}"
                                 )
                         if _matched_bmc:
                             _primary_bmc46 = _matched_bmc
                             print(f"  ℹ️  Resolved primary BMC from SP list: {_primary_bmc46}")
-                            _session_log.log(f"5c: primary BMC resolved from SP list: {_primary_bmc46}")
+                            _session_log.log(f"5.3: primary BMC resolved from SP list: {_primary_bmc46}")
                         else:
                             # Final fallback: first SP IP
                             _primary_bmc46 = _sp_ips46[0]
                             print(f"  ⚠️  Could not match primary BMC from SP list; using first: {_primary_bmc46}")
-                            _session_log.log(f"5c: primary BMC fallback to first SP IP: {_primary_bmc46}",
+                            _session_log.log(f"5.3: primary BMC fallback to first SP IP: {_primary_bmc46}",
                                              prefix="WARN")
                         # Update the primary_node bmc field in config so it's saved correctly.
                         if isinstance(_config_data.get("primary_node"), dict):
@@ -28487,7 +28487,7 @@ def main():
                         # ── ADD PATH ─────────────────────────────────────────────
                         # Goal: patch cluster_network_ip into an existing config file
                         # and append the new nodes to secondary_nodes so the file can
-                        # immediately drive option 2a/2b.
+                        # immediately drive option 2.1/2.2.
                         # We only need the cluster shell to get a cluster-network IP;
                         # we do NOT call collect_retain_data so primary_node and all
                         # cluster fields are preserved exactly as-is.
@@ -28617,11 +28617,11 @@ def main():
                             _cluster_ip_rows46 = _get_cluster_role_ips(_bch46)
                             if _cluster_ip_rows46:
                                 _session_log.log(
-                                    f"5c: captured {len(_cluster_ip_rows46)} cluster-role IP row(s)"
+                                    f"5.3: captured {len(_cluster_ip_rows46)} cluster-role IP row(s)"
                                 )
                         except Exception as _cip46_err:
                             _session_log.log(
-                                f"5c: cluster-role IP capture failed: {_cip46_err}",
+                                f"5.3: cluster-role IP capture failed: {_cip46_err}",
                                 prefix="WARN",
                             )
 
@@ -28817,11 +28817,11 @@ def main():
                             "cluster_ip": str(_row46.get("cluster_ip") or "").strip(),
                             "node_name": str(_row46.get("node_name") or "").strip(),
                             "bmc": "",
-                            "source": "5c gather/build",
+                            "source": "5.3 gather/build",
                         })
                     _cluster_path46 = _write_cluster_ip_manifest_entries(
                         _cluster_entries46,
-                        reason="mode 5c gather/build",
+                        reason="mode 5.3 gather/build",
                     )
                     if _cluster_path46:
                         print(f"  ✅ cluster_IP.json written to: {_cluster_path46}")
@@ -28867,7 +28867,7 @@ def main():
                 if _4a_pending_after_4e:
                     _4a_pending_after_4e = False
                     _operation_mode = 41
-                    print("\n  \u2705 Config created. Continuing with 4a upgrade workflow...\n")
+                    print("\n  \u2705 Config created. Continuing with 4.1 upgrade workflow...\n")
                     _make_session_log("Mode 41: ONTAP upgrade (rolling takeover/giveback)")
                     ok = _run_ontap_upgrade(_session_log)
                     _session_log.record_completion(normal_exit=ok)
@@ -28877,13 +28877,13 @@ def main():
                 if _5f_pending_after_4e:
                     _5f_pending_after_4e = False
                     _operation_mode = 49
-                    print("\n  \u2705 Config created. Continuing with 5f health check...\n")
+                    print("\n  \u2705 Config created. Continuing with 5.5 health check...\n")
                 else:
                     raise _ReturnToMenu
 
-            # ── Mode 47 (5d): verify BMC authentication ────────────────────────────
+            # ── Mode 47 (5.4): verify BMC authentication ────────────────────────────
             if _operation_mode == 47:
-                _print_banner("\U0001f50d 5d: Verify BMC authentication")
+                _print_banner("\U0001f50d 5.4: Verify BMC authentication")
                 print("")
 
                 # ── Locate BMC IP list ────────────────────────────────────────────
@@ -29022,7 +29022,7 @@ def main():
                     "n",
                 ).strip().lower() in ("y", "yes")
                 if _blank_fallback47:
-                    print("  ℹ️  Blank-password fallback is enabled for this 5d test run.")
+                    print("  ℹ️  Blank-password fallback is enabled for this 5.4 test run.")
                 print("")
 
                 while True:
@@ -29243,9 +29243,9 @@ def main():
                     pass
                 raise _ReturnToMenu
 
-            # ── Mode 56 (5z): reset all nodes to LOADER prompt ─────────────────────
+            # ── Mode 56 (5.14): reset all nodes to LOADER prompt ─────────────────────
             if _operation_mode == 56:
-                _print_banner("\U0001f504 5z: Reset all nodes to LOADER prompt")
+                _print_banner("\U0001f504 5.14: Reset all nodes to LOADER prompt")
                 print("")
 
                 # ── Locate BMC IP list (same logic as mode 47) ───────────────────
@@ -29357,7 +29357,7 @@ def main():
                             _creds48[_ip48] = (_u48, _p48)
                 print("")
 
-                _make_session_log("5z: reset all nodes to LOADER")
+                _make_session_log("5.14: reset all nodes to LOADER")
 
                 # ── Reset each node to LOADER in parallel ────────────────────────
                 _print_banner(f"\U0001f504 Resetting {len(_bmc_ips48)} node(s) to LOADER prompt")
@@ -29507,10 +29507,10 @@ def main():
                     pass
                 raise _ReturnToMenu
 
-            # ── Mode 49 (5g): cluster health and version check ─────────────────────
+            # ── Mode 49 (5.6): cluster health and version check ─────────────────────
             if _operation_mode == 49:
-                _print_banner("\U0001f4ca 5g: Cluster health and version check")
-                _make_session_log("Mode 5g: cluster health and version check")
+                _print_banner("\U0001f4ca 5.6: Cluster health and version check")
+                _make_session_log("Mode 5.6: cluster health and version check")
                 print("")
 
                 # ── Gather connection details ────────────────────────────────────
@@ -29545,7 +29545,7 @@ def main():
                 # 2. No config found — offer to gather one or ask for IP.
                 if not _ch49_ip and not _49_cfg_files:
                     print("\n  \u26a0\ufe0f  No reinit-config.json found on disk.")
-                    print("     Option 5c can connect to your existing cluster and generate one automatically.")
+                    print("     Option 5.3 can connect to your existing cluster and generate one automatically.")
                     _ans_49 = _prompt("  Run the 4e config-gather workflow now? [Y/n]: ", "n").lower()
                     if _ans_49 != "n":
                         _5f_pending_after_4e = True
@@ -29578,7 +29578,7 @@ def main():
                     )
                 except Exception as _e49:
                     print(f"  \u274c Connection failed: {_e49}")
-                    _session_log.log(f"5f: connection failed: {_e49}", prefix="ERROR")
+                    _session_log.log(f"5.5: connection failed: {_e49}", prefix="ERROR")
                     print(f"\U0001f4dd Session log: {_session_log.log_file}")
                     try:
                         input("  Press Enter to return to the main menu...")
@@ -29595,7 +29595,7 @@ def main():
                     _at_cluster49 = _wait_for_cluster_prompt(_ch49, timeout=30)
                 if not _at_cluster49:
                     print(f"  \u274c Could not reach the cluster shell on {_ch49_ip}.")
-                    _session_log.log(f"5g: cluster shell not reached on {_ch49_ip}", prefix="ERROR")
+                    _session_log.log(f"5.6: cluster shell not reached on {_ch49_ip}", prefix="ERROR")
                     try:
                         _ch49.close()
                     except Exception:
@@ -29611,7 +29611,7 @@ def main():
                         pass
                     raise _ReturnToMenu
                 print(f"  \u2705 Connected to {_ch49_ip}")
-                _session_log.log(f"5g: connected to {_ch49_ip}")
+                _session_log.log(f"5.6: connected to {_ch49_ip}")
 
                 # ── Health check ─────────────────────────────────────────────────
                 print("\n  \U0001f50d Running cluster health check...")
@@ -29653,11 +29653,11 @@ def main():
                 for _r49 in _parse_failover_show(_fo49_out):
                     if _r49["node"] and _r49["node"] not in _nodes49:
                         _nodes49.append(_r49["node"])
-                _session_log.log(f"5g: nodes discovered: {_nodes49}")
+                _session_log.log(f"5.6: nodes discovered: {_nodes49}")
 
                 if not _nodes49:
                     print("  \u26a0\ufe0f  Could not discover node names from 'storage failover show'.")
-                    _session_log.log("5g: no node names discovered from storage failover show",
+                    _session_log.log("5.6: no node names discovered from storage failover show",
                                      prefix="WARN")
                     _healthy49 = False
                 else:
@@ -29677,7 +29677,7 @@ def main():
                 _ports49_ok = bool(_ports49_rows) and not _ports49_bad
                 if not _ports49_rows:
                     print("  ⚠️  Could not parse any cluster ports from network port output.")
-                    _session_log.log("5g: no cluster ports parsed from network port show",
+                    _session_log.log("5.6: no cluster ports parsed from network port show",
                                      prefix="WARN")
                 elif _ports49_bad:
                     print("\n  ⚠️  Cluster port health check FAILED:")
@@ -29688,7 +29688,7 @@ def main():
                         _hs49 = _bp49.get("health") or "<missing>"
                         print(f"    • {_bn49}:{_pp49}  link={_lk49}  health={_hs49}")
                     _session_log.log(
-                        "5g: cluster port health failures: " +
+                        "5.6: cluster port health failures: " +
                         "; ".join(
                             f"{(r.get('node') or '<unknown-node>')}:{(r.get('port') or '<unknown-port>')} "
                             f"link={(r.get('link') or '<missing>')} health={(r.get('health') or '<missing>')}"
@@ -29698,7 +29698,7 @@ def main():
                     )
                 else:
                     print("  ✅ Cluster port health check passed (all cluster ports link=up, health=healthy).")
-                    _session_log.log("5g: cluster port health check passed")
+                    _session_log.log("5.6: cluster port health check passed")
 
                 _healthy49 = bool(_healthy49 and _ports49_ok)
 
@@ -29720,7 +29720,7 @@ def main():
                     for _il49 in _img49_lines[-12:]:
                         print(f"    {_il49}")
 
-                _session_log.log(f"5g: running version={_running49}")
+                _session_log.log(f"5.6: running version={_running49}")
                 _per_node_49 = _ver49_snapshot["current_by_node"]
                 if _running49:
                     _session_log.set_ontap_versions(
@@ -29744,10 +29744,10 @@ def main():
                 if _healthy49:
                     _ver_str = f" and all nodes are running ONTAP {_running49}" if _running49 else ""
                     print(f"\n  \u2705 Cluster is healthy{_ver_str}.")
-                    _session_log.log(f"5g: cluster healthy, version={_running49}")
+                    _session_log.log(f"5.6: cluster healthy, version={_running49}")
                 else:
                     print("\n  \u26a0\ufe0f  Cluster did not reach fully healthy state within the timeout.")
-                    _session_log.log("5g: cluster not healthy within timeout", prefix="WARN")
+                    _session_log.log("5.6: cluster not healthy within timeout", prefix="WARN")
 
                 print(f"\U0001f4dd Session log: {_session_log.log_file}")
                 try:
@@ -29756,10 +29756,10 @@ def main():
                     pass
                 raise _ReturnToMenu
 
-            # ── Mode 50 (5h): list and clean up stale BMC SSH sessions ────────────
+            # ── Mode 50 (5.7): list and clean up stale BMC SSH sessions ────────────
             if _operation_mode == 50:
-                _print_banner("\U0001f9f9 5h: List and clean up stale BMC SSH sessions")
-                _make_session_log("Mode 5h: stale BMC SSH session cleanup")
+                _print_banner("\U0001f9f9 5.7: List and clean up stale BMC SSH sessions")
+                _make_session_log("Mode 5.7: stale BMC SSH session cleanup")
                 print("")
 
                 # ── Load BMC IPs from config (same logic as modes 47/48) ─────────
@@ -29923,10 +29923,10 @@ def main():
                 print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
-            # ── Mode 51 (5f): check node status (LOADER / cluster prompt) ──────────
+            # ── Mode 51 (5.5): check node status (LOADER / cluster prompt) ──────────
             if _operation_mode == 51:
-                _print_banner("🔍 5f: Check node status")
-                _make_session_log("Mode 5f: node status check")
+                _print_banner("🔍 5.5: Check node status")
+                _make_session_log("Mode 5.5: node status check")
                 print("")
 
                 # ── Load BMC IPs (same pattern as modes 47/48/50) ────────────────
@@ -30021,7 +30021,7 @@ def main():
                     try:
                         cl51, u51w, p51w = _ssh_connect_with_retry(
                             ip, u51w, p51w,
-                            label=f"5f/{ip}", max_attempts=3, interactive=True,
+                            label=f"5.5/{ip}", max_attempts=3, interactive=True,
                         )
                         ch51 = _open_shell(cl51)
 
@@ -30139,10 +30139,10 @@ def main():
                 input("\n  Press Enter to return to the main menu...")
                 raise _ReturnToMenu
 
-            # ── Mode 52 (5i): Backup LOADER environment variables ─────────────────
+            # ── Mode 52 (5.8): Backup LOADER environment variables ─────────────────
             if _operation_mode == 52:
-                _print_banner("\U0001f4be 5i: Backup LOADER environment variables")
-                _make_session_log("Mode 5i: LOADER env backup")
+                _print_banner("\U0001f4be 5.8: Backup LOADER environment variables")
+                _make_session_log("Mode 5.8: LOADER env backup")
                 print("")
 
                 # Load BMC IPs (same pattern as mode 51)
@@ -30227,7 +30227,7 @@ def main():
                     try:
                         _cl52, _u52w, _p52w = _ssh_connect_with_retry(
                             _ip52, _u52w, _p52w,
-                            label=f"5i/{_ip52}", max_attempts=3, interactive=True,
+                            label=f"5.8/{_ip52}", max_attempts=3, interactive=True,
                         )
                         _ch52 = _open_shell(_cl52)
                         _nf52 = None
@@ -30286,10 +30286,10 @@ def main():
                     print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
-            # ── Mode 53 (5j): Compare LOADER env to defaults (diff) ──────────────
+            # ── Mode 53 (5.9): Compare LOADER env to defaults (diff) ──────────────
             if _operation_mode == 53:
-                _print_banner("\U0001f50d 5j: Compare LOADER env to defaults (diff)")
-                _make_session_log("Mode 5j: LOADER env diff")
+                _print_banner("\U0001f50d 5.9: Compare LOADER env to defaults (diff)")
+                _make_session_log("Mode 5.9: LOADER env diff")
                 print("")
 
                 # Load BMC IPs (same pattern as mode 51/52)
@@ -30373,7 +30373,7 @@ def main():
                     try:
                         _cl53, _u53w, _p53w = _ssh_connect_with_retry(
                             _ip53, _u53w, _p53w,
-                            label=f"5j/{_ip53}", max_attempts=3, interactive=True,
+                            label=f"5.9/{_ip53}", max_attempts=3, interactive=True,
                         )
                         _ch53 = _open_shell(_cl53)
                         _nf53 = None
@@ -30435,25 +30435,25 @@ def main():
                     print(f"\n\U0001f4dd Session log: {_session_log.log_file}")
                 raise _ReturnToMenu
 
-            # ── Mode 54 (5k): Check boot DNA ───────────────────────────────────────
+            # ── Mode 54 (5.10): Check boot DNA ───────────────────────────────────────
             if _operation_mode == 54:
-                _print_banner("\U0001f9ec 5k: Check boot DNA")
-                _make_session_log("Mode 5k: boot DNA check")
+                _print_banner("\U0001f9ec 5.10: Check boot DNA")
+                _make_session_log("Mode 5.10: boot DNA check")
                 print("")
                 _run_boot_dna_check_mode()
                 raise _ReturnToMenu
 
-            # ── Mode 55 (5l): Build cluster_IP manifest ───────────────────────────
+            # ── Mode 55 (5.11): Build cluster_IP manifest ───────────────────────────
             if _operation_mode == 55:
                 _run_cluster_ip_manifest_mode()
                 raise _ReturnToMenu
 
-            # ── Mode 57 (5m): Compare and correct cluster node names ──────────────
+            # ── Mode 57 (5.12): Compare and correct cluster node names ──────────────
             if _operation_mode == 57:
                 _run_5m_node_repair_mode()
                 raise _ReturnToMenu
 
-            # ── Mode 58 (5n): Show reinit-config ─────────────────────────────────
+            # ── Mode 58 (5.13): Show reinit-config ─────────────────────────────────
             if _operation_mode == 58:
                 _run_show_config_mode()
                 raise _ReturnToMenu
@@ -30539,7 +30539,7 @@ def main():
                 else:
                     sp_pass_45 = getpass.getpass("  BMC password: ")
 
-                _make_session_log("Mode 5b: set up passwordless SSH")
+                _make_session_log("Mode 5.2: set up passwordless SSH")
 
                 _session_log.start_phase("SSH Connection (BMC)")
                 client_45, sp_user_45, sp_pass_45 = connect_to_sp(sp_host_45, sp_user_45, sp_pass_45)
@@ -31001,25 +31001,25 @@ def main():
                 _session_log.log(f"Loaded config file: {config_path}")
 
             if _operation_mode == 3:
-                mode_desc = "End-to-end auto initialize (1b primary + parallel auto-add peers)"
+                mode_desc = "End-to-end auto initialize (1.2 primary + parallel auto-add peers)"
             elif _operation_mode == 1:
                 mode_desc = "Create single node cluster (fully automated)"
             elif _operation_mode == 41:
-                mode_desc = "ONTAP upgrade - rolling takeover/giveback (4a)"
+                mode_desc = "ONTAP upgrade - rolling takeover/giveback (4.1)"
             elif _operation_mode == 43:
-                mode_desc = "Netboot and install image only (4c, no reinit)"
+                mode_desc = "Netboot and install image only (4.3, no reinit)"
             elif _operation_mode == 44:
-                mode_desc = "Install license file only (5a, standalone)"
+                mode_desc = "Install license file only (5.1, standalone)"
             elif _operation_mode == 45:
                 mode_desc = "Set up passwordless SSH to cluster management (4d)"
             elif _operation_mode == 46:
                 mode_desc = "Create backup cluster configuration (4e, standalone)"
             elif _operation_mode == 49:
-                mode_desc = "Cluster health and version check (5g)"
+                mode_desc = "Cluster health and version check (5.6)"
             elif _operation_mode == 2 and _auto_add:
-                mode_desc = "Add node to existing cluster (2b, automatic join wizard)"
+                mode_desc = "Add node to existing cluster (2.2, automatic join wizard)"
             else:
-                mode_desc = "Add node to existing cluster (2a, option 4, interactive)"
+                mode_desc = "Add node to existing cluster (2.1, option 4, interactive)"
             _session_log.log(
                 f"Operation mode: {_operation_mode} (auto_setup={_auto_setup}, "
                 f"auto_add={_auto_add}) – {mode_desc}"
@@ -31445,7 +31445,7 @@ def main():
                     return val or (default or "")
 
                 if _operation_mode == 1:
-                    # Mode 1a/1b only touches the first node — skip the summary/confirm loop
+                    # Mode 1.1/1.2 only touches the first node — skip the summary/confirm loop
                     global _initial_node_count
                     _initial_node_count = 1
                     if other_sps:
@@ -31534,12 +31534,12 @@ def main():
                         print("\n  (No new peers entered; re-confirming current list.)")
 
                 # Collect node-management network info for every BMC (primary +
-                # peers) up-front so mode 1b can auto-answer the per-node prompts.
-                # This also runs in mode 1a so the data is captured in the log even
+                # peers) up-front so mode 1.2 can auto-answer the per-node prompts.
+                # This also runs in mode 1.1 so the data is captured in the log even
                 # though it won't be auto-applied.
                 collect_node_mgmt_per_bmc(sp_host, other_sps)
 
-                # Mode 1b needs the cluster-level setup wizard answers up-front.
+                # Mode 1.2 needs the cluster-level setup wizard answers up-front.
                 # For mode 3, defer until after peer credential prompts so the
                 # cluster-admin password reuse question appears in the requested order.
                 if _auto_setup and _operation_mode == 1:
@@ -31921,16 +31921,16 @@ def main():
                         _ts_print(f"  {sym} [{addr}] Peer reset {'reached LOADER' if ok else 'did NOT reach LOADER'}")
                     _session_log.end_phase()
 
-            # Mode 2 (2a/2b): collect node-management network info for THIS node
+            # Mode 2 (2.1/2.2): collect node-management network info for THIS node
             # up-front (before option 4 runs) so the join wizard prompts can be
             # auto-answered from the config file or operator-entered values, matching
-            # mode 1b's behavior. Mode 2a captures it for log fidelity even though
+            # mode 1.2's behavior. Mode 2.1 captures it for log fidelity even though
             # it won't be auto-applied.
             if _operation_mode == 2:
                 # Ensure the cluster management IP is known before the join wizard
                 # runs — avoids the mid-session prompt inside _fetch_existing_cluster_ip.
                 # Only prompt when mode 2 was the original selection; mid-run
-                # transitions (e.g. after 1b) already have mgmt_ip populated.
+                # transitions (e.g. after 1.2) already have mgmt_ip populated.
                 if _initial_operation_mode == 2 and not _cluster_config.get("mgmt_ip"):
                     cfg_cluster_2 = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
                     _pre_mgmt_ip = cfg_cluster_2.get("clus_mgmt_address") or ""
@@ -31948,7 +31948,7 @@ def main():
                         _cluster_config["mgmt_ip"] = _pre_mgmt_ip
                         _session_log.log(f"Mode 2: cluster mgmt IP set up-front: {_pre_mgmt_ip}")
 
-                # For 2b, decide cluster-shell credentials before the node-add
+                # For 2.2, decide cluster-shell credentials before the node-add
                 # workflow starts so the join wizard never pauses for auth.
                 if _initial_operation_mode == 2 and _auto_add:
                     cfg_cluster_2 = (_config_data.get("cluster") or {}) if isinstance(_config_data, dict) else {}
@@ -31971,7 +31971,7 @@ def main():
                             _cluster_config["admin_user"] = sp_user or "admin"
                             _cluster_config["admin_password"] = sp_pass
                             _session_log.log(
-                                f"Mode 2b: using BMC credentials for cluster lookup "
+                                f"Mode 2.2: using BMC credentials for cluster lookup "
                                 f"(user={sp_user or 'admin'})"
                             )
                         else:
@@ -31990,17 +31990,17 @@ def main():
                                 _cluster_config["admin_user"] = _pre_cl_user
                                 _cluster_config["admin_password"] = _pre_cl_pass
                                 _session_log.log(
-                                    f"Mode 2b: cluster admin credentials collected upfront "
+                                    f"Mode 2.2: cluster admin credentials collected upfront "
                                     f"(user={_pre_cl_user})"
                                 )
                             else:
                                 _session_log.log(
-                                    "Mode 2b: no upfront cluster admin password entered; "
+                                    "Mode 2.2: no upfront cluster admin password entered; "
                                     "cluster lookup will still try BMC credentials",
                                     prefix="WARN",
                                 )
                     elif _session_log:
-                        _session_log.log("Mode 2b: cluster lookup credentials already available")
+                        _session_log.log("Mode 2.2: cluster lookup credentials already available")
 
                 # ── Cluster health check ──────────────────────────────────────────────
                 # If a cluster management IP is present in the config, SSH to it and
@@ -32021,7 +32021,7 @@ def main():
                         _print_banner("🩺 Cluster health check")
                         print(f"\n  Cluster management IP: {_2hc_ip}")
 
-                        # Use credentials already collected (2b), otherwise prompt.
+                        # Use credentials already collected (2.2), otherwise prompt.
                         _2hc_user = _cluster_config.get("admin_user") or "admin"
                         _2hc_pass = _cluster_config.get("admin_password") or ""
                         if not _2hc_pass:
@@ -32230,7 +32230,7 @@ def main():
 
                 collect_node_mgmt_per_bmc(sp_host, [])
 
-            # ── Mode 2b: run parallel add for all 2b configurations ────────────────
+            # ── Mode 2.2: run parallel add for all 2.2 configurations ────────────────
             # Collect all peers, run every node through LOADER → option 4 → join in
             # parallel (joins serialized), then repair node names/LIFs and run a
             # final health check.
@@ -32281,17 +32281,17 @@ def main():
                 )
                 if ok and _session_log and hasattr(_session_log, "log_dir"):
                     _archive_node_add_manifests_to_log_dir(
-                        _session_log.log_dir, reason="2b: parallel add success"
+                        _session_log.log_dir, reason="2.2: parallel add success"
                     )
                 _session_log.record_completion(normal_exit=ok)
                 print(f"\n📝 Session log: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 
-            # ── Mode 2a: parallel add with interactive broker ───────────────────────
-            # Mode 2a always uses the parallel thread infrastructure (same as 2b) so
+            # ── Mode 2.1: parallel add with interactive broker ───────────────────────
+            # Mode 2.1 always uses the parallel thread infrastructure (same as 2.2) so
             # that multi-node configs are handled correctly, but threads pause and ask
             # the operator whenever a confirmation is required rather than
-            # auto-answering.  Even a single-node 2a benefits from summary output
+            # auto-answering.  Even a single-node 2.1 benefits from summary output
             # instead of raw BMC console pass-through.
             if _operation_mode == 2 and not _auto_add:
                 _2a_extra_peers = []
@@ -32379,7 +32379,7 @@ def main():
             # The actual primary-setup phases are not skipped on resume (re-running
             # system-reset on a primary whose cluster is already up would be
             # destructive); on resume we detect primary_setup_done and steer the
-            # operator to option 2c instead. Per-peer skip in add_peer_nodes_parallel
+            # operator to option 2.3 instead. Per-peer skip in add_peer_nodes_parallel
             # still prevents re-joining nodes that already completed.
             if _operation_mode == 3 and _checkpoint is None:
                 _option3_init_checkpoint(_run_context, sp_host, _peer_bmc_list, config_path)
@@ -32492,7 +32492,7 @@ def main():
             _session_log.start_phase("AUTOBOOT/LOADER Monitoring")
             monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass)
 
-            # Mode 2b: support adding additional nodes within the same run. The join
+            # Mode 2.2: support adding additional nodes within the same run. The join
             # automation may set _add_another_node_request to (host, user, password)
             # to drive a fresh BMC through the same pipeline.
             while _add_another_node_request is not None:
