@@ -7738,7 +7738,13 @@ def _attempt_console_cluster_login(channel):
             entered_user = input(
                 f"   Cluster admin username [{default_user}]: "
             ).strip() or default_user
-            entered_pass = getpass.getpass("   Cluster admin password: ")
+            _cl_ip = _config_cluster_ip() or "*"
+            _cached_pass = _cred_lookup("cluster", _cl_ip, entered_user)
+            if _cached_pass is not None:
+                print(f"   🔑 Using cached cluster password for {entered_user}.")
+                entered_pass = _cached_pass
+            else:
+                entered_pass = getpass.getpass("   Cluster admin password: ")
         except (EOFError, KeyboardInterrupt):
             print("   \u274C Cluster login aborted by operator.")
             _slog("Cluster login aborted by operator", prefix="ERROR")
@@ -10498,15 +10504,22 @@ def _fetch_existing_cluster_ip(bmc_user=None, bmc_password=None, prompt_before_a
             prompted_user = input(
                 f"  Cluster admin username [{_best_user}]: "
             ).strip() or _best_user
-            prompted_pass = getpass.getpass(
-                f"  Password for {prompted_user}@{mgmt_ip}{_pass_hint}: "
-            ).strip()
+            _cached_pass = _cred_lookup("cluster", mgmt_ip, prompted_user)
+            if _cached_pass is not None:
+                print(f"  🔑 Using cached password for {prompted_user}@{mgmt_ip}.")
+                prompted_pass = _cached_pass
+            else:
+                prompted_pass = getpass.getpass(
+                    f"  Password for {prompted_user}@{mgmt_ip}{_pass_hint}: "
+                ).strip()
+                if not prompted_pass and _best_pass:
+                    prompted_pass = _best_pass
+                    print("  ℹ️  Using stored cluster password.")
         except (EOFError, KeyboardInterrupt):
             prompted_user = _best_user
             prompted_pass = ""
         if not prompted_pass and _best_pass:
             prompted_pass = _best_pass
-            print("  ℹ️  Using stored cluster password.")
         if prompted_user and prompted_pass:
             _cluster_config["admin_user"] = prompted_user
             _cluster_config["admin_password"] = prompted_pass
@@ -10584,9 +10597,14 @@ def _fetch_existing_cluster_ip(bmc_user=None, bmc_password=None, prompt_before_a
                 entered_user = input(
                     f"  Cluster admin username [{_best_user}]: "
                 ).strip() or _best_user
-                entered_pass = getpass.getpass(
-                    f"  Password for {entered_user}@{mgmt_ip}{_pass_hint}: "
-                ) or _best_pass or ""
+                _cached_pass = _cred_lookup("cluster", mgmt_ip, entered_user)
+                if _cached_pass is not None:
+                    print(f"  🔑 Using cached password for {entered_user}@{mgmt_ip}.")
+                    entered_pass = _cached_pass
+                else:
+                    entered_pass = getpass.getpass(
+                        f"  Password for {entered_user}@{mgmt_ip}{_pass_hint}: "
+                    ) or _best_pass or ""
             except (EOFError, KeyboardInterrupt):
                 return _prompt_cluster_ip_fallback()
             if not entered_pass:
@@ -18442,12 +18460,18 @@ def _run_ontap_upgrade(log):
                 if not _login_primary_cluster_shell(channel_41, bmc_pass):
                     print("  \u26a0\ufe0f  Cluster login with BMC credentials failed; "
                           "prompting for cluster admin password...")
-                    try:
-                        cl_pass = getpass.getpass(
-                            f"  Cluster admin password for {bmc_user}: "
-                        )
-                    except (EOFError, KeyboardInterrupt):
-                        return False
+                    _cl_ip = _config_cluster_ip() or "*"
+                    _cached_cl = _cred_lookup("cluster", _cl_ip, bmc_user)
+                    if _cached_cl is not None:
+                        print(f"  🔑 Using cached cluster password for {bmc_user}.")
+                        cl_pass = _cached_cl
+                    else:
+                        try:
+                            cl_pass = getpass.getpass(
+                                f"  Cluster admin password for {bmc_user}: "
+                            )
+                        except (EOFError, KeyboardInterrupt):
+                            return False
                     if not _login_primary_cluster_shell(channel_41, cl_pass):
                         print("  \u274c Cluster shell login failed. Exiting.")
                         if log:
@@ -28114,15 +28138,20 @@ def _run_2c_resume():
         return False
 
     if not cluster_admin_password:
-        try:
-            cluster_admin_password = getpass.getpass(
-                f"  Cluster admin password for {cluster_admin_user}@"
-                f"{cluster_mgmt_ip}: "
-            )
-        except (EOFError, KeyboardInterrupt):
-            cluster_admin_password = ""
+        _cached_pw_2c = _cred_lookup("cluster", cluster_mgmt_ip, cluster_admin_user)
+        if _cached_pw_2c is not None:
+            print(f"  \U0001f511 Using cached password for {cluster_admin_user}@{cluster_mgmt_ip}.")
+            cluster_admin_password = _cached_pw_2c
+        else:
+            try:
+                cluster_admin_password = getpass.getpass(
+                    f"  Cluster admin password for {cluster_admin_user}@"
+                    f"{cluster_mgmt_ip}: "
+                )
+            except (EOFError, KeyboardInterrupt):
+                cluster_admin_password = ""
 
-    print(f"\n  🔌 Connecting to cluster {cluster_mgmt_ip}...")
+    print(f"\n  \U0001f50c Connecting to cluster {cluster_mgmt_ip}...")
     primary_client  = None
     primary_channel = None
     cluster_node_ips: dict = {}   # {node_name: mgmt_ip}
@@ -30328,7 +30357,12 @@ def main():
                 _ch49_user_in = input(f"  Cluster admin username [{_ch49_user}]: ").strip()
                 if _ch49_user_in:
                     _ch49_user = _ch49_user_in
-                _ch49_pass = _gp49.getpass(f"  Cluster admin password for {_ch49_user}@{_ch49_ip}: ")
+                _cached_pw_49 = _cred_lookup("cluster", _ch49_ip, _ch49_user)
+                if _cached_pw_49 is not None:
+                    print(f"  \U0001f511 Using cached password for {_ch49_user}@{_ch49_ip}.")
+                    _ch49_pass = _cached_pw_49
+                else:
+                    _ch49_pass = _gp49.getpass(f"  Cluster admin password for {_ch49_user}@{_ch49_ip}: ")
 
                 # ── Connect ──────────────────────────────────────────────────────
                 print(f"\n  \U0001f50c Connecting to {_ch49_ip} as {_ch49_user}...")
@@ -31363,7 +31397,14 @@ def main():
                 if not _wait_for_cluster_prompt(ch_45, timeout=60):
                     admin_pw_45 = _cluster_config.get("admin_password") or ""
                     if not admin_pw_45:
-                        admin_pw_45 = getpass.getpass("  Cluster admin password: ")
+                        _admin_user_45 = _cluster_config.get("admin_user") or "admin"
+                        _ip_45 = mgmt_ip or _cluster_config.get("mgmt_ip") or _config_cluster_ip() or "*"
+                        _cached_pw_45 = _cred_lookup("cluster", _ip_45, _admin_user_45)
+                        if _cached_pw_45 is not None:
+                            print(f"  \U0001f511 Using cached password for {_admin_user_45}@{_ip_45}.")
+                            admin_pw_45 = _cached_pw_45
+                        else:
+                            admin_pw_45 = getpass.getpass("  Cluster admin password: ")
                     if not _login_primary_cluster_shell(ch_45, admin_pw_45):
                         print("  \u274c Cluster shell login failed. Exiting.")
                         sys.exit(1)
