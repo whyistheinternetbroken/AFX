@@ -1191,44 +1191,65 @@ class _InjectedCheckpointFailure(RuntimeError):
 
 _CHECKPOINT_TEST_OPTIONS = {
     1: [
-        ("primary_install_done", "Primary ONTAP install recorded"),
-        ("primary_format_done", "Primary disk format recorded"),
-        ("primary_node_mgmt_done", "Primary node management configured"),
-        ("primary_bootmenu_done", "Primary boot menu cleared"),
-        ("cluster_formed", "Cluster creation completed"),
-        ("primary_setup_done", "Primary setup completed"),
+        ("cp_1_1", "LOADER configuration completed"),
+        ("cp_1_2", "boot_ontap menu issued"),
+        ("cp_1_3", "Boot menu option 9 completed"),
+        ("cp_1_4", "Boot menu option 4 started"),
+        ("cp_1_5", "Option 4 completed"),
+        ("cp_1_6", "Node management configured"),
+        ("cp_1_7", "Cluster setup started"),
         ("option1_complete", "Option 1 completion recorded"),
     ],
     2: [
-        ("node_install_done", "Node ONTAP install recorded"),
-        ("node_format_done", "Node disk format recorded"),
-        ("node_joined", "Node joined cluster"),
+        ("cp_2_1", "Node at LOADER"),
+        ("cp_2_2", "boot_ontap menu issued"),
+        ("cp_2_3", "Option 4 issued"),
+        ("cp_2_4", "Option 4 completed"),
+        ("cp_2_5", "Node management configured"),
+        ("cp_2_6", "Node at cluster prompt before join"),
+        ("cp_2_7", "Node joined cluster"),
         ("option2_complete", "Option 2 completion recorded"),
     ],
     3: [
-        ("primary_node_mgmt_done", "Primary node management configured"),
-        ("cluster_formed", "Primary cluster creation completed"),
-        ("primary_setup_done", "Primary setup completed"),
-        ("peer_option4_done", "Peer reached add-node checkpoint"),
+        ("cp_1_1", "Primary LOADER configuration completed"),
+        ("cp_1_2", "Primary boot_ontap menu issued"),
+        ("cp_1_3", "Primary boot menu option 9 completed"),
+        ("cp_1_4", "Primary boot menu option 4 started"),
+        ("cp_1_5", "Primary option 4 completed"),
+        ("cp_1_6", "Primary node management configured"),
+        ("cp_1_7", "Primary cluster setup started"),
+        ("cp_2_1", "Peer at LOADER"),
+        ("cp_2_2", "Peer boot_ontap menu issued"),
+        ("cp_2_3", "Peer option 4 issued"),
+        ("cp_2_4", "Peer option 4 completed"),
+        ("cp_2_5", "Peer node management configured"),
+        ("cp_2_6", "Peer ready for cluster add-node"),
+        ("cp_2_7", "Peer joined cluster"),
         ("option3_complete", "Option 3 completion recorded"),
     ],
+    41: [
+        ("cp_41_1", "Upgrade image available"),
+        ("cp_41_2", "Image installed on all nodes"),
+        ("cp_41_3", "First set of nodes taken over"),
+        ("cp_41_4", "First set of nodes given back"),
+        ("cp_41_5", "Second set of nodes taken over"),
+        ("cp_41_6", "Second set of nodes given back"),
+    ],
     42: [
-        ("option6_done", "Option 6 accepted for a node"),
-        ("install_done", "Node install/login checkpoint recorded"),
-        ("reinit_loader", "Node returned to LOADER after install"),
-        ("primary_node_mgmt_done", "Primary node management configured"),
-        ("primary_bootmenu_done", "Primary boot menu cleared"),
-        ("cluster_formed", "Cluster creation completed"),
-        ("peer_option4_done", "Peer reached add-node checkpoint"),
+        ("cp_42_1", "All nodes reached LOADER"),
+        ("cp_42_2", "Netboot started"),
+        ("cp_42_3", "Option 7 selected"),
+        ("cp_42_4", "Image download stage reached"),
+        ("cp_42_5", "Image installed"),
+        ("cp_42_6", "Transitioning to cluster reinit"),
     ],
     43: [
-        ("option6_done", "Option 6 accepted for a node"),
-        ("install_done", "Node install/login checkpoint recorded"),
-        ("reinit_loader", "Node returned to LOADER after install"),
-        ("primary_node_mgmt_done", "Primary node management configured"),
-        ("primary_bootmenu_done", "Primary boot menu cleared"),
-        ("cluster_formed", "Cluster creation completed"),
-        ("peer_option4_done", "Peer reached add-node checkpoint"),
+        ("cp_43_1", "All nodes reached LOADER"),
+        ("cp_43_2", "Netboot started"),
+        ("cp_43_3", "Option 7 selected"),
+        ("cp_43_4", "Image download stage reached"),
+        ("cp_43_5", "Image installed"),
+        ("cp_43_6", "Nodes booting"),
     ],
 }
 
@@ -1295,6 +1316,73 @@ def _describe_4b_resume_stage(cp) -> str:
         return "Reinit reconnect continuation to LOADER on remaining nodes."
 
     return "Netboot install phase (pre-option-6 completion)."
+
+
+_MODE3_PRIMARY_CHECKPOINT_NODE = "node_primary"
+
+
+def _mode3_peer_checkpoint_node(ip: str) -> str:
+    return f"node_peer:{ip}"
+
+
+def _checkpoint_phase_done(phase: str, node_id: str = "") -> bool:
+    if not _checkpoint:
+        return False
+    try:
+        return _checkpoint.is_node_done(phase, node_id) if node_id else _checkpoint.is_done(phase)
+    except Exception:
+        return False
+
+
+def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = "",
+                           alias_node_id: str = "", promote_global: bool = False,
+                           target_node_ids=None) -> bool:
+    if not _checkpoint:
+        return False
+    marked = False
+    try:
+        if node_id:
+            if not _checkpoint.is_node_done(phase, node_id):
+                _checkpoint.mark_node_done(phase, node_id)
+                marked = True
+        elif not _checkpoint.is_done(phase):
+            _checkpoint.mark_done(phase)
+            marked = True
+
+        if alias_phase:
+            if alias_node_id:
+                if not _checkpoint.is_node_done(alias_phase, alias_node_id):
+                    _checkpoint.mark_node_done(alias_phase, alias_node_id)
+            elif not _checkpoint.is_done(alias_phase):
+                _checkpoint.mark_done(alias_phase)
+
+        if promote_global:
+            _targets = [
+                str(_tid).strip() for _tid in (
+                    target_node_ids or getattr(_checkpoint, "bmc_ips", []) or []
+                )
+                if str(_tid).strip()
+            ]
+            if _targets and all(_checkpoint.is_node_done(phase, _tid) for _tid in _targets):
+                if not _checkpoint.is_done(phase):
+                    _checkpoint.mark_done(phase)
+                    marked = True
+
+        if marked:
+            _maybe_inject_checkpoint_failure(phase, node_id)
+    except _InjectedCheckpointFailure:
+        raise
+    except Exception:
+        pass
+    return marked
+
+
+def _run_optional_checkpoint_status_checks() -> None:
+    for _func_name in ("_check_node_boot_status", "_prompt_checkpoint_continuation"):
+        _func = globals().get(_func_name)
+        if callable(_func):
+            with suppress(Exception):
+                _func()
 
 
 def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> None:
@@ -6405,6 +6493,37 @@ OPTIONS
         from bootargs.txt / bootargs (or prompted interactively), then
         applied after set-defaults and before saveenv.
 
+    --test
+        Enable checkpoint failure injection for testing checkpoint recovery logic.
+        After selecting a mode, the script displays available checkpoints and prompts
+        you to choose which one to inject a failure at. When that checkpoint is reached,
+        the script injects a simulated failure and exits. Useful for validating resume
+        procedures and recovery behavior.
+        
+        Supported modes: 1, 2, 3, 4.1, 4.2, 4.3
+        Available checkpoints vary by mode:
+          â€¢ Mode 1: 7 checkpoints (cp_1_1 through cp_1_7)
+          â€¢ Mode 2: 7 checkpoints (cp_2_1 through cp_2_7)
+          â€¢ Mode 3: 14 checkpoints (combined primary + peers)
+          â€¢ Mode 4.1: 6 checkpoints
+          â€¢ Mode 4.2: 6 checkpoints (no option 6)
+          â€¢ Mode 4.3: 6 checkpoints
+        
+        After a test failure, restart with --resume to test checkpoint recovery.
+        Use with -v for verbose output to see checkpoint details.
+
+    --test-checkpoint NODE_IP:CHECKPOINT_ID
+        EXPERIMENTAL: Inject failure at a specific checkpoint for a specific node.
+        Format: '10.1.1.192:cp_1_5' (node IP, colon, checkpoint ID).
+        
+        Implies --test flag. Useful for testing recovery from specific failure points
+        in multi-node operations or debugging particular phase transitions.
+        
+        Example checkpoint IDs:
+          â€¢ cp_1_5  = Mode 1, checkpoint 5 (Option 4 completed)
+          â€¢ cp_2_3  = Mode 2, checkpoint 3 (option 4 issued)
+          â€¢ cp_4a_2 = Mode 4.1, checkpoint 2 (Image installed)
+
     Startup flag completion
         Startup CLI flags can be Tab-completed when argcomplete is installed
         and your shell has its completion hook enabled.
@@ -6423,6 +6542,49 @@ OPTIONS
         --backup          Run mode 5.3 directly
         --verify          Run mode 5.4 directly
         --loader          Run mode 5.99 directly
+
+CHECKPOINTS AND RECOVERY
+
+    AFX_reinit automatically creates checkpoints during operation to enable recovery
+    from failure points. Each node gets its own checkpoint file in the "checkpoints/"
+    directory with independent phase tracking.
+
+    CHECKPOINT PHASES BY MODE
+       Mode 1 (Primary init):     7 phases - LOADER config → cluster created
+       Mode 2 (Add nodes):        7 phases - LOADER → joined to cluster
+       Mode 3 (End-to-end):      14 phases - Primary + peer in parallel (tracked independently)
+       Mode 4.1 (Rolling upgrade): 6 phases - Download image → upgrade complete
+       Mode 4.2 (Netboot reinit):  6 phases - LOADER → cluster initialized (no option 6)
+       Mode 4.3 (Install only):    6 phases - LOADER → nodes booting
+
+    RESUMING FROM CHECKPOINT
+       1. Restart the script:       python3 AFX_reinit.py
+       2. Select "Resume from last checkpoint" when prompted
+       3. Script skips completed phases and continues from next pending phase
+
+    TESTING CHECKPOINT RECOVERY
+       # Interactive checkpoint selection
+       python3 AFX_reinit.py --test
+
+       # Test specific checkpoint for specific node (EXPERIMENTAL)
+       python3 AFX_reinit.py --test-checkpoint 10.1.1.192:cp_1_5
+
+    VIEWING CHECKPOINT DATA
+       # Display saved checkpoint information
+       python3 AFX_reinit.py --inspect-checkpoint
+        
+       # Display status of the most recent run
+       python3 AFX_reinit.py --last-status
+
+    CHECKPOINT FILES
+       Location: checkpoints/{node_id}_checkpoint.json
+       Format:   JSON v2 with per-node phase tracking
+       Expiry:   Checkpoints older than 72 hours are ignored
+       Cleanup:  Automatically deleted on successful completion
+        
+       Manually clear all checkpoints: rm -rf checkpoints/*.json
+
+    For more details, see README.md section "Checkpoint System"
 
 INTERACTIVE FEATURES
 
@@ -6824,8 +6986,19 @@ def parse_args():
                         help="Skip the menu and run mode 5.99: reset all nodes "
                              "to the LOADER prompt in parallel.")
     parser.add_argument("--test", action="store_true", default=False,
-                        help="Interactive checkpoint failure injection for "
-                             "resume testing in modes 1-4.")
+                        help="Enable checkpoint failure injection for testing checkpoint "
+                             "resume logic. After selecting a mode, the script displays "
+                             "available checkpoints and prompts you to choose which one to "
+                             "inject a failure at. When reached, the script injects a "
+                             "failure and exits. Use with -v for verbose output. "
+                             "Modes 1-4 supported.")
+    parser.add_argument("--test-checkpoint", type=str, default=None, 
+                        metavar="NODE_IP:CHECKPOINT_ID",
+                        help="EXPERIMENTAL: Inject failure at a specific checkpoint for a "
+                             "specific node. Format: '10.1.1.192:cp_1_5'. Implies --test "
+                             "flag. Checkpoint IDs vary by mode: cp_1_1 through cp_1_7 for "
+                             "mode 1, cp_2_1 through cp_2_7 for mode 2, etc. "
+                             "Useful for testing recovery from specific failure points.")
 
     def _resolve_option_dest(raw_token: str) -> "str | None":
         """Best-effort map from a raw CLI option token to its argparse dest."""
@@ -9234,6 +9407,11 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     if _session_log:
         _session_log.log(f"Boot menu detected – auto-selecting option {option} ({description})")
         _session_log.log_sent(option)
+    if _operation_mode in (1, 3):
+        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+        _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
+    elif _operation_mode == 2:
+        _checkpoint_mark_phase("cp_2_2")
 
     channel.send(option + "\r")
     _boot_host = (
@@ -9256,6 +9434,12 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
         print(f"   ↻ Menu prompt still visible; resending option {option}...")
         channel.send(option + "\r\n")
         time.sleep(2)
+
+    if _operation_mode in (1, 3):
+        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+        _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
+    elif _operation_mode == 2:
+        _checkpoint_mark_phase("cp_2_3")
 
     return True
 
@@ -13243,7 +13427,10 @@ def _node_log_open(ip, log_dir, prefix="node", previous_log=None):
 def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                                   log=None, boot_menu_timeout=900,
                                   node_file=None, status_cb=None,
-                                  static_ifconfig=None, phase_name=""):
+                                  static_ifconfig=None, phase_name="",
+                                  checkpoint_phase_base="",
+                                  checkpoint_node_id="",
+                                  checkpoint_target_node_ids=None):
     """Run the netboot install sequence on a channel already at LOADER prompt.
 
     *static_ifconfig* — when supplied, a dict with keys ``port``, ``ip``,
@@ -13363,7 +13550,14 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                     f"{_nb_attempt}/{_NETBOOT_MAX_ATTEMPTS}: {pkg_url}"
                 )
         _send_raw(f"netboot {pkg_url}")
-        _status_ts(f"\n  {_format_status_line(node_label, '📥 Downloading ONTAP image — this may take several minutes...', 'INFO')}")
+        if checkpoint_phase_base:
+            _checkpoint_mark_phase(
+                f"{checkpoint_phase_base}_2",
+                node_id=checkpoint_node_id,
+                promote_global=True,
+                target_node_ids=checkpoint_target_node_ids,
+            )
+        _status_ts(f"\n  {_format_status_line(node_label, 'ðŸ“¥ Downloading ONTAP image â€” this may take several minutes...', 'INFO')}")
 
         # Download-phase progress thread: emits a status line every 60 s so
         # the terminal doesn't look hung while the image transfers.
@@ -13473,6 +13667,13 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     if log:
         log.log(f"[{node_label}] boot menu detected – sending option 7")
     _send_raw("7")
+    if checkpoint_phase_base:
+        _checkpoint_mark_phase(
+            f"{checkpoint_phase_base}_3",
+            node_id=checkpoint_node_id,
+            promote_global=True,
+            target_node_ids=checkpoint_target_node_ids,
+        )
     time.sleep(2)
 
     # ── 4. Answer install prompts ──────────────────────────────────────────
@@ -13510,6 +13711,13 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         if log:
             log.log(f"[{node_label}] sending package URL")
         _send_raw(pkg_url)
+        if checkpoint_phase_base:
+            _checkpoint_mark_phase(
+                f"{checkpoint_phase_base}_4",
+                node_id=checkpoint_node_id,
+                promote_global=True,
+                target_node_ids=checkpoint_target_node_ids,
+            )
 
     # Mutable container so _do_reboot (defined here) can stop a timer
     # that may be created later in the user-name-prompt branch.
@@ -13530,6 +13738,13 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         _status_ts(f"\n  ✅ {_format_status_line(node_label, 'Image installed — 🔄 node rebooting...', 'SUCCESS')}")
         if log:
             log.log(f"[{node_label}] reboot triggered; install complete")
+        if checkpoint_phase_base:
+            _checkpoint_mark_phase(
+                f"{checkpoint_phase_base}_5",
+                node_id=checkpoint_node_id,
+                promote_global=True,
+                target_node_ids=checkpoint_target_node_ids,
+            )
         return True
 
     # Prompt 3: "What is the user name on 'x.x.x.x', if any?"
@@ -13573,6 +13788,13 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
         if log and phase_name:
             log.add_phase_subtiming(phase_name, f"  [{node_label}] image download", _whole_dl_elapsed)
             log.add_phase_subtiming(phase_name, f"  [{node_label}] image install", time.monotonic() - _inst_t0)
+        if checkpoint_phase_base:
+            _checkpoint_mark_phase(
+                f"{checkpoint_phase_base}_5",
+                node_id=checkpoint_node_id,
+                promote_global=True,
+                target_node_ids=checkpoint_target_node_ids,
+            )
         return True
 
     # Prompt 4: "Do you want to restore the backup configuration now? {y|n}"
@@ -13605,6 +13827,13 @@ def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
     if log and phase_name:
         log.add_phase_subtiming(phase_name, f"  [{node_label}] image download", _whole_dl_elapsed)
         log.add_phase_subtiming(phase_name, f"  [{node_label}] image install", time.monotonic() - _inst_t0)
+    if checkpoint_phase_base:
+        _checkpoint_mark_phase(
+            f"{checkpoint_phase_base}_5",
+            node_id=checkpoint_node_id,
+            promote_global=True,
+            target_node_ids=checkpoint_target_node_ids,
+        )
     return True
 
 
@@ -13660,6 +13889,8 @@ def _peer_reinit_worker(ip, ctx):
 
     try:
         _t_loader_seen = time.monotonic() - _t_thread_start
+        _peer_cp_node = _mode3_peer_checkpoint_node(ip)
+        _checkpoint_mark_phase("cp_2_1", node_id=_peer_cp_node)
         # NOTE: primary_option9_done_event is now checked AFTER the peer boot menu
         # is reached (not before loader prep). This lets peers boot to the menu in
         # parallel with the primary's option-9 phase, reducing total wait time.
@@ -13705,6 +13936,7 @@ def _peer_reinit_worker(ip, ctx):
                 else:
                     peer_ch.send("boot_ontap menu\r")
                     time.sleep(1)
+            _checkpoint_mark_phase("cp_2_2", node_id=_peer_cp_node)
 
         # Wait for boot menu, then send option 4.
         _status(f"  ⏳ {_format_status_line(ip, 'Waiting for boot menu (peer)...', 'INFO')}")
@@ -13791,6 +14023,7 @@ def _peer_reinit_worker(ip, ctx):
             _par_write(_pnf, "\n>>> sending option 4\n")
         peer_ch.send("4\r")
         _t_option4_sent = time.monotonic() - _t_thread_start
+        _checkpoint_mark_phase("cp_2_3", node_id=_peer_cp_node)
         _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
         time.sleep(2)
 
@@ -13800,15 +14033,19 @@ def _peer_reinit_worker(ip, ctx):
             reconnect_ctx=_peer_rc_ctx,
         )
         _t_disk_erase_done = time.monotonic() - _t_thread_start
+        _checkpoint_mark_phase("cp_2_4", node_id=_peer_cp_node, alias_phase="peer_option4_done", alias_node_id=ip)
+        _run_optional_checkpoint_status_checks()
         cfg = _resolve_node_mgmt_config(ip)
         _auto_answer_node_mgmt(peer_ch, cfg, node_log=_pnf)
         _t_node_mgmt_done = time.monotonic() - _t_thread_start
+        _checkpoint_mark_phase("cp_2_5", node_id=_peer_cp_node)
 
         # Abort the cluster wizard with Ctrl+C, log in as admin, and
         # capture the node's cluster interface IP.
         _cluster_ip = _abort_wizard_get_cluster_ip(
             peer_ch, ip, admin_password, cluster_ips_out, ip, node_log=_pnf)
         _t_cluster_ip_done = time.monotonic() - _t_thread_start
+        _checkpoint_mark_phase("cp_2_6", node_id=_peer_cp_node)
 
         if _cluster_ip is None:
             _status(f"  ⚠️  [{ip}] Could not capture cluster IP; "
@@ -13865,6 +14102,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     _bootarg_check_enabled = None
     _primary_option9_done = threading.Event()
     _4b_primary_node_ip = None
+    _cp4x_base = "cp_43" if install_only else "cp_42"
 
     # ── Shared state ───────────────────────────────────────────────────────
     # Serializes the brief status lines printed to the console by parallel
@@ -14293,7 +14531,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     # future improvement — the operator can re-confirm progress visually.)
     if resuming and _checkpoint:
         _install_done_ips = _checkpoint.nodes_done_for("install_done")
-        _opt6_done_ips    = _checkpoint.nodes_done_for("option6_done")
+        # Only load option6_done for mode 4.3 (install_only); mode 4.2 never uses it.
+        _opt6_done_ips    = _checkpoint.nodes_done_for("option6_done") if install_only else set()
         _reinit_done_ips  = _checkpoint.nodes_done_for("reinit_loader")
         _opt4_done_ips    = _checkpoint.nodes_done_for("peer_option4_done")
         _joined_ips       = _checkpoint.nodes_done_for("peer_joined")
@@ -14303,7 +14542,8 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _flags = []
             if _ip in _install_done_ips:
                 _flags.append("install_done")
-            if _ip in _opt6_done_ips:
+            # Only display option6_done for mode 4.3 (install_only)
+            if install_only and _ip in _opt6_done_ips:
                 _flags.append("option6_done")
             if _ip in _reinit_done_ips:
                 _flags.append("reinit_loader")
@@ -14323,17 +14563,32 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if _checkpoint.is_done("option3_complete"):
             print("     option3_complete      : ✅")
         if log:
-            log.log(
-                "4.2 resume: prior progress — install_done="
-                f"{_install_done_ips}, option6_done={_opt6_done_ips}, "
-                f"reinit_loader={_reinit_done_ips}, "
-                f"peer_option4_done={_opt4_done_ips}, "
-                f"peer_joined={_joined_ips}, "
-                f"primary_bootmenu_done={_checkpoint.is_done('primary_bootmenu_done')}, "
-                f"primary_node_mgmt_done={_checkpoint.is_done('primary_node_mgmt_done')}, "
-                f"cluster_formed={_checkpoint.is_done('cluster_formed')}, "
-                f"primary_setup_done={_checkpoint.is_done('primary_setup_done')}"
-            )
+            # Only log option6_done for mode 4.3 (install_only)
+            if install_only:
+                log.log(
+                    "4b resume: prior progress - install_done="
+                    f"{_install_done_ips}, option6_done={_opt6_done_ips}, "
+                    f"reinit_loader={_reinit_done_ips}, "
+                    f"peer_option4_done={_opt4_done_ips}, "
+                    f"peer_joined={_joined_ips}, "
+                    f"primary_bootmenu_done={_checkpoint.is_done('primary_bootmenu_done')}, "
+                    f"primary_node_mgmt_done={_checkpoint.is_done('primary_node_mgmt_done')}, "
+                    f"cluster_formed={_checkpoint.is_done('cluster_formed')}, "
+                    f"primary_setup_done={_checkpoint.is_done('primary_setup_done')}"
+                )
+            else:
+                # Mode 4.2 (4b strict) does not use option6_done
+                log.log(
+                    "4b resume: prior progress - install_done="
+                    f"{_install_done_ips}, "
+                    f"reinit_loader={_reinit_done_ips}, "
+                    f"peer_option4_done={_opt4_done_ips}, "
+                    f"peer_joined={_joined_ips}, "
+                    f"primary_bootmenu_done={_checkpoint.is_done('primary_bootmenu_done')}, "
+                    f"primary_node_mgmt_done={_checkpoint.is_done('primary_node_mgmt_done')}, "
+                    f"cluster_formed={_checkpoint.is_done('cluster_formed')}, "
+                    f"primary_setup_done={_checkpoint.is_done('primary_setup_done')}"
+                )
 
     # Open per-BMC session logs for the install flow.
     for ip in bmc_ips:
@@ -14531,7 +14786,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     with connect_lock:
                         loader_channels[ip] = ch
                         loader_clients[ip] = cl
-                    _status(f"  ✅ [{ip}] At LOADER prompt.")
+                    _checkpoint_mark_phase(
+                        f"{_cp4x_base}_1",
+                        node_id=ip,
+                        promote_global=True,
+                        target_node_ids=_install_bmc_ips,
+                    )
+                    _status(f"  âœ… [{ip}] At LOADER prompt.")
                     if log:
                         log.log(f"[{ip}] confirmed LOADER prompt (no reset needed)")
                     return
@@ -14569,7 +14830,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     with connect_lock:
                         loader_channels[ip] = ch
                         loader_clients[ip] = cl
-                    _status(f"  ✅ [{ip}] At LOADER prompt.")
+                    _checkpoint_mark_phase(
+                        f"{_cp4x_base}_1",
+                        node_id=ip,
+                        promote_global=True,
+                        target_node_ids=_install_bmc_ips,
+                    )
+                    _status(f"  âœ… [{ip}] At LOADER prompt.")
                     if log:
                         log.log(f"[{ip}] reached LOADER prompt")
                 else:
@@ -14632,7 +14899,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     ch, pkg_url, node_label=ip, log=log,
                     boot_menu_timeout=900, node_file=nf, status_cb=_scb,
                     static_ifconfig=_static,
-                    phase_name="4.2 \u2013 Netboot Install",
+                    phase_name="4b \u2013 Netboot Install",
+                    checkpoint_phase_base=_cp4x_base,
+                    checkpoint_node_id=ip,
+                    checkpoint_target_node_ids=_install_bmc_ips,
                 )
             except _InjectedCheckpointFailure:
                 with connect_lock:
@@ -14686,7 +14956,11 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if log:
             log.log(f"4.2: netboot install complete on {len(_install_bmc_ips)} node(s)")
 
-        print(f"\n  ✅ Netboot complete on all {len(_install_bmc_ips)} node(s).")
+        print(f"\n  âœ… Netboot complete on all {len(_install_bmc_ips)} node(s).")
+        if install_only:
+            _checkpoint_mark_phase(f"{_cp4x_base}_6")
+        else:
+            _checkpoint_mark_phase(f"{_cp4x_base}_6")
         # (_do_reinit and _mode_sel were collected upfront before operations began)
 
         # Close and log all node files now (before option 6 and init take over).
@@ -18335,6 +18609,7 @@ def _run_ontap_upgrade(log):
             print(f"  \U0001f517 Package URL: {pkg_url}")
             if log:
                 log.log(f"Upgrade package URL (user-supplied): {pkg_url}")
+        _checkpoint_mark_phase("cp_41_1")
 
         # ── Step 2: Credentials ──────────────────────────────────────────────
         # The same credentials work for both the cluster-mgmt LIF and the BMC.
@@ -19079,7 +19354,9 @@ def _run_ontap_upgrade(log):
                     log.log(f"Image installed on {nodename}")
                     log.add_phase_subtiming("Upgrade Workflow", f"  [{nodename}] download + install", _seq_inst_elapsed)
 
-        # ── Pre-stage / validate-only exits ─────────────────────────────────
+        _checkpoint_mark_phase("cp_41_2")
+
+        # â”€â”€ Pre-stage / validate-only exits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # The HTTP server is no longer needed once all image downloads are done.
         if httpd is not None:
             print("\n  \U0001f310 Shutting down temporary HTTP server (downloads complete)...")
@@ -19347,7 +19624,9 @@ def _run_ontap_upgrade(log):
                 log.log(f"SFO poll IP: {_sfo_poll_ip}")
 
         def _do_takeover_giveback(takeover_node, takeover_by,
-                                  allow_version_mismatch=False):
+                                  allow_version_mismatch=False,
+                                  takeover_checkpoint="",
+                                  giveback_checkpoint=""):
             """Take over `takeover_node` by `takeover_by`, auto-issue giveback
             when the node reaches 'Waiting for giveback', then wait until the
             node is fully back online.
@@ -19629,6 +19908,8 @@ def _run_ontap_upgrade(log):
                     _last_state = _state_lower
 
                 if "waiting for giveback" in _state_lower:
+                    if takeover_checkpoint:
+                        _checkpoint_mark_phase(takeover_checkpoint)
                     print(f"  \U0001f501 {takeover_node} reached 'Waiting for "
                           "giveback' — issuing giveback...")
                     if log:
@@ -19657,6 +19938,10 @@ def _run_ontap_upgrade(log):
                             f"  [{takeover_node}] takeover + giveback",
                             _total,
                         )
+                    if takeover_checkpoint:
+                        _checkpoint_mark_phase(takeover_checkpoint)
+                    if giveback_checkpoint:
+                        _checkpoint_mark_phase(giveback_checkpoint)
                     _close_poll()
                     return True
 
@@ -19821,6 +20106,8 @@ def _run_ontap_upgrade(log):
                             f"  [{takeover_node}] takeover + giveback",
                             _total,
                         )
+                    if giveback_checkpoint:
+                        _checkpoint_mark_phase(giveback_checkpoint)
                     _close_poll()
                     return True
 
@@ -19837,12 +20124,17 @@ def _run_ontap_upgrade(log):
         partner_of = {r["node"]: r["partner"] for r in fo_rows}
         partner_of.update({r["partner"]: r["node"] for r in fo_rows})
 
-        for phase, nodes in (("1 (partner)", partner_group), ("2 (main)", main_group)):
-            print(f"\n  ── Phase {phase} ─────────────────────────────────────")
+        for phase, nodes, _tk_cp, _gb_cp in (
+            ("1 (partner)", partner_group, "cp_41_3", "cp_41_4"),
+            ("2 (main)", main_group, "cp_41_5", "cp_41_6"),
+        ):
+            print(f"\n  â”€â”€ Phase {phase} â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€")
             for to_node in nodes:
                 by_node = partner_of.get(to_node, "")
                 if not _do_takeover_giveback(to_node, by_node,
-                                             allow_version_mismatch=(to_node in _ver_mismatch_nodes)):
+                                             allow_version_mismatch=(to_node in _ver_mismatch_nodes),
+                                             takeover_checkpoint=_tk_cp,
+                                             giveback_checkpoint=_gb_cp):
                     return False
 
         # ── Step 11b: remediation pass ──────────────────────────────────────
@@ -20590,7 +20882,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         "\n⏳ Cluster create started. Waiting for ONTAP to form the cluster "
         "and reach post-create prompts..."
     )
-    _slog("Cluster create started – waiting for additional license key prompt")
+    _slog("Cluster create started â€“ waiting for additional license key prompt")
+    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+    _checkpoint_mark_phase("cp_1_7", node_id=_primary_cp_node, alias_phase="primary_setup_done")
     _create_wait_done = threading.Event()
     _create_wait_t0 = time.monotonic()
     def _create_wait_reporter(_ev=_create_wait_done, _t0=_create_wait_t0):
@@ -21066,6 +21360,8 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = ""):
     _slog(f"[{label}] Sent Enter after wizard-start detection")
     channel.send("\r")
     time.sleep(0.5)
+    if _operation_mode == 2:
+        _checkpoint_mark_phase("cp_2_6")
     if "press enter" in _which.lower():
         # Serialize the join keystroke across peer-add threads.
         print(f"\n🔒 [{label}] Waiting for join lock...")
@@ -21113,6 +21409,8 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         channel, label=bmc_host or sp_host or "", is_node_add=True,
         reconnect_ctx=_join_reconnect_ctx,
     )
+    _checkpoint_mark_phase("cp_2_4")
+    _run_optional_checkpoint_status_checks()
 
     # Node mgmt config (from per-BMC pre-collection).
     cfg = _resolve_node_mgmt_config(bmc_host)
@@ -21122,6 +21420,7 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         print(f"   {k:<8} = {v if v else '(prompt manually)'}")
     _slog(f"Node mgmt config to use: {cfg}")
     _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
+    _checkpoint_mark_phase("cp_2_5")
 
     # Drive the join wizard (sends "join" at create-or-join prompt).
     _run_join_wizard(channel, label=f"2.2/{bmc_host or 'this node'}",
@@ -21226,8 +21525,8 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     # Checkpoint: node has joined the cluster
     if _checkpoint and _operation_mode == 2:
         try:
-            _checkpoint.mark_done("node_joined")
-            _slog("checkpoint: node_joined saved")
+            _checkpoint_mark_phase("cp_2_7", alias_phase="node_joined")
+            _slog("checkpoint: cp_2_7/node_joined saved")
         except _InjectedCheckpointFailure:
             raise
         except Exception:
@@ -24638,6 +24937,16 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
             log=_session_log,
             node_timings_out=_m3_add_node_timings,
         )
+        if _add_nodes_ok:
+            for _peer_bmc, _entry in (_m3_cluster_ips_out or {}).items():
+                _peer_cluster_ip = _cluster_ip_from_entry(_entry)
+                if _peer_cluster_ip and _peer_cluster_ip in _m3_collected_ips:
+                    _checkpoint_mark_phase(
+                        "cp_2_7",
+                        node_id=_mode3_peer_checkpoint_node(_peer_bmc),
+                        alias_phase="peer_joined",
+                        alias_node_id=_peer_bmc,
+                    )
         if not _add_nodes_ok:
             _mode3_ok = False
     else:
@@ -25032,12 +25341,18 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
             _session_log.log("2nd boot menu detected; auto-selecting option 4")
             _session_log.log_sent("4")
         channel.send("4\r")
+        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+        _checkpoint_mark_phase("cp_1_4", node_id=_primary_cp_node)
+        _run_optional_checkpoint_status_checks()
         _cleanup_known_hosts_after_boot_option(bmc_host or "primary", "4", log=_session_log)
         time.sleep(2)
 
     # 3) Yes confirmations.
     _auto_answer_disk_erase_prompts(channel, label=bmc_host or "",
                                     is_node_add=False)
+    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+    _checkpoint_mark_phase("cp_1_5", node_id=_primary_cp_node, alias_phase="primary_bootmenu_done")
+    _run_optional_checkpoint_status_checks()
 
     # 4) Node management config.
     cfg = _resolve_node_mgmt_config(bmc_host)
@@ -25049,8 +25364,8 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
     _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
     if _checkpoint:
         try:
-            _checkpoint.mark_done("primary_node_mgmt_done")
-            _slog("checkpoint: primary_node_mgmt_done saved")
+            _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node, alias_phase="primary_node_mgmt_done")
+            _slog("checkpoint: cp_1_6/primary_node_mgmt_done saved")
         except _InjectedCheckpointFailure:
             raise
         except Exception:
@@ -25375,7 +25690,9 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     channel.send("\r")
     output = direct_read_until(channel, "LOADER-", timeout=15)
     if "loader-" not in output.lower():
-        print("⚠️  No LOADER prompt seen, attempting commands anyway...")
+        print("âš ï¸  No LOADER prompt seen, attempting commands anyway...")
+    if _operation_mode == 2:
+        _checkpoint_mark_phase("cp_2_1")
 
     loader_commands = get_loader_commands()
 
@@ -25453,8 +25770,12 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
                 _session_log.log_sent(command)
             time.sleep(1)
 
-    # ── Netboot-before-reinit hook ─────────────────────────────────────────
-    # When the operator answered 'y' to the 1.1/1.2 ONTAP-version prompt, skip
+    if _operation_mode in (1, 3):
+        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+        _checkpoint_mark_phase("cp_1_1", node_id=_primary_cp_node)
+
+    # â”€â”€ Netboot-before-reinit hook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # When the operator answered 'y' to the 1a/1b ONTAP-version prompt, skip
     # boot_ontap menu and instead do ifconfig + netboot on the primary node.
     # After the install completes and the node reboots, the normal boot-menu
     # selection below will pick up the new ONTAP boot menu (option 9 → init).

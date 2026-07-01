@@ -464,92 +464,233 @@ the cluster LIF is in flux.
 
 ---
 
-## Checkpoint & Resume (modes 4.2 and 3)
+## Checkpoint System
 
-Mode **4.2** (including the end-to-end variant **4.2 + reinit mode 3**)
-and the standalone end-to-end mode **3** persist progress to a
-checkpoint file so an interrupted run — Ctrl+C, network blip, BMC
-banner stall, power loss on the jump host — can be resumed without
-re-running destructive steps.
+The AFX_reinit script automatically creates per-node checkpoint files to enable recovery from intermediate failure points during long-running operations across all 6 operation modes.
 
-> **Tip:** Run `python3 AFX_reinit.py --checkpoint-status` at any time to inspect the saved checkpoint — including file path, run mode, current phase, age, BMC IPs, and completed phases — without modifying or resuming it.
-> **Note:** Checkpointing is experimental and still a work in progress.
+### How Checkpoints Work
 
-### Where the checkpoint lives
+When you run AFX_reinit, the script automatically creates checkpoint files for each node:
 
-A single JSON file named **`afx_checkpoint.json`** is written to the same
-directory as the script (next to `AFX_reinit.py`). Checkpoints older than
-**72 hours** are ignored on load.
+- **Location**: `checkpoints/{node_id}_checkpoint.json`
+- **Format**: JSON v2 with per-node phase tracking
+- **Automatic Cleanup**: Checkpoint files are deleted upon successful completion
+- **Age**: Checkpoints older than 72 hours are automatically ignored
 
-### How to inspect it
+Each checkpoint file tracks which phases (stages) have completed for that node, allowing the script to:
 
-Use the dedicated CLI flag — no need to open the JSON by hand:
+1. Resume from the last completed phase if the script is interrupted
+2. Skip already-completed phases and continue with the next phase
+3. Validate node state before proceeding to critical operations
+
+### Checkpoint Phases by Mode
+
+#### Mode 1: Primary Node Initialization
+
+Creates a primary node and cluster from scratch.
+
+**7 Checkpoints**:
+
+1. **LOADER configuration completed** — LOADER environment variables configured
+2. **Boot_ontap menu issued** — Boot menu displayed
+3. **Boot menu Option 9 completed** — System cleanup confirmed
+4. **Boot menu option 4 started** — Disk erase/config wipe initiated
+5. **Option 4 completed** — Disk erase/config wipe done
+6. **Node management configured** — Node management interface set up
+7. **Cluster setup started** — Cluster creation initiated
+
+#### Mode 2: Add Additional Nodes to Cluster
+
+Adds one or more nodes to an existing cluster.
+
+**7 Checkpoints**:
+
+1. **Node at LOADER** — Node reaches LOADER prompt
+2. **boot_ontap menu issued** — Boot menu displayed
+3. **option 4 issued** — Disk erase/config wipe started
+4. **Option 4 completed** — Disk erase/config wipe done
+5. **Node management configured** — Node management interface set
+6. **Node at ::> prompt (not joined)** — ONTAP shell reached but cluster join pending
+7. **Node joined to cluster** — Cluster join completed
+
+#### Mode 3: End-to-End Automatic Initialization
+
+Initializes both primary and peer nodes in parallel.
+
+**14 Checkpoints** (Combines Mode 1 + Mode 2 for primary and peer nodes, tracked independently)
+
+#### Mode 4.1: Rolling ONTAP Upgrade
+
+Upgrades ONTAP on all nodes using rolling takeover/giveback.
+
+**6 Checkpoints**:
+
+1. **Image downloaded** — ONTAP image file downloaded
+2. **Image installed** — Image installed on all nodes
+3. **First set of nodes taken over** — First node(s) taken over for upgrade
+4. **First set of nodes given back** — First node(s) giveback complete, upgrade done
+5. **2nd set of nodes taken over** — Second node(s) taken over
+6. **2nd set of nodes given back** — Second node(s) giveback complete, all nodes upgraded
+
+#### Mode 4.2: Netboot + Automated Cluster Reinit
+
+Reinstalls ONTAP via netboot and reinitializes cluster.
+
+**6 Checkpoints** (Option 6 NOT used in this mode):
+
+1. **Nodes at LOADER** — All nodes reach LOADER prompt
+2. **Netboot started** — Netboot boot process initiated
+3. **Option 7 selected** — Netboot option selected from boot menu
+4. **Image downloaded** — ONTAP image downloaded via netboot
+5. **Image installed** — ONTAP image installation complete
+6. **Continue with Option 1+2** — Transition to cluster initialization (then follows Mode 1+2 phases)
+
+#### Mode 4.3: Install Image Only
+
+Installs ONTAP image without cluster initialization (Option 6 supported).
+
+**6 Checkpoints**:
+
+1. **Nodes at LOADER** — All nodes reach LOADER prompt
+2. **Netboot started** — Netboot process initiated
+3. **Option 7 selected** — Netboot option selected
+4. **Image downloaded** — ONTAP image downloaded
+5. **Image installed** — ONTAP installation complete
+6. **Nodes booting** — Nodes beginning final boot sequence
+
+### Resuming from Checkpoints
+
+If the script is interrupted (e.g., network failure, timeout), you can resume:
 
 ```bash
-python3 AFX_reinit.py --checkpoint-status
+# Simply restart the script with the same mode and parameters
+python AFX_reinit.py
+
+# Select the same operation mode
+# The script will detect existing checkpoints
+# Select "Resume from checkpoint" option when prompted
 ```
 
-This prints the absolute checkpoint path, the run mode (e.g. `4.2-3`),
-the current phase, next expected phase, created/updated timestamps, age
-in minutes, log directory, config path, BMC IPs, every completed global
-phase, and every per-node phase keyed by BMC IP — then exits without
-modifying the file.
+**The script will**:
 
-Per-node checkpoint blocks are labeled with node roles when known:
+- Automatically detect per-node checkpoints
+- Show a summary of current progress for each node
+- Skip all completed phases
+- Continue from the next pending phase
+- Validate node state before continuing
 
-- `primary | <ip>` for the first/primary node
-- `secondary-01 | <ip>`, `secondary-02 | <ip>`, etc. for peer nodes
+### Manual Checkpoint Inspection
 
-Primary-only milestones such as `primary_bootmenu_done`,
-`primary_node_mgmt_done`, and `primary_setup_done` are also echoed in the
-primary node's `done` list so checkpoint status is easier to scan without
-cross-referencing the global section.
-
-During `4.2+3` runs, checkpoint status may also show peer nodes as
-`(waiting on primary cluster setup)` while the primary is still in the
-cluster setup wizard, with the next expected phase set to
-`2.2 – Parallel Node Add`.
-
-The same summary is also printed automatically at startup whenever a
-valid checkpoint is found, immediately before the resume / discard
-prompt.
-
-### How to resume
+To see what checkpoint data was saved (for debugging):
 
 ```bash
-python3 AFX_reinit.py --resume
+python AFX_reinit.py --inspect-checkpoint
 ```
 
-On startup the script loads `afx_checkpoint.json`, shows the summary,
-and resumes mode 4.2 from the first unfinished phase. Completed work is
-skipped:
+This displays:
+- Checkpoint file paths and ages
+- Completed phases per node
+- Node metadata (BMC IP, hostname, management configuration)
+- Timestamps for checkpoint creation and last update
 
-- All BMC IPs marked `install_done` → Steps 2–6a (SSH / reset / netboot /
-  install / boot menu option 6) are skipped; the run jumps straight to
-  Step 6b (reconnect to LOADER and boot ONTAP).
-- Peers marked `peer_joined` (mode 3 only) are skipped during the
-  parallel peer auto-add phase.
-- `cluster_formed`, `primary_setup_done`, and `option3_complete` gate
-  the cluster-setup wizard, license/SSH steps, and the finalize banner.
+### Testing Checkpoint Recovery
 
-If `option3_complete` or `primary_setup_done` is set from a prior run,
-the resume prompt warns that re-running will destroy the existing
-cluster and asks for explicit confirmation.
+Use the `--test` flag to inject failures at specific checkpoints for testing recovery:
 
-### Phase glossary
+```bash
+# Enable checkpoint failure injection
+python AFX_reinit.py --test
 
-| Phase | Scope | Set when |
-|---|---|---|
-| `install_done` | per-node | Option 6 (Update flash from backup config) succeeds and the node reaches the post-install `login:` prompt. |
-| `reinit_loader` | per-node | Reconnect-to-LOADER succeeds and `boot_ontap menu` has been sent. |
-| `primary_bootmenu_done` | global | The primary node clears the ONTAP boot menu (option 9 for mode 1/3, option 4 for mode 2). Cluster setup wizard is about to begin. |
-| `cluster_formed` | global | `cluster create` succeeds on the primary node and the prompt reaches `::>`. |
-| `primary_setup_done` | global | The primary cluster-setup wizard returns successfully. |
-| `peer_option4_done` | per-peer (mode 3) | A peer clears boot menu option 4, finishes format, and reaches the join barrier. Recorded once per peer so the option-4 / format work can be reasoned about on resume. |
-| `peer_joined` | per-peer (mode 3) | A peer completes the join wizard and the primary's `cluster show` confirms it. |
-| `option3_complete` | global | The end-to-end mode-3 finalize banner has been printed. The checkpoint file is then deleted. |
+# Script will prompt you to select which checkpoint to fail at
+# When reached, script will inject a failure and exit
+# Restart with --test again to test recovery from that checkpoint
+```
 
-### Manual checkpoint snapshots
+**Available test checkpoints vary by mode**:
+
+- Mode 1: 7 injection points (cp_1_1 through cp_1_7)
+- Mode 2: 7 injection points (cp_2_1 through cp_2_7)
+- Mode 3: 14 injection points (Mode 1 + Mode 2)
+- Mode 4.1: 6 injection points
+- Mode 4.2: 6 injection points (NO option 6)
+- Mode 4.3: 6 injection points
+
+#### Advanced: Node-Specific Checkpoint Injection
+
+For more precise testing, inject failure at a specific checkpoint for a specific node:
+
+```bash
+# Test specific checkpoint for specific node (EXPERIMENTAL)
+python AFX_reinit.py --test-checkpoint 10.1.1.192:cp_1_5
+```
+
+Format: `NODE_IP:CHECKPOINT_ID`
+
+Example checkpoint IDs:
+- `cp_1_5` — Mode 1, checkpoint 5
+- `cp_2_3` — Mode 2, checkpoint 3
+- `cp_4a_2` — Mode 4.1, checkpoint 2
+
+### Checkpoint File Structure
+
+Checkpoint files are stored in JSON format in the `checkpoints/` directory:
+
+```json
+{
+  "version": 2,
+  "node_id": "node_192",
+  "bmc_ip": "10.1.1.192",
+  "hostname": "node-0",
+  "option": "1",
+  "created": "2024-01-01T12:00:00.000000",
+  "updated": "2024-01-01T12:05:30.000000",
+  "checkpoints": {
+    "cp_1_1": {
+      "name": "LOADER configuration completed",
+      "completed": true,
+      "timestamp": "2024-01-01T12:01:00.000000",
+      "details": {
+        "loader_env": "DHCP",
+        "diagnostic_bootargs": ["one.ipv4"]
+      }
+    },
+    "cp_1_2": {
+      "name": "Boot_ontap menu issued",
+      "completed": false,
+      "timestamp": null,
+      "details": {}
+    }
+  },
+  "params": {
+    "cluster_ip": "10.1.1.100"
+  }
+}
+```
+
+### Checkpoint Cleanup
+
+Checkpoint files are automatically deleted when:
+
+- ✅ Mode completes successfully (all nodes healthy)
+- ✅ Operator selects "Start fresh" instead of resume
+- ✅ Checkpoint expires (>72 hours old)
+
+Checkpoint files are **preserved** when:
+
+- ⚠️ Mode fails or is interrupted
+- ⚠️ Operator selects "Resume from checkpoint"
+
+To manually clear all checkpoints:
+
+```bash
+# Remove all checkpoint files
+rm -rf checkpoints/*.json
+
+# Or selectively remove one node's checkpoints:
+rm checkpoints/node_192_checkpoint.json
+```
+
+### Manual Checkpoint Snapshots
 
 At any point during a live run you can force an immediate checkpoint snapshot — a timestamped copy of the current checkpoint state — without stopping the script.
 
@@ -578,13 +719,135 @@ The script prints the saved path on screen:
 💾 Manual checkpoint saved (operator): checkpoints/afx_checkpoint_manual_20260613_151200.json
 ```
 
-Manual snapshot files are separate from the live `afx_checkpoint.json` that `--resume` uses; they are kept for audit/diagnostic purposes and are not loaded automatically.
+Manual snapshot files are separate from the live checkpoint files that `--resume` uses; they are kept for audit/diagnostic purposes and are not loaded automatically.
 
-### Clearing the checkpoint
+---
 
-The script removes `afx_checkpoint.json` automatically on successful
-completion of mode 4.2. To discard a stale checkpoint manually, delete
-the file or answer **no** at the resume prompt.
+## Examples
+
+### Example 1: Simple Mode 1 Cluster Creation with Checkpoint Resume
+
+This example shows how to initialize a primary node and recover from an interruption:
+
+```bash
+# First run - initialize primary node
+$ python AFX_reinit.py
+? Select operation mode: 1
+? Enter primary BMC IP: 10.1.1.192
+... script running ...
+[node_192] ERROR: Network timeout at checkpoint 5
+
+# Checkpoint file saved: checkpoints/node_192_checkpoint.json
+
+# Restart script later
+$ python AFX_reinit.py
+? Select operation mode: 1
+? Resume from last checkpoint? (y/n): y
+
+# Script detects checkpoint, skips cp_1_1 through cp_1_4, resumes at cp_1_5
+[node_192] Resuming from checkpoint cp_1_5: Option 4 completed
+... continues from checkpoint 5 ...
+... completes successfully ...
+✅ Cluster initialization complete
+```
+
+**What happened**: The checkpoint system saved progress after checkpoint 4. When the script restarted, it detected the saved checkpoint and resumed from checkpoint 5, skipping the already-completed disk erase and format stages.
+
+### Example 2: Testing Checkpoint Recovery with --test Flag
+
+This example shows how to test checkpoint recovery logic:
+
+```bash
+# Run mode 1 with test failure injection
+$ python AFX_reinit.py --test
+? Select operation mode: 1
+? Enter primary BMC IP: 10.1.1.192
+
+? Select checkpoint to inject failure at:
+  1. LOADER configuration completed (cp_1_1)
+  2. Boot_ontap menu issued (cp_1_2)
+  3. Boot menu Option 9 completed (cp_1_3)
+  4. Boot menu option 4 started (cp_1_4)
+  5. Option 4 completed (cp_1_5)
+  6. Node management configured (cp_1_6)
+  7. Cluster setup started (cp_1_7)
+
+? Select [1-7]: 5
+
+🧪 --test armed for mode 1: checkpoint 'cp_1_5' (Option 4 completed)
+... script running, completes checkpoints 1-5 ...
+🧪 Injected --test failure after checkpoint 'cp_1_5' was saved
+ERROR: Test failure injected at checkpoint cp_1_5
+
+# Checkpoint saved - now test recovery
+$ python AFX_reinit.py
+? Select operation mode: 1
+? Resume from last checkpoint? (y/n): y
+
+[node_192] Resuming from checkpoint cp_1_5
+... resumes from checkpoint 5, continues successfully ...
+```
+
+**What happened**: The `--test` flag injected a simulated failure at checkpoint 5. This allows you to verify that the resume mechanism works correctly from that point. In production, this helps validate recovery procedures.
+
+### Example 3: Mode 4.2 (Netboot + Cluster Reinit) Without Option 6
+
+This example demonstrates Mode 4.2's strict 6-checkpoint sequence:
+
+```bash
+$ python AFX_reinit.py
+? Select operation mode: 4
+? Select upgrade/install option:
+  a. Rolling upgrade (4a)
+  b. Netboot + cluster reinit (4b)
+  c. Install image only (4c)
+
+? Select [a/b/c]: b
+
+# Mode 4.2 runs with 6 checkpoints (NO Option 6)
+Checkpoint 1/6: Nodes at LOADER
+Checkpoint 2/6: Netboot started
+Checkpoint 3/6: Option 7 selected
+Checkpoint 4/6: Image downloaded
+Checkpoint 5/6: Image installed
+Checkpoint 6/6: Continue with Option 1+2 cluster initialization
+
+[node_192] Checkpoint 1/6: Nodes at LOADER ✅
+[node_193] Checkpoint 1/6: Nodes at LOADER ✅
+[node_192] Checkpoint 2/6: Netboot started ✅
+[node_193] Checkpoint 2/6: Netboot started ✅
+... continues through checkpoint 6 ...
+```
+
+**What happened**: Mode 4.2 follows a strict 6-phase sequence without Option 6 (Update flash from backup config). The checkpoints track progress independently for each node, allowing parallel operations while maintaining per-node recovery capability.
+
+### Example 4: Multi-Node End-to-End with Parallel Checkpoint Tracking
+
+This example shows Mode 3 (end-to-end) tracking 14 independent checkpoints across primary and peer nodes:
+
+```bash
+$ python AFX_reinit.py
+? Select operation mode: 3
+? Enter primary BMC IP: 10.1.1.192
+? Enter peer 1 BMC IP: 10.1.1.193
+? Enter peer 2 BMC IP: 10.1.1.194
+
+# Mode 3 runs primary (7 checkpoints) + 2 peers (7 each) = 14 total
+[PRIMARY 10.1.1.192] Checkpoint 1/7: LOADER configuration ✅
+[PEER-01 10.1.1.193] Checkpoint 1/7: Node at LOADER ✅
+[PEER-02 10.1.1.194] Checkpoint 1/7: Node at LOADER ✅
+[PRIMARY 10.1.1.192] Checkpoint 2/7: Boot menu issued ✅
+[PEER-01 10.1.1.193] Checkpoint 2/7: boot_ontap menu ✅
+... peers progress in parallel ...
+[PRIMARY 10.1.1.192] Checkpoint 7/7: Cluster setup started ✅
+... cluster setup completes ...
+[PEER-01 10.1.1.193] Checkpoint 7/7: Joined to cluster ✅
+[PEER-02 10.1.1.194] Checkpoint 7/7: Joined to cluster ✅
+
+✅ All 3 nodes initialized and cluster operational
+```
+
+**What happened**: Mode 3 maintains independent checkpoint tracks for the primary node and each peer. This enables fine-grained recovery: if a peer fails at checkpoint 4, the primary can hold at checkpoint 7, and on resume only the failed peer resumes from checkpoint 4.
 
 ---
 

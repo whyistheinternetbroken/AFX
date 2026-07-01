@@ -8,95 +8,79 @@ revision labels rather than strict [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
-### Changed
-- **Session credential cache now persists across all 5.x modes and option 1.**
-  Modes 5.5, 5.7, 5.8, 5.9, and 5.99 (and the option 1 node-reinit and cluster
-  config flows) now store credentials in the in-memory session cache after every
-  manual entry and reuse cached values on subsequent prompts within the same
-  session. Prior to this change, only `_prompt_or_cached_bmc_pass` stored
-  credentials; direct `getpass` / `input` paths never called `_cred_store`,
-  so the cache was always empty on re-entry.
-- **BIOS firmware update prevention prompt now defaults to N.**
-  The "Do you want to prevent BIOS firmware from updating?" prompt changed from
-  `[Y/n]` (default yes) to `[y/N]` (default no) at both prompt sites (mode 5.3
-  and mode 5.99). Pressing Enter without input no longer enables prevention.
-- **5.11 BMC connection option added.**
-  Option 5.11 (Build cluster_IP manifest) now offers a choice between connecting
-  via the cluster management IP or via BMC. The BMC path SSH-connects to the
-  BMC, sends `system console`, handles the takeover `y/n` prompt, and logs into
-  the cluster shell before running the manifest query.
-- **5.11 no-config prompt now runs option 5.3 directly.**
-  When no configuration file is found on entry to 5.11, the script now offers
-  to run option 5.3 immediately ("Run option 5.3 now? [Y/n]") rather than just
-  returning to the menu. Answering Y launches the full 5.3 config-gather flow
-  inline; answering N continues into 5.11 without a config file.
-
-
-- **Options 1a and 1b consolidated into a single option 1.**
-  The interactive (1a) and automated (1b) first-node initialization options are
-  now combined into a single menu option 1: "Create single node cluster". The
-  new option runs in fully automated mode (equivalent to the old 1b behavior).
-  Users who previously needed interactive wizard prompts should use the config
-  file to pre-supply values or re-enter them when prompted during automated
-  execution. The `--first-node` shortcut flag still routes directly to mode 1.
-- **After 1a/1b completion, prompt to run 2a, 2b, or return to menu.**
-  Options 1a and 1b no longer exit the script after the cluster setup wizard
-  completes. Instead, the operator is shown a three-choice prompt (2a / 2b / N).
-  Choosing 2a or 2b flows directly into node-add without re-prompting for the
-  "continue to add nodes?" and sub-option questions. Choosing N (or Enter) raises
-  `_ReturnToMenu` and returns to the main menu cleanly.
-- **Option 1b now clears the checkpoint on completion.**
-  When option 1b finishes, the checkpoint file is deleted rather than marked done,
-  so stale 1b state does not interfere with subsequent runs.
-- **5k raw SSH output suppressed; only the DNA summary is shown.**
-  `_run_boot_dna_check_target` now wraps SSH operations in `_suppress_console()`
-  so raw BMC/ONTAP echo no longer appears on screen. The per-target intermediate
-  "values from BMC" table was removed; only the final multi-target summary is
-  printed.
-- **5k target list now shows `node_name (IP)` when names are available.**
-  The boot-DNA target selection list now resolves node names from the config file
-  (primary_node / secondary_nodes / netboot_bmcs + structured nodes) and displays
-  entries as `node_name (IP)`. A two-pass search is used so names and cluster
-  management IP are found even when BMC IPs and node names are in separate files.
-- **5l now supports hostname input, prints discovered IPs, and logs the path.**
-  Mode 5l accepts a hostname or IP for the cluster target, prints the cluster-role
-  IPs discovered during the query, logs the path of the written `cluster_IP.json`,
-  and pauses for Enter before returning to the main menu.
-- **5f now pauses before returning to menu.**
-  After the cluster health and version check (5f / 5g), the script waits for
-  Enter before returning to the main menu, keeping result output visible.
-- **5n now runs without a yes/no confirmation and pauses for Enter.**
-  The "show config" view no longer asks for confirmation; it displays immediately
-  and shows a "Press Enter to return to the main menu" pause at the end.
-
 ### Added
-- **New option 5n and `--show-config` flag: display reinit-config.json.**
-  Option 5n (and the equivalent `--show-config` CLI flag) renders the active
-  config file in a human-readable layout: cluster settings, primary node,
-  secondary nodes, and any extra fields. Passwords are masked as `[set]` or
-  `[none]`.
+- (No new features yet)
+
+### Changed
+- (No changes yet)
 
 ### Fixed
-- **Boot DNA regex now matches `printenv` whitespace-only format.**
-  `_extract_boot_dna_records()` previously required `==` or `:` between key
-  and value. The `printenv` command outputs `bootarg.init.dna     3088` with
-  whitespace only, causing option 3 LOADER-stage DNA verification to always
-  return `None` and abort with "unsupported boot DNA". The separator group is
-  now optional so both `bootarg.init.dna == 3088` and
-  `bootarg.init.dna     3088` are matched.
-- **`setenv bootarg.init.unjoined true` now set in all node-add LOADER flows.**
-  The LOADER command set for options 2a, 2b, 2c, and the peer-node path of
-  option 3 now includes `setenv bootarg.init.unjoined true` before `saveenv`.
-  This was missing and could cause node-join failures after option 4.
-- **Node-add timeouts increased for large clusters.**
-  Disk-erase and node-management wait timeouts in 2a/2b/3 peer workers were
-  raised to better handle slower hardware and larger disk counts.
-- **`-node-names` omitted from `cluster add-node` when names are not configured.**
-  `cluster add-node` no longer passes `-node-names` when node names are absent
-  or unset in the config, preventing a command error on clusters where auto-name
-  assignment is expected.
+- (No fixes yet)
 
+---
 
+## [1.2.0] - 2026-07-01
+
+### Added
+- **Per-node checkpoint system** with automatic state persistence
+  - Each node gets independent checkpoint file in `checkpoints/{node_id}_checkpoint.json`
+  - Supports resume from any completed phase across all operation modes (1-4)
+  - Format: JSON v2 with per-node phase tracking and node metadata
+- **Comprehensive checkpoint phase definitions** for all 6 operation modes
+  - Mode 1 (Primary init): 7 phases from LOADER config to cluster setup
+  - Mode 2 (Node adds): 7 phases from LOADER to cluster join
+  - Mode 3 (End-to-end): 14 phases (7 primary + 7 per peer, tracked independently)
+  - Mode 4.1 (Rolling upgrade): 6 phases from image download to final giveback
+  - Mode 4.2 (Netboot reinit): 6 phases without Option 6 boot sequence
+  - Mode 4.3 (Install only): 6 phases ending with nodes booting
+- **Checkpoint inspection** via `--inspect-checkpoint` flag to view saved checkpoint data
+- **Enhanced --test flag** for checkpoint failure injection
+  - Interactive checkpoint selection for testing resume logic
+  - New `--test-checkpoint NODE_IP:CHECKPOINT_ID` format for targeted failure injection
+  - Per-node failure injection support (EXPERIMENTAL)
+- **Automatic checkpoint cleanup** on successful completion
+- **Status checker integration** at critical checkpoints (modes 1-3)
+- **Comprehensive documentation** for checkpoint system in README.md
+  - How checkpoints work and their structure
+  - Phase definitions for each operation mode
+  - Resume procedures and checkpoint inspection
+  - Testing checkpoint recovery with --test flag
+  - Examples section with 4 detailed use cases
+
+### Changed
+- **Mode 4.2 (Netboot + Cluster Reinit)** now strict mode WITHOUT Option 6
+  - Option 6 phase removed from mode 4.2 checkpoint sequence
+  - Option 6 preserved for Mode 4.3 (install-only mode only)
+  - Ensures clean separation between modes: 4b strict, 4c image-only
+- Checkpoint file format upgraded to v2 (backwards compatible with v1)
+- Improved resumption diagnostics with per-node tracking
+- Per-node checkpoint enables fine-grained recovery across parallel operations
+- Help text updated to document new checkpoint and test flag options
+
+### Fixed
+- Multi-node checkpoint coordination now per-node independent
+- Resume logic now supports node-level granularity
+- Checkpoint state tracking more granular with per-checkpoint details
+
+### Deprecated
+- Direct filesystem access to checkpoint JSON files (use script inspection tools)
+- Old v1 single-file checkpoint format (auto-migrated on first run)
+
+### Breaking Changes
+- Mode 4.2 no longer uses Option 6 boot menu sequence
+- Single global `afx_checkpoint.json` file replaced with per-node files in `checkpoints/` directory
+- Old checkpoint file automatically backed up and migrated on first run
+
+### Migration Guide
+- First run after v1.2.0 release will auto-migrate v1 checkpoint to v2
+- Existing v1 checkpoints preserved with full mode/node context
+- Old checkpoint file backed up as `afx_checkpoint.v1.backup`
+- No action required by users - migration is automatic and transparent
+
+---
+
+## [v1.1] – Previous release
+- **Mode 3 now prints per-node join status during bulk add-node polling.**
   While polling `cluster add-node-status`, the primary console now emits
   row-level join status transitions (node/IP + status) and a one-time message
   when ONTAP has not yet returned any status rows, so peer join progress is
