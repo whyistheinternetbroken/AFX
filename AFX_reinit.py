@@ -9627,6 +9627,9 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                     channel.send("no\r")
                 if _session_log:
                     _session_log.log_sent("no")
+                if not _cp_1_3_done_now():
+                    _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
+                    _run_optional_checkpoint_status_checks()
                 time.sleep(0.2)
                 continue
             if "yes/no" in _buf:
@@ -25758,6 +25761,9 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 channel.send("no\r")
             except Exception:
                 pass
+            if not _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node):
+                _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
+                _run_optional_checkpoint_status_checks()
         elif ("type yes to confirm and continue" in _init_l
               or "welcome to the cluster setup wizard" in _init_l):
             _option9_progress_confirmed = True
