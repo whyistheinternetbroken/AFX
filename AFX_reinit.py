@@ -32570,6 +32570,8 @@ def main():
                 
                 # Show saved selections summary and ask for confirmation (with selective mod)
                 _has_saved = _checkpoint.has_saved_selections() if _checkpoint else False
+                _need_to_ask_questions = True  # Flag: do we need to ask prompts?
+                
                 if _has_saved:
                     _saved_selections, _was_modified = _handle_checkpoint_confirmation_with_selective_mod(
                         _checkpoint, diag_mode=_diag_mode
@@ -32583,13 +32585,13 @@ def main():
                         _loader_env_stage_enabled = _saved_selections.get("loader_env_stage_enabled", True)
                         _setup_passwordless_ssh = _saved_selections.get("setup_passwordless_ssh", False)
                         _netboot_before_reinit = _saved_selections.get("netboot_before_reinit", False)
-                        _has_saved = False  # Set to False so we skip re-prompting
+                        _need_to_ask_questions = False  # Skip re-prompting - we have all values
                     else:
                         # Operator modified or cleared - need to re-prompt for cleared items
-                        _has_saved = True  # Keep as True to trigger re-prompting below
+                        _need_to_ask_questions = True
                 
-                # Re-prompt for any cleared or new selections
-                if _has_saved:
+                # Ask questions if: no checkpoint, or operator cleared selections
+                if _need_to_ask_questions:
                     # Ask all questions
                     if _operation_mode in (1, 3):
                         print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
@@ -32660,6 +32662,8 @@ def main():
                 _print_banner("Node pre-config")
                 
                 _has_saved = _checkpoint.has_saved_selections() if _checkpoint else False
+                _need_to_ask_questions = True
+                
                 if _has_saved:
                     _saved_selections, _was_modified = _handle_checkpoint_confirmation_with_selective_mod(
                         _checkpoint, diag_mode=_diag_mode
@@ -32668,9 +32672,11 @@ def main():
                     if _saved_selections and not _was_modified:
                         _prevent_bios_fw_update = _saved_selections.get("prevent_bios_fw_update", False)
                         _loader_env_stage_enabled = _saved_selections.get("loader_env_stage_enabled", True)
-                        _has_saved = False
+                        _need_to_ask_questions = False
+                    else:
+                        _need_to_ask_questions = True
                 
-                if not _has_saved:
+                if _need_to_ask_questions:
                     # Ask BIOS firmware question
                     _fw_ans = _prompt(
                         "  Do you want to prevent BIOS firmware from updating? [y/N]: ",
