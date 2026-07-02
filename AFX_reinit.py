@@ -9957,9 +9957,15 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
         return True
 
     if _operation_mode == 2:
-        print(f"\n✅ {_pfx}Boot menu detected! Option {option} selected. Node reinitializing to be added to cluster.{_elapsed_str()}")
+        print(
+            f"\n✅ {_pfx}Boot menu detected! Preparing to send option {option} "
+            f"for node add flow.{_elapsed_str()}"
+        )
     else:
-        print(f"\n✅ {_pfx}Boot menu detected! Option {option} selected. Node reinitializing and Storage Availability Zone being destroyed.{_elapsed_str()}")
+        print(
+            f"\n✅ {_pfx}Boot menu detected! Preparing to send option {option} "
+            f"for reinit flow.{_elapsed_str()}"
+        )
     if _session_log:
         _session_log.log(f"Boot menu detected – auto-selecting option {option} ({description})")
         _session_log.log_sent(option)
@@ -9970,6 +9976,10 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
         _checkpoint_mark_phase("cp_2_2")
 
     channel.send(option + "\r")
+    if _operation_mode == 2:
+        print(f"   ✅ {_pfx}Option {option} issued; node reinitializing to be added to cluster.{_elapsed_str()}")
+    else:
+        print(f"   ✅ {_pfx}Option {option} issued; node reinitializing and Storage Availability Zone being destroyed.{_elapsed_str()}")
     _boot_host = (
         (reconnect_ctx.get("host") if isinstance(reconnect_ctx, dict) else "")
         or node_label
@@ -25696,6 +25706,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
 
     _already_in_wizard = False
     _second_bootmenu_visible = False
+    _option9_progress_confirmed = False
     _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
     _resume_cp_1_3 = bool(
         resume_from_cp_1_3
@@ -25710,6 +25721,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         )
         _slog("cp_1_3 resume: skipping option-9 warning wait; proceeding to option 4 stage")
         _second_bootmenu_visible = True
+        _option9_progress_confirmed = True
     else:
         # 1) Storage availability zone warning -> "no"
         print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for storage-availability-zone warning (auto-answer 'no')...{_elapsed_str()}")
@@ -25738,6 +25750,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             channel = _rc["channel"]
         _init_l = str(_init_matched or "").lower()
         if "storage availability zone will be destroyed" in _init_l:
+            _option9_progress_confirmed = True
             if _session_log:
                 _session_log.log("Storage availability zone warning detected; auto-responding 'no'")
                 _session_log.log_sent("no")
@@ -25747,14 +25760,20 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 pass
         elif ("type yes to confirm and continue" in _init_l
               or "welcome to the cluster setup wizard" in _init_l):
+            _option9_progress_confirmed = True
             _already_in_wizard = True
             print(f"   ℹ️  {_node_pfx(bmc_host)}Cluster setup wizard already active; skipping second boot-menu wait.")
             _slog(f"[{bmc_host}] cluster setup wizard detected before second boot menu")
         elif any(_sig in _init_l for _sig in (
             "selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu"
         )):
-            _second_bootmenu_visible = True
-            _slog(f"[{bmc_host}] second boot menu already visible after option 9")
+            # Seeing boot-menu text immediately after option 9 can be the first
+            # menu still echoing; do not treat this as cp_1_3 completion yet.
+            _slog(
+                f"[{bmc_host}] boot menu text seen after option 9 send; "
+                "continuing to wait for second boot menu before marking cp_1_3",
+                prefix="WARN",
+            )
 
     # 2) Wait for the *second* boot menu and select option 4.
     global _mode3_pipeline_state, _mode3_staged_loader_channels, _mode3_staged_loader_clients
@@ -25902,6 +25921,15 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             if _session_log:
                 _session_log.log_console(chunk)
             output_lower += chunk.lower()
+            _chunk_lower = chunk.lower()
+            if any(_sig in _chunk_lower for _sig in (
+                "storage availability zone will be destroyed",
+                "type yes to confirm and continue",
+                "welcome to the cluster setup wizard",
+                "do you want to abort this operation (yes/no)",
+                "this is a disruptive operation",
+            )):
+                _option9_progress_confirmed = True
             fatal_reason = _fatal_boot_integrity_reason(output_lower)
             if fatal_reason:
                 print(
@@ -25918,6 +25946,22 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 output_lower = output_lower[-8192:]
             last_progress = time.monotonic()
         if matched:
+            _matched_l = str(matched or "").lower()
+            _matched_menu = any(_sig in _matched_l for _sig in (
+                "selection (1-",
+                "selection (1-9)?",
+                "selection (1-11)?",
+                "selection (1-12)?",
+                "select option 4",
+                "boot menu",
+            ))
+            if _matched_menu and not (_option9_progress_confirmed or _resume_cp_1_3):
+                _slog(
+                    f"[{bmc_host}] boot menu detected but option-9 progress not confirmed yet; "
+                    "continuing wait to avoid premature cp_1_3",
+                    prefix="WARN",
+                )
+                continue
             found = True
             break
         if (not loader_recovery_attempted
@@ -26340,21 +26384,34 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
     global _netboot_pkg_preselected, _mode3_peer_netboot_done
     _reinit_label = sp_host or _reinit_label
     _pfx = _node_pfx()
-    print(f"\n⏳ {_pfx}Setting LOADER boot options...{_elapsed_str()}")
-    if _session_log:
-        _session_log.end_phase()  # End AUTOBOOT/LOADER Monitoring
-        _session_log.start_phase("LOADER Commands")
-        _session_log.log("LOADER prompt detected – running boot configuration commands")
-
-    drain_channel(channel, seconds=1)
-
-    _resume_cp_1_1_probe = bool(
+    _resume_cp_1_1_only = bool(
         _operation_mode in (1, 3)
         and _checkpoint is not None
         and _checkpoint.is_done("cp_1_1")
         and not _checkpoint.is_done("cp_1_2")
         and not resume_skip_loader_commands
     )
+    if _resume_cp_1_1_only:
+        print(
+            f"\n⏳ {_pfx}Resuming from cp_1_1: booting node to boot menu "
+            f"(issuing 'boot_ontap menu')...{_elapsed_str()}"
+        )
+    else:
+        print(f"\n⏳ {_pfx}Setting LOADER boot options...{_elapsed_str()}")
+    if _session_log:
+        _session_log.end_phase()  # End AUTOBOOT/LOADER Monitoring
+        _session_log.start_phase("LOADER Commands")
+        if _resume_cp_1_1_only:
+            _session_log.log(
+                "Checkpoint resume cp_1_1 – skipping LOADER setenv replay and issuing boot_ontap menu"
+            )
+        else:
+            _session_log.log("LOADER prompt detected – running boot configuration commands")
+
+    drain_channel(channel, seconds=1)
+
+    _resume_cp_1_1_probe = _resume_cp_1_1_only
+    _resume_cp_1_1_issue_boot_menu = False
 
     if _resume_cp_1_1_probe:
         # cp_1_1 resume guard: detect actual console state before replaying
@@ -26404,7 +26461,12 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
             _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
             _run_optional_checkpoint_status_checks()
         elif _at_loader:
-            _slog("Checkpoint resume probe (cp_1_1): LOADER prompt confirmed; replaying LOADER commands")
+            resume_skip_loader_commands = True
+            _resume_cp_1_1_issue_boot_menu = True
+            _slog(
+                "Checkpoint resume probe (cp_1_1): LOADER prompt confirmed; "
+                "issuing boot_ontap menu only (no LOADER setenv replay)"
+            )
         else:
             _slog(
                 "Checkpoint resume probe (cp_1_1): prompt inconclusive; proceeding with LOADER replay",
@@ -26464,8 +26526,21 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
         )
 
     if resume_skip_loader_commands:
-        print(f"\n⏭️ {_pfx}Checkpoint indicates boot_ontap menu already issued; skipping LOADER command replay.{_elapsed_str()}")
-        _slog("Checkpoint resume: skipped LOADER command replay (cp_1_2 already complete)")
+        if _resume_cp_1_1_issue_boot_menu:
+            print(
+                f"\n⏳ {_pfx}Checkpoint resume cp_1_1: issuing boot_ontap menu "
+                f"to advance to checkpoint 1_2...{_elapsed_str()}"
+            )
+            channel.send("boot_ontap menu\r")
+            if _session_log:
+                _session_log.log_sent("boot_ontap menu")
+            time.sleep(1)
+            _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+            _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
+            _run_optional_checkpoint_status_checks()
+        else:
+            print(f"\n⏭️ {_pfx}Checkpoint indicates boot_ontap menu already issued; skipping LOADER command replay.{_elapsed_str()}")
+            _slog("Checkpoint resume: skipped LOADER command replay (cp_1_2 already complete)")
     else:
         for command in loader_commands:
             # set-defaults was already run inside _loader_env_pre_post_prompt;
@@ -34742,14 +34817,19 @@ def main():
                 _checkpoint and _checkpoint.is_done("cp_1_1")
             ) if _checkpoint else False
              
-            _at_loader = (
-                _primary_loader_result[0]
-                if _primary_loader_result[0] is not None
-                    and other_sps
-                    and _operation_mode in (1, 3)
-                    and not _mode3_skip_presets
-                else _already_at_loader(channel, label=sp_host)
-            )
+            if _checkpoint_1_done:
+                # Resume from cp_1_1 means LOADER prep is already complete and system
+                # reset is skipped; do not run additional LOADER/reset probe messaging.
+                _at_loader = True
+            else:
+                _at_loader = (
+                    _primary_loader_result[0]
+                    if _primary_loader_result[0] is not None
+                        and other_sps
+                        and _operation_mode in (1, 3)
+                        and not _mode3_skip_presets
+                    else _already_at_loader(channel, label=sp_host)
+                )
             if _at_loader or _checkpoint_1_done:
                 # Node is already sitting at LOADER — nothing to reset.
                 if _checkpoint_1_done:
@@ -34862,7 +34942,8 @@ def main():
                     )
                 else:
                     _real_stdout.write(
-                        "⏭️  Continuing from LOADER commands (boot_ontap menu + boot menu selection)...\n\n"
+                        "⏭️  Resuming from cp_1_1: issuing boot_ontap menu to reach boot menu "
+                        "and then advancing to checkpoint 1_2...\n\n"
                     )
                 _real_stdout.flush()
                 _session_log.log("Checkpoint 1 complete; bypassing monitor and resuming from saved stage")
