@@ -1030,6 +1030,9 @@ _config_data = {}
 
 # Path to the loaded config file (used to save updates like NTP selections).
 _config_file_path = None
+# Cached operator choice from detected-config prompt (persisted to checkpoint
+# as soon as a checkpoint exists).
+_use_detected_config_choice = None
 
 # Cluster-level setup config gathered up-front (used by mode 1.2 to drive the
 # post-node-mgmt cluster setup wizard non-interactively).
@@ -2034,6 +2037,7 @@ def _select_config_path_interactive(detected, indent="  ", header_emoji="📄"):
     if not detected:
         return None
     pad = indent
+    global _use_detected_config_choice
     if len(detected) == 1:
         found = detected[0]
         print(f"\n{pad}{header_emoji} Found config file: {found}")
@@ -2041,6 +2045,8 @@ def _select_config_path_interactive(detected, indent="  ", header_emoji="📄"):
         _cp_pref = CheckpointManager()
         if _cp_pref.load():
             _saved_pref = _cp_pref.get_param("use_detected_config")
+        if _saved_pref is None and _use_detected_config_choice in (True, False):
+            _saved_pref = _use_detected_config_choice
         if _saved_pref is True:
             print(f"{pad}ℹ️  Using saved checkpoint choice: yes")
             return found
@@ -2049,6 +2055,7 @@ def _select_config_path_interactive(detected, indent="  ", header_emoji="📄"):
             return None
         use_it = _prompt(f"{pad}Use this config file? [Y/n]: ", "y").lower()
         _use_config = use_it in ("", "y", "yes")
+        _use_detected_config_choice = _use_config
         if _cp_pref.load():
             _cp_pref.set_param("use_detected_config", _use_config)
         return found if _use_config else None
@@ -9501,6 +9508,8 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     waiting_for_bmc_retry_armed = False
     loader_recovery_attempted = False
     boot_wait_extension = 0
+    abort_prompt_auto_answers = 0
+    _ABORT_PROMPT_MAX_AUTO_ANSWERS = 6
 
     def _screen_status(msg):
         try:
@@ -9537,6 +9546,44 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 sys.stdout.flush()
             if _session_log:
                 _session_log.log_console(chunk)
+            # Resume path can land while option-9 is already active and waiting
+            # for "Do you want to abort this operation (yes/no)?". If we only
+            # wait for boot-menu signatures, this stalls indefinitely. Auto-
+            # answer "no" (same as normal flow) and continue.
+            if "do you want to abort this operation (yes/no)" in output_lower:
+                if abort_prompt_auto_answers < _ABORT_PROMPT_MAX_AUTO_ANSWERS:
+                    abort_prompt_auto_answers += 1
+                    _screen_status(
+                        f"⚙️  {_pfx}Detected option-9 abort confirmation prompt; "
+                        "auto-answering 'no' and continuing..."
+                    )
+                    if _session_log:
+                        _session_log.log(
+                            f"[{node_label or 'primary'}] detected option-9 abort prompt "
+                            f"during boot-menu wait; auto-answering 'no' "
+                            f"(attempt {abort_prompt_auto_answers}/{_ABORT_PROMPT_MAX_AUTO_ANSWERS})",
+                            prefix="WARN",
+                        )
+                        _session_log.log_sent("no")
+                    with suppress(Exception):
+                        channel.send("no\r")
+                    # Reset rolling buffer so stale prompt text doesn't keep
+                    # retriggering while we wait for fresh output.
+                    output = ""
+                    output_lower = ""
+                    last_progress = time.monotonic()
+                    time.sleep(0.2)
+                    continue
+                _screen_status(
+                    f"⚠️  {_pfx}Option-9 abort prompt persisted after "
+                    f"{_ABORT_PROMPT_MAX_AUTO_ANSWERS} auto-answers."
+                )
+                if _session_log:
+                    _session_log.log(
+                        f"[{node_label or 'primary'}] option-9 abort prompt persisted "
+                        f"after {_ABORT_PROMPT_MAX_AUTO_ANSWERS} auto-answers",
+                        prefix="WARN",
+                    )
             if "waiting for bmc" in chunk.lower():
                 waiting_for_bmc_seen = True
                 waiting_for_bmc_retry_armed = True
@@ -24463,6 +24510,7 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
     # only overwrites the field we actually mutated (ctx.checkpoint).
     ctx.refresh_from_globals()
     session_log = ctx.session_log
+    global _use_detected_config_choice
 
     prior = CheckpointManager()
     if prior.load():
@@ -24543,6 +24591,8 @@ def _option3_init_checkpoint(ctx, sp_host, peer_bmcs, config_path):
                      if session_log and hasattr(session_log, "log_dir") else ""),
             config_path=(config_path or ""),
         )
+        if _use_detected_config_choice in (True, False):
+            cp.set_param("use_detected_config", _use_detected_config_choice)
         ctx.checkpoint = cp
         ctx.apply_to_globals()
         if session_log:
@@ -24569,6 +24619,7 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
     """
     ctx.refresh_from_globals()
     session_log = ctx.session_log
+    global _use_detected_config_choice
 
     prior = CheckpointManager()
     if prior.load():
@@ -24628,6 +24679,8 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
                      if session_log and hasattr(session_log, "log_dir") else ""),
             config_path=(config_path or ""),
         )
+        if _use_detected_config_choice in (True, False):
+            cp.set_param("use_detected_config", _use_detected_config_choice)
         ctx.checkpoint = cp
         ctx.apply_to_globals()
         if session_log:
@@ -24651,6 +24704,7 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
     """
     ctx.refresh_from_globals()
     session_log = ctx.session_log
+    global _use_detected_config_choice
 
     prior = CheckpointManager()
     if prior.load():
@@ -24704,6 +24758,8 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
                      if session_log and hasattr(session_log, "log_dir") else ""),
             config_path=(config_path or ""),
         )
+        if _use_detected_config_choice in (True, False):
+            cp.set_param("use_detected_config", _use_detected_config_choice)
         ctx.checkpoint = cp
         ctx.apply_to_globals()
         if session_log:
