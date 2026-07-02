@@ -34258,7 +34258,16 @@ def main():
             # Phase: AUTOBOOT/LOADER Monitoring
             # (sub-phases LOADER Commands, Boot Menu, Interactive are handled inside)
             _session_log.start_phase("AUTOBOOT/LOADER Monitoring")
-            monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass)
+             
+            # Check if checkpoint 1 is complete (LOADER bootargs already set)
+            if _checkpoint and _checkpoint.is_done("cp_1_1"):
+                _real_stdout.write("\n🔖 Resuming from checkpoint 1 (LOADER bootargs already set).\n")
+                _real_stdout.write("⏭️  Skipping AUTOBOOT/LOADER monitoring phase; waiting for boot menu directly...\n\n")
+                _real_stdout.flush()
+                _session_log.log("Checkpoint 1 complete; skipping AUTOBOOT/LOADER monitoring")
+                _session_log.end_phase()
+            else:
+                monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass)
 
             # Mode 2.2: support adding additional nodes within the same run. The join
             # automation may set _add_another_node_request to (host, user, password)
