@@ -26290,20 +26290,38 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 "boot menu",
             ))
             if _matched_menu and not (_option9_progress_confirmed or _resume_cp_1_3):
+                if "boot menu option 9 or 9a is not supported" in output_lower:
+                    _slog(
+                        f"[{bmc_host}] option 9 not supported on this platform; "
+                        "falling back to option 4",
+                        prefix="WARN",
+                    )
+                    print(
+                        f"\n  ⚠️  {_node_pfx(bmc_host)}Option 9 not supported on this platform; "
+                        "falling back to option 4..."
+                    )
+                    with suppress(Exception):
+                        channel.send("4\r")
+                    if _session_log:
+                        _session_log.log_sent("4 (option-9 not supported fallback)")
+                    _option9_progress_confirmed = True
+                    output_lower = ""
+                    last_progress = time.monotonic()
+                    continue
                 _slog(
                     f"[{bmc_host}] boot menu detected but option-9 progress not confirmed yet; "
                     "continuing wait to avoid premature cp_1_3",
                     prefix="WARN",
                 )
                 with suppress(Exception):
-                    channel.send("\t")
+                    channel.send("\r")
                 continue
             found = True
             break
         if not chunk and not matched:
-            _slog(f"[{bmc_host}] boot menu wait: console silent, sending Tab to elicit current state")
+            _slog(f"[{bmc_host}] boot menu wait: console silent, sending Enter to elicit current state")
             with suppress(Exception):
-                channel.send("\t")
+                channel.send("\r")
         if (not loader_recovery_attempted
                 and time.monotonic() - start >= 600):
             loader_recovery_attempted = True
