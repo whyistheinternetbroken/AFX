@@ -12132,7 +12132,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                 _still_waiting_msg = "Still waiting for node add readiness"
             else:
                 _boot_action = "begin cluster creation"
-                _still_waiting_msg = "Still waiting for cluster creation"
+                _still_waiting_msg = "Node booting after initialization"
             print(f"\n⏳ {_pfx}Waiting for node to boot and {_boot_action}.{_elapsed_str()}")
             _print_wait_log_hint(node_log=node_log)
             _cc_done_ev = threading.Event()
@@ -12223,9 +12223,13 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                                         check_bmc_drop=True, quiet=_node_add, node_log=node_log,
                                         reconnect_ctx=reconnect_ctx)
             _raise_if_fatal_boot_integrity(_out, lbl)
+            if lbl == "type-yes confirmation" and not _node_add:
+                print(f"\n   ⏳ {_pfx}Configuring node management network...{_elapsed_str()}")
         if _cc_done_ev is not None:
             _cc_done_ev.set()
             _cc_done_ev = None
+            if not _node_add:
+                print(f"\n   ⏳ {_pfx}Starting cluster creation...{_elapsed_str()}")
 
     if _node_add:
         print(f"\n   ⏳ {_pfx}Node(s) resetting; takes 3-5 minutes.")
@@ -25805,6 +25809,10 @@ def _wait_for_autosupport_confirmation(channel, *, bmc_host=None, node_log=None,
                 or "node management interface ip address" in _combined):
             _slog("AutoSupport confirmation already passed; node-management/setup prompts detected")
             return ""
+        if not _out and not _matched:
+            _slog("Console silent; sending Tab to elicit current state")
+            with suppress(Exception):
+                channel.send("\t")
         _now = time.monotonic()
         if _saw_console_activity and (_now - _last_boot_msg) >= 60:
             print(f"   ⏳ {_pfx}node still booting...{_elapsed_str()}")
