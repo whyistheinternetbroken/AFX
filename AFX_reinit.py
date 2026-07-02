@@ -3910,7 +3910,7 @@ def _list_completed_checkpoints(cp) -> str:
     if not completed:
         return ""
     
-    return "\n     Checkpoints created: " + ", ".join(completed[:2])  # Show first 2 on same line
+    return "\n     Checkpoints created: " + ", ".join(completed)
 
 
 
