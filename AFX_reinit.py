@@ -7823,7 +7823,7 @@ def enter_system_console(channel, loader_message=True, force_takeover=False):
 # LOADER-check helper — probe before deciding to system reset
 # ---------------------------------------------------------------------------
 
-def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
+def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resuming=False):
     """Probe for an existing LOADER prompt, entering system console only from BMC.
 
     Flow:
@@ -7957,7 +7957,8 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label=""):
 
     # Not at LOADER — exit console and let caller do system reset.
     if _entered_console:
-        _tprint(f"  ℹ️  {pfx}Not at LOADER. Exiting console for system reset...")
+        _not_loader_msg = "Not at LOADER. Continuing." if resuming else "Not at LOADER. Exiting console for system reset..."
+        _tprint(f"  ℹ️  {pfx}{_not_loader_msg}")
         _exit_buf = ""
         _max_exit_attempts = 5
         for _exit_attempt in range(1, _max_exit_attempts + 1):
@@ -34457,8 +34458,9 @@ def main():
                     # system-reset phase below can skip the reset if already at LOADER.
                     def _mode1_primary_loader_worker():
                         try:
+                            _is_resuming = bool(_latest_primary_checkpoint_done(_checkpoint)[0])
                             _primary_loader_result[0] = _already_at_loader(
-                                channel, label=sp_host
+                                channel, label=sp_host, resuming=_is_resuming
                             )
                         except RuntimeError:
                             _primary_loader_result[0] = False
@@ -34570,8 +34572,9 @@ def main():
 
                     def _primary_loader_worker():
                         try:
+                            _is_resuming = bool(_latest_primary_checkpoint_done(_checkpoint)[0])
                             _primary_loader_result[0] = _already_at_loader(
-                                channel, label=sp_host
+                                channel, label=sp_host, resuming=_is_resuming
                             )
                         except RuntimeError:
                             # Console exit failed; treat as "not at LOADER" so
