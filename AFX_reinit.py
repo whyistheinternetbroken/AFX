@@ -2624,14 +2624,25 @@ class SessionLogger:
             return f"_option{_m.group(1)}"
         return ""
 
-    def __init__(self, bg_mode: bool = False, label: str = ""):
+    @staticmethod
+    def _normalize_resume_suffix(suffix: str) -> str:
+        _raw = str(suffix or "").strip()
+        if not _raw:
+            return ""
+        if not _raw.startswith("_"):
+            _raw = "_" + _raw
+        _safe = re.sub(r"[^A-Za-z0-9_.-]", "_", _raw)
+        return _safe
+
+    def __init__(self, bg_mode: bool = False, label: str = "", resume_suffix: str = ""):
         try:
             _script_dir = os.path.dirname(os.path.abspath(__file__))
         except NameError:
             _script_dir = os.getcwd()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _resume_suffix = self._normalize_resume_suffix(resume_suffix)
         self.log_dir = os.path.join(
-            _script_dir, "logs", timestamp + self._dir_suffix_from_label(label)
+            _script_dir, "logs", timestamp + self._dir_suffix_from_label(label) + _resume_suffix
         )
         os.makedirs(self.log_dir, exist_ok=True)
         self.log_file = _build_numbered_log_path(
@@ -3736,6 +3747,8 @@ _auto_setup = False
 _auto_add = False
 # Set when the start menu checkpoint prompt has already confirmed a 4.2 resume.
 _resume_from_start_menu = False
+# Directory suffix for resumed-run logs (e.g. "_cp_1_2").
+_resume_checkpoint_log_suffix = ""
 
 
 def _checkpoint_menu_option_label(cp_mode: str) -> str:
@@ -3784,6 +3797,47 @@ def _checkpoint_resume_stage_label(cp) -> str:
     if _mode.startswith("4.2"):
         return _describe_4b_resume_stage(cp)
     return "All checkpoints completed."
+
+
+def _checkpoint_resume_phase_id(cp) -> str:
+    """Return the next checkpoint ID for the loaded checkpoint, if any."""
+    if not cp:
+        return ""
+    _mode = str(getattr(cp, "mode", "") or "").strip().lower()
+    if _mode.startswith("4.2"):
+        _mode_key = 42
+    elif _mode.startswith("4.1"):
+        _mode_key = 41
+    elif _mode.startswith("4.3"):
+        _mode_key = 43
+    elif _mode == "3":
+        _mode_key = 3
+    elif _mode == "2":
+        _mode_key = 2
+    elif _mode == "1":
+        _mode_key = 1
+    else:
+        _mode_key = None
+    _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
+    for _cp_id, _cp_desc in _checkpoint_seq:
+        if not cp.is_done(_cp_id):
+            return _cp_id
+    return ""
+
+
+def _set_resume_log_suffix_from_checkpoint(cp) -> None:
+    """Set per-run log-dir suffix so resumed runs include the checkpoint phase."""
+    global _resume_checkpoint_log_suffix
+    _phase_id = _checkpoint_resume_phase_id(cp)
+    _resume_checkpoint_log_suffix = f"_{_phase_id}" if _phase_id else "_cp_complete"
+
+
+def _consume_resume_log_suffix() -> str:
+    """Return and clear the pending resume log suffix for the next session logger."""
+    global _resume_checkpoint_log_suffix
+    _out = str(_resume_checkpoint_log_suffix or "")
+    _resume_checkpoint_log_suffix = ""
+    return _out
 
 
 def _list_completed_checkpoints(cp) -> str:
@@ -3864,6 +3918,7 @@ def select_operation_mode():
 
     def _dispatch_checkpoint_resume(_cp_obj):
         global _resume_from_start_menu
+        _set_resume_log_suffix_from_checkpoint(_cp_obj)
         _cp_mode = str(_cp_obj.mode or "").strip()
         if _cp_mode.lower().startswith("4.2"):
             _resume_from_start_menu = True
@@ -9510,10 +9565,19 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     boot_wait_extension = 0
     abort_prompt_auto_answers = 0
     _ABORT_PROMPT_MAX_AUTO_ANSWERS = 6
+    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+
+    def _cp_1_3_done_now() -> bool:
+        return bool(
+            _operation_mode in (1, 3)
+            and _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node)
+        )
+
     _resume_cp_1_2_option9 = (
         bool(resume_from_cp_1_2)
         and _operation_mode in (1, 3)
         and str(option) == "9"
+        and not _cp_1_3_done_now()
     )
 
     def _auto_answer_option9_init_prompts(max_wait=180):
@@ -9533,7 +9597,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                     "selection (1-",
                     "loader-",
                 ],
-                timeout=8,
+                timeout=30,
                 node_log=node_log,
                 quiet=True,
                 check_bmc_drop=True,
@@ -9581,6 +9645,8 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 continue
             if _matched and "selection (1-" in str(_matched).lower():
                 if _resend_9 < 2:
+                    if _cp_1_3_done_now():
+                        return _answered
                     _resend_9 += 1
                     _screen_status(
                         f"↻ {_pfx}Boot menu still visible during cp_1_2 resume; "
@@ -9882,6 +9948,14 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     # Brief drain to let the trailing whitespace after "Selection (1-N)?" land.
     drain_channel(channel, seconds=1, node_log=node_log)
 
+    if _operation_mode in (1, 3) and str(option) == "9" and _cp_1_3_done_now():
+        print(f"\n✅ {_pfx}Boot menu detected; checkpoint already shows option 9 complete, skipping resend.{_elapsed_str()}")
+        if _session_log:
+            _session_log.log(
+                f"[{node_label or 'primary'}] cp_1_3 already complete; not re-sending option 9"
+            )
+        return True
+
     if _operation_mode == 2:
         print(f"\n✅ {_pfx}Boot menu detected! Option {option} selected. Node reinitializing to be added to cluster.{_elapsed_str()}")
     else:
@@ -9913,14 +9987,21 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 "Boot menu prompt still present after first send; retrying option",
                 prefix="WARN",
             )
-        print(f"   ↻ Menu prompt still visible; resending option {option}...")
-        channel.send(option + "\r\n")
-        time.sleep(2)
+        if _operation_mode in (1, 3) and str(option) == "9" and _cp_1_3_done_now():
+            if _session_log:
+                _session_log.log(
+                    f"[{node_label or 'primary'}] menu still visible but cp_1_3 is complete; "
+                    "skipping option 9 resend"
+                )
+        else:
+            print(f"   ↻ Menu prompt still visible; resending option {option}...")
+            channel.send(option + "\r\n")
+            time.sleep(2)
 
     if _operation_mode == 2:
         _checkpoint_mark_phase("cp_2_3")
 
-    if _resume_cp_1_2_option9:
+    if _resume_cp_1_2_option9 and not _cp_1_3_done_now():
         _auto_answer_option9_init_prompts()
 
     return True
@@ -25563,7 +25644,8 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     return _mode3_ok
 
 
-def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
+def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
+                                 resume_from_cp_1_3=False):
     """Drive option-9 → option-4 cluster init non-interactively for mode 1.2.
 
     Sequence:
@@ -25614,51 +25696,65 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
 
     _already_in_wizard = False
     _second_bootmenu_visible = False
-
-    # 1) Storage availability zone warning -> "no"
-    print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for storage-availability-zone warning (auto-answer 'no')...{_elapsed_str()}")
-    _slog("Waiting for storage-availability-zone warning")
-    _ch_init = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
-    _init_sigs = [
-        "storage availability zone will be destroyed",
-        "type yes to confirm and continue",
-        "welcome to the cluster setup wizard",
-        "selection (1-",
-        "selection (1-9)?",
-        "selection (1-11)?",
-        "selection (1-12)?",
-        "boot menu",
-    ]
-    _init_chunk, _init_matched = direct_read_until_any(
-        _ch_init,
-        _init_sigs,
-        timeout=1800,
-        node_log=_boot_log,
-        quiet=True,
-        check_bmc_drop=True,
-        reconnect_ctx=_rc,
+    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+    _resume_cp_1_3 = bool(
+        resume_from_cp_1_3
+        or (_operation_mode in (1, 3)
+            and _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node))
     )
-    if _rc and _rc.get("channel") is not None:
-        channel = _rc["channel"]
-    _init_l = str(_init_matched or "").lower()
-    if "storage availability zone will be destroyed" in _init_l:
-        if _session_log:
-            _session_log.log("Storage availability zone warning detected; auto-responding 'no'")
-            _session_log.log_sent("no")
-        try:
-            channel.send("no\r")
-        except Exception:
-            pass
-    elif ("type yes to confirm and continue" in _init_l
-          or "welcome to the cluster setup wizard" in _init_l):
-        _already_in_wizard = True
-        print(f"   ℹ️  {_node_pfx(bmc_host)}Cluster setup wizard already active; skipping second boot-menu wait.")
-        _slog(f"[{bmc_host}] cluster setup wizard detected before second boot menu")
-    elif any(_sig in _init_l for _sig in (
-        "selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu"
-    )):
+
+    if _resume_cp_1_3:
+        print(
+            f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option 9 is complete; "
+            "skipping option-9 warning wait and continuing to option 4."
+        )
+        _slog("cp_1_3 resume: skipping option-9 warning wait; proceeding to option 4 stage")
         _second_bootmenu_visible = True
-        _slog(f"[{bmc_host}] second boot menu already visible after option 9")
+    else:
+        # 1) Storage availability zone warning -> "no"
+        print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for storage-availability-zone warning (auto-answer 'no')...{_elapsed_str()}")
+        _slog("Waiting for storage-availability-zone warning")
+        _ch_init = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
+        _init_sigs = [
+            "storage availability zone will be destroyed",
+            "type yes to confirm and continue",
+            "welcome to the cluster setup wizard",
+            "selection (1-",
+            "selection (1-9)?",
+            "selection (1-11)?",
+            "selection (1-12)?",
+            "boot menu",
+        ]
+        _init_chunk, _init_matched = direct_read_until_any(
+            _ch_init,
+            _init_sigs,
+            timeout=1800,
+            node_log=_boot_log,
+            quiet=True,
+            check_bmc_drop=True,
+            reconnect_ctx=_rc,
+        )
+        if _rc and _rc.get("channel") is not None:
+            channel = _rc["channel"]
+        _init_l = str(_init_matched or "").lower()
+        if "storage availability zone will be destroyed" in _init_l:
+            if _session_log:
+                _session_log.log("Storage availability zone warning detected; auto-responding 'no'")
+                _session_log.log_sent("no")
+            try:
+                channel.send("no\r")
+            except Exception:
+                pass
+        elif ("type yes to confirm and continue" in _init_l
+              or "welcome to the cluster setup wizard" in _init_l):
+            _already_in_wizard = True
+            print(f"   ℹ️  {_node_pfx(bmc_host)}Cluster setup wizard already active; skipping second boot-menu wait.")
+            _slog(f"[{bmc_host}] cluster setup wizard detected before second boot menu")
+        elif any(_sig in _init_l for _sig in (
+            "selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu"
+        )):
+            _second_bootmenu_visible = True
+            _slog(f"[{bmc_host}] second boot menu already visible after option 9")
 
     # 2) Wait for the *second* boot menu and select option 4.
     global _mode3_pipeline_state, _mode3_staged_loader_channels, _mode3_staged_loader_clients
@@ -26252,6 +26348,69 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
 
     drain_channel(channel, seconds=1)
 
+    _resume_cp_1_1_probe = bool(
+        _operation_mode in (1, 3)
+        and _checkpoint is not None
+        and _checkpoint.is_done("cp_1_1")
+        and not _checkpoint.is_done("cp_1_2")
+        and not resume_skip_loader_commands
+    )
+
+    if _resume_cp_1_1_probe:
+        # cp_1_1 resume guard: detect actual console state before replaying
+        # LOADER commands. If the node is already at boot menu / option-9
+        # prompts, skip LOADER setenv sequence and continue safely.
+        with suppress(Exception):
+            channel.send("\r")
+        _probe_out, _probe_match = direct_read_until_any(
+            channel,
+            [
+                "LOADER-",
+                "selection (1-",
+                "(1-9)?",
+                "(1-11)?",
+                "(1-12)?",
+                "do you want to abort this operation (yes/no)",
+                "yes/no",
+            ],
+            timeout=30,
+            quiet=True,
+        )
+        _probe_low = (_probe_out or "").lower()
+        _probe_tok = str(_probe_match or "").lower()
+        _at_loader = ("loader-" in _probe_low) or ("loader-" in _probe_tok)
+        _at_or_beyond_boot_menu = (
+            ("selection (1-" in _probe_low)
+            or ("(1-9)?" in _probe_low)
+            or ("(1-11)?" in _probe_low)
+            or ("(1-12)?" in _probe_low)
+            or ("selection (1-" in _probe_tok)
+            or ("do you want to abort this operation (yes/no)" in _probe_low)
+            or ("do you want to abort this operation (yes/no)" in _probe_tok)
+            or ("yes/no" in _probe_tok)
+        )
+        if _at_or_beyond_boot_menu and not _at_loader:
+            resume_skip_loader_commands = True
+            print(
+                f"\n🔎 {_pfx}Checkpoint resume probe: console is already at boot-menu/"
+                "option-9 prompts; skipping LOADER command replay."
+            )
+            _slog(
+                "Checkpoint resume probe (cp_1_1): detected boot-menu/option-9 "
+                "state; skipping LOADER command replay",
+                prefix="WARN",
+            )
+            _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+            _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
+            _run_optional_checkpoint_status_checks()
+        elif _at_loader:
+            _slog("Checkpoint resume probe (cp_1_1): LOADER prompt confirmed; replaying LOADER commands")
+        else:
+            _slog(
+                "Checkpoint resume probe (cp_1_1): prompt inconclusive; proceeding with LOADER replay",
+                prefix="WARN",
+            )
+
     if not resume_skip_loader_commands:
         # Send a bare CR to provoke a fresh LOADER prompt echo; the calling loop
         # already confirmed LOADER is active, so this should respond instantly.
@@ -26467,43 +26626,56 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
     if _session_log:
         _session_log.start_phase("Boot Menu Selection")
 
-    _bootmenu_reconnect_ctx = {
-        "host": sp_host,
-        "user": sp_user,
-        "password": sp_pass,
-        "client": client,
-        "channel": channel,
-    }
-    _bootmenu_ok = wait_for_boot_menu_and_select(
-        channel,
-        timeout=1800,
-        node_label=sp_host,
-        reconnect_ctx=_bootmenu_reconnect_ctx,
-        resume_from_cp_1_2=bool(resume_skip_loader_commands and _operation_mode in (1, 3)),
+    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+    _resume_cp_1_3_done = bool(
+        _operation_mode in (1, 3)
+        and _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node)
     )
-    # Ensure fallback/manual path and later phases use latest session if reconnected.
-    channel = _bootmenu_reconnect_ctx.get("channel", channel)
-    client = _bootmenu_reconnect_ctx.get("client", client)
-    sp_user = _bootmenu_reconnect_ctx.get("user", sp_user)
-    sp_pass = _bootmenu_reconnect_ctx.get("password", sp_pass)
-    if not _bootmenu_ok:
-        print("\n⚠️  Falling back to manual menu selection...")
-        _slog("Auto-select failed, falling back to manual input", prefix="WARN")
-        drain_channel(channel, seconds=5)
-        while True:
-            try:
-                user_option = input("\nEnter a numeric option from the menu: ")
-                if not user_option.isdigit():
-                    print("⚠️  Invalid input. Please enter a numeric value.")
-                    continue
-                if _session_log:
-                    _session_log.log_user_input(f"Manual boot menu selection: {user_option}")
-                    _session_log.log_sent(user_option)
-                channel.send(user_option + "\r")
-                break
-            except (EOFError, KeyboardInterrupt):
-                _shutdown_event.set()
-                return
+    if _resume_cp_1_3_done:
+        print(
+            f"\n⏭️ {_pfx}Checkpoint indicates option 9 already completed "
+            "(SAZ cleanup done); continuing at option 4 stage."
+        )
+        _slog("Checkpoint resume: cp_1_3 already complete; skipping option-9 replay")
+        _bootmenu_ok = True
+    else:
+        _bootmenu_reconnect_ctx = {
+            "host": sp_host,
+            "user": sp_user,
+            "password": sp_pass,
+            "client": client,
+            "channel": channel,
+        }
+        _bootmenu_ok = wait_for_boot_menu_and_select(
+            channel,
+            timeout=1800,
+            node_label=sp_host,
+            reconnect_ctx=_bootmenu_reconnect_ctx,
+            resume_from_cp_1_2=bool(resume_skip_loader_commands and _operation_mode in (1, 3)),
+        )
+        # Ensure fallback/manual path and later phases use latest session if reconnected.
+        channel = _bootmenu_reconnect_ctx.get("channel", channel)
+        client = _bootmenu_reconnect_ctx.get("client", client)
+        sp_user = _bootmenu_reconnect_ctx.get("user", sp_user)
+        sp_pass = _bootmenu_reconnect_ctx.get("password", sp_pass)
+        if not _bootmenu_ok:
+            print("\n⚠️  Falling back to manual menu selection...")
+            _slog("Auto-select failed, falling back to manual input", prefix="WARN")
+            drain_channel(channel, seconds=5)
+            while True:
+                try:
+                    user_option = input("\nEnter a numeric option from the menu: ")
+                    if not user_option.isdigit():
+                        print("⚠️  Invalid input. Please enter a numeric value.")
+                        continue
+                    if _session_log:
+                        _session_log.log_user_input(f"Manual boot menu selection: {user_option}")
+                        _session_log.log_sent(user_option)
+                    channel.send(user_option + "\r")
+                    break
+                except (EOFError, KeyboardInterrupt):
+                    _shutdown_event.set()
+                    return
 
     if _session_log:
         _session_log.end_phase()  # End Boot Menu Selection
@@ -26527,7 +26699,11 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
         # Nothing remains for an interactive session, so return without
         # entering InteractiveSession (which would print the misleading
         # "Session is now fully interactive" banner mid-boot).
-        auto_complete_initialization(channel, bmc_host=sp_host)
+        auto_complete_initialization(
+            channel,
+            bmc_host=sp_host,
+            resume_from_cp_1_3=_resume_cp_1_3_done,
+        )
         return
     elif _auto_add:
         auto_complete_join(channel, client, sp_host, sp_user, sp_pass,
@@ -26739,7 +26915,11 @@ def _make_session_log(label: str) -> "SessionLogger":
     appeared inline in each mode section of ``main()``.
     """
     global _session_log
-    _session_log = SessionLogger(bg_mode=_bg_mode, label=label)
+    _session_log = SessionLogger(
+        bg_mode=_bg_mode,
+        label=label,
+        resume_suffix=_consume_resume_log_suffix(),
+    )
     _banner = _version_banner_line()
     print(f"\n🚀 {_banner}")
 
@@ -29764,11 +29944,13 @@ def main():
                     # resume directly. Operator already opted in via the CLI flag.
                     _resuming = True
                     _checkpoint = _cp
+                    _set_resume_log_suffix_from_checkpoint(_cp)
                     print("\n  ✅ Resuming from EXPERIMENTAL checkpoint (--resume).")
                 elif _resume_from_start_menu:
                     if _cp.load():
                         _resuming = True
                         _checkpoint = _cp
+                        _set_resume_log_suffix_from_checkpoint(_cp)
                         print("\n  ✅ Resuming from EXPERIMENTAL checkpoint (startup menu prompt).")
                     else:
                         print("\n  ⚠️  Startup-selected checkpoint is no longer available; "
@@ -29819,6 +30001,7 @@ def main():
                         if _resume_ans != "n":
                             _resuming = True
                             _checkpoint = _cp
+                            _set_resume_log_suffix_from_checkpoint(_cp)
                             print("  ✅ Resuming from EXPERIMENTAL checkpoint.")
                         else:
                             _cp.clear()
@@ -34666,11 +34849,21 @@ def main():
             # Check if checkpoint 1 is complete (LOADER bootargs already set)
             if _checkpoint and _checkpoint.is_done("cp_1_1"):
                 _cp_1_2_done = _checkpoint.is_done("cp_1_2")
+                _cp_1_3_done = _checkpoint.is_done("cp_1_3")
                 _real_stdout.write("\n🔖 Resuming from checkpoint 1 (LOADER bootargs already set).\n")
-                if _cp_1_2_done:
-                    _real_stdout.write("⏭️  boot_ontap menu already issued; continuing at boot menu selection...\n\n")
+                if _cp_1_3_done:
+                    _real_stdout.write(
+                        "⏭️  Option 9 already completed (SAZ cleanup done); "
+                        "continuing at option 4 stage...\n\n"
+                    )
+                elif _cp_1_2_done:
+                    _real_stdout.write(
+                        "⏭️  boot_ontap menu already issued; continuing at boot menu selection...\n\n"
+                    )
                 else:
-                    _real_stdout.write("⏭️  Continuing from LOADER commands (boot_ontap menu + boot menu selection)...\n\n")
+                    _real_stdout.write(
+                        "⏭️  Continuing from LOADER commands (boot_ontap menu + boot menu selection)...\n\n"
+                    )
                 _real_stdout.flush()
                 _session_log.log("Checkpoint 1 complete; bypassing monitor and resuming from saved stage")
                 handle_loader_commands(
