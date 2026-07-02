@@ -1028,6 +1028,9 @@ _auto_clear_stale_bmc = False
 # dict when not provided. Schema described in _CONFIG_FILE_EXAMPLE below.
 _config_data = {}
 
+# Path to the loaded config file (used to save updates like NTP selections).
+_config_file_path = None
+
 # Cluster-level setup config gathered up-front (used by mode 1.2 to drive the
 # post-node-mgmt cluster setup wizard non-interactively).
 _cluster_config = {}
@@ -3742,6 +3745,58 @@ def _checkpoint_resume_stage_label(cp) -> str:
     return "Resume from last saved checkpoint state."
 
 
+def _list_completed_checkpoints(cp) -> str:
+    """List all completed checkpoints for this mode."""
+    if not cp:
+        return ""
+    _mode = str(getattr(cp, "mode", "") or "").strip().lower()
+    
+    # Define checkpoint descriptions by mode
+    _checkpoint_desc = {
+        "1": {
+            "cp_1_1": "LOADER options set",
+            "cp_1_2": "Boot menu issued",
+            "cp_1_3": "Option 9 completed",
+            "cp_1_4": "Option 4 started",
+            "cp_1_5": "Node management configured",
+            "cp_1_6": "Cluster setup menu",
+            "cp_1_7": "Cluster joined",
+        },
+        "2": {
+            "cp_2_1": "LOADER reached",
+            "cp_2_2": "Boot menu issued",
+            "cp_2_3": "Option 4 completed",
+            "cp_2_4": "Node management configured",
+            "cp_2_5": "Cluster setup menu",
+            "cp_2_6": "Cluster join pending",
+            "cp_2_7": "Node joined",
+        },
+        "4.2": {
+            "cp_4b_1": "Nodes at LOADER",
+            "cp_4b_2": "Netboot started",
+            "cp_4b_3": "Option 7 selected",
+            "cp_4b_4": "Image downloaded",
+            "cp_4b_5": "Image installed",
+            "cp_4b_6": "Mode 1/2 checkpoints continue",
+        },
+    }
+    
+    desc_map = _checkpoint_desc.get(_mode, {})
+    if not desc_map:
+        return ""
+    
+    completed = []
+    for cp_id, desc in desc_map.items():
+        if cp.is_done(cp_id):
+            completed.append(f"✅ {desc}")
+    
+    if not completed:
+        return ""
+    
+    return "\n     Checkpoints created: " + ", ".join(completed[:2])  # Show first 2 on same line
+
+
+
 def select_operation_mode():
     """Return (operation_mode_int, auto_setup_bool, auto_add_bool).
 
@@ -3824,10 +3879,13 @@ def select_operation_mode():
                     pass
                 _menu_opt = _checkpoint_menu_option_label(_cp_mode)
                 _stage = _checkpoint_resume_stage_label(_cp_start)
+                _completed = _list_completed_checkpoints(_cp_start)
                 print("=" * 60)
                 print(f"  🔖 Existing checkpoint found{_cp_age} (EXPERIMENTAL)")
                 print(f"     Last menu option : {_menu_opt}")
                 print(f"     Checkpoint mode  : {_format_checkpoint_mode(_cp_mode)}")
+                if _completed:
+                    print(_completed)
                 print(f"     Resume stage     : {_stage}")
                 print("=" * 60)
                 _resume_now = _prompt_with_timeout(
@@ -10532,6 +10590,16 @@ def apply_retained_to_cluster_config():
             _session_log.log(
                 f"Populated cluster config from retained data: {fills}"
             )
+        # Save updated config (including NTP server selections) back to file
+        if _config_file_path:
+            try:
+                write_config_snapshot(_config_file_path)
+            except Exception as _save_err:
+                if _session_log:
+                    _session_log.log(
+                        f"Could not save config updates: {_save_err}",
+                        prefix="WARN",
+                    )
     return fills
 
 
@@ -32430,7 +32498,9 @@ def main():
 
             if config_path:
                 try:
+                    global _config_file_path
                     _config_data = load_config_file(config_path)
+                    _config_file_path = config_path
                     print(f"📄 Loaded config: {config_path}")
                     # Config file supplies all cluster values — no need to pull them
                     # from a running cluster later. Mark retain as "no" so the
