@@ -3819,6 +3819,41 @@ def select_operation_mode():
     global _diag_bootargs, _netboot_static_ip
     global _resume_from_start_menu
     _startup_checkpoint_prompt_done = False
+    _menu_checkpoint_available = False
+
+    def _dispatch_checkpoint_resume(_cp_obj):
+        global _resume_from_start_menu
+        _cp_mode = str(_cp_obj.mode or "").strip()
+        if _cp_mode.lower().startswith("4.2"):
+            _resume_from_start_menu = True
+            print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 4.2.")
+            return 42, False, False
+        if _cp_mode == "2":
+            print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2.3.")
+            return 26, False, False
+        if _cp_mode == "3":
+            _mode3_peer_opt4 = bool(_cp_obj.nodes_done_for("peer_option4_done"))
+            _mode3_replay_risk = bool(
+                _cp_obj.is_done("cluster_formed")
+                or _cp_obj.is_done("primary_setup_done")
+                or _cp_obj.is_done("primary_bootmenu_done")
+                or _cp_obj.is_done("primary_node_mgmt_done")
+                or _mode3_peer_opt4
+            )
+            if _mode3_replay_risk:
+                print(
+                    "\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2.3 "
+                    "(safe add-node continuation)."
+                )
+                return 26, False, False
+            print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 3.")
+            return 3, True, True
+        if _cp_mode == "1":
+            print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 1.")
+            return 1, True, False
+        print("  ⚠️  Checkpoint mode is not auto-routable from the start menu.")
+        return None
+
     while True:
         _print_banner("NetApp AFX BMC Console Automation 🤖")
         print("\n  What do you want to do?\n")
@@ -3869,6 +3904,7 @@ def select_operation_mode():
             _startup_checkpoint_prompt_done = True
             _cp_start = CheckpointManager()
             if _cp_start.load():
+                _menu_checkpoint_available = True
                 _cp_mode = str(_cp_start.mode or "").strip()
                 _cp_age = ""
                 try:
@@ -3888,44 +3924,37 @@ def select_operation_mode():
                     print(_completed)
                 print(f"     Resume stage     : {_stage}")
                 print("=" * 60)
-                _resume_now = _prompt_with_timeout(
-                    "  Resume from this EXPERIMENTAL checkpoint now? [y/N]: ",
-                    default="n",
-                    timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
-                ).strip().lower()
-                print("")  # Ensure newline after checkpoint prompt response
+                while True:
+                    _resume_now = _prompt(
+                        "  Resume from this EXPERIMENTAL checkpoint now? [y/n]: "
+                    ).strip().lower()
+                    if _resume_now in ("y", "n"):
+                        break
+                    print("  Please enter y or n.")
+                print("")
                 if _resume_now == "y":
-                    if _cp_mode.lower().startswith("4.2"):
-                        _resume_from_start_menu = True
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 4.2.")
-                        return 42, False, False
-                    if _cp_mode == "2":
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2.3.")
-                        return 26, False, False
-                    if _cp_mode == "3":
-                        _mode3_peer_opt4 = bool(_cp_start.nodes_done_for("peer_option4_done"))
-                        _mode3_replay_risk = bool(
-                            _cp_start.is_done("cluster_formed")
-                            or _cp_start.is_done("primary_setup_done")
-                            or _cp_start.is_done("primary_bootmenu_done")
-                            or _cp_start.is_done("primary_node_mgmt_done")
-                            or _mode3_peer_opt4
-                        )
-                        if _mode3_replay_risk:
-                            print(
-                                "\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2.3 "
-                                "(safe add-node continuation)."
-                            )
-                            return 26, False, False
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 3.")
-                        return 3, True, True
-                    if _cp_mode == "1":
-                        print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 1.")
-                        return 1, True, False
-                    print("  ⚠️  Checkpoint mode is not auto-routable from the start menu.")
+                    _resume_choice = _dispatch_checkpoint_resume(_cp_start)
+                    if _resume_choice is not None:
+                        return _resume_choice
                 # Checkpoint was not resumed — print newline before menu selection prompt
                 print("")
-        choice = input("❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.): ").strip().lower()
+        if _menu_checkpoint_available:
+            choice = input(
+                '❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.) or type "checkpoint" to resume the last checkpoint: '
+            ).strip().lower()
+        else:
+            choice = input("❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.): ").strip().lower()
+
+        if choice == "checkpoint":
+            _cp_manual = CheckpointManager()
+            if not _cp_manual.load():
+                print("\n  ⚠️  No valid checkpoint is currently available to resume.")
+                _menu_checkpoint_available = False
+                continue
+            _resume_choice = _dispatch_checkpoint_resume(_cp_manual)
+            if _resume_choice is not None:
+                return _resume_choice
+            continue
 
         if choice == "1":
             _print_banner("⚠️  WARNING ⚠️")
@@ -26029,6 +26058,8 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
                             pass
                     sys.exit(1)
         else:
+            print(f"\n⏳ {_pfx}Booting node to boot menu to clean system configuration...{_elapsed_str()}")
+            _slog("Booting node to boot menu to clean system configuration")
             channel.send(command + "\r")
             if _session_log:
                 _session_log.log_sent(command)
