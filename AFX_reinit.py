@@ -11843,22 +11843,29 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
         # Wait until the trigger appears in the accumulated buffer.
         _trigger_start = time.monotonic()
         _asup_info_enter_sent = False
+        _last_recv_activity = time.monotonic()
         while trigger_lower not in _buf.lower():
             if time.monotonic() - _trigger_start > _overall_timeout:
                 break
             if channel.recv_ready():
                 chunk = channel.recv(4096).decode("utf-8", errors="replace")
                 _buf += chunk
+                _last_recv_activity = time.monotonic()
                 if node_log:
                     _par_write(node_log, chunk)
                 if _session_log:
                     _session_log.log_console(chunk)
             if not _asup_info_enter_sent:
                 _buf_l = _buf.lower()
-                if ("enabling autosupport can significantly speed problem determination" in _buf_l
-                        or "this system will send event messages" in _buf_l):
+                _saw_asup_info = (
+                    "enabling autosupport can significantly speed problem determination" in _buf_l
+                    or "this system will send event messages" in _buf_l
+                )
+                _console_silent = (time.monotonic() - _last_recv_activity) >= 3
+                if _saw_asup_info or _console_silent:
                     time.sleep(0.5)
-                    _slog("AutoSupport info screen detected in node-mgmt wait; sending Enter to advance")
+                    _reason = "AutoSupport info screen detected" if _saw_asup_info else "console silent"
+                    _slog(f"{_reason} in node-mgmt wait; sending Enter to advance")
                     with suppress(Exception):
                         channel.send("\r")
                     _asup_info_enter_sent = True
