@@ -28823,44 +28823,49 @@ def _add_bmc_creds() -> bool:
         print(f"\n  ✅ BMC credentials stored as shared for {_pair[0]}.")
         return True
 
-    print("")
-    for _i, (_ip, _user) in enumerate(_entries, 1):
-        print(f"  {_i}. {_ip}  (default user: {_user})")
-    print(f"  {len(_entries) + 1}. Use same username/password for all BMCs")
-    print("  Enter to go back")
-    print("")
-    try:
-        _pick = input("  Choice: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return False
-    if not _pick:
-        return False
+    _stored_any = False
+    while True:
+        print("")
+        for _i, (_ip, _user) in enumerate(_entries, 1):
+            print(f"  {_i}. {_ip}  (default user: {_user})")
+        print(f"  {len(_entries) + 1}. Use same username/password for all BMCs")
+        print("  Enter to go back")
+        print("")
+        try:
+            _pick = input("  Choice: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return _stored_any
+        if not _pick:
+            return _stored_any
 
-    if _pick == str(len(_entries) + 1):
-        _default_user = _entries[0][1] if _entries else "admin"
-        _pair = _prompt_user_pass(_default_user, "BMC", "all nodes")
+        if _pick == str(len(_entries) + 1):
+            _default_user = _entries[0][1] if _entries else "admin"
+            _pair = _prompt_user_pass(_default_user, "BMC", "all nodes")
+            if not _pair:
+                return _stored_any
+            for _bip, _ in _entries:
+                _cred_store("bmc", _bip, _pair[0], _pair[1])
+            print(f"\n  ✅ BMC credentials stored for {_pair[0]} on {len(_entries)} node(s).")
+            return True
+
+        try:
+            _idx = int(_pick) - 1
+        except ValueError:
+            print("  Invalid choice.")
+            return _stored_any
+        if _idx < 0 or _idx >= len(_entries):
+            print("  Invalid choice.")
+            return _stored_any
+        _bip, _default_user = _entries[_idx]
+        _pair = _prompt_user_pass(_default_user, "BMC", _bip)
         if not _pair:
-            return False
-        for _bip, _ in _entries:
-            _cred_store("bmc", _bip, _pair[0], _pair[1])
-        print(f"\n  ✅ BMC credentials stored for {_pair[0]} on {len(_entries)} node(s).")
-        return True
-
-    try:
-        _idx = int(_pick) - 1
-    except ValueError:
-        print("  Invalid choice.")
-        return False
-    if _idx < 0 or _idx >= len(_entries):
-        print("  Invalid choice.")
-        return False
-    _bip, _default_user = _entries[_idx]
-    _pair = _prompt_user_pass(_default_user, "BMC", _bip)
-    if not _pair:
-        return False
-    _cred_store("bmc", _bip, _pair[0], _pair[1])
-    print(f"\n  ✅ BMC credentials stored for {_pair[0]}@{_bip}.")
-    return True
+            return _stored_any
+        _cred_store("bmc", _bip, _pair[0], _pair[1])
+        _stored_any = True
+        print(f"\n  ✅ BMC credentials stored for {_pair[0]}@{_bip}.")
+        _another = _prompt("  Add another individual BMC credential? [y/N]: ", "n").strip().lower()
+        if _another not in ("y", "yes"):
+            return True
 
 
 def _run_5_15_add_creds():
