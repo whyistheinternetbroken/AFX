@@ -11872,9 +11872,14 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                 else:
                     _ans = _prompt("  AutoSupport confirmation detected. Enable AutoSupport? [Y/n]: ", "y").strip().lower()
                     _enable_autosupport = (_ans not in ("n", "no"))
-                _asup_resp = "yes" if _enable_autosupport else "no"
-                _slog(f"AutoSupport confirmation prompt detected in node-mgmt wait; answering '{_asup_resp}'")
-                print(f"  🤖 AutoSupport confirmation prompt detected; answering '{_asup_resp}'.")
+                    if _checkpoint:
+                        with suppress(Exception):
+                            _checkpoint.set_selection("enable_autosupport", _enable_autosupport)
+                        with suppress(Exception):
+                            _checkpoint.set_param("enable_autosupport", _enable_autosupport)
+                _asup_resp = "yes"  # always answer yes; disable via autosupport modify after cluster setup if needed
+                _slog(f"AutoSupport confirmation prompt detected in node-mgmt wait; answering 'yes' (preference={'enabled' if _enable_autosupport else 'disabled'})")
+                print(f"  🤖 AutoSupport confirmation prompt detected; answering 'yes'.")
                 time.sleep(0.3)
                 with suppress(Exception):
                     channel.send(_asup_resp + "\r")
@@ -12170,7 +12175,8 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
 
     for trigger, resp, lbl in _prompt_sequence[_start_idx:]:
         if lbl == "type-yes confirmation":
-            resp = _resolve_asup_response(prompt_if_missing=True)
+            _resolve_asup_response(prompt_if_missing=True)  # capture and save user preference
+            resp = "yes"  # always answer yes; disable via autosupport modify after cluster setup if needed
             if _node_add:
                 _boot_action = "get ready for node add"
                 _still_waiting_msg = "Still waiting for node add readiness"
@@ -21892,6 +21898,26 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     prefix="WARN",
                 )
 
+    # Disable AutoSupport phone-home if the operator opted out.
+    if not _enable_autosupport:
+        if _login_primary_cluster_shell(channel, cc.get("admin_password")):
+            print("\n⏳ Disabling AutoSupport phone-home support...")
+            _slog("Running autosupport modify -support disable")
+            try:
+                _run_cluster_command(channel, "autosupport modify -support disable", timeout=30)
+                print("  ✅ AutoSupport phone-home disabled.")
+                _slog("AutoSupport phone-home disabled successfully")
+            except Exception as _e:
+                print(f"\n  ⚠️  AutoSupport disable command failed: {_e}")
+                _slog(f"AutoSupport disable error: {_e}", prefix="WARN")
+        else:
+            print("\n  ⚠️  Could not log in to cluster shell for AutoSupport configuration.")
+            if _session_log:
+                _session_log.log(
+                    "Cluster shell login failed for AutoSupport configuration",
+                    prefix="WARN",
+                )
+
     # Set up passwordless SSH if the operator requested it during 1.1/1.2.
     if _setup_passwordless_ssh:
         _ssh_mgmt_ip = cc.get("mgmt_ip") or ""
@@ -25807,7 +25833,7 @@ def _wait_for_autosupport_confirmation(channel, *, bmc_host=None, node_log=None,
                 _checkpoint.set_selection("enable_autosupport", _saved)
             with suppress(Exception):
                 _checkpoint.set_param("enable_autosupport", _saved)
-    _resp = "yes" if bool(_saved) else "no"
+    _resp = "yes"  # always answer yes; disable via autosupport modify after cluster setup if needed
 
     _scan = ""
     _deadline = time.monotonic() + 2400
@@ -26347,7 +26373,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     print("\n📋 Node management config to apply:")
     for k in ("port", "ip", "netmask", "gateway"):
         v = cfg.get(k)
-        print(f"   {k:<8} = {v if v else '(prompt manually)'}")
+        print(f"📋   {k:<8} = {v if v else '(prompt manually)'}")
     _slog(f"Node mgmt config to use: {cfg}")
     _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
     if _checkpoint:
