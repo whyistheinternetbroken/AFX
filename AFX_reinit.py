@@ -25848,10 +25848,9 @@ def _wait_for_autosupport_confirmation(channel, *, bmc_host=None, node_log=None,
             if _session_log:
                 _session_log.log_sent(_resp)
             return _resp
-        if ("welcome to the cluster setup wizard" in _combined
-                or "node management interface port" in _combined
+        if ("node management interface port" in _combined
                 or "node management interface ip address" in _combined):
-            _slog("AutoSupport confirmation already passed; node-management/setup prompts detected")
+            _slog("AutoSupport confirmation already passed; node-management prompts detected")
             return ""
         if not _out and not _matched:
             _slog("Console silent; sending Tab to elicit current state")
