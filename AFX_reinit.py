@@ -26398,6 +26398,10 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
         and not resume_skip_loader_commands
     )
     if _resume_cp_1_1_only:
+        # cp_1_1 semantics: LOADER bootargs are already configured. Never replay
+        # setenv/saveenv on resume from this checkpoint.
+        resume_skip_loader_commands = True
+    if _resume_cp_1_1_only:
         print(
             f"\n⏳ {_pfx}Resuming from cp_1_1: booting node to boot menu "
             f"(issuing 'boot_ontap menu')...{_elapsed_str()}"
@@ -26467,17 +26471,34 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
             _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
             _run_optional_checkpoint_status_checks()
         elif _at_loader:
-            resume_skip_loader_commands = True
             _resume_cp_1_1_issue_boot_menu = True
             _slog(
                 "Checkpoint resume probe (cp_1_1): LOADER prompt confirmed; "
                 "issuing boot_ontap menu only (no LOADER setenv replay)"
             )
         else:
-            _slog(
-                "Checkpoint resume probe (cp_1_1): prompt inconclusive; proceeding with LOADER replay",
-                prefix="WARN",
+            with suppress(Exception):
+                channel.send("\r")
+            _loader_probe_out, _ = direct_read_until_any(
+                channel,
+                ["LOADER-"],
+                timeout=8,
+                quiet=True,
             )
+            _loader_probe_low = (_loader_probe_out or "").lower()
+            if "loader-" in _loader_probe_low:
+                _resume_cp_1_1_issue_boot_menu = True
+                _slog(
+                    "Checkpoint resume probe (cp_1_1): fallback probe found LOADER; "
+                    "issuing boot_ontap menu only",
+                    prefix="WARN",
+                )
+            else:
+                _slog(
+                    "Checkpoint resume probe (cp_1_1): prompt inconclusive; preserving "
+                    "checkpoint semantics by skipping LOADER setenv replay",
+                    prefix="WARN",
+                )
 
     if not resume_skip_loader_commands:
         # Send a bare CR to provoke a fresh LOADER prompt echo; the calling loop
