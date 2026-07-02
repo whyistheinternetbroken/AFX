@@ -34346,6 +34346,15 @@ def main():
                 print(f"\n📝 Full session log saved to: {_session_log.log_file}")
 
         except _ReturnToMenu:
+            # Restore real stdout before returning to menu, in case the
+            # exception occurred while sys.stdout was redirected to the node log.
+            if isinstance(sys.stdout, _NodeLogWriter):
+                try:
+                    sys.stdout._nf.close()
+                except Exception:
+                    pass
+                sys.stdout = _real_stdout
+            
             print("\n  \u21a9\ufe0f  Returning to main menu...\n")
             _resume_autodispatch = False
             continue
