@@ -21648,14 +21648,14 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
 
     # After the cluster name is submitted, ONTAP begins the real cluster-create
     # work immediately. Mark cp_1_7 first so an exit-after-checkpoint run stops
-    # before the long “waiting for cluster to form” phase.
-    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else “”
-    _checkpoint_mark_phase(“cp_1_7”, node_id=_primary_cp_node, alias_phase=”primary_setup_done”)
+    # before the long "waiting for cluster to form" phase.
+    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+    _checkpoint_mark_phase("cp_1_7", node_id=_primary_cp_node, alias_phase="primary_setup_done")
     print(
-        “\n⏳ Cluster create started. Waiting for ONTAP to form the cluster “
-        “and reach post-create prompts...”
+        "\n⏳ Cluster create started. Waiting for ONTAP to form the cluster "
+        "and reach post-create prompts..."
     )
-    _slog(“Cluster create started — waiting for additional license key prompt”)
+    _slog("Cluster create started — waiting for additional license key prompt")
     _create_wait_done = threading.Event()
     _create_wait_t0 = time.monotonic()
     def _create_wait_reporter(_ev=_create_wait_done, _t0=_create_wait_t0):
