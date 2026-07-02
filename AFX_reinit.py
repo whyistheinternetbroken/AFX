@@ -298,6 +298,15 @@ class CheckpointManager:
             },
             "phases": {},        # phase_name -> {"done": bool, "ts": str}
             "node_phases": {},   # phase_name -> {ip -> {"done": bool, "ts": str}}
+            "selections": {      # Operator selections to persist across resume
+                "enable_autosupport": None,      # bool or None
+                "physical_zeroing": None,        # bool or None
+                "prevent_bios_fw_update": None,  # bool or None
+                "setup_passwordless_ssh": None,  # bool or None
+                "netboot_before_reinit": None,   # bool or None
+                "loader_env_stage_enabled": None, # bool or None
+                "skip_loader_env_backup": None,  # bool or None
+            },
         }
         self._save()
 
@@ -627,6 +636,18 @@ class CheckpointManager:
             "ts": datetime.now().isoformat(),
         }
         self._save()
+
+    # ── Selection persistence (for operator choices like AutoSupport, physical zeroing, etc.)
+
+    def set_selection(self, key: str, value: "bool | None") -> None:
+        """Store an operator selection (e.g., AutoSupport y/n) for re-use on resume."""
+        if key:
+            self._data.setdefault("selections", {})[key] = value
+            self._save()
+
+    def get_selection(self, key: str) -> "bool | None":
+        """Retrieve a stored operator selection, or None if not set."""
+        return self._data.get("selections", {}).get(key)
 
     # ── Internal ────────────────────────────────────────────────────────────
 
