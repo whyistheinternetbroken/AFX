@@ -26081,6 +26081,12 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         "selection (1-12)?",
         "select option 4",
         "boot menu",
+        "zero disks, reset config and install a new file system",
+        "this will erase all the data on the disks",
+        "type yes to confirm and continue",
+        "welcome to the cluster setup wizard",
+        "node management interface port",
+        "node management interface ip address",
     ]
     output_lower = ""
     start = time.monotonic()
@@ -26088,7 +26094,14 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     found = False
     loader_recovery_attempted = False
     boot_wait_extension = 0
-    _skip_option4 = _already_in_wizard or _resume_cp_1_4 or _resume_cp_1_5
+    _post_boot_sigs = [
+        "zero disks, reset config and install a new file system",
+        "this will erase all the data on the disks",
+        "type yes to confirm and continue",
+        "welcome to the cluster setup wizard",
+        "node management interface port",
+        "node management interface ip address",
+    ]
     if _already_in_wizard or _second_bootmenu_visible:
         found = True
     while (not found) and time.monotonic() - start < (2400 + boot_wait_extension):
@@ -26149,6 +26162,12 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             last_progress = time.monotonic()
         if matched:
             _matched_l = str(matched or "").lower()
+            _matched_post_boot = any(_sig in _matched_l for _sig in _post_boot_sigs)
+            if _matched_post_boot:
+                _slog(f"[{bmc_host}] confirmation/wizard prompt detected during boot-menu wait; node already past option 4")
+                _already_in_wizard = True
+                found = True
+                break
             _matched_menu = any(_sig in _matched_l for _sig in (
                 "selection (1-",
                 "selection (1-9)?",
@@ -26163,9 +26182,15 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                     "continuing wait to avoid premature cp_1_3",
                     prefix="WARN",
                 )
+                with suppress(Exception):
+                    channel.send("\t")
                 continue
             found = True
             break
+        if not chunk and not matched:
+            _slog(f"[{bmc_host}] boot menu wait: console silent, sending Tab to elicit current state")
+            with suppress(Exception):
+                channel.send("\t")
         if (not loader_recovery_attempted
                 and time.monotonic() - start >= 600):
             loader_recovery_attempted = True
@@ -26206,6 +26231,8 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             _session_log.end_phase()
         _close_boot_log()
         return
+
+    _skip_option4 = _already_in_wizard or _resume_cp_1_4 or _resume_cp_1_5
 
     # Checkpoint 3 is complete only after option-9 follow-up progressed to
     # either the next boot menu or the setup wizard (i.e. not immediately
