@@ -32565,6 +32565,23 @@ def main():
             # Asked here — right after config/retain selection, before any BMC
             # connection — so all up-front questions are grouped together.
             # Skip if resuming mode 3 at peer-add finalization stage (cluster already created).
+            
+            # Initialize checkpoint early for modes 1-3 so pre-init selections can be saved
+            if _operation_mode in (1, 2, 3) and _checkpoint is None and not _mode3_skip_presets:
+                try:
+                    # Load any existing checkpoint to check for resume
+                    _cp_test = CheckpointManager()
+                    _checkpoint_exists = _cp_test.load()
+                    if not _checkpoint_exists:
+                        # No prior checkpoint - create a new one (will be fully initialized later at line 34098)
+                        _checkpoint = CheckpointManager()
+                    else:
+                        # Reuse the loaded checkpoint
+                        _checkpoint = _cp_test
+                except Exception:
+                    # Fallback: create empty checkpoint
+                    _checkpoint = CheckpointManager()
+            
             if _operation_mode in (1, 2, 3) and not _mode3_skip_presets:
                 _print_banner("Node pre-config")
                 
