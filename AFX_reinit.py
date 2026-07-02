@@ -3690,6 +3690,7 @@ def select_operation_mode():
                     default="n",
                     timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
                 ).strip().lower()
+                print("")  # Ensure newline after checkpoint prompt response
                 if _resume_now == "y":
                     if _cp_mode.lower().startswith("4.2"):
                         _resume_from_start_menu = True
