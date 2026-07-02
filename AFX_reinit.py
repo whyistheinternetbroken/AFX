@@ -1368,7 +1368,7 @@ _CHECKPOINT_TEST_OPTIONS = {
         ("cp_1_3", "Boot menu option 9 completed"),
         ("cp_1_4", "Boot menu option 4 started"),
         ("cp_1_5", "Option 4 completed"),
-        ("cp_1_6", "Node management configured"),
+        ("cp_1_6", "AutoSupport confirmation answered"),
         ("cp_1_7", "Cluster setup started"),
         ("option1_complete", "Option 1 completion recorded"),
     ],
@@ -1388,7 +1388,7 @@ _CHECKPOINT_TEST_OPTIONS = {
         ("cp_1_3", "Primary boot menu option 9 completed"),
         ("cp_1_4", "Primary boot menu option 4 started"),
         ("cp_1_5", "Primary option 4 completed"),
-        ("cp_1_6", "Primary node management configured"),
+        ("cp_1_6", "Primary AutoSupport confirmation answered"),
         ("cp_1_7", "Primary cluster setup started"),
         ("cp_2_1", "Peer at LOADER"),
         ("cp_2_2", "Peer boot_ontap menu issued"),
@@ -3875,9 +3875,9 @@ def _list_completed_checkpoints(cp) -> str:
             "cp_1_2": "Boot menu issued",
             "cp_1_3": "Option 9 completed",
             "cp_1_4": "Option 4 started",
-            "cp_1_5": "Node management configured",
-            "cp_1_6": "Cluster setup menu",
-            "cp_1_7": "Cluster joined",
+            "cp_1_5": "Option 4 completed",
+            "cp_1_6": "AutoSupport confirmation answered",
+            "cp_1_7": "Cluster setup started",
         },
         "2": {
             "cp_2_1": "LOADER reached",
@@ -12059,6 +12059,28 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
 
     if _node_add:
         print(f"\n⏳ {_pfx}Resetting configuration and rebooting.{_elapsed_str()}")
+
+    def _resolve_asup_response(*, prompt_if_missing: bool = False) -> str:
+        global _enable_autosupport
+        _saved = None
+        if _checkpoint:
+            with suppress(Exception):
+                _saved = _checkpoint.get_selection("enable_autosupport")
+            if _saved is None:
+                with suppress(Exception):
+                    _saved = _checkpoint.get_param("enable_autosupport", None)
+        if _saved is None and prompt_if_missing:
+            _ans = _prompt("  Do you want to enable AutoSupport after reinit? [Y/n]: ", "y").strip().lower()
+            _saved = (_ans not in ("n", "no"))
+            if _checkpoint:
+                with suppress(Exception):
+                    _checkpoint.set_selection("enable_autosupport", _saved)
+                with suppress(Exception):
+                    _checkpoint.set_param("enable_autosupport", _saved)
+        if _saved is not None:
+            _enable_autosupport = bool(_saved)
+        return "yes" if _enable_autosupport else "no"
+
     _cc_done_ev = None  # set when the cluster-creation progress reporter starts
     _menu_sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
     _prompt_sequence = [
@@ -12104,6 +12126,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
 
     for trigger, resp, lbl in _prompt_sequence[_start_idx:]:
         if lbl == "type-yes confirmation":
+            resp = _resolve_asup_response(prompt_if_missing=True)
             if _node_add:
                 _boot_action = "get ready for node add"
                 _still_waiting_msg = "Still waiting for node add readiness"
@@ -25714,9 +25737,90 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     return _mode3_ok
 
 
+def _wait_for_autosupport_confirmation(channel, *, bmc_host=None, node_log=None, reconnect_ctx=None):
+    """Wait for AutoSupport confirmation prompt, report boot activity, and answer."""
+    _rc = reconnect_ctx
+    _pfx = _node_pfx(bmc_host)
+    print(f"\n⏳ {_pfx}Waiting for AutoSupport confirmation prompt...{_elapsed_str()}")
+    _slog("Waiting for AutoSupport confirmation prompt")
+
+    _saved = None
+    if _checkpoint:
+        with suppress(Exception):
+            _saved = _checkpoint.get_selection("enable_autosupport")
+        if _saved is None:
+            with suppress(Exception):
+                _saved = _checkpoint.get_param("enable_autosupport", None)
+    if _saved is None:
+        _ans = _prompt("  Do you want to enable AutoSupport after reinit? [Y/n]: ", "y").strip().lower()
+        _saved = (_ans not in ("n", "no"))
+        if _checkpoint:
+            with suppress(Exception):
+                _checkpoint.set_selection("enable_autosupport", _saved)
+            with suppress(Exception):
+                _checkpoint.set_param("enable_autosupport", _saved)
+    _resp = "yes" if bool(_saved) else "no"
+
+    _scan = ""
+    _deadline = time.monotonic() + 2400
+    _last_boot_msg = 0.0
+    _saw_console_activity = False
+    _sigs = [
+        "enabling autosupport can significantly speed problem determination",
+        "type yes to confirm and continue",
+        "welcome to the cluster setup wizard",
+        "node management interface port",
+        "node management interface ip address",
+    ]
+    while time.monotonic() < _deadline:
+        _ch = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
+        _out, _matched = direct_read_until_any(
+            _ch,
+            _sigs,
+            timeout=30,
+            node_log=node_log,
+            quiet=True,
+            check_bmc_drop=True,
+            reconnect_ctx=_rc,
+        )
+        if _rc and _rc.get("channel") is not None:
+            channel = _rc["channel"]
+        if _out:
+            _saw_console_activity = True
+            _scan += str(_out).lower()
+            if len(_scan) > 16384:
+                _scan = _scan[-8192:]
+        _matched_l = str(_matched or "").lower()
+        _combined = _scan + "\n" + _matched_l
+        if ("enabling autosupport can significantly speed problem determination" in _combined
+                or "type yes to confirm and continue" in _combined):
+            print(f"   🤖 {_pfx}AutoSupport confirmation detected; answering '{_resp}'.{_elapsed_str()}")
+            with suppress(Exception):
+                channel.send(_resp + "\r")
+            if _session_log:
+                _session_log.log_sent(_resp)
+            return _resp
+        if ("welcome to the cluster setup wizard" in _combined
+                or "node management interface port" in _combined
+                or "node management interface ip address" in _combined):
+            _slog("AutoSupport confirmation already passed; node-management/setup prompts detected")
+            return ""
+        _now = time.monotonic()
+        if _saw_console_activity and (_now - _last_boot_msg) >= 60:
+            print(f"   ⏳ {_pfx}node still booting...{_elapsed_str()}")
+            _last_boot_msg = _now
+            _saw_console_activity = False
+
+    _msg = f"[{bmc_host or 'primary'}] timed out waiting for AutoSupport confirmation prompt"
+    print(f"\n⚠️  {_msg}")
+    _slog(_msg, prefix="WARN")
+    return None
+
+
 def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                                  resume_from_cp_1_3=False,
-                                 resume_from_cp_1_4=False):
+                                 resume_from_cp_1_4=False,
+                                 resume_from_cp_1_5=False):
     """Drive option-9 → option-4 cluster init non-interactively for mode 1.2.
 
     Sequence:
@@ -25779,8 +25883,21 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         or (_operation_mode in (1, 3)
             and _checkpoint_phase_done("cp_1_4", node_id=_primary_cp_node))
     )
+    _resume_cp_1_5 = bool(
+        resume_from_cp_1_5
+        or (_operation_mode in (1, 3)
+            and _checkpoint_phase_done("cp_1_5", node_id=_primary_cp_node))
+    )
 
-    if _resume_cp_1_4:
+    if _resume_cp_1_5:
+        print(
+            f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option 4 completion was reached; "
+            "resuming at AutoSupport confirmation."
+        )
+        _slog("cp_1_5 resume: skipping second boot-menu wait and option-4 confirmation replay")
+        _second_bootmenu_visible = True
+        _option9_progress_confirmed = True
+    elif _resume_cp_1_4:
         print(
             f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option 4 was already started; "
             "resuming at option-4 confirmation prompts."
@@ -25963,7 +26080,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     found = False
     loader_recovery_attempted = False
     boot_wait_extension = 0
-    _skip_option4 = _already_in_wizard or _resume_cp_1_4
+    _skip_option4 = _already_in_wizard or _resume_cp_1_4 or _resume_cp_1_5
     if _already_in_wizard or _second_bootmenu_visible:
         found = True
     while (not found) and time.monotonic() - start < (2400 + boot_wait_extension):
@@ -26123,12 +26240,29 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         time.sleep(2)
 
     # 3) Yes confirmations.
-    _auto_answer_disk_erase_prompts(channel, label=bmc_host or "",
-                                    is_node_add=False,
-                                    expect_option4_unjoin_warning=_resume_cp_1_4)
-    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
-    _checkpoint_mark_phase("cp_1_5", node_id=_primary_cp_node, alias_phase="primary_bootmenu_done")
-    _run_optional_checkpoint_status_checks()
+    if _resume_cp_1_5:
+        _asup_answer = _wait_for_autosupport_confirmation(
+            channel,
+            bmc_host=bmc_host,
+            node_log=_boot_log,
+            reconnect_ctx=_rc,
+        )
+        if _asup_answer is None:
+            if _session_log:
+                _session_log.end_phase(outcome="FAIL", note="AutoSupport confirmation prompt timeout")
+            _close_boot_log()
+            return
+        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+        _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node)
+        _run_optional_checkpoint_status_checks()
+    else:
+        _auto_answer_disk_erase_prompts(channel, label=bmc_host or "",
+                                        is_node_add=False,
+                                        expect_option4_unjoin_warning=_resume_cp_1_4)
+        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+        _checkpoint_mark_phase("cp_1_5", node_id=_primary_cp_node, alias_phase="primary_bootmenu_done")
+        _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node)
+        _run_optional_checkpoint_status_checks()
 
     # 4) Node management config.
     cfg = _resolve_node_mgmt_config(bmc_host)
@@ -26141,7 +26275,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     if _checkpoint:
         try:
             _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node, alias_phase="primary_node_mgmt_done")
-            _slog("checkpoint: cp_1_6/primary_node_mgmt_done saved")
+            _slog("checkpoint: primary_node_mgmt_done saved")
         except _InjectedCheckpointFailure:
             raise
         except Exception:
@@ -26809,7 +26943,18 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
         _operation_mode in (1, 3)
         and _checkpoint_phase_done("cp_1_4", node_id=_primary_cp_node)
     )
-    if _resume_cp_1_3_done:
+    _resume_cp_1_5_done = bool(
+        _operation_mode in (1, 3)
+        and _checkpoint_phase_done("cp_1_5", node_id=_primary_cp_node)
+    )
+    if _resume_cp_1_5_done:
+        print(
+            f"\n⏭️ {_pfx}Checkpoint indicates option 4 completion was already reached; "
+            "continuing at AutoSupport confirmation stage."
+        )
+        _slog("Checkpoint resume: cp_1_5 already complete; skipping option-9/option-4 replay")
+        _bootmenu_ok = True
+    elif _resume_cp_1_3_done:
         print(
             f"\n⏭️ {_pfx}Checkpoint indicates option 9 already completed "
             "(SAZ cleanup done); continuing at option 4 stage."
@@ -26882,6 +27027,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
             bmc_host=sp_host,
             resume_from_cp_1_3=_resume_cp_1_3_done,
             resume_from_cp_1_4=_resume_cp_1_4_done,
+            resume_from_cp_1_5=_resume_cp_1_5_done,
         )
         return
     elif _auto_add:
@@ -35041,10 +35187,16 @@ def main():
                 _cp_1_2_done = _checkpoint.is_done("cp_1_2")
                 _cp_1_3_done = _checkpoint.is_done("cp_1_3")
                 _cp_1_4_done = _checkpoint.is_done("cp_1_4")
+                _cp_1_5_done = _checkpoint.is_done("cp_1_5")
                 _real_stdout.write(
                     f"\n🔖 Resuming from checkpoint {_resume_cp_num} ({_resume_cp_latest_desc or 'checkpoint state loaded'}).\n"
                 )
-                if _cp_1_4_done:
+                if _cp_1_5_done:
+                    _real_stdout.write(
+                        "⏭️  Option 4 complete checkpoint reached; waiting for AutoSupport "
+                        "confirmation (auto-answer from stored admin choice) and then advancing to checkpoint 1_6...\n\n"
+                    )
+                elif _cp_1_4_done:
                     _real_stdout.write(
                         "⏭️  Option 4 already started; waiting for option-4 confirmation prompts "
                         "(auto-answer 'yes') and then advancing to checkpoint 1_5...\n\n"
