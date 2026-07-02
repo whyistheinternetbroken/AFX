@@ -3840,6 +3840,28 @@ def _consume_resume_log_suffix() -> str:
     return _out
 
 
+def _latest_primary_checkpoint_done(cp):
+    """Return the latest completed primary checkpoint id/description."""
+    if not cp:
+        return "", ""
+    _seq = list(_CHECKPOINT_TEST_OPTIONS.get(1) or [])
+    for _cp_id, _cp_desc in reversed(_seq):
+        if not str(_cp_id).startswith("cp_1_"):
+            continue
+        try:
+            if cp.is_done(_cp_id):
+                return _cp_id, _cp_desc
+        except Exception:
+            continue
+    return "", ""
+
+
+def _checkpoint_display_number(cp_id: str) -> str:
+    """Extract display number from checkpoint id (e.g. cp_1_4 -> 4)."""
+    _parts = str(cp_id or "").split("_")
+    return _parts[-1] if _parts else ""
+
+
 def _list_completed_checkpoints(cp) -> str:
     """List all completed checkpoints for this mode."""
     if not cp:
@@ -12002,7 +12024,8 @@ def _wait_and_send(channel, trigger, response, label, timeout=900,
 
 
 def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
-                                    is_node_add=None, reconnect_ctx=None):
+                                    is_node_add=None, reconnect_ctx=None,
+                                    expect_option4_unjoin_warning=False):
     """Auto-answer the three disk-zero/erase/confirm prompts after option 4.
 
     ``is_node_add`` controls the progress messaging:
@@ -12038,14 +12061,48 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
         print(f"\n⏳ {_pfx}Resetting configuration and rebooting.{_elapsed_str()}")
     _cc_done_ev = None  # set when the cluster-creation progress reporter starts
     _menu_sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
-    for trigger, resp, lbl in (
+    _prompt_sequence = [
         ("zero disks, reset config and install a new file system", "yes",
          "zero disks confirmation"),
         ("this will erase all the data on the disks", "yes",
          "erase data confirmation"),
         ("type yes to confirm and continue", "yes" if _enable_autosupport else "no",
          "type-yes confirmation"),
-    ):
+    ]
+    if expect_option4_unjoin_warning:
+        _prompt_sequence.insert(
+            0,
+            ("this node may not have been properly unjoined from an existing cluster",
+             "yes", "option 4 unjoin warning confirmation"),
+        )
+
+    _start_idx = 0
+    _preprobe_sigs = [t for t, _, __ in _prompt_sequence] + [
+        "welcome to the cluster setup wizard",
+    ]
+    with suppress(Exception):
+        channel.send("\r")
+    _preprobe_out, _preprobe_match = direct_read_until_any(
+        channel,
+        _preprobe_sigs,
+        timeout=30,
+        node_log=node_log,
+        check_bmc_drop=True,
+        quiet=True,
+        reconnect_ctx=reconnect_ctx,
+    )
+    _preprobe_l = str(_preprobe_out or "").lower()
+    _preprobe_m = str(_preprobe_match or "").lower()
+    if "welcome to the cluster setup wizard" in _preprobe_m or "welcome to the cluster setup wizard" in _preprobe_l:
+        _slog("Option-4 confirmations already complete; cluster setup wizard prompt detected")
+        return
+    for _idx, (_trig, _, __) in enumerate(_prompt_sequence):
+        _trig_l = _trig.lower()
+        if _trig_l in _preprobe_m or _trig_l in _preprobe_l:
+            _start_idx = _idx
+            break
+
+    for trigger, resp, lbl in _prompt_sequence[_start_idx:]:
         if lbl == "type-yes confirmation":
             if _node_add:
                 _boot_action = "get ready for node add"
@@ -25658,7 +25715,8 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
 
 
 def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
-                                 resume_from_cp_1_3=False):
+                                 resume_from_cp_1_3=False,
+                                 resume_from_cp_1_4=False):
     """Drive option-9 → option-4 cluster init non-interactively for mode 1.2.
 
     Sequence:
@@ -25716,8 +25774,21 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         or (_operation_mode in (1, 3)
             and _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node))
     )
+    _resume_cp_1_4 = bool(
+        resume_from_cp_1_4
+        or (_operation_mode in (1, 3)
+            and _checkpoint_phase_done("cp_1_4", node_id=_primary_cp_node))
+    )
 
-    if _resume_cp_1_3:
+    if _resume_cp_1_4:
+        print(
+            f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option 4 was already started; "
+            "resuming at option-4 confirmation prompts."
+        )
+        _slog("cp_1_4 resume: skipping second boot-menu wait and option-4 resend")
+        _second_bootmenu_visible = True
+        _option9_progress_confirmed = True
+    elif _resume_cp_1_3:
         print(
             f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option 9 is complete; "
             "skipping option-9 warning wait and continuing to option 4."
@@ -25892,10 +25963,10 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     found = False
     loader_recovery_attempted = False
     boot_wait_extension = 0
-    _skip_option4 = _already_in_wizard
+    _skip_option4 = _already_in_wizard or _resume_cp_1_4
     if _already_in_wizard or _second_bootmenu_visible:
         found = True
-    while time.monotonic() - start < (2400 + boot_wait_extension):
+    while (not found) and time.monotonic() - start < (2400 + boot_wait_extension):
         if _shutdown_event.is_set():
             return
         now = time.monotonic()
@@ -26053,7 +26124,8 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
 
     # 3) Yes confirmations.
     _auto_answer_disk_erase_prompts(channel, label=bmc_host or "",
-                                    is_node_add=False)
+                                    is_node_add=False,
+                                    expect_option4_unjoin_warning=_resume_cp_1_4)
     _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
     _checkpoint_mark_phase("cp_1_5", node_id=_primary_cp_node, alias_phase="primary_bootmenu_done")
     _run_optional_checkpoint_status_checks()
@@ -26733,6 +26805,10 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
         _operation_mode in (1, 3)
         and _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node)
     )
+    _resume_cp_1_4_done = bool(
+        _operation_mode in (1, 3)
+        and _checkpoint_phase_done("cp_1_4", node_id=_primary_cp_node)
+    )
     if _resume_cp_1_3_done:
         print(
             f"\n⏭️ {_pfx}Checkpoint indicates option 9 already completed "
@@ -26805,6 +26881,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
             channel,
             bmc_host=sp_host,
             resume_from_cp_1_3=_resume_cp_1_3_done,
+            resume_from_cp_1_4=_resume_cp_1_4_done,
         )
         return
     elif _auto_add:
@@ -34839,10 +34916,9 @@ def main():
             # reset phase (mode 1 or mode 3). For single-node mode 1 and all other
             # modes, check now.
              
-            # Check if checkpoint 1 is already complete (LOADER bootargs set)
-            _checkpoint_1_done = (
-                _checkpoint and _checkpoint.is_done("cp_1_1")
-            ) if _checkpoint else False
+            # Check if any primary option-1 checkpoint is already complete.
+            _resume_cp_latest_id, _resume_cp_latest_desc = _latest_primary_checkpoint_done(_checkpoint)
+            _checkpoint_1_done = bool(_resume_cp_latest_id)
              
             if _checkpoint_1_done:
                 # Resume from cp_1_1 means LOADER prep is already complete and system
@@ -34860,8 +34936,11 @@ def main():
             if _at_loader or _checkpoint_1_done:
                 # Node is already sitting at LOADER — nothing to reset.
                 if _checkpoint_1_done:
-                    print("\n🔖 Resuming from checkpoint 1 (LOADER bootargs already set).")
-                    _session_log.log("Resuming from checkpoint 1 - skipping system reset")
+                    _resume_cp_num = _checkpoint_display_number(_resume_cp_latest_id) or "?"
+                    print(f"\n🔖 Resuming from checkpoint {_resume_cp_num} ({_resume_cp_latest_desc}).")
+                    _session_log.log(
+                        f"Resuming from checkpoint {_resume_cp_num} ({_resume_cp_latest_id}) - skipping system reset"
+                    )
                 else:
                     _session_log.log("Already at LOADER – system reset skipped")
                 _session_log.end_phase()
@@ -34870,7 +34949,9 @@ def main():
                 if _checkpoint_1_done:
                     # Force console takeover on resume
                     print("Forcing console takeover...")
-                    _session_log.log("Forcing console takeover after checkpoint 1 resume")
+                    _session_log.log(
+                        f"Forcing console takeover after checkpoint resume ({_resume_cp_latest_id})"
+                    )
                     enter_system_console(channel, force_takeover=True)
                     _session_log.log("Console takeover successful")
                 else:
@@ -34955,10 +35036,20 @@ def main():
              
             # Check if checkpoint 1 is complete (LOADER bootargs already set)
             if _checkpoint and _checkpoint.is_done("cp_1_1"):
+                _resume_cp_latest_id, _resume_cp_latest_desc = _latest_primary_checkpoint_done(_checkpoint)
+                _resume_cp_num = _checkpoint_display_number(_resume_cp_latest_id) or "1"
                 _cp_1_2_done = _checkpoint.is_done("cp_1_2")
                 _cp_1_3_done = _checkpoint.is_done("cp_1_3")
-                _real_stdout.write("\n🔖 Resuming from checkpoint 1 (LOADER bootargs already set).\n")
-                if _cp_1_3_done:
+                _cp_1_4_done = _checkpoint.is_done("cp_1_4")
+                _real_stdout.write(
+                    f"\n🔖 Resuming from checkpoint {_resume_cp_num} ({_resume_cp_latest_desc or 'checkpoint state loaded'}).\n"
+                )
+                if _cp_1_4_done:
+                    _real_stdout.write(
+                        "⏭️  Option 4 already started; waiting for option-4 confirmation prompts "
+                        "(auto-answer 'yes') and then advancing to checkpoint 1_5...\n\n"
+                    )
+                elif _cp_1_3_done:
                     _real_stdout.write(
                         "⏭️  Option 9 already completed (SAZ cleanup done); "
                         "continuing at option 4 stage...\n\n"
@@ -34973,7 +35064,9 @@ def main():
                         "and then advancing to checkpoint 1_2...\n\n"
                     )
                 _real_stdout.flush()
-                _session_log.log("Checkpoint 1 complete; bypassing monitor and resuming from saved stage")
+                _session_log.log(
+                    f"Checkpoint resume ({_resume_cp_latest_id or 'cp_1_1'}) loaded; bypassing monitor and resuming from saved stage"
+                )
                 handle_loader_commands(
                     channel, client, sp_host, sp_user, sp_pass,
                     resume_skip_loader_commands=_cp_1_2_done,
