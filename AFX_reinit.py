@@ -3761,7 +3761,7 @@ def _checkpoint_menu_option_label(cp_mode: str) -> str:
     if _m == "2":
         return "2.3"
     if _m == "1":
-        return "1.2"
+        return "1.2 (Automatic reinit of primary node in cluster/cluster creation)"
     return cp_mode or "unknown"
 
 
