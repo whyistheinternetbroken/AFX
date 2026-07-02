@@ -7503,7 +7503,7 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
 # Enter system console
 # ---------------------------------------------------------------------------
 
-def enter_system_console(channel, loader_message=True):
+def enter_system_console(channel, loader_message=True, force_takeover=False):
     print("\n📺 Probing current prompt before entering system console...")
     _slog("Probing prompt before system console")
 
@@ -7561,9 +7561,16 @@ def enter_system_console(channel, loader_message=True):
 
     if matched and "y/n" in matched.lower():
         print("\n⚠️  An existing console session is active!")
-        answer = input("   Do you want to disconnect the other console session? [Y/N]: ").strip().lower()
-        if _session_log:
-            _session_log.log_user_input(f"Existing console session takeover response: {answer}")
+        if force_takeover:
+            # Auto-respond 'y' when resuming from checkpoint
+            answer = "y"
+            print("   Auto-responding 'y' to disconnect other session (checkpoint resume)...")
+            if _session_log:
+                _session_log.log_user_input(f"Existing console session takeover response: {answer} (auto from checkpoint)")
+        else:
+            answer = input("   Do you want to disconnect the other console session? [Y/N]: ").strip().lower()
+            if _session_log:
+                _session_log.log_user_input(f"Existing console session takeover response: {answer}")
 
         if answer == "y":
             print("Disconnecting other console session...")
@@ -34137,11 +34144,17 @@ def main():
             ):
                 _print_autopilot_banner()
 
-            # Phase: System Reset (skipped if already at LOADER)
+            # Phase: System Reset (skipped if already at LOADER or checkpoint 1 done)
             _session_log.start_phase("System Reset")
             # _primary_loader_result is set by the parallel thread during the peer
             # reset phase (mode 1 or mode 3). For single-node mode 1 and all other
             # modes, check now.
+             
+            # Check if checkpoint 1 is already complete (LOADER bootargs set)
+            _checkpoint_1_done = (
+                _checkpoint and _checkpoint.is_done("cp_1_1")
+            ) if _checkpoint else False
+             
             _at_loader = (
                 _primary_loader_result[0]
                 if _primary_loader_result[0] is not None
@@ -34150,13 +34163,24 @@ def main():
                     and not _mode3_skip_presets
                 else _already_at_loader(channel, label=sp_host)
             )
-            if _at_loader:
+            if _at_loader or _checkpoint_1_done:
                 # Node is already sitting at LOADER — nothing to reset.
-                _session_log.log("Already at LOADER – system reset skipped")
+                if _checkpoint_1_done:
+                    print("\n🔖 Resuming from checkpoint 1 (LOADER bootargs already set).")
+                    _session_log.log("Resuming from checkpoint 1 - skipping system reset")
+                else:
+                    _session_log.log("Already at LOADER – system reset skipped")
                 _session_log.end_phase()
                 # Skip "Enter System Console" — we're already in the console.
                 _session_log.start_phase("Enter System Console")
-                _session_log.log("Already in console (LOADER detected before reset)")
+                if _checkpoint_1_done:
+                    # Force console takeover on resume
+                    print("Forcing console takeover...")
+                    _session_log.log("Forcing console takeover after checkpoint 1 resume")
+                    enter_system_console(channel, force_takeover=True)
+                    _session_log.log("Console takeover successful")
+                else:
+                    _session_log.log("Already in console (LOADER detected before reset)")
                 _session_log.end_phase()
             else:
                 print("\n🔄 Sending 'system reset' command...")
