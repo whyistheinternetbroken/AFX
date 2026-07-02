@@ -11844,6 +11844,7 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
         # Wait until the trigger appears in the accumulated buffer.
         _trigger_start = time.monotonic()
         _asup_info_enter_sent = False
+        _asup_prompt_answered = False
         _last_recv_activity = time.monotonic()
         while trigger_lower not in _buf.lower():
             if time.monotonic() - _trigger_start > _overall_timeout:
@@ -11856,8 +11857,20 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                     _par_write(node_log, chunk)
                 if _session_log:
                     _session_log.log_console(chunk)
-            if not _asup_info_enter_sent:
-                _buf_l = _buf.lower()
+            _buf_l = _buf.lower()
+            if not _asup_prompt_answered and "type yes to confirm and continue" in _buf_l:
+                _asup_resp = _resolve_asup_response(prompt_if_missing=True)
+                _slog(f"AutoSupport confirmation prompt detected in node-mgmt wait; answering '{_asup_resp}'")
+                print(f"  🤖 AutoSupport confirmation prompt detected; answering '{_asup_resp}'.")
+                time.sleep(0.3)
+                with suppress(Exception):
+                    channel.send(_asup_resp + "\r")
+                if _session_log:
+                    _session_log.log_sent(_asup_resp)
+                _asup_prompt_answered = True
+                _asup_info_enter_sent = True
+                _buf = ""
+            elif not _asup_info_enter_sent:
                 _saw_asup_info = (
                     "enabling autosupport can significantly speed problem determination" in _buf_l
                     or "this system will send event messages" in _buf_l
