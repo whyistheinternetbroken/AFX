@@ -9461,7 +9461,7 @@ class InteractiveSession:
 # ---------------------------------------------------------------------------
 
 def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_label="",
-                                  reconnect_ctx=None):
+                                  reconnect_ctx=None, resume_from_cp_1_2=False):
     """Wait for the ONTAP boot menu then auto-select the configured option.
 
     When *node_log* is supplied all raw console bytes are written there
@@ -9510,6 +9510,91 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     boot_wait_extension = 0
     abort_prompt_auto_answers = 0
     _ABORT_PROMPT_MAX_AUTO_ANSWERS = 6
+    _resume_cp_1_2_option9 = (
+        bool(resume_from_cp_1_2)
+        and _operation_mode in (1, 3)
+        and str(option) == "9"
+    )
+
+    def _auto_answer_option9_init_prompts(max_wait=180):
+        """For cp_1_2 resume, finish option-9 yes/no confirmations if already active."""
+        if not _resume_cp_1_2_option9:
+            return 0
+        _answered = 0
+        _deadline = time.monotonic() + max_wait
+        _last_activity = time.monotonic()
+        _resend_9 = 0
+        while time.monotonic() < _deadline:
+            _out, _matched = direct_read_until_any(
+                channel,
+                [
+                    "do you want to abort this operation (yes/no)",
+                    "yes/no",
+                    "selection (1-",
+                    "loader-",
+                ],
+                timeout=8,
+                node_log=node_log,
+                quiet=True,
+                check_bmc_drop=True,
+                reconnect_ctx=reconnect_ctx,
+            )
+            _buf = (_out or "").lower()
+            if _buf:
+                _last_activity = time.monotonic()
+                if _session_log:
+                    _session_log.log_console(_out)
+            if "loader-" in _buf:
+                _screen_status(
+                    f"↪️  {_pfx}Resume probe found LOADER; issuing 'boot_ontap menu'..."
+                )
+                with suppress(Exception):
+                    channel.send("boot_ontap menu\r")
+                if _session_log:
+                    _session_log.log_sent("boot_ontap menu")
+                time.sleep(1)
+                continue
+            if "do you want to abort this operation (yes/no)" in _buf:
+                _screen_status(
+                    f"⚙️  {_pfx}Detected option-9 abort confirmation prompt; "
+                    "auto-answering 'no' to continue init..."
+                )
+                with suppress(Exception):
+                    channel.send("no\r")
+                if _session_log:
+                    _session_log.log_sent("no")
+                time.sleep(0.2)
+                continue
+            if "yes/no" in _buf:
+                _answered += 1
+                _screen_status(
+                    f"⚙️  {_pfx}Detected option-9 init confirmation "
+                    f"({_answered}/2); auto-answering 'yes'..."
+                )
+                with suppress(Exception):
+                    channel.send("yes\r")
+                if _session_log:
+                    _session_log.log_sent("yes")
+                if _answered >= 2:
+                    return _answered
+                time.sleep(0.2)
+                continue
+            if _matched and "selection (1-" in str(_matched).lower():
+                if _resend_9 < 2:
+                    _resend_9 += 1
+                    _screen_status(
+                        f"↻ {_pfx}Boot menu still visible during cp_1_2 resume; "
+                        "resending option 9..."
+                    )
+                    with suppress(Exception):
+                        channel.send("9\r")
+                    if _session_log:
+                        _session_log.log_sent("9")
+                    time.sleep(1)
+                    continue
+            if _answered > 0 and time.monotonic() - _last_activity > 20:
+                break
+        return _answered
 
     def _screen_status(msg):
         try:
@@ -9546,6 +9631,19 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 sys.stdout.flush()
             if _session_log:
                 _session_log.log_console(chunk)
+            if _resume_cp_1_2_option9 and "loader-" in output_lower:
+                _screen_status(
+                    f"↪️  {_pfx}Resume detected LOADER; issuing 'boot_ontap menu'..."
+                )
+                if _session_log:
+                    _session_log.log_sent("boot_ontap menu")
+                with suppress(Exception):
+                    channel.send("boot_ontap menu\r")
+                output = ""
+                output_lower = ""
+                last_progress = time.monotonic()
+                time.sleep(0.3)
+                continue
             # Resume path can land while option-9 is already active and waiting
             # for "Do you want to abort this operation (yes/no)?". If we only
             # wait for boot-menu signatures, this stalls indefinitely. Auto-
@@ -9584,6 +9682,20 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                         f"after {_ABORT_PROMPT_MAX_AUTO_ANSWERS} auto-answers",
                         prefix="WARN",
                     )
+            if _resume_cp_1_2_option9 and "yes/no" in output_lower:
+                _screen_status(
+                    f"⚙️  {_pfx}Resume detected option-9 init confirmation; "
+                    "auto-answering 'yes'..."
+                )
+                if _session_log:
+                    _session_log.log_sent("yes")
+                with suppress(Exception):
+                    channel.send("yes\r")
+                output = ""
+                output_lower = ""
+                last_progress = time.monotonic()
+                time.sleep(0.2)
+                continue
             if "waiting for bmc" in chunk.lower():
                 waiting_for_bmc_seen = True
                 waiting_for_bmc_retry_armed = True
@@ -9805,11 +9917,11 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
         channel.send(option + "\r\n")
         time.sleep(2)
 
-    if _operation_mode in (1, 3):
-        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
-        _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
-    elif _operation_mode == 2:
+    if _operation_mode == 2:
         _checkpoint_mark_phase("cp_2_3")
+
+    if _resume_cp_1_2_option9:
+        _auto_answer_option9_init_prompts()
 
     return True
 
@@ -25753,6 +25865,13 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
         _close_boot_log()
         return
 
+    # Checkpoint 3 is complete only after option-9 follow-up progressed to
+    # either the next boot menu or the setup wizard (i.e. not immediately
+    # after sending "9").
+    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+    _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
+    _run_optional_checkpoint_status_checks()
+
     if _skip_option4:
         if (_operation_mode == 3 and _mode3_pipeline_state
                 and (_mode3_pipeline_state.get("primary_option9_done_event") is not None)
@@ -25781,7 +25900,6 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None):
             _session_log.log("2nd boot menu detected; auto-selecting option 4")
             _session_log.log_sent("4")
         channel.send("4\r")
-        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
         _checkpoint_mark_phase("cp_1_4", node_id=_primary_cp_node)
         _run_optional_checkpoint_status_checks()
         _cleanup_known_hosts_after_boot_option(bmc_host or "primary", "4", log=_session_log)
@@ -26361,6 +26479,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
         timeout=1800,
         node_label=sp_host,
         reconnect_ctx=_bootmenu_reconnect_ctx,
+        resume_from_cp_1_2=bool(resume_skip_loader_commands and _operation_mode in (1, 3)),
     )
     # Ensure fallback/manual path and later phases use latest session if reconnected.
     channel = _bootmenu_reconnect_ctx.get("channel", channel)
