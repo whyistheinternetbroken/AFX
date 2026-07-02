@@ -649,6 +649,41 @@ class CheckpointManager:
         """Retrieve a stored operator selection, or None if not set."""
         return self._data.get("selections", {}).get(key)
 
+    def get_saved_selections(self) -> "dict[str, bool | None]":
+        """Return dict of all saved selections."""
+        return self._data.get("selections", {})
+
+    def has_saved_selections(self) -> bool:
+        """Return True if any selections are saved."""
+        return bool(any(v is not None for v in self.get_saved_selections().values()))
+
+    def print_saved_selections_summary(self) -> None:
+        """Print a formatted summary of all saved selections."""
+        selections = self.get_saved_selections()
+        if not selections or not any(v is not None for v in selections.values()):
+            return
+        
+        print("\n  📋 Saved operator selections from previous run:")
+        print("  " + "─" * 56)
+        
+        label_map = {
+            "enable_autosupport": "AutoSupport after reinit",
+            "physical_zeroing": "Physical disk zeroing",
+            "prevent_bios_fw_update": "BIOS firmware update prevention",
+            "setup_passwordless_ssh": "Passwordless SSH setup",
+            "netboot_before_reinit": "Install ONTAP version before reinit",
+            "loader_env_stage_enabled": "LOADER env backup (printenv capture)",
+            "skip_loader_env_backup": "Skip LOADER env backup",
+        }
+        
+        for key, label in label_map.items():
+            val = selections.get(key)
+            if val is not None:
+                val_str = "✅ enabled" if val else "❌ disabled"
+                print(f"    {label:<45} {val_str}")
+        
+        print("  " + "─" * 56)
+
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _save(self) -> None:
@@ -6621,7 +6656,7 @@ CHECKPOINTS AND RECOVERY
        python3 AFX_reinit.py --last-status
 
     CHECKPOINT FILES
-       Location: checkpoints/{node_id}_checkpoint.json
+       Location: checkpoints/{{node_id}}_checkpoint.json
        Format:   JSON v2 with per-node phase tracking
        Expiry:   Checkpoints older than 72 hours are ignored
        Cleanup:  Automatically deleted on successful completion
@@ -32422,15 +32457,49 @@ def main():
             # Skip if resuming mode 3 at peer-add finalization stage (cluster already created).
             if _operation_mode in (1, 3) and not _mode3_skip_presets:
                 _print_banner("Node pre-config")
-                print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
                 
-                # Check checkpoint for saved physical_zeroing preference
-                _saved_pz = _checkpoint.get_selection("physical_zeroing") if _checkpoint else None
-                if _saved_pz is not None:
-                    _physical_zeroing = _saved_pz
-                    _pz_label = "yes" if _physical_zeroing else "no"
-                    print(f"  ℹ️   Resuming with saved preference: physical zeroing = {_pz_label}")
-                else:
+                # Show saved selections summary and ask for confirmation
+                _has_saved = _checkpoint.has_saved_selections() if _checkpoint else False
+                if _has_saved:
+                    _checkpoint.print_saved_selections_summary()
+                    _keep_selections = _prompt(
+                        "  Keep these selections and continue? [Y/n]: ", "y"
+                    ).strip().lower()
+                    if _keep_selections not in ("n", "no"):
+                        # Use all saved selections
+                        _saved_pz = _checkpoint.get_selection("physical_zeroing")
+                        _saved_asup = _checkpoint.get_selection("enable_autosupport")
+                        _saved_fw = _checkpoint.get_selection("prevent_bios_fw_update")
+                        _saved_env = _checkpoint.get_selection("loader_env_stage_enabled")
+                        _saved_ssh = _checkpoint.get_selection("setup_passwordless_ssh")
+                        _saved_nb = _checkpoint.get_selection("netboot_before_reinit")
+                        
+                        _physical_zeroing = _saved_pz if _saved_pz is not None else False
+                        _enable_autosupport = _saved_asup if _saved_asup is not None else True
+                        _prevent_bios_fw_update = _saved_fw if _saved_fw is not None else False
+                        _loader_env_stage_enabled = _saved_env if _saved_env is not None else True
+                        _setup_passwordless_ssh = _saved_ssh if _saved_ssh is not None else False
+                        _netboot_before_reinit = _saved_nb if _saved_nb is not None else False
+                        
+                        print("\n  ✅ Using saved selections. Proceeding...\n")
+                        if _diag_mode:
+                            _diag_bootargs = _load_diag_bootargs()
+                    else:
+                        # Operator chose to change selections - clear them and re-prompt
+                        print("\n  ℹ️   Clearing saved selections. Please answer the questions again:\n")
+                        _checkpoint.set_selection("physical_zeroing", None)
+                        _checkpoint.set_selection("enable_autosupport", None)
+                        _checkpoint.set_selection("prevent_bios_fw_update", None)
+                        _checkpoint.set_selection("loader_env_stage_enabled", None)
+                        _checkpoint.set_selection("setup_passwordless_ssh", None)
+                        _checkpoint.set_selection("netboot_before_reinit", None)
+                        _has_saved = False
+                
+                # Only ask questions if no saved selections or operator chose to change
+                if not _has_saved:
+                    print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
+                    
+                    # Ask for physical_zeroing
                     try:
                         while True:
                             _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
@@ -32442,17 +32511,11 @@ def main():
                     _physical_zeroing = (_pz_ans == "y")
                     if _checkpoint:
                         _checkpoint.set_selection("physical_zeroing", _physical_zeroing)
-                
-                if _physical_zeroing:
-                    print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
-                
-                # Check checkpoint for saved AutoSupport preference
-                _saved_asup = _checkpoint.get_selection("enable_autosupport") if _checkpoint else None
-                if _saved_asup is not None:
-                    _enable_autosupport = _saved_asup
-                    _asup_label = "yes" if _enable_autosupport else "no"
-                    print(f"  ℹ️   Resuming with saved preference: AutoSupport = {_asup_label}")
-                else:
+                    
+                    if _physical_zeroing:
+                        print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
+                    
+                    # Ask for AutoSupport
                     try:
                         while True:
                             _asup_ans = input("  Do you want to enable AutoSupport after reinit? [Y/n]: ").strip().lower()
@@ -32464,43 +32527,46 @@ def main():
                     _enable_autosupport = (_asup_ans != "n")
                     if _checkpoint:
                         _checkpoint.set_selection("enable_autosupport", _enable_autosupport)
-                
-                if not _enable_autosupport:
-                    print("  ℹ️   AutoSupport will be disabled (will respond 'no' to AutoSupport prompt).")
-                
-                if _diag_mode:
-                    _diag_bootargs = _load_diag_bootargs()
+                    
+                    if not _enable_autosupport:
+                        print("  ℹ️   AutoSupport will be disabled (will respond 'no' to AutoSupport prompt).")
+                    
+                    if _diag_mode:
+                        _diag_bootargs = _load_diag_bootargs()
             elif _operation_mode == 2 and _diag_mode:
                 _diag_bootargs = _load_diag_bootargs()
 
             if _operation_mode in (1, 2, 3) and not _mode3_skip_presets:
-                # Check checkpoint for saved BIOS firmware update prevention preference
-                _saved_fw = _checkpoint.get_selection("prevent_bios_fw_update") if _checkpoint else None
-                if _saved_fw is not None:
-                    _prevent_bios_fw_update = _saved_fw
-                    _fw_label = "yes" if _prevent_bios_fw_update else "no"
-                    print(f"  ℹ️   Resuming with saved preference: BIOS firmware update prevention = {_fw_label}")
+                # Only ask if we haven't already processed saved selections
+                _ask_presets = True
+                if _operation_mode in (1, 3):
+                    # Already handled above for modes 1 and 3 with saved selections
+                    _ask_presets = not (_checkpoint and _checkpoint.has_saved_selections())
+                
+                if _ask_presets:
+                    # Ask for BIOS firmware update prevention
+                    _saved_fw = _checkpoint.get_selection("prevent_bios_fw_update") if _checkpoint else None
+                    if _saved_fw is not None:
+                        _prevent_bios_fw_update = _saved_fw
+                    else:
+                        _fw_ans = _prompt(
+                            "  Do you want to prevent BIOS firmware from updating? [y/N]: ",
+                            "n",
+                        ).lower()
+                        _prevent_bios_fw_update = (_fw_ans in ("y", "yes"))
+                        if _checkpoint:
+                            _checkpoint.set_selection("prevent_bios_fw_update", _prevent_bios_fw_update)
                 else:
-                    _fw_ans = _prompt(
-                        "  Do you want to prevent BIOS firmware from updating? [y/N]: ",
-                        "n",
-                    ).lower()
-                    _prevent_bios_fw_update = (_fw_ans in ("y", "yes"))
-                    if _checkpoint:
-                        _checkpoint.set_selection("prevent_bios_fw_update", _prevent_bios_fw_update)
+                    _prevent_bios_fw_update = _checkpoint.get_selection("prevent_bios_fw_update") if _checkpoint else False
                 
                 if _prevent_bios_fw_update:
                     print("  ℹ️   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
                 else:
                     print("  ℹ️   BIOS firmware auto-update prevention disabled.")
                 
-                # Check checkpoint for saved LOADER env backup preference
+                # Ask for LOADER env backup preference
                 _saved_env = _checkpoint.get_selection("loader_env_stage_enabled") if _checkpoint else None
-                if _saved_env is not None:
-                    _loader_env_stage_enabled = _saved_env
-                    _env_label = "captured" if _loader_env_stage_enabled else "skipped"
-                    print(f"  ℹ️   Resuming with saved preference: LOADER env backup = {_env_label}")
-                else:
+                if _ask_presets and _saved_env is None:
                     try:
                         while True:
                             _env_q = input("  Skip LOADER backup/printenv capture? [Y/n]: ").strip().lower()
@@ -32512,6 +32578,8 @@ def main():
                     _loader_env_stage_enabled = (_env_q in ("n", "no"))
                     if _checkpoint:
                         _checkpoint.set_selection("loader_env_stage_enabled", _loader_env_stage_enabled)
+                else:
+                    _loader_env_stage_enabled = _saved_env if _saved_env is not None else True
 
             # License: collect key(s) or validate the license file path now, before
             # the BMC session starts, so the operator can fix issues early.
