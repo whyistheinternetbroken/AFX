@@ -719,7 +719,7 @@ def _handle_checkpoint_confirmation_with_selective_mod(checkpoint, diag_mode=Fal
     
     while True:
         _choice = _prompt(
-            "  Keep these selections and continue? [Y/n/c]: ", "y"
+            "  Keep these selections and continue? [Y/n/c] (c = change): ", "y"
         ).strip().lower()
         
         if _choice in ("y", "yes", ""):
@@ -34381,10 +34381,10 @@ def main():
             # Check if checkpoint 1 is complete (LOADER bootargs already set)
             if _checkpoint and _checkpoint.is_done("cp_1_1"):
                 _real_stdout.write("\n🔖 Resuming from checkpoint 1 (LOADER bootargs already set).\n")
-                _real_stdout.write("⏭️  Skipping AUTOBOOT/LOADER monitoring phase; waiting for boot menu directly...\n\n")
+                _real_stdout.write("⏭️  Continuing from LOADER commands (boot_ontap menu + boot menu selection)...\n\n")
                 _real_stdout.flush()
-                _session_log.log("Checkpoint 1 complete; skipping AUTOBOOT/LOADER monitoring")
-                _session_log.end_phase()
+                _session_log.log("Checkpoint 1 complete; bypassing monitor and resuming LOADER command flow")
+                handle_loader_commands(channel, client, sp_host, sp_user, sp_pass)
             else:
                 monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass)
 
