@@ -32644,20 +32644,38 @@ def main():
             # Skip if resuming mode 3 at peer-add finalization stage (cluster already created).
             
             # Initialize checkpoint early for modes 1-3 so pre-init selections can be saved
+            # into a valid checkpoint schema (version/mode metadata present). This
+            # allows immediate resume discovery after injected --test failures.
             if _operation_mode in (1, 2, 3) and _checkpoint is None and not _mode3_skip_presets:
                 try:
                     # Load any existing checkpoint to check for resume
                     _cp_test = CheckpointManager()
                     _checkpoint_exists = _cp_test.load()
                     if not _checkpoint_exists:
-                        # No prior checkpoint - create a new one (will be fully initialized later at line 34098)
+                        # No prior checkpoint - create a fully valid checkpoint now so
+                        # checkpoint-status/resume discovery can see it immediately.
+                        _early_mode = {1: "1", 2: "2", 3: "3"}.get(_operation_mode, str(_operation_mode))
                         _checkpoint = CheckpointManager()
+                        _checkpoint.init_run(
+                            mode=_early_mode,
+                            bmc_ips=[],
+                            log_dir="",
+                            config_path=(config_path or ""),
+                        )
                     else:
                         # Reuse the loaded checkpoint
                         _checkpoint = _cp_test
                 except Exception:
-                    # Fallback: create empty checkpoint
+                    # Fallback: create a valid checkpoint skeleton.
+                    _early_mode = {1: "1", 2: "2", 3: "3"}.get(_operation_mode, str(_operation_mode))
                     _checkpoint = CheckpointManager()
+                    with suppress(Exception):
+                        _checkpoint.init_run(
+                            mode=_early_mode,
+                            bmc_ips=[],
+                            log_dir="",
+                            config_path=(config_path or ""),
+                        )
             
             if _operation_mode in (1, 2, 3) and not _mode3_skip_presets:
                 _print_banner("Node pre-config")
