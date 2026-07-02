@@ -3767,12 +3767,25 @@ def select_operation_mode():
                         break
                     print("  Please enter y or N.")
                 _setup_passwordless_ssh = (_ssh_ans == "y")
-                while True:
-                    _nb_ans = input("  Do you want to install a specific version of ONTAP before re-creating the cluster? [y/N]: ").strip().lower()
-                    if _nb_ans in ("y", "n", ""):
-                        break
-                    print("  Please enter y or N.")
-                _netboot_before_reinit = (_nb_ans == "y")
+                if _checkpoint:
+                    _checkpoint.set_selection("setup_passwordless_ssh", _setup_passwordless_ssh)
+                
+                # Check checkpoint for saved netboot_before_reinit preference
+                _saved_nb = _checkpoint.get_selection("netboot_before_reinit") if _checkpoint else None
+                if _saved_nb is not None:
+                    _netboot_before_reinit = _saved_nb
+                    _nb_label = "yes" if _netboot_before_reinit else "no"
+                    print(f"  ℹ️   Resuming with saved preference: netboot before reinit = {_nb_label}")
+                else:
+                    while True:
+                        _nb_ans = input("  Do you want to install a specific version of ONTAP before re-creating the cluster? [y/N]: ").strip().lower()
+                        if _nb_ans in ("y", "n", ""):
+                            break
+                        print("  Please enter y or N.")
+                    _netboot_before_reinit = (_nb_ans == "y")
+                    if _checkpoint:
+                        _checkpoint.set_selection("netboot_before_reinit", _netboot_before_reinit)
+
                 if _netboot_before_reinit:
                     print("  ℹ️   Netboot-install will run at LOADER before the cluster reinit.")
                     while True:
@@ -32410,52 +32423,95 @@ def main():
             if _operation_mode in (1, 3) and not _mode3_skip_presets:
                 _print_banner("Node pre-config")
                 print("\n  ℹ️   Physical zeroing can help ensure consistency in throughput results.")
-                try:
-                    while True:
-                        _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
-                        if _pz_ans in ("y", "n", ""):
-                           break
-                        print("  Please enter y or N.")
-                except (EOFError, KeyboardInterrupt):
-                    _pz_ans = ""
-                _physical_zeroing = (_pz_ans == "y")
+                
+                # Check checkpoint for saved physical_zeroing preference
+                _saved_pz = _checkpoint.get_selection("physical_zeroing") if _checkpoint else None
+                if _saved_pz is not None:
+                    _physical_zeroing = _saved_pz
+                    _pz_label = "yes" if _physical_zeroing else "no"
+                    print(f"  ℹ️   Resuming with saved preference: physical zeroing = {_pz_label}")
+                else:
+                    try:
+                        while True:
+                            _pz_ans = input("  Do you want to physically zero all disks? (This can add time to the reinit process) [y/N]: ").strip().lower()
+                            if _pz_ans in ("y", "n", ""):
+                               break
+                            print("  Please enter y or N.")
+                    except (EOFError, KeyboardInterrupt):
+                        _pz_ans = ""
+                    _physical_zeroing = (_pz_ans == "y")
+                    if _checkpoint:
+                        _checkpoint.set_selection("physical_zeroing", _physical_zeroing)
+                
                 if _physical_zeroing:
                     print("  ℹ️   Physical disk zeroing enabled (raid.use-physical-zeroing).")
-                try:
-                    while True:
-                        _asup_ans = input("  Do you want to enable AutoSupport after reinit? [Y/n]: ").strip().lower()
-                        if _asup_ans in ("y", "n", ""):
-                            break
-                        print("  Please enter y or n.")
-                except (EOFError, KeyboardInterrupt):
-                    _asup_ans = ""
-                _enable_autosupport = (_asup_ans != "n")
+                
+                # Check checkpoint for saved AutoSupport preference
+                _saved_asup = _checkpoint.get_selection("enable_autosupport") if _checkpoint else None
+                if _saved_asup is not None:
+                    _enable_autosupport = _saved_asup
+                    _asup_label = "yes" if _enable_autosupport else "no"
+                    print(f"  ℹ️   Resuming with saved preference: AutoSupport = {_asup_label}")
+                else:
+                    try:
+                        while True:
+                            _asup_ans = input("  Do you want to enable AutoSupport after reinit? [Y/n]: ").strip().lower()
+                            if _asup_ans in ("y", "n", ""):
+                                break
+                            print("  Please enter y or n.")
+                    except (EOFError, KeyboardInterrupt):
+                        _asup_ans = ""
+                    _enable_autosupport = (_asup_ans != "n")
+                    if _checkpoint:
+                        _checkpoint.set_selection("enable_autosupport", _enable_autosupport)
+                
                 if not _enable_autosupport:
                     print("  ℹ️   AutoSupport will be disabled (will respond 'no' to AutoSupport prompt).")
+                
                 if _diag_mode:
                     _diag_bootargs = _load_diag_bootargs()
             elif _operation_mode == 2 and _diag_mode:
                 _diag_bootargs = _load_diag_bootargs()
 
             if _operation_mode in (1, 2, 3) and not _mode3_skip_presets:
-                _fw_ans = _prompt(
-                    "  Do you want to prevent BIOS firmware from updating? [y/N]: ",
-                    "n",
-                ).lower()
-                _prevent_bios_fw_update = (_fw_ans in ("y", "yes"))
+                # Check checkpoint for saved BIOS firmware update prevention preference
+                _saved_fw = _checkpoint.get_selection("prevent_bios_fw_update") if _checkpoint else None
+                if _saved_fw is not None:
+                    _prevent_bios_fw_update = _saved_fw
+                    _fw_label = "yes" if _prevent_bios_fw_update else "no"
+                    print(f"  ℹ️   Resuming with saved preference: BIOS firmware update prevention = {_fw_label}")
+                else:
+                    _fw_ans = _prompt(
+                        "  Do you want to prevent BIOS firmware from updating? [y/N]: ",
+                        "n",
+                    ).lower()
+                    _prevent_bios_fw_update = (_fw_ans in ("y", "yes"))
+                    if _checkpoint:
+                        _checkpoint.set_selection("prevent_bios_fw_update", _prevent_bios_fw_update)
+                
                 if _prevent_bios_fw_update:
                     print("  ℹ️   BIOS firmware auto-update prevention enabled (AUTO_FW_UPDATE false).")
                 else:
                     print("  ℹ️   BIOS firmware auto-update prevention disabled.")
-                try:
-                    while True:
-                        _env_q = input("  Skip LOADER backup/printenv capture? [Y/n]: ").strip().lower()
-                        if _env_q in ("", "y", "yes", "n", "no"):
-                            break
-                        print("  Please enter y or N.")
-                except (EOFError, KeyboardInterrupt):
-                    _env_q = ""
-                _loader_env_stage_enabled = (_env_q in ("n", "no"))
+                
+                # Check checkpoint for saved LOADER env backup preference
+                _saved_env = _checkpoint.get_selection("loader_env_stage_enabled") if _checkpoint else None
+                if _saved_env is not None:
+                    _loader_env_stage_enabled = _saved_env
+                    _env_label = "captured" if _loader_env_stage_enabled else "skipped"
+                    print(f"  ℹ️   Resuming with saved preference: LOADER env backup = {_env_label}")
+                else:
+                    try:
+                        while True:
+                            _env_q = input("  Skip LOADER backup/printenv capture? [Y/n]: ").strip().lower()
+                            if _env_q in ("", "y", "yes", "n", "no"):
+                                break
+                            print("  Please enter y or N.")
+                    except (EOFError, KeyboardInterrupt):
+                        _env_q = ""
+                    _loader_env_stage_enabled = (_env_q in ("n", "no"))
+                    if _checkpoint:
+                        _checkpoint.set_selection("loader_env_stage_enabled", _loader_env_stage_enabled)
 
             # License: collect key(s) or validate the license file path now, before
             # the BMC session starts, so the operator can fix issues early.
