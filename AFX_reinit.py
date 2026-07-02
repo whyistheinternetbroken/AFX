@@ -27292,6 +27292,15 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     handle_loader_commands(channel, client, sp_host, sp_user, sp_pass)
                     break
 
+                elif "\nlogin:" in output_buffer or output_buffer.lstrip().startswith("login:"):
+                    print(f"\n❌ [{sp_host}] Node has already booted to ONTAP (login: prompt detected).")
+                    print("   Cannot intercept AUTOBOOT. Manual intervention or re-run required.")
+                    _slog(f"[{sp_host}] login: prompt detected during boot monitoring — node booted to ONTAP instead of LOADER",
+                          prefix="ERROR")
+                    if _session_log:
+                        _session_log.set_outcome("FAIL", "node booted to ONTAP during LOADER wait")
+                    break
+
                 if len(output_buffer) > 8192:
                     output_buffer = output_buffer[-4096:]
 
@@ -27329,12 +27338,20 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     channel.send("system console\r")
                     _sc_out, _sc_matched = direct_read_until_any(
                         channel,
-                        ["y/n", "ctrl-d", "loader-", "autoboot", "selection", "::>"],
+                        ["y/n", "ctrl-d", "loader-", "autoboot", "selection", "::>", "login:"],
                         timeout=20,
                     )
                     if _sc_matched and "y/n" in _sc_matched.lower():
                         channel.send("y\r")
                         time.sleep(2)
+                    elif _sc_matched and "login:" in _sc_matched.lower():
+                        print(f"\n❌ [{sp_host}] Node has already booted to ONTAP (login: prompt on reconnect).")
+                        print("   Cannot intercept AUTOBOOT. Manual intervention or re-run required.")
+                        _slog(f"[{sp_host}] login: seen on reconnect — node at ONTAP; aborting boot monitoring",
+                              prefix="ERROR")
+                        if _session_log:
+                            _session_log.set_outcome("FAIL", "node booted to ONTAP during LOADER wait")
+                        break
                     channel.send("\r")
                     output_buffer = ""
                     _last_data = time.monotonic()
