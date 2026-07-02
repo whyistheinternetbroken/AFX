@@ -11967,6 +11967,7 @@ _WIZARD_START_TRIGGERS = [
     "use your web browser to complete cluster setup by accessing",
     "press enter to complete cluster setup",
     "do you want to create a new cluster or join",
+    "cluster management interface port",
 ]
 
 _FATAL_BOOT_INTEGRITY_SIGS = [
@@ -12041,9 +12042,16 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
         else:
             now = time.monotonic()
             if now - last_data > 15 and now - last_nudge > 15:
-                channel.send("\r")
+                _ol = output_lower
+                if ("cluster management interface ip address" in _ol
+                        and "cluster management interface port" not in _ol):
+                    _slog("Cluster mgmt IP prompt seen before port; sending 'back' to reach port prompt")
+                    with suppress(Exception):
+                        channel.send("back\r")
+                else:
+                    channel.send("\r")
+                    _slog("No wizard prompt seen for 15s; sending CR to nudge")
                 last_nudge = now
-                _slog("No wizard prompt seen for 15s; sending CR to nudge")
         time.sleep(0.1)
     return None
 
@@ -21519,163 +21527,176 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _session_log.log("Timeout waiting for wizard start", prefix="ERROR")
             _session_log.set_outcome("FAIL", "wizard start timeout")
         return False
-    # Always send one Enter after wizard-start detection. In fast paths, the
-    # create/join text can be present in residual output while ONTAP still
-    # requires Enter to continue from the "Otherwise, press Enter..." gate.
-    if "press enter" in _which.lower():
-        print("\n✅ 'Press Enter' prompt detected – sending Enter")
-    else:
-        print("\nℹ️  Sending Enter to advance past any pending wizard gate...")
-    _slog("Sent Enter after wizard-start detection")
-    channel.send("\r")
-    time.sleep(0.5)
+    _skip_create_steps = bool(_which and "cluster management interface port" in _which.lower())
+    if _skip_create_steps:
+        _slog("Wizard already at cluster management port; marking cp_1_7 and skipping create steps")
+        print("\n⏭️ Wizard already at cluster management port; skipping to management interface configuration.")
+        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+        _checkpoint_mark_phase("cp_1_7", node_id=_primary_cp_node, alias_phase="primary_setup_done")
+        _log_path = _session_log.log_file if _session_log else "the log file"
+        print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
+        channel.send(cc["mgmt_port"] + "\r")
+        if _session_log:
+            _session_log.log_sent(cc["mgmt_port"])
+        time.sleep(0.5)
+    if not _skip_create_steps:
+        # Always send one Enter after wizard-start detection. In fast paths, the
+        # create/join text can be present in residual output while ONTAP still
+        # requires Enter to continue from the "Otherwise, press Enter..." gate.
+        if "press enter" in _which.lower():
+            print("\n✅ 'Press Enter' prompt detected – sending Enter")
+        else:
+            print("\nℹ️  Sending Enter to advance past any pending wizard gate...")
+        _slog("Sent Enter after wizard-start detection")
+        channel.send("\r")
+        time.sleep(0.5)
 
-    # ONTAP can occasionally echo/repaint the create/join prompt and ignore the
-    # first answer due to console timing. Keep sending "create" until the
-    # wizard advances to the yes/no confirmation.
-    print("\n⏳ Waiting for create/join prompt and selecting 'create'...")
-    _slog("Waiting for create/join prompt and confirming transition to yes/no")
-    _create_deadline = time.monotonic() + 600
-    _create_sent_attempts = 1
-    _create_ok = False
-    _yes_prompt_seen = False
-    _create_prompt_tokens = (
-        "do you want to create a new cluster or join",
-        "{create, join}",
-        "create or join",
-    )
-    _create_history = str(initial_buf or "").lower()
-    _create_prompt_seen_history = any(_tok in _create_history for _tok in _create_prompt_tokens)
-    if (not _create_prompt_seen_history) and isinstance(sys.stdout, _NodeLogWriter):
-        # Resume runs can start with the create/join prompt already present in
-        # the per-node log before this helper is entered.
-        try:
-            _hist_path = getattr(getattr(sys.stdout, "_nf", None), "name", "")
-            if _hist_path and os.path.exists(_hist_path):
-                with open(_hist_path, "r", encoding="utf-8", errors="replace") as _hf:
-                    _create_history = _hf.read().lower()
-                _create_prompt_seen_history = any(
-                    _tok in _create_history for _tok in _create_prompt_tokens
-                )
-        except Exception:
-            pass
-    # Prime the wizard once immediately after Enter so resume paths that already
-    # printed create/join in buffered console output still advance.
-    channel.send("create\r")
-    if _session_log:
-        _session_log.log_sent("create")
-    time.sleep(0.5)
-    while (not _shutdown_event.is_set()) and (time.monotonic() < _create_deadline):
-        _remaining = max(1, int(_create_deadline - time.monotonic()))
-        _out_cj, _m_cj = direct_read_until_any(
-            channel,
-            [
-                "do you want to create a new cluster or join",
-                "{create, join}",
-                "{yes, no}",
-            ],
-            timeout=min(30, _remaining),
-            node_log=node_log,
-            quiet=bool(node_log),
-            check_bmc_drop=True,
+        # ONTAP can occasionally echo/repaint the create/join prompt and ignore the
+        # first answer due to console timing. Keep sending "create" until the
+        # wizard advances to the yes/no confirmation.
+        print("\n⏳ Waiting for create/join prompt and selecting 'create'...")
+        _slog("Waiting for create/join prompt and confirming transition to yes/no")
+        _create_deadline = time.monotonic() + 600
+        _create_sent_attempts = 1
+        _create_ok = False
+        _yes_prompt_seen = False
+        _create_prompt_tokens = (
+            "do you want to create a new cluster or join",
+            "{create, join}",
+            "create or join",
         )
-        if _shutdown_event.is_set():
-            break
-        _scan_cj = (str(_out_cj or "") + "\n" + str(_m_cj or "")).lower()
-        if _scan_cj.strip():
-            _create_history += "\n" + _scan_cj
-        if any(_tok in _scan_cj for _tok in _create_prompt_tokens):
-            _create_prompt_seen_history = True
-        if "{yes, no}" in _scan_cj:
-            _create_ok = True
-            _yes_prompt_seen = True
-            break
-        if (("create or join" in _scan_cj)
-                or ("create a new cluster or join" in _scan_cj)
-                or ("{create, join}" in _scan_cj)):
+        _create_history = str(initial_buf or "").lower()
+        _create_prompt_seen_history = any(_tok in _create_history for _tok in _create_prompt_tokens)
+        if (not _create_prompt_seen_history) and isinstance(sys.stdout, _NodeLogWriter):
+            # Resume runs can start with the create/join prompt already present in
+            # the per-node log before this helper is entered.
+            try:
+                _hist_path = getattr(getattr(sys.stdout, "_nf", None), "name", "")
+                if _hist_path and os.path.exists(_hist_path):
+                    with open(_hist_path, "r", encoding="utf-8", errors="replace") as _hf:
+                        _create_history = _hf.read().lower()
+                    _create_prompt_seen_history = any(
+                        _tok in _create_history for _tok in _create_prompt_tokens
+                    )
+            except Exception:
+                pass
+        # Prime the wizard once immediately after Enter so resume paths that already
+        # printed create/join in buffered console output still advance.
+        channel.send("create\r")
+        if _session_log:
+            _session_log.log_sent("create")
+        time.sleep(0.5)
+        while (not _shutdown_event.is_set()) and (time.monotonic() < _create_deadline):
+            _remaining = max(1, int(_create_deadline - time.monotonic()))
+            _out_cj, _m_cj = direct_read_until_any(
+                channel,
+                [
+                    "do you want to create a new cluster or join",
+                    "{create, join}",
+                    "{yes, no}",
+                ],
+                timeout=min(30, _remaining),
+                node_log=node_log,
+                quiet=bool(node_log),
+                check_bmc_drop=True,
+            )
+            if _shutdown_event.is_set():
+                break
+            _scan_cj = (str(_out_cj or "") + "\n" + str(_m_cj or "")).lower()
+            if _scan_cj.strip():
+                _create_history += "\n" + _scan_cj
+            if any(_tok in _scan_cj for _tok in _create_prompt_tokens):
+                _create_prompt_seen_history = True
+            if "{yes, no}" in _scan_cj:
+                _create_ok = True
+                _yes_prompt_seen = True
+                break
+            if (("create or join" in _scan_cj)
+                    or ("create a new cluster or join" in _scan_cj)
+                    or ("{create, join}" in _scan_cj)):
+                _create_sent_attempts += 1
+                channel.send("create\r")
+                if _session_log:
+                    _session_log.log_sent("create")
+                time.sleep(0.5)
+                continue
+            # No create/join/yes-no match in this read window. If we have never seen
+            # the prompt signature in the accumulated history, nudge with Enter so
+            # ONTAP reprints it; otherwise resend create to advance.
+            if not _create_prompt_seen_history:
+                channel.send("\r")
+                if _session_log:
+                    _session_log.log_sent("<Enter> (nudge create/join prompt)")
+                time.sleep(0.3)
             _create_sent_attempts += 1
             channel.send("create\r")
             if _session_log:
                 _session_log.log_sent("create")
             time.sleep(0.5)
-            continue
-        # No create/join/yes-no match in this read window. If we have never seen
-        # the prompt signature in the accumulated history, nudge with Enter so
-        # ONTAP reprints it; otherwise resend create to advance.
-        if not _create_prompt_seen_history:
-            channel.send("\r")
+        if _shutdown_event.is_set():
+            print("\n👋 Interrupted while waiting for create/join; exiting wizard.")
             if _session_log:
-                _session_log.log_sent("<Enter> (nudge create/join prompt)")
-            time.sleep(0.3)
-        _create_sent_attempts += 1
-        channel.send("create\r")
-        if _session_log:
-            _session_log.log_sent("create")
-        time.sleep(0.5)
-    if _shutdown_event.is_set():
-        print("\n👋 Interrupted while waiting for create/join; exiting wizard.")
-        if _session_log:
-            _session_log.log("Interrupted while waiting for create/join", prefix="WARN")
-            _session_log.set_outcome("FAIL", "user interrupted during create/join wait")
-        return False
-    if not _create_ok:
-        print("\n❌ Timed out advancing past create/join prompt.")
-        if _session_log:
-            _session_log.log(
-                f"Wizard did not advance past create/join prompt after {_create_sent_attempts} create attempt(s)",
-                prefix="ERROR",
-            )
-            _session_log.set_outcome("FAIL", "wizard create/join transition timeout")
-        return False
-    if _yes_prompt_seen:
-        channel.send("yes\r")
-        if _session_log:
-            _session_log.log_sent("yes")
-        time.sleep(0.5)
-    else:
-        _wait_and_send(channel, "{yes, no}", "yes",
-                       "Yes/no confirmation after create -> yes",
-                       timeout=600, node_log=node_log, quiet=bool(node_log))
-    _wait_and_send(channel, "enter the cluster administrator", cc["admin_password"],
-                   "Cluster administrator password", timeout=600,
-                   hide_in_log=True, node_log=node_log, quiet=bool(node_log))
-    _wait_and_send(channel, "retype the password", cc["admin_password"],
-                   "Retype cluster administrator password", timeout=600,
-                   hide_in_log=True, node_log=node_log, quiet=bool(node_log))
-    _wait_and_send(channel, "enter the cluster name", cc["name"],
-                   f"Cluster name -> {cc['name']}", timeout=600,
-                   node_log=node_log, quiet=bool(node_log))
+                _session_log.log("Interrupted while waiting for create/join", prefix="WARN")
+                _session_log.set_outcome("FAIL", "user interrupted during create/join wait")
+            return False
+        if not _create_ok:
+            print("\n❌ Timed out advancing past create/join prompt.")
+            if _session_log:
+                _session_log.log(
+                    f"Wizard did not advance past create/join prompt after {_create_sent_attempts} create attempt(s)",
+                    prefix="ERROR",
+                )
+                _session_log.set_outcome("FAIL", "wizard create/join transition timeout")
+            return False
+        if _yes_prompt_seen:
+            channel.send("yes\r")
+            if _session_log:
+                _session_log.log_sent("yes")
+            time.sleep(0.5)
+        else:
+            _wait_and_send(channel, "{yes, no}", "yes",
+                           "Yes/no confirmation after create -> yes",
+                           timeout=600, node_log=node_log, quiet=bool(node_log))
+        _wait_and_send(channel, "enter the cluster administrator", cc["admin_password"],
+                       "Cluster administrator password", timeout=600,
+                       hide_in_log=True, node_log=node_log, quiet=bool(node_log))
+        _wait_and_send(channel, "retype the password", cc["admin_password"],
+                       "Retype cluster administrator password", timeout=600,
+                       hide_in_log=True, node_log=node_log, quiet=bool(node_log))
+        _wait_and_send(channel, "enter the cluster name", cc["name"],
+                       f"Cluster name -> {cc['name']}", timeout=600,
+                       node_log=node_log, quiet=bool(node_log))
 
-    # After the cluster name is submitted, ONTAP begins the real cluster-create
-    # work immediately. Mark cp_1_7 first so an exit-after-checkpoint run stops
-    # before the long "waiting for cluster to form" phase.
-    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
-    _checkpoint_mark_phase("cp_1_7", node_id=_primary_cp_node, alias_phase="primary_setup_done")
-    print(
-        "\n⏳ Cluster create started. Waiting for ONTAP to form the cluster "
-        "and reach post-create prompts..."
-    )
-    _slog("Cluster create started — waiting for additional license key prompt")
-    _create_wait_done = threading.Event()
-    _create_wait_t0 = time.monotonic()
-    def _create_wait_reporter(_ev=_create_wait_done, _t0=_create_wait_t0):
-        while not _ev.wait(60):
-            _elapsed = int(time.monotonic() - _t0)
-            print(f"   ⏳ Cluster creation still in progress... ({_elapsed}s elapsed)")
-    threading.Thread(target=_create_wait_reporter, daemon=True).start()
-    _wait_and_send(channel, "enter an additional license key", "",
-                   "Additional license key -> Enter", timeout=1800,
-                   quiet=True, node_log=node_log)
-    _create_wait_done.set()
-    _log_path = _session_log.log_file if _session_log else "the log file"
-    print(
-        "\n✅ Cluster create reached post-create wizard prompts. "
-        "Continuing management network configuration..."
-    )
-    print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
-    _wait_and_send(channel, "cluster management interface port", cc["mgmt_port"],
-                   f"Cluster mgmt port -> {cc['mgmt_port']}", timeout=900,
-                   node_log=node_log, quiet=bool(node_log))
+        # After the cluster name is submitted, ONTAP begins the real cluster-create
+        # work immediately. Mark cp_1_7 first so an exit-after-checkpoint run stops
+        # before the long "waiting for cluster to form" phase.
+        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+        _checkpoint_mark_phase("cp_1_7", node_id=_primary_cp_node, alias_phase="primary_setup_done")
+        print(
+            "\n⏳ Cluster create started. Waiting for ONTAP to form the cluster "
+            "and reach post-create prompts..."
+        )
+        _slog("Cluster create started — waiting for additional license key prompt")
+        _create_wait_done = threading.Event()
+        _create_wait_t0 = time.monotonic()
+        def _create_wait_reporter(_ev=_create_wait_done, _t0=_create_wait_t0):
+            while not _ev.wait(60):
+                _elapsed = int(time.monotonic() - _t0)
+                print(f"   ⏳ Cluster creation still in progress... ({_elapsed}s elapsed)")
+        threading.Thread(target=_create_wait_reporter, daemon=True).start()
+        _wait_and_send(channel, "enter an additional license key", "",
+                       "Additional license key -> Enter", timeout=1800,
+                       quiet=True, node_log=node_log)
+        _create_wait_done.set()
+        _log_path = _session_log.log_file if _session_log else "the log file"
+        print(
+            "\n✅ Cluster create reached post-create wizard prompts. "
+            "Continuing management network configuration..."
+        )
+        print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
+        _wait_and_send(channel, "cluster management interface port", cc["mgmt_port"],
+                       f"Cluster mgmt port -> {cc['mgmt_port']}", timeout=900,
+                       node_log=node_log, quiet=bool(node_log))
     _wait_and_send(channel, "cluster management interface ip address", cc["mgmt_ip"],
                    f"Cluster mgmt IP -> {cc['mgmt_ip']}", timeout=600,
                    node_log=node_log, quiet=bool(node_log))
