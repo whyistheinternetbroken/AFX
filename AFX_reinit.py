@@ -11842,6 +11842,7 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
 
         # Wait until the trigger appears in the accumulated buffer.
         _trigger_start = time.monotonic()
+        _asup_info_enter_sent = False
         while trigger_lower not in _buf.lower():
             if time.monotonic() - _trigger_start > _overall_timeout:
                 break
@@ -11852,6 +11853,15 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                     _par_write(node_log, chunk)
                 if _session_log:
                     _session_log.log_console(chunk)
+            if not _asup_info_enter_sent:
+                _buf_l = _buf.lower()
+                if ("enabling autosupport can significantly speed problem determination" in _buf_l
+                        or "this system will send event messages" in _buf_l):
+                    time.sleep(0.5)
+                    _slog("AutoSupport info screen detected in node-mgmt wait; sending Enter to advance")
+                    with suppress(Exception):
+                        channel.send("\r")
+                    _asup_info_enter_sent = True
             time.sleep(0.1)
 
         # Prompt detected – resolve the value.
