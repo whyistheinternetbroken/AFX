@@ -1434,6 +1434,23 @@ def _clear_checkpoint_test_config() -> None:
     _pending_checkpoint_test_failure = None
 
 
+def _checkpoint_phase_description(phase: str) -> str:
+    """Return the human-readable description for a checkpoint phase ID."""
+    _phase = str(phase or "").strip()
+    if not _phase:
+        return ""
+    _mode_options = list(_CHECKPOINT_TEST_OPTIONS.get(_operation_mode) or [])
+    for _cp_id, _label in _mode_options:
+        if _cp_id == _phase:
+            return _label
+    # Fallback for cross-mode/common phases when mode context is unavailable.
+    for _opts in _CHECKPOINT_TEST_OPTIONS.values():
+        for _cp_id, _label in _opts:
+            if _cp_id == _phase:
+                return _label
+    return ""
+
+
 def _checkpoint_test_mode_name(operation_mode: int) -> str:
     return {
         1: "1",
@@ -1539,8 +1556,10 @@ def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = 
 
         if marked:
             _cp_label = f" [{node_id}]" if node_id else ""
-            print(f"  ✅ Checkpoint created{_cp_label}: {phase}")
-            _slog(f"Checkpoint marked: {phase}{_cp_label}", prefix="INFO")
+            _cp_desc = _checkpoint_phase_description(phase)
+            _cp_suffix = f" — {_cp_desc}" if _cp_desc else ""
+            print(f"  ✅ Checkpoint created{_cp_label}: {phase}{_cp_suffix}")
+            _slog(f"Checkpoint marked: {phase}{_cp_label}{_cp_suffix}", prefix="INFO")
             _maybe_inject_checkpoint_failure(phase, node_id)
     except _InjectedCheckpointFailure as _e:
         # Test failure injection: exit gracefully to menu instead of crashing
@@ -2018,8 +2037,21 @@ def _select_config_path_interactive(detected, indent="  ", header_emoji="📄"):
     if len(detected) == 1:
         found = detected[0]
         print(f"\n{pad}{header_emoji} Found config file: {found}")
+        _saved_pref = None
+        _cp_pref = CheckpointManager()
+        if _cp_pref.load():
+            _saved_pref = _cp_pref.get_param("use_detected_config")
+        if _saved_pref is True:
+            print(f"{pad}ℹ️  Using saved checkpoint choice: yes")
+            return found
+        if _saved_pref is False:
+            print(f"{pad}ℹ️  Using saved checkpoint choice: no")
+            return None
         use_it = _prompt(f"{pad}Use this config file? [Y/n]: ", "y").lower()
-        return found if use_it in ("", "y", "yes") else None
+        _use_config = use_it in ("", "y", "yes")
+        if _cp_pref.load():
+            _cp_pref.set_param("use_detected_config", _use_config)
+        return found if _use_config else None
 
     print(f"\n{pad}{header_emoji} Found multiple config files:")
     for i, p in enumerate(detected, 1):
@@ -3718,31 +3750,33 @@ def _checkpoint_resume_stage_label(cp) -> str:
     if not cp:
         return "Unknown stage"
     _mode = str(getattr(cp, "mode", "") or "").strip().lower()
+
+    def _mode_to_test_key(_raw_mode: str):
+        if _raw_mode.startswith("4.2"):
+            return 42
+        if _raw_mode.startswith("4.1"):
+            return 41
+        if _raw_mode.startswith("4.3"):
+            return 43
+        if _raw_mode == "3":
+            return 3
+        if _raw_mode == "2":
+            return 2
+        if _raw_mode == "1":
+            return 1
+        return None
+
+    _mode_key = _mode_to_test_key(_mode)
+    _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
+    for _cp_id, _cp_desc in _checkpoint_seq:
+        if not cp.is_done(_cp_id):
+            return _cp_desc
+
+    # If all known checkpoints for this mode are done, keep mode-specific
+    # context for clarity in the menu prompt.
     if _mode.startswith("4.2"):
         return _describe_4b_resume_stage(cp)
-    if _mode == "2":
-        if cp.is_done("node_joined"):
-            return "Node already joined to cluster (finalization stage)."
-        if cp.is_done("node_format_done"):
-            return "Post-format node join workflow."
-        if cp.is_done("node_install_done"):
-            return "Post-install formatting/join workflow."
-        return "Node add workflow startup."
-    if _mode == "1":
-        if cp.is_done("primary_setup_done"):
-            return "Primary cluster already created (finalization stage)."
-        if cp.is_done("primary_format_done"):
-            return "Post-format cluster setup wizard."
-        if cp.is_done("primary_install_done"):
-            return "Post-install format/setup workflow."
-        return "Initial cluster creation startup."
-    if _mode == "3":
-        if cp.is_done("option3_complete") or cp.is_done("cluster_formed"):
-            return "Cluster create complete; peer add finalization."
-        if cp.is_done("primary_setup_done"):
-            return "Peer add workflow after primary setup."
-        return "End-to-end auto initialize startup."
-    return "Resume from last saved checkpoint state."
+    return "All checkpoints completed."
 
 
 def _list_completed_checkpoints(cp) -> str:
@@ -9442,6 +9476,12 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
             f"Phase 2: Waiting for boot menu up to {timeout}s "
             f"(will auto-select option {option} – {description})"
         )
+    # Always nudge the console once up-front so an already-displayed boot
+    # menu prompt is re-printed and detectable immediately.
+    with suppress(Exception):
+        channel.send("\r")
+    with suppress(Exception):
+        channel.send("\r")
 
     menu_signatures = [
         "selection (1-",   # "Selection (1-9)?" / "Selection (1-11)?"
@@ -9874,6 +9914,42 @@ def _recover_boot_menu_from_loader(channel, *, node_label="", node_log=None, sel
     return False, _looks_like_boot_in_progress((_out or "") + (_out3 or ""))
 
 
+def _checkpoint_boot_dna_is_verified(node_label: str = "") -> bool:
+    """Return True when checkpoint metadata says this node already passed DNA check."""
+    if not _checkpoint:
+        return False
+    try:
+        _verified = _checkpoint.get_param("boot_dna_verified_nodes", {}) or {}
+        if not isinstance(_verified, dict):
+            return False
+        _key = str(node_label or "").strip() or "primary"
+        _entry = _verified.get(_key)
+        if isinstance(_entry, dict):
+            return bool(_entry.get("verified"))
+        return bool(_entry)
+    except Exception:
+        return False
+
+
+def _checkpoint_mark_boot_dna_verified(node_label: str = "", dna_value: str = "") -> None:
+    """Persist successful boot DNA verification in checkpoint metadata."""
+    if not _checkpoint:
+        return
+    try:
+        _verified = _checkpoint.get_param("boot_dna_verified_nodes", {}) or {}
+        if not isinstance(_verified, dict):
+            _verified = {}
+        _key = str(node_label or "").strip() or "primary"
+        _verified[_key] = {
+            "verified": True,
+            "dna_value": str(dna_value or "").strip(),
+            "ts": datetime.now().isoformat(),
+        }
+        _checkpoint.set_param("boot_dna_verified_nodes", _verified)
+    except Exception:
+        pass
+
+
 def _verify_boot_dna(channel, node_log=None, node_label=""):
     """Run 'printenv' at the LOADER prompt, save raw output in configs/, and
     confirm bootarg.init.dna is the supported value.
@@ -9925,6 +10001,7 @@ def _verify_boot_dna(channel, node_log=None, node_label=""):
     if dna_value == _REQUIRED_BOOT_DNA:
         print(f"   ✅ Boot DNA check passed: bootarg.init.dna={dna_value}")
         _slog(f"Boot DNA verified: {dna_value}")
+        _checkpoint_mark_boot_dna_verified(node_label=node_label, dna_value=dna_value)
         return True
 
     _print_banner("❌ UNSUPPORTED BOOT DNA")
@@ -11961,10 +12038,24 @@ def _collect_license_config(ctx):
     # don't clobber fields (e.g. _operation_mode, _auto_setup) that legacy
     # code updated since the ctx was last snapshotted.
     ctx.refresh_from_globals()
+    global _checkpoint
+
     _print_banner("\U0001f4dc ONTAP License")
-    ans = _prompt(
-        "\n  Add an ONTAP license (key or file)? [y/N]: "
-    , "n").lower()
+    _saved_license_pref = None
+    if _checkpoint:
+        _saved_license_pref = _checkpoint.get_param("add_ontap_license", None)
+    if _saved_license_pref in (True, False):
+        ans = "y" if _saved_license_pref else "n"
+        print(
+            f"\n  ℹ️  Using saved checkpoint choice for license setup: "
+            f"{'yes' if _saved_license_pref else 'no'}"
+        )
+    else:
+        ans = _prompt(
+            "\n  Add an ONTAP license (key or file)? [y/N]: "
+        , "n").lower()
+        if _checkpoint:
+            _checkpoint.set_param("add_ontap_license", ans in ("y", "yes"))
     if ans not in ("y", "yes"):
         return
 
@@ -25808,8 +25899,12 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
         direct_send_and_wait(channel, "set-defaults", "LOADER-",
                              timeout=15, node_log=_env_log)
 
-        _slog("bootarg.init.dna verification required; running automatically")
-        if not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
+        _dna_already_verified = _checkpoint_boot_dna_is_verified(label)
+        if _dna_already_verified:
+            _slog(f"[{label}] bootarg.init.dna already verified in checkpoint; skipping re-check")
+        else:
+            _slog("bootarg.init.dna verification required; running automatically")
+        if (not _dna_already_verified) and (not _verify_boot_dna(channel, node_log=_env_log, node_label=label)):
             _mark_fatal_boot_dna(label)
             if _close_env_log and _env_log:
                 with suppress(Exception):
@@ -25839,8 +25934,12 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
                          timeout=15, node_log=_env_log)
 
     # Verify boot DNA (required in all modes).
-    _slog("bootarg.init.dna verification required; running automatically")
-    if not _verify_boot_dna(channel, node_log=_env_log, node_label=label):
+    _dna_already_verified = _checkpoint_boot_dna_is_verified(label)
+    if _dna_already_verified:
+        _slog(f"[{label}] bootarg.init.dna already verified in checkpoint; skipping re-check")
+    else:
+        _slog("bootarg.init.dna verification required; running automatically")
+    if (not _dna_already_verified) and (not _verify_boot_dna(channel, node_log=_env_log, node_label=label)):
         _mark_fatal_boot_dna(label)
         if _close_env_log and _env_log:
             with suppress(Exception):
@@ -25965,7 +26064,8 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
 
 
 
-def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
+def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
+                           resume_skip_loader_commands=False):
     global _reinit_label, _bootarg_check_enabled, _loader_env_stage_enabled
     global _netboot_pkg_preselected, _mode3_peer_netboot_done
     _reinit_label = sp_host or _reinit_label
@@ -25978,12 +26078,15 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
 
     drain_channel(channel, seconds=1)
 
-    # Send a bare CR to provoke a fresh LOADER prompt echo; the calling loop
-    # already confirmed LOADER is active, so this should respond instantly.
-    channel.send("\r")
-    output = direct_read_until(channel, "LOADER-", timeout=15)
-    if "loader-" not in output.lower():
-        print("âš ï¸  No LOADER prompt seen, attempting commands anyway...")
+    if not resume_skip_loader_commands:
+        # Send a bare CR to provoke a fresh LOADER prompt echo; the calling loop
+        # already confirmed LOADER is active, so this should respond instantly.
+        channel.send("\r")
+        output = direct_read_until(channel, "LOADER-", timeout=15)
+        if "loader-" not in output.lower():
+            print("âš ï¸  No LOADER prompt seen, attempting commands anyway...")
+    else:
+        _slog("Checkpoint resume: skipping LOADER prompt probe")
     if _operation_mode == 2:
         _checkpoint_mark_phase("cp_2_1")
 
@@ -26020,50 +26123,57 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass):
     _ld_log_dir = (_session_log.log_dir
                    if _session_log and hasattr(_session_log, "log_dir")
                    else os.getcwd())
-    _extra_setvars = _loader_env_pre_post_prompt(
-        channel, sp_host or "primary", _ld_log_dir, interactive=True
-    )
+    if resume_skip_loader_commands:
+        _extra_setvars = []
+    else:
+        _extra_setvars = _loader_env_pre_post_prompt(
+            channel, sp_host or "primary", _ld_log_dir, interactive=True
+        )
 
-    for command in loader_commands:
-        # set-defaults was already run inside _loader_env_pre_post_prompt;
-        # inject any restored env vars at this point and skip the command.
-        if command == "set-defaults":
-            for _ev in _extra_setvars:
-                _slog(f"Restoring env var: setenv {_ev}")
-                direct_send_and_wait(channel, f"setenv {_ev}", "LOADER-", timeout=15)
-            continue
-        # When netboot-before-reinit is active, skip boot_ontap menu – the
-        # node will boot into the menu naturally after the netboot install.
-        if command == "boot_ontap menu" and _netboot_before_reinit and _operation_mode != 3:
-            _slog("Skipping 'boot_ontap menu' – netboot will handle boot")
-            print("\n  ℹ️  Skipping 'boot_ontap menu' (netboot-install requested).")
-            continue
-        _slog(f"Running LOADER command: {command}")
-        if command != "boot_ontap menu":
-            output = direct_send_and_wait(channel, command, "LOADER-", timeout=15)
-            if "loader-" not in output.lower():
-                print(f"⚠️  No LOADER prompt after '{command}', continuing anyway...")
-            # Check for LOADER errors on diag bootarg setenv commands.
-            if command.startswith("setenv bootarg."):
-                if any(tok in output for tok in ("%", "Error", "error", "invalid", "unknown", "Unknown")):
-                    print(f"\n  ❌ LOADER error after '{command}':")
-                    print(f"     {output.strip()!r}")
-                    if _session_log:
-                        _session_log.log(f"LOADER error after '{command}': {output.strip()!r}",
-                                         prefix="ERROR")
-                        _session_log.set_outcome("FAIL", f"LOADER error on {command}")
-                        try:
-                            _session_log.close()
-                        except Exception:
-                            pass
-                    sys.exit(1)
-        else:
-            print(f"\n⏳ {_pfx}Booting node to boot menu to clean system configuration...{_elapsed_str()}")
-            _slog("Booting node to boot menu to clean system configuration")
-            channel.send(command + "\r")
-            if _session_log:
-                _session_log.log_sent(command)
-            time.sleep(1)
+    if resume_skip_loader_commands:
+        print(f"\n⏭️ {_pfx}Checkpoint indicates boot_ontap menu already issued; skipping LOADER command replay.{_elapsed_str()}")
+        _slog("Checkpoint resume: skipped LOADER command replay (cp_1_2 already complete)")
+    else:
+        for command in loader_commands:
+            # set-defaults was already run inside _loader_env_pre_post_prompt;
+            # inject any restored env vars at this point and skip the command.
+            if command == "set-defaults":
+                for _ev in _extra_setvars:
+                    _slog(f"Restoring env var: setenv {_ev}")
+                    direct_send_and_wait(channel, f"setenv {_ev}", "LOADER-", timeout=15)
+                continue
+            # When netboot-before-reinit is active, skip boot_ontap menu – the
+            # node will boot into the menu naturally after the netboot install.
+            if command == "boot_ontap menu" and _netboot_before_reinit and _operation_mode != 3:
+                _slog("Skipping 'boot_ontap menu' – netboot will handle boot")
+                print("\n  ℹ️  Skipping 'boot_ontap menu' (netboot-install requested).")
+                continue
+            _slog(f"Running LOADER command: {command}")
+            if command != "boot_ontap menu":
+                output = direct_send_and_wait(channel, command, "LOADER-", timeout=15)
+                if "loader-" not in output.lower():
+                    print(f"⚠️  No LOADER prompt after '{command}', continuing anyway...")
+                # Check for LOADER errors on diag bootarg setenv commands.
+                if command.startswith("setenv bootarg."):
+                    if any(tok in output for tok in ("%", "Error", "error", "invalid", "unknown", "Unknown")):
+                        print(f"\n  ❌ LOADER error after '{command}':")
+                        print(f"     {output.strip()!r}")
+                        if _session_log:
+                            _session_log.log(f"LOADER error after '{command}': {output.strip()!r}",
+                                             prefix="ERROR")
+                            _session_log.set_outcome("FAIL", f"LOADER error on {command}")
+                            try:
+                                _session_log.close()
+                            except Exception:
+                                pass
+                        sys.exit(1)
+            else:
+                print(f"\n⏳ {_pfx}Booting node to boot menu to clean system configuration...{_elapsed_str()}")
+                _slog("Booting node to boot menu to clean system configuration")
+                channel.send(command + "\r")
+                if _session_log:
+                    _session_log.log_sent(command)
+                time.sleep(1)
 
     if _operation_mode in (1, 3):
         _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
@@ -34380,11 +34490,18 @@ def main():
              
             # Check if checkpoint 1 is complete (LOADER bootargs already set)
             if _checkpoint and _checkpoint.is_done("cp_1_1"):
+                _cp_1_2_done = _checkpoint.is_done("cp_1_2")
                 _real_stdout.write("\n🔖 Resuming from checkpoint 1 (LOADER bootargs already set).\n")
-                _real_stdout.write("⏭️  Continuing from LOADER commands (boot_ontap menu + boot menu selection)...\n\n")
+                if _cp_1_2_done:
+                    _real_stdout.write("⏭️  boot_ontap menu already issued; continuing at boot menu selection...\n\n")
+                else:
+                    _real_stdout.write("⏭️  Continuing from LOADER commands (boot_ontap menu + boot menu selection)...\n\n")
                 _real_stdout.flush()
-                _session_log.log("Checkpoint 1 complete; bypassing monitor and resuming LOADER command flow")
-                handle_loader_commands(channel, client, sp_host, sp_user, sp_pass)
+                _session_log.log("Checkpoint 1 complete; bypassing monitor and resuming from saved stage")
+                handle_loader_commands(
+                    channel, client, sp_host, sp_user, sp_pass,
+                    resume_skip_loader_commands=_cp_1_2_done,
+                )
             else:
                 monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass)
 
