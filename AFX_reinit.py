@@ -1369,6 +1369,9 @@ def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = 
                     marked = True
 
         if marked:
+            _cp_label = f" [{node_id}]" if node_id else ""
+            print(f"  ✅ Checkpoint created{_cp_label}: {phase}")
+            _slog(f"Checkpoint marked: {phase}{_cp_label}", prefix="INFO")
             _maybe_inject_checkpoint_failure(phase, node_id)
     except _InjectedCheckpointFailure as _e:
         # Test failure injection: exit gracefully to menu instead of crashing
@@ -3695,6 +3698,8 @@ def select_operation_mode():
                         print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 1.")
                         return 1, True, False
                     print("  ⚠️  Checkpoint mode is not auto-routable from the start menu.")
+                # Checkpoint was not resumed — print newline before menu selection prompt
+                print("")
         choice = input("❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.): ").strip().lower()
 
         if choice == "1":
