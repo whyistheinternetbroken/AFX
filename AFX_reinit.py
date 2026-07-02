@@ -11859,7 +11859,20 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                     _session_log.log_console(chunk)
             _buf_l = _buf.lower()
             if not _asup_prompt_answered and "type yes to confirm and continue" in _buf_l:
-                _asup_resp = _resolve_asup_response(prompt_if_missing=True)
+                global _enable_autosupport
+                _asup_saved = None
+                if _checkpoint:
+                    with suppress(Exception):
+                        _asup_saved = _checkpoint.get_selection("enable_autosupport")
+                    if _asup_saved is None:
+                        with suppress(Exception):
+                            _asup_saved = _checkpoint.get_param("enable_autosupport", None)
+                if _asup_saved is not None:
+                    _enable_autosupport = bool(_asup_saved)
+                else:
+                    _ans = _prompt("  AutoSupport confirmation detected. Enable AutoSupport? [Y/n]: ", "y").strip().lower()
+                    _enable_autosupport = (_ans not in ("n", "no"))
+                _asup_resp = "yes" if _enable_autosupport else "no"
                 _slog(f"AutoSupport confirmation prompt detected in node-mgmt wait; answering '{_asup_resp}'")
                 print(f"  🤖 AutoSupport confirmation prompt detected; answering '{_asup_resp}'.")
                 time.sleep(0.3)
