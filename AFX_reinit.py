@@ -21647,15 +21647,15 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                    node_log=node_log, quiet=bool(node_log))
 
     # After the cluster name is submitted, ONTAP begins the real cluster-create
-    # work immediately. Use explicit progress messages (rather than a dot-only
-    # ticker) so the console timing reflects when creation actually started.
+    # work immediately. Mark cp_1_7 first so an exit-after-checkpoint run stops
+    # before the long “waiting for cluster to form” phase.
+    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else “”
+    _checkpoint_mark_phase(“cp_1_7”, node_id=_primary_cp_node, alias_phase=”primary_setup_done”)
     print(
-        "\n⏳ Cluster create started. Waiting for ONTAP to form the cluster "
-        "and reach post-create prompts..."
+        “\n⏳ Cluster create started. Waiting for ONTAP to form the cluster “
+        “and reach post-create prompts...”
     )
-    _slog("Cluster create started â€“ waiting for additional license key prompt")
-    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
-    _checkpoint_mark_phase("cp_1_7", node_id=_primary_cp_node, alias_phase="primary_setup_done")
+    _slog(“Cluster create started — waiting for additional license key prompt”)
     _create_wait_done = threading.Event()
     _create_wait_t0 = time.monotonic()
     def _create_wait_reporter(_ev=_create_wait_done, _t0=_create_wait_t0):
@@ -25845,6 +25845,8 @@ def _wait_for_autosupport_confirmation(channel, *, bmc_host=None, node_log=None,
         "welcome to the cluster setup wizard",
         "node management interface port",
         "node management interface ip address",
+        "cluster management interface port",
+        "cluster management interface ip address",
     ]
     while time.monotonic() < _deadline:
         _ch = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
@@ -25874,14 +25876,23 @@ def _wait_for_autosupport_confirmation(channel, *, bmc_host=None, node_log=None,
             if _session_log:
                 _session_log.log_sent(_resp)
             return _resp
+        if ("cluster management interface ip address" in _combined
+                and "cluster management interface port" not in _combined):
+            _slog("Cluster management IP prompt appeared before port prompt; sending 'back'")
+            with suppress(Exception):
+                channel.send("back\r")
+            _scan = ""
+            continue
         if ("node management interface port" in _combined
-                or "node management interface ip address" in _combined):
-            _slog("AutoSupport confirmation already passed; node-management prompts detected")
+                or "node management interface ip address" in _combined
+                or "cluster management interface port" in _combined
+                or "cluster management interface ip address" in _combined):
+            _slog("AutoSupport confirmation already passed; node/cluster-management prompts detected")
             return ""
         if not _out and not _matched:
-            _slog("Console silent; sending Tab to elicit current state")
+            _slog("Console silent; sending Enter to elicit current state")
             with suppress(Exception):
-                channel.send("\t")
+                channel.send("\r")
         _now = time.monotonic()
         if _saw_console_activity and (_now - _last_boot_msg) >= 60:
             print(f"   ⏳ {_pfx}node still booting...{_elapsed_str()}")
@@ -25965,8 +25976,20 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         or (_operation_mode in (1, 3)
             and _checkpoint_phase_done("cp_1_5", node_id=_primary_cp_node))
     )
+    _resume_cp_1_6 = bool(
+        _operation_mode in (1, 3)
+        and _checkpoint_phase_done("cp_1_6", node_id=_primary_cp_node)
+    )
 
-    if _resume_cp_1_5:
+    if _resume_cp_1_6:
+        print(
+            f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates node management complete; "
+            "resuming at cluster setup wizard."
+        )
+        _slog("cp_1_6 resume: skipping boot-menu wait, option-4 confirmations, AutoSupport, and node management")
+        _second_bootmenu_visible = True
+        _option9_progress_confirmed = True
+    elif _resume_cp_1_5:
         print(
             f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option 4 completion was reached; "
             "resuming at AutoSupport confirmation."
@@ -26343,47 +26366,50 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         _cleanup_known_hosts_after_boot_option(bmc_host or "primary", "4", log=_session_log)
         time.sleep(2)
 
-    # 3) Yes confirmations.
-    if _resume_cp_1_5:
-        _asup_answer = _wait_for_autosupport_confirmation(
-            channel,
-            bmc_host=bmc_host,
-            node_log=_boot_log,
-            reconnect_ctx=_rc,
-        )
-        if _asup_answer is None:
-            if _session_log:
-                _session_log.end_phase(outcome="FAIL", note="AutoSupport confirmation prompt timeout")
-            _close_boot_log()
-            return
-        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
-        _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node)
-        _run_optional_checkpoint_status_checks()
+    # 3) Yes confirmations + 4) Node management config.
+    if _resume_cp_1_6:
+        _mgmt_residual = ""
     else:
-        _auto_answer_disk_erase_prompts(channel, label=bmc_host or "",
-                                        is_node_add=False,
-                                        expect_option4_unjoin_warning=_resume_cp_1_4)
-        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
-        _checkpoint_mark_phase("cp_1_5", node_id=_primary_cp_node, alias_phase="primary_bootmenu_done")
-        _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node)
-        _run_optional_checkpoint_status_checks()
+        if _resume_cp_1_5:
+            _asup_answer = _wait_for_autosupport_confirmation(
+                channel,
+                bmc_host=bmc_host,
+                node_log=_boot_log,
+                reconnect_ctx=_rc,
+            )
+            if _asup_answer is None:
+                if _session_log:
+                    _session_log.end_phase(outcome="FAIL", note="AutoSupport confirmation prompt timeout")
+                _close_boot_log()
+                return
+            _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+            _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node)
+            _run_optional_checkpoint_status_checks()
+        else:
+            _auto_answer_disk_erase_prompts(channel, label=bmc_host or "",
+                                            is_node_add=False,
+                                            expect_option4_unjoin_warning=_resume_cp_1_4)
+            _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+            _checkpoint_mark_phase("cp_1_5", node_id=_primary_cp_node, alias_phase="primary_bootmenu_done")
+            _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node)
+            _run_optional_checkpoint_status_checks()
 
-    # 4) Node management config.
-    cfg = _resolve_node_mgmt_config(bmc_host)
-    print("\n📋 Node management config to apply:")
-    for k in ("port", "ip", "netmask", "gateway"):
-        v = cfg.get(k)
-        print(f"📋   {k:<8} = {v if v else '(prompt manually)'}")
-    _slog(f"Node mgmt config to use: {cfg}")
-    _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
-    if _checkpoint:
-        try:
-            _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node, alias_phase="primary_node_mgmt_done")
-            _slog("checkpoint: primary_node_mgmt_done saved")
-        except _InjectedCheckpointFailure:
-            raise
-        except Exception:
-            pass
+        # 4) Node management config.
+        cfg = _resolve_node_mgmt_config(bmc_host)
+        print("\n📋 Node management config to apply:")
+        for k in ("port", "ip", "netmask", "gateway"):
+            v = cfg.get(k)
+            print(f"📋   {k:<8} = {v if v else '(prompt manually)'}")
+        _slog(f"Node mgmt config to use: {cfg}")
+        _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
+        if _checkpoint:
+            try:
+                _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node, alias_phase="primary_node_mgmt_done")
+                _slog("checkpoint: primary_node_mgmt_done saved")
+            except _InjectedCheckpointFailure:
+                raise
+            except Exception:
+                pass
 
     print("\n✅ Mode 1.2 auto-init complete; driving cluster setup wizard...")
     if _session_log:
