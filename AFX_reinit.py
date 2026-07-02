@@ -1370,8 +1370,12 @@ def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = 
 
         if marked:
             _maybe_inject_checkpoint_failure(phase, node_id)
-    except _InjectedCheckpointFailure:
-        raise
+    except _InjectedCheckpointFailure as _e:
+        # Test failure injection: exit gracefully to menu instead of crashing
+        _msg = f"  ↩️  Test checkpoint failure reached - returning to main menu.\n    {_e}"
+        print(f"\n{_msg}")
+        _slog(_msg, prefix="INFO")
+        raise _ReturnToMenu
     except Exception:
         pass
     return marked
