@@ -4800,6 +4800,11 @@ _physical_zeroing = False
 # confirmation prompt ("Type yes to confirm and continue"). When False, responds 'no'.
 _enable_autosupport = True
 
+# Set to True during Boot Menu Selection when ONTAP reports that option 9/9a is
+# not supported on the platform.  The second-boot-menu wait checks this flag to
+# fall back to option 4 instead of looping indefinitely.
+_option9_platform_unsupported = False
+
 # When True (set by --diag flag), enables diagnostic bootarg injection at LOADER.
 _diag_mode = False
 
@@ -9723,6 +9728,18 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 sys.stdout.flush()
             if _session_log:
                 _session_log.log_console(chunk)
+            if "boot menu option 9 or 9a is not supported" in output_lower:
+                global _option9_platform_unsupported
+                if not _option9_platform_unsupported:
+                    _option9_platform_unsupported = True
+                    _screen_status(
+                        f"⚠️  {_pfx}Platform does not support option 9/9a — will fall back to option 4."
+                    )
+                    _slog(
+                        f"[{node_label or 'primary'}] option 9/9a not supported on this platform; "
+                        "setting _option9_platform_unsupported flag",
+                        prefix="WARN",
+                    )
             if _resume_cp_1_2_option9 and "loader-" in output_lower:
                 _screen_status(
                     f"↪️  {_pfx}Resume detected LOADER; issuing 'boot_ontap menu'..."
@@ -26290,7 +26307,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 "boot menu",
             ))
             if _matched_menu and not (_option9_progress_confirmed or _resume_cp_1_3):
-                if "boot menu option 9 or 9a is not supported" in output_lower:
+                if _option9_platform_unsupported:
                     _slog(
                         f"[{bmc_host}] option 9 not supported on this platform; "
                         "falling back to option 4",
@@ -26313,15 +26330,12 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                     "continuing wait to avoid premature cp_1_3",
                     prefix="WARN",
                 )
-                with suppress(Exception):
-                    channel.send("\r")
+                time.sleep(0.1)
                 continue
             found = True
             break
         if not chunk and not matched:
-            _slog(f"[{bmc_host}] boot menu wait: console silent, sending Enter to elicit current state")
-            with suppress(Exception):
-                channel.send("\r")
+            _slog(f"[{bmc_host}] boot menu wait: console silent; waiting for next signal")
         if (not loader_recovery_attempted
                 and time.monotonic() - start >= 600):
             loader_recovery_attempted = True
