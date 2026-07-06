@@ -12192,9 +12192,19 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
     if "welcome to the cluster setup wizard" in _preprobe_m or "welcome to the cluster setup wizard" in _preprobe_l:
         _slog("Option-4 confirmations already complete; cluster setup wizard prompt detected")
         return
-    for _idx, (_trig, _, __) in enumerate(_prompt_sequence):
+    for _idx, (_trig, _resp, __) in enumerate(_prompt_sequence):
         _trig_l = _trig.lower()
-        if _trig_l in _preprobe_m or _trig_l in _preprobe_l:
+        if _trig_l in _preprobe_m:
+            # Pre-probe consumed (matched) this trigger — answer it immediately and advance
+            time.sleep(0.3)
+            channel.send(_resp + "\r")
+            if _session_log:
+                _session_log.log(f"Pre-probe consumed '{_trig}'; auto-answering '{_resp}'")
+                _session_log.log_sent(_resp)
+            _slog(f"Pre-probe consumed '{_trig}'; answered '{_resp}'; starting from next step")
+            _start_idx = _idx + 1
+            break
+        elif _trig_l in _preprobe_l:
             _start_idx = _idx
             break
 
@@ -26224,6 +26234,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     found = False
     loader_recovery_attempted = False
     boot_wait_extension = 0
+    _last_elicit = start
     _post_boot_sigs = [
         "this node may not have been properly unjoined from an existing cluster",
         "zero disks, reset config and install a new file system",
@@ -26248,6 +26259,13 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             except Exception:
                 pass
             last_progress = now
+            _last_elicit = now
+        elif now - _last_elicit >= 30:
+            try:
+                channel.send("\r")
+            except Exception:
+                pass
+            _last_elicit = now
         _remaining = max(1, int(2400 - (time.monotonic() - start)))
         _slice_timeout = min(30, _remaining)
         _ch = (_rc.get("channel") if (_rc and _rc.get("channel") is not None)
@@ -26291,6 +26309,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             if len(output_lower) > 16384:
                 output_lower = output_lower[-8192:]
             last_progress = time.monotonic()
+            _last_elicit = last_progress
         if matched:
             _matched_l = str(matched or "").lower()
             _matched_post_boot = any(_sig in _matched_l for _sig in _post_boot_sigs)
