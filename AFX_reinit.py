@@ -1364,7 +1364,7 @@ class _InjectedCheckpointFailure(RuntimeError):
 _CHECKPOINT_TEST_OPTIONS = {
     1: [
         ("cp_1_1", "LOADER configuration completed"),
-        ("cp_1_2", "boot_ontap menu issued"),
+        ("cp_1_2", "Option 9 confirmation answered"),
         ("cp_1_3", "Boot menu option 9 completed"),
         ("cp_1_4", "Boot menu option 4 started"),
         ("cp_1_5", "Option 4 completed"),
@@ -3872,7 +3872,7 @@ def _list_completed_checkpoints(cp) -> str:
     _checkpoint_desc = {
         "1": {
             "cp_1_1": "LOADER options set",
-            "cp_1_2": "Boot menu issued",
+            "cp_1_2": "Option 9 confirmed",
             "cp_1_3": "Option 9 completed",
             "cp_1_4": "Option 4 started",
             "cp_1_5": "Option 4 completed",
@@ -9615,6 +9615,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
         if not _resume_cp_1_2_option9:
             return 0
         _answered = 0
+        _abort_answered = False
         _deadline = time.monotonic() + max_wait
         _last_activity = time.monotonic()
         _resend_9 = 0
@@ -9657,9 +9658,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                     channel.send("no\r")
                 if _session_log:
                     _session_log.log_sent("no")
-                if not _cp_1_3_done_now():
-                    _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
-                    _run_optional_checkpoint_status_checks()
+                _abort_answered = True
                 time.sleep(0.2)
                 continue
             if "yes/no" in _buf:
@@ -9673,6 +9672,9 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 if _session_log:
                     _session_log.log_sent("yes")
                 if _answered >= 2:
+                    if not _checkpoint_phase_done("cp_1_2", node_id=_primary_cp_node):
+                        _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
+                        _run_optional_checkpoint_status_checks()
                     return _answered
                 time.sleep(0.2)
                 continue
@@ -9691,8 +9693,11 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                         _session_log.log_sent("9")
                     time.sleep(1)
                     continue
-            if _answered > 0 and time.monotonic() - _last_activity > 20:
+            if (_answered > 0 or _abort_answered) and time.monotonic() - _last_activity > 20:
                 break
+        if _abort_answered and not _checkpoint_phase_done("cp_1_2", node_id=_primary_cp_node):
+            _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
+            _run_optional_checkpoint_status_checks()
         return _answered
 
     def _screen_status(msg):
@@ -10014,10 +10019,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     if _session_log:
         _session_log.log(f"Boot menu detected – auto-selecting option {option} ({description})")
         _session_log.log_sent(option)
-    if _operation_mode in (1, 3):
-        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
-        _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
-    elif _operation_mode == 2:
+    if _operation_mode == 2:
         _checkpoint_mark_phase("cp_2_2")
 
     channel.send(option + "\r")
@@ -26057,6 +26059,11 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         or (_operation_mode in (1, 3)
             and _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node))
     )
+    _resume_cp_1_2 = bool(
+        _operation_mode in (1, 3)
+        and _checkpoint_phase_done("cp_1_2", node_id=_primary_cp_node)
+        and not _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node)
+    )
     _resume_cp_1_4 = bool(
         resume_from_cp_1_4
         or (_operation_mode in (1, 3)
@@ -26121,61 +26128,191 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         _slog("cp_1_3 resume: skipping option-9 warning wait; proceeding to option 4 stage")
         _second_bootmenu_visible = True
         _option9_progress_confirmed = True
+    elif _resume_cp_1_2:
+        print(
+            f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option-9 confirmation was answered; "
+            "waiting for second boot menu."
+        )
+        _slog("cp_1_2 resume: option-9 confirmed; waiting for second boot menu")
+        _option9_progress_confirmed = True
+        # _second_bootmenu_visible stays False — node is still rebooting
     else:
-        # 1) Storage availability zone warning -> "no"
-        print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for storage-availability-zone warning (auto-answer 'no')...{_elapsed_str()}")
-        _slog("Waiting for storage-availability-zone warning")
+        # 1) Option-9 confirmation prompts -> answer and save cp_1_2
+        print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for option-9 confirmation prompts...{_elapsed_str()}")
+        _slog("Waiting for option-9 confirmation prompts (abort/yes-no)")
         _ch_init = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
         _init_sigs = [
             "storage availability zone will be destroyed",
+            "do you want to abort this operation (yes/no)",
+            "yes/no",
             "type yes to confirm and continue",
             "welcome to the cluster setup wizard",
+            "boot menu option 9 or 9a is not supported",
+            "login:",
             "selection (1-",
             "selection (1-9)?",
             "selection (1-11)?",
             "selection (1-12)?",
             "boot menu",
         ]
-        _init_chunk, _init_matched = direct_read_until_any(
-            _ch_init,
-            _init_sigs,
-            timeout=1800,
-            node_log=_boot_log,
-            quiet=True,
-            check_bmc_drop=True,
-            reconnect_ctx=_rc,
-        )
-        if _rc and _rc.get("channel") is not None:
-            channel = _rc["channel"]
-        _init_l = str(_init_matched or "").lower()
-        if "storage availability zone will be destroyed" in _init_l:
-            _option9_progress_confirmed = True
-            if _session_log:
-                _session_log.log("Storage availability zone warning detected; auto-responding 'no'")
-                _session_log.log_sent("no")
-            try:
-                channel.send("no\r")
-            except Exception:
-                pass
-            if not _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node):
-                _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
-                _run_optional_checkpoint_status_checks()
-        elif ("type yes to confirm and continue" in _init_l
-              or "welcome to the cluster setup wizard" in _init_l):
-            _option9_progress_confirmed = True
-            _already_in_wizard = True
-            print(f"   ℹ️  {_node_pfx(bmc_host)}Cluster setup wizard already active; skipping second boot-menu wait.")
-            _slog(f"[{bmc_host}] cluster setup wizard detected before second boot menu")
-        elif any(_sig in _init_l for _sig in (
-            "selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu"
-        )):
-            # Seeing boot-menu text immediately after option 9 can be the first
-            # menu still echoing; do not treat this as cp_1_3 completion yet.
-            _slog(
-                f"[{bmc_host}] boot menu text seen after option 9 send; "
-                "continuing to wait for second boot menu before marking cp_1_3",
-                prefix="WARN",
+        _opt9_abort_answered = False
+        _opt9_yesno_count = 0
+        _opt9_cp_1_2_saved = False
+        _opt9_deadline = time.monotonic() + 1800
+
+        while time.monotonic() < _opt9_deadline:
+            _opt9_remaining = max(1, int(_opt9_deadline - time.monotonic()))
+            _opt9_slice = min(30, _opt9_remaining)
+            _init_chunk, _init_matched = direct_read_until_any(
+                _ch_init,
+                _init_sigs,
+                timeout=_opt9_slice,
+                node_log=_boot_log,
+                quiet=True,
+                check_bmc_drop=True,
+                reconnect_ctx=_rc,
             )
+            if _rc and _rc.get("channel") is not None:
+                channel = _ch_init = _rc["channel"]
+            _init_buf = (_init_chunk or "").lower()
+            _init_l = str(_init_matched or "").lower()
+
+            # "not supported" can appear anywhere in the output buffer
+            if "boot menu option 9 or 9a is not supported" in _init_buf:
+                global _option9_platform_unsupported
+                if not _option9_platform_unsupported:
+                    _option9_platform_unsupported = True
+                    print(
+                        f"\n  ⚠️  {_node_pfx(bmc_host)}Option 9 not supported on this platform; "
+                        "falling back to option 4..."
+                    )
+                    _slog(
+                        f"[{bmc_host}] option 9/9a not supported on this platform; "
+                        "no cp_1_2 save; second-boot-menu loop will send option 4",
+                        prefix="WARN",
+                    )
+                _option9_progress_confirmed = True
+                break  # second-boot-menu loop handles the option-4 fallback
+
+            if ("storage availability zone will be destroyed" in _init_buf
+                    or "storage availability zone will be destroyed" in _init_l):
+                _option9_progress_confirmed = True
+                if _session_log:
+                    _session_log.log("Storage availability zone warning detected; auto-responding 'no'")
+                    _session_log.log_sent("no")
+                try:
+                    channel.send("no\r")
+                except Exception:
+                    pass
+                _opt9_abort_answered = True
+                continue
+
+            if ("do you want to abort this operation (yes/no)" in _init_buf
+                    or "do you want to abort this operation (yes/no)" in _init_l):
+                _option9_progress_confirmed = True
+                if _session_log:
+                    _session_log.log("Option-9 abort prompt detected; auto-responding 'no'")
+                    _session_log.log_sent("no")
+                try:
+                    channel.send("no\r")
+                except Exception:
+                    pass
+                _opt9_abort_answered = True
+                continue
+
+            if "yes/no" in _init_buf or "yes/no" in _init_l:
+                _opt9_yesno_count += 1
+                print(
+                    f"   ⚙️  {_node_pfx(bmc_host)}Detected option-9 init confirmation "
+                    f"({_opt9_yesno_count}/2); auto-answering 'yes'..."
+                )
+                if _session_log:
+                    _session_log.log_sent("yes")
+                try:
+                    channel.send("yes\r")
+                except Exception:
+                    pass
+                if _opt9_yesno_count >= 2:
+                    if not _checkpoint_phase_done("cp_1_2", node_id=_primary_cp_node):
+                        _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
+                        _run_optional_checkpoint_status_checks()
+                        _slog(f"[{bmc_host}] cp_1_2 saved after 2nd yes/no confirmation")
+                    _opt9_cp_1_2_saved = True
+                    break
+                continue
+
+            if ("type yes to confirm and continue" in _init_l
+                    or "welcome to the cluster setup wizard" in _init_l):
+                _option9_progress_confirmed = True
+                _already_in_wizard = True
+                print(f"   ℹ️  {_node_pfx(bmc_host)}Cluster setup wizard already active; skipping second boot-menu wait.")
+                _slog(f"[{bmc_host}] cluster setup wizard detected before second boot menu")
+                break
+
+            if "login:" in _init_buf or "login:" in _init_l:
+                _slog(
+                    f"[{bmc_host}] login prompt during option-9 confirmation wait; "
+                    "sending Ctrl-D and issuing system reset",
+                    prefix="WARN",
+                )
+                with suppress(Exception):
+                    channel.send("\x04")
+                time.sleep(2)
+                with suppress(Exception):
+                    channel.send("system reset\r")
+                _bmc_reset_out, _ = direct_read_until_any(
+                    channel, ["y/n", ">"], timeout=5, quiet=True
+                )
+                if "y/n" in ((_bmc_reset_out or "").lower()):
+                    with suppress(Exception):
+                        channel.send("y\r")
+                direct_read_until_any(
+                    channel,
+                    ["loader-", "boot menu", "selection (1-"],
+                    timeout=120,
+                    quiet=True,
+                )
+                with suppress(Exception):
+                    channel.send("boot_ontap menu\r")
+                if _session_log:
+                    _session_log.log_sent("boot_ontap menu (after login recovery during option-9 wait)")
+                continue
+
+            _boot_menu_in_l = any(_sig in _init_l for _sig in (
+                "selection (1-", "selection (1-9)?", "selection (1-11)?",
+                "selection (1-12)?", "boot menu",
+            ))
+            if _boot_menu_in_l:
+                if not _option9_progress_confirmed:
+                    _slog(
+                        f"[{bmc_host}] boot menu seen before option-9 confirmed; resending option 9",
+                        prefix="WARN",
+                    )
+                    try:
+                        channel.send("9\r")
+                    except Exception:
+                        pass
+                    if _session_log:
+                        _session_log.log_sent("9 (resend – option-9 not yet confirmed)")
+                    time.sleep(1)
+                    continue
+                break  # boot menu seen after confirmation; proceed to second-boot-menu wait
+
+            # No match (slice timeout): if abort answered, confirmation is complete
+            if not _init_matched and _opt9_abort_answered:
+                if not _checkpoint_phase_done("cp_1_2", node_id=_primary_cp_node):
+                    _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
+                    _run_optional_checkpoint_status_checks()
+                    _slog(f"[{bmc_host}] cp_1_2 saved after abort-prompt confirmation (no yes/no followed)")
+                _opt9_cp_1_2_saved = True
+                break
+
+        # Safety: ensure cp_1_2 is saved on abort-only platforms
+        if _opt9_abort_answered and not _opt9_cp_1_2_saved:
+            if not _checkpoint_phase_done("cp_1_2", node_id=_primary_cp_node):
+                _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
+                _run_optional_checkpoint_status_checks()
+                _slog(f"[{bmc_host}] cp_1_2 saved (abort-only platform fallback save)")
 
     # 2) Wait for the *second* boot menu and select option 4.
     global _mode3_pipeline_state, _mode3_staged_loader_channels, _mode3_staged_loader_clients
@@ -26288,6 +26425,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         "welcome to the cluster setup wizard",
         "node management interface port",
         "node management interface ip address",
+        "login:",
     ]
     output_lower = ""
     start = time.monotonic()
@@ -26407,11 +26545,34 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                     last_progress = time.monotonic()
                     continue
                 _slog(
-                    f"[{bmc_host}] boot menu detected but option-9 progress not confirmed yet; "
-                    "continuing wait to avoid premature cp_1_3",
+                    f"[{bmc_host}] boot menu detected but option-9 progress not confirmed; "
+                    "resending option 9",
                     prefix="WARN",
                 )
-                time.sleep(0.1)
+                channel.send("9\r")
+                if _session_log:
+                    _session_log.log_sent("9 (resend – option-9 not yet confirmed)")
+                time.sleep(1)
+                continue
+            if "login:" in _matched_l:
+                _slog(
+                    f"[{bmc_host}] login prompt during second-boot-menu wait; "
+                    "sending Ctrl-D and issuing system reset",
+                    prefix="WARN",
+                )
+                with suppress(Exception):
+                    channel.send("\x04")
+                time.sleep(2)
+                with suppress(Exception):
+                    channel.send("system reset\r")
+                _login_reset_out, _ = direct_read_until_any(
+                    channel, ["y/n", ">"], timeout=5, quiet=True
+                )
+                if "y/n" in ((_login_reset_out or "").lower()):
+                    with suppress(Exception):
+                        channel.send("y\r")
+                output_lower = ""
+                last_progress = time.monotonic()
                 continue
             found = True
             break
