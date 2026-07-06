@@ -11985,6 +11985,7 @@ _WIZARD_START_TRIGGERS = [
     "press enter to complete cluster setup",
     "do you want to create a new cluster or join",
     "cluster management interface port",
+    "node management interface port",
 ]
 
 _FATAL_BOOT_INTEGRITY_SIGS = [
@@ -12063,6 +12064,11 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 if ("cluster management interface ip address" in _ol
                         and "cluster management interface port" not in _ol):
                     _slog("Cluster mgmt IP prompt seen before port; sending 'back' to reach port prompt")
+                    with suppress(Exception):
+                        channel.send("back\r")
+                elif ("node management interface ip address" in _ol
+                        and "node management interface port" not in _ol):
+                    _slog("Node mgmt IP prompt seen before port; sending 'back' to reach port prompt")
                     with suppress(Exception):
                         channel.send("back\r")
                 else:
@@ -21555,6 +21561,27 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _session_log.set_outcome("FAIL", "wizard start timeout")
         return False
     _skip_create_steps = bool(_which and "cluster management interface port" in _which.lower())
+    # If node management prompts are still pending (session resumed past them or they
+    # were missed), drive them before attempting the wizard create/join flow.
+    while _which and "node management interface port" in _which.lower():
+        _slog("Node management port prompt detected at wizard start; driving node management config")
+        print("\n⏭️ Node management prompts still pending; driving node management config...")
+        _nm_cfg = _resolve_node_mgmt_config(primary_bmc)
+        _nm_residual = _auto_answer_node_mgmt(
+            channel, _nm_cfg, node_log=node_log,
+            initial_buf="node management interface port",
+        ) or ""
+        _which = _wait_for_wizard_start(
+            channel, timeout=1800, initial_buf=_nm_residual, node_log=node_log
+        )
+        if _which is None:
+            print("\n❌ Timed out waiting for cluster setup wizard after node management.")
+            if _session_log:
+                _session_log.log("Timeout waiting for wizard start after node management", prefix="ERROR")
+                _session_log.set_outcome("FAIL", "wizard start timeout after node management")
+            return False
+        _skip_create_steps = bool(_which and "cluster management interface port" in _which.lower())
+        break
     if _skip_create_steps:
         _slog("Wizard already at cluster management port; marking cp_1_7 and skipping create steps")
         print("\n⏭️ Wizard already at cluster management port; skipping to management interface configuration.")
