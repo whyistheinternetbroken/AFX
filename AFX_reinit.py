@@ -9614,6 +9614,14 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
         """For cp_1_2 resume, finish option-9 yes/no confirmations if already active."""
         if not _resume_cp_1_2_option9:
             return 0
+        if _option9_platform_unsupported:
+            # Flag was set by the post-send drain; no prompts will appear, skip entirely.
+            _slog(
+                f"[{node_label or 'primary'}] option 9 not supported on this platform; "
+                "skipping _auto_answer_option9_init_prompts",
+                prefix="WARN",
+            )
+            return 0
         _answered = 0
         _abort_answered = False
         _deadline = time.monotonic() + max_wait
@@ -9679,6 +9687,13 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
                 time.sleep(0.2)
                 continue
             if _matched and "selection (1-" in str(_matched).lower():
+                # "Boot menu option 9 or 9a is not supported" is typically accumulated
+                # in _buf before the subsequent "Selection (1-N)?" prompt.
+                if (_option9_platform_unsupported
+                        or "boot menu option 9 or 9a is not supported" in _buf):
+                    if not _option9_platform_unsupported:
+                        _option9_platform_unsupported = True
+                    return _answered  # SAZ loop / second-boot-menu loop sends option 4
                 if _resend_9 < 2:
                     if _cp_1_3_done_now():
                         return _answered
@@ -10038,7 +10053,19 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
     # Check whether the menu is still sitting at "Selection (1-N)?" — if so,
     # the keystroke didn't land (slow console, race), so resend once.
     post = drain_channel(channel, seconds=2, node_log=node_log).lower()
-    if any(s in post for s in sig_lower):
+    if "boot menu option 9 or 9a is not supported" in post:
+        if not _option9_platform_unsupported:
+            _option9_platform_unsupported = True
+            _screen_status(
+                f"⚠️  {_pfx}Platform does not support option 9/9a — will fall back to option 4."
+            )
+            if _session_log:
+                _session_log.log(
+                    f"[{node_label or 'primary'}] option 9/9a not supported (post-send drain); "
+                    "setting _option9_platform_unsupported flag",
+                    prefix="WARN",
+                )
+    elif any(s in post for s in sig_lower):
         if _session_log:
             _session_log.log(
                 "Boot menu prompt still present after first send; retrying option",
