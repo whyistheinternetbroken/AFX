@@ -7659,7 +7659,8 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
     print("Shell invoked. Waiting for initial prompt...")
     _slog("Waiting for initial BMC prompt (watching for existing session y/n)")
 
-    output, matched = direct_read_until_any(channel, ["y/n", ">"], timeout=15)
+    channel.send("\r")
+    output, matched = direct_read_until_any(channel, ["y/n", ">"], timeout=30)
 
     if matched and "y/n" in matched.lower():
         print("\n⚠️  An existing session is active on this BMC!")
