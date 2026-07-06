@@ -26038,10 +26038,9 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     elif _resume_cp_1_4:
         print(
             f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option 4 was already started; "
-            "resuming at option-4 confirmation prompts."
+            "will resend option 4 if second boot menu reappears."
         )
-        _slog("cp_1_4 resume: skipping second boot-menu wait and option-4 resend")
-        _second_bootmenu_visible = True
+        _slog("cp_1_4 resume: option-9 progress confirmed; still waiting for second boot menu to resend option 4 if needed")
         _option9_progress_confirmed = True
     elif _resume_cp_1_3:
         print(
@@ -26377,7 +26376,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         _close_boot_log()
         return
 
-    _skip_option4 = _already_in_wizard or _resume_cp_1_4 or _resume_cp_1_5
+    _skip_option4 = _already_in_wizard or _resume_cp_1_5
 
     # Checkpoint 3 is complete only after option-9 follow-up progressed to
     # either the next boot menu or the setup wizard (i.e. not immediately
