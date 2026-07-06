@@ -35668,6 +35668,10 @@ def main():
                     _session_log.log(
                         f"Resuming from checkpoint {_resume_cp_num} ({_resume_cp_latest_id}) - skipping system reset"
                     )
+                    if _checkpoint_test_enabled and _checkpoint_test_target:
+                        _ift_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+                        if _checkpoint_phase_done(_checkpoint_test_target, node_id=_ift_node):
+                            _maybe_inject_checkpoint_failure(_checkpoint_test_target, node_id=_ift_node)
                 else:
                     _session_log.log("Already at LOADER – system reset skipped")
                 _session_log.end_phase()
@@ -35772,6 +35776,13 @@ def main():
                 _real_stdout.write(
                     f"\n🔖 Resuming from checkpoint {_resume_cp_num} ({_resume_cp_latest_desc or 'checkpoint state loaded'}).\n"
                 )
+                # If the inject-failure target is already saved in the checkpoint, fire
+                # immediately — the save that would normally trigger it already happened
+                # in a previous run, so it would never fire otherwise.
+                if _checkpoint_test_enabled and _checkpoint_test_target:
+                    _ift_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+                    if _checkpoint_phase_done(_checkpoint_test_target, node_id=_ift_node):
+                        _maybe_inject_checkpoint_failure(_checkpoint_test_target, node_id=_ift_node)
                 if _cp_1_5_done:
                     _real_stdout.write(
                         "⏭️  Option 4 complete checkpoint reached; waiting for AutoSupport "
