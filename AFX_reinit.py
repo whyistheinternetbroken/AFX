@@ -7713,7 +7713,7 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
 # Enter system console
 # ---------------------------------------------------------------------------
 
-def enter_system_console(channel, loader_message=True, force_takeover=False):
+def enter_system_console(channel, loader_message=True, force_takeover=True):
     print("\n📺 Probing current prompt before entering system console...")
     _slog("Probing prompt before system console")
 
@@ -7774,9 +7774,10 @@ def enter_system_console(channel, loader_message=True, force_takeover=False):
         if force_takeover:
             # Auto-respond 'y' when resuming from checkpoint
             answer = "y"
-            print("   Auto-responding 'y' to disconnect other session (checkpoint resume)...")
+            print("   Auto-disconnecting existing console session...")
             if _session_log:
-                _session_log.log_user_input(f"Existing console session takeover response: {answer} (auto from checkpoint)")
+                _session_log.log("Auto-takeover: disconnecting existing console session", prefix="WARN")
+                _session_log.log_sent("y")
         else:
             answer = input("   Do you want to disconnect the other console session? [Y/N]: ").strip().lower()
             if _session_log:
