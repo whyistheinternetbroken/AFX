@@ -26470,6 +26470,23 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                     _session_log.log_sent("4")
                 channel.send("4\r")
                 time.sleep(2)
+                _option4_behind_detected = True
+                _resume_cp_1_5 = False
+                _resume_cp_1_6 = False
+            elif "type yes to confirm and continue" in _behind_l:
+                # AutoSupport confirmation still pending — answer it and let normal resume
+                # routing proceed: cp_1_6 skips node mgmt; cp_1_5 autosupport wait detects
+                # node-mgmt prompts and returns normally.
+                _slog(
+                    f"[{bmc_host}] cp_1_5/cp_1_6 resume behind: "
+                    "autosupport confirmation detected; answering 'yes'; continuing normal flow"
+                )
+                if _session_log:
+                    _session_log.log("cp resume behind: autosupport confirmation detected; answering 'yes'")
+                    _session_log.log_sent("yes")
+                channel.send("yes\r")
+                time.sleep(0.5)
+                # _resume_cp_1_5 / _resume_cp_1_6 intentionally not cleared
             else:
                 _slog(
                     f"[{bmc_host}] cp_1_5/cp_1_6 resume behind: "
@@ -26479,9 +26496,9 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                     _session_log.log(
                         f"cp resume behind: option-4 prompt detected; routing to disk erase handler"
                     )
-            _option4_behind_detected = True
-            _resume_cp_1_5 = False
-            _resume_cp_1_6 = False
+                _option4_behind_detected = True
+                _resume_cp_1_5 = False
+                _resume_cp_1_6 = False
 
     if _resume_cp_1_6:
         _mgmt_residual = ""
