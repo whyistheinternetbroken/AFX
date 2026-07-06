@@ -12020,6 +12020,7 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
     start = time.monotonic()
     last_data = start
     last_nudge = start
+    _asup_wizard_answered = False
 
     for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
         if trigger_lower in output_lower:
@@ -12052,6 +12053,17 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 last_nudge = time.monotonic()
                 continue
             last_data = time.monotonic()
+            if not _asup_wizard_answered and "type yes to confirm and continue" in chunk.lower():
+                _slog("AutoSupport confirmation in wizard start wait; answering 'yes'")
+                with suppress(Exception):
+                    channel.send("yes\r")
+                if _session_log:
+                    _session_log.log_sent("yes")
+                _asup_wizard_answered = True
+                output = ""
+                output_lower = ""
+                last_data = time.monotonic()
+                continue
             for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
                 if trigger_lower in output_lower:
                     return trigger
@@ -12066,11 +12078,13 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                     _slog("Cluster mgmt IP prompt seen before port; sending 'back' to reach port prompt")
                     with suppress(Exception):
                         channel.send("back\r")
+                    _asup_wizard_answered = False
                 elif ("node management interface ip address" in _ol
                         and "node management interface port" not in _ol):
                     _slog("Node mgmt IP prompt seen before port; sending 'back' to reach port prompt")
                     with suppress(Exception):
                         channel.send("back\r")
+                    _asup_wizard_answered = False
                 else:
                     channel.send("\r")
                     _slog("No wizard prompt seen for 15s; sending CR to nudge")
