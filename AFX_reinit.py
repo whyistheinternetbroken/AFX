@@ -26210,6 +26210,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         "selection (1-12)?",
         "select option 4",
         "boot menu",
+        "this node may not have been properly unjoined from an existing cluster",
         "zero disks, reset config and install a new file system",
         "this will erase all the data on the disks",
         "type yes to confirm and continue",
@@ -26224,6 +26225,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     loader_recovery_attempted = False
     boot_wait_extension = 0
     _post_boot_sigs = [
+        "this node may not have been properly unjoined from an existing cluster",
         "zero disks, reset config and install a new file system",
         "this will erase all the data on the disks",
         "type yes to confirm and continue",
@@ -26419,6 +26421,49 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         time.sleep(2)
 
     # 3) Yes confirmations + 4) Node management config.
+    # Before routing, probe for behind-state if we resumed from cp_1_5 or cp_1_6.
+    # Either flag may have been True at checkpoint detection time but the node may
+    # still be at the boot menu or at option-4 confirmation prompts.
+    _option4_behind_detected = False
+    if _resume_cp_1_5 or _resume_cp_1_6:
+        _behind_sigs = [
+            "this node may not have been properly unjoined from an existing cluster",
+            "zero disks, reset config and install a new file system",
+            "this will erase all the data on the disks",
+            "type yes to confirm and continue",
+            "selection (1-",
+        ]
+        _behind_out, _behind_match = direct_read_until_any(
+            channel, _behind_sigs, timeout=5,
+            node_log=_boot_log, quiet=True, check_bmc_drop=True, reconnect_ctx=_rc,
+        )
+        if _rc and _rc.get("channel") is not None:
+            channel = _rc["channel"]
+        if _behind_match:
+            _behind_l = str(_behind_match).lower()
+            if "selection (1-" in _behind_l:
+                _slog(
+                    f"[{bmc_host}] cp_1_5/cp_1_6 resume behind: "
+                    "second boot menu detected; resending option 4"
+                )
+                if _session_log:
+                    _session_log.log("cp resume behind: second boot menu detected; resending option 4")
+                    _session_log.log_sent("4")
+                channel.send("4\r")
+                time.sleep(2)
+            else:
+                _slog(
+                    f"[{bmc_host}] cp_1_5/cp_1_6 resume behind: "
+                    f"option-4 prompt detected ({_behind_match!r}); routing to disk erase handler"
+                )
+                if _session_log:
+                    _session_log.log(
+                        f"cp resume behind: option-4 prompt detected; routing to disk erase handler"
+                    )
+            _option4_behind_detected = True
+            _resume_cp_1_5 = False
+            _resume_cp_1_6 = False
+
     if _resume_cp_1_6:
         _mgmt_residual = ""
     else:
@@ -26440,7 +26485,8 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         else:
             _auto_answer_disk_erase_prompts(channel, label=bmc_host or "",
                                             is_node_add=False,
-                                            expect_option4_unjoin_warning=_resume_cp_1_4)
+                                            expect_option4_unjoin_warning=(
+                                                _resume_cp_1_4 or _option4_behind_detected))
             _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
             _checkpoint_mark_phase("cp_1_5", node_id=_primary_cp_node, alias_phase="primary_bootmenu_done")
             _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node)
