@@ -26284,6 +26284,24 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             ))
             if _boot_menu_in_l:
                 if not _option9_progress_confirmed:
+                    # "boot menu" is a prefix of "boot menu option 9 or 9a is not supported";
+                    # direct_read_until_any may match "boot menu" before the rest of the line
+                    # arrives, leaving _init_matched="boot menu" even on an unsupported platform.
+                    if ("boot menu option 9 or 9a is not supported" in _init_buf
+                            or _option9_platform_unsupported):
+                        if not _option9_platform_unsupported:
+                            _option9_platform_unsupported = True
+                            print(
+                                f"\n  ⚠️  {_node_pfx(bmc_host)}Option 9 not supported on this platform; "
+                                "falling back to option 4..."
+                            )
+                            _slog(
+                                f"[{bmc_host}] option 9/9a not supported (late-match in boot-menu handler); "
+                                "no cp_1_2 save; second-boot-menu loop will send option 4",
+                                prefix="WARN",
+                            )
+                        _option9_progress_confirmed = True
+                        break
                     _slog(
                         f"[{bmc_host}] boot menu seen before option-9 confirmed; resending option 9",
                         prefix="WARN",
@@ -26491,8 +26509,11 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 "welcome to the cluster setup wizard",
                 "do you want to abort this operation (yes/no)",
                 "this is a disruptive operation",
+                "boot menu option 9 or 9a is not supported",
             )):
                 _option9_progress_confirmed = True
+            if "boot menu option 9 or 9a is not supported" in _chunk_lower:
+                _option9_platform_unsupported = True
             fatal_reason = _fatal_boot_integrity_reason(output_lower)
             if fatal_reason:
                 print(
