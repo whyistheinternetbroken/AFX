@@ -26078,6 +26078,24 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         _slog("cp_1_6 resume: skipping boot-menu wait, option-4 confirmations, AutoSupport, and node management")
         _second_bootmenu_visible = True
         _option9_progress_confirmed = True
+        # Reload per-run selections that were saved before this phase was skipped.
+        if _checkpoint:
+            global _enable_autosupport, _setup_passwordless_ssh
+            _asup_saved = None
+            with suppress(Exception):
+                _asup_saved = _checkpoint.get_selection("enable_autosupport")
+            if _asup_saved is None:
+                with suppress(Exception):
+                    _asup_saved = _checkpoint.get_param("enable_autosupport", None)
+            if _asup_saved is not None:
+                _enable_autosupport = bool(_asup_saved)
+                _slog(f"cp_1_6 resume: loaded enable_autosupport={_enable_autosupport} from checkpoint")
+            _ssh_saved = None
+            with suppress(Exception):
+                _ssh_saved = _checkpoint.get_selection("setup_passwordless_ssh")
+            if _ssh_saved is not None:
+                _setup_passwordless_ssh = bool(_ssh_saved)
+                _slog(f"cp_1_6 resume: loaded setup_passwordless_ssh={_setup_passwordless_ssh} from checkpoint")
     elif _resume_cp_1_5:
         print(
             f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option 4 completion was reached; "
