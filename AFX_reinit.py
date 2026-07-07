@@ -1365,7 +1365,7 @@ _CHECKPOINT_TEST_OPTIONS = {
     1: [
         ("cp_1_1", "LOADER configuration completed"),
         ("cp_1_2", "Option 9 confirmation answered"),
-        ("cp_1_3", "Boot menu option 9 completed"),
+        ("cp_1_3", "Option-9 abort answered"),
         ("cp_1_4", "Boot menu option 4 started"),
         ("cp_1_5", "Option 4 completed"),
         ("cp_1_6", "AutoSupport confirmation answered"),
@@ -3873,7 +3873,7 @@ def _list_completed_checkpoints(cp) -> str:
         "1": {
             "cp_1_1": "LOADER options set",
             "cp_1_2": "Option 9 confirmed",
-            "cp_1_3": "Option 9 completed",
+            "cp_1_3": "Option-9 abort answered",
             "cp_1_4": "Option 4 started",
             "cp_1_5": "Option 4 completed",
             "cp_1_6": "AutoSupport confirmation answered",
@@ -26168,12 +26168,42 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         _option9_progress_confirmed = True
     elif _resume_cp_1_3:
         print(
-            f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option 9 is complete; "
-            "skipping option-9 warning wait and continuing to option 4."
+            f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option-9 abort was answered; "
+            "probing 60s for abort prompt reappearance before waiting for second boot menu."
         )
-        _slog("cp_1_3 resume: skipping option-9 warning wait; proceeding to option 4 stage")
-        _second_bootmenu_visible = True
+        _slog("cp_1_3 resume: probing 60s for abort/yes-no prompt before second-boot-menu wait")
         _option9_progress_confirmed = True
+        _ch_resume = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
+        _probe_sigs = [
+            "do you want to abort this operation (yes/no)",
+            "yes/no",
+            "selection (1-",
+            "selection (1-9)?",
+            "selection (1-11)?",
+            "selection (1-12)?",
+            "boot menu",
+        ]
+        _probe_out, _probe_matched = direct_read_until_any(
+            _ch_resume, _probe_sigs, timeout=60, quiet=True
+        )
+        _probe_l = (_probe_matched or "").lower()
+        if "do you want to abort" in _probe_l:
+            _slog(f"[{bmc_host}] cp_1_3 resume: abort prompt reappeared; re-answering 'no'")
+            with suppress(Exception):
+                _ch_resume.send("no\r")
+            if _session_log:
+                _session_log.log_sent("no (cp_1_3 resume: abort re-appeared)")
+        elif "yes/no" in _probe_l:
+            _slog(f"[{bmc_host}] cp_1_3 resume: yes/no prompt appeared; answering 'yes'")
+            with suppress(Exception):
+                _ch_resume.send("yes\r")
+            if _session_log:
+                _session_log.log_sent("yes (cp_1_3 resume: yes/no prompt)")
+        elif any(_sig in _probe_l for _sig in ("selection (1-", "boot menu")):
+            _slog(f"[{bmc_host}] cp_1_3 resume: boot menu already visible")
+            _second_bootmenu_visible = True
+        else:
+            _slog(f"[{bmc_host}] cp_1_3 resume: no abort prompt in 60s; proceeding to second-boot-menu wait")
     elif _resume_cp_1_2:
         print(
             f"\n⏭️ {_node_pfx(bmc_host)}Checkpoint indicates option-9 confirmation was answered; "
@@ -26250,6 +26280,10 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                     channel.send("no\r")
                 except Exception:
                     pass
+                if not _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node):
+                    _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
+                    _run_optional_checkpoint_status_checks()
+                    _slog(f"[{bmc_host}] cp_1_3 saved after SAZ abort answered 'no'")
                 _opt9_abort_answered = True
                 continue
 
@@ -26263,6 +26297,10 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                     channel.send("no\r")
                 except Exception:
                     pass
+                if not _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node):
+                    _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
+                    _run_optional_checkpoint_status_checks()
+                    _slog(f"[{bmc_host}] cp_1_3 saved after option-9 abort answered 'no'")
                 _opt9_abort_answered = True
                 continue
 
@@ -26364,19 +26402,18 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
 
             # No match (slice timeout): if abort answered, confirmation is complete
             if not _init_matched and _opt9_abort_answered:
-                if not _checkpoint_phase_done("cp_1_2", node_id=_primary_cp_node):
-                    _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
+                if not _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node):
+                    _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
                     _run_optional_checkpoint_status_checks()
-                    _slog(f"[{bmc_host}] cp_1_2 saved after abort-prompt confirmation (no yes/no followed)")
-                _opt9_cp_1_2_saved = True
+                    _slog(f"[{bmc_host}] cp_1_3 saved after abort-prompt confirmation (no yes/no followed)")
                 break
 
-        # Safety: ensure cp_1_2 is saved on abort-only platforms
-        if _opt9_abort_answered and not _opt9_cp_1_2_saved:
-            if not _checkpoint_phase_done("cp_1_2", node_id=_primary_cp_node):
-                _checkpoint_mark_phase("cp_1_2", node_id=_primary_cp_node)
+        # Safety: ensure cp_1_3 is saved on abort-only platforms
+        if _opt9_abort_answered:
+            if not _checkpoint_phase_done("cp_1_3", node_id=_primary_cp_node):
+                _checkpoint_mark_phase("cp_1_3", node_id=_primary_cp_node)
                 _run_optional_checkpoint_status_checks()
-                _slog(f"[{bmc_host}] cp_1_2 saved (abort-only platform fallback save)")
+                _slog(f"[{bmc_host}] cp_1_3 saved (abort-only platform fallback save)")
 
     # 2) Wait for the *second* boot menu and select option 4.
     global _mode3_pipeline_state, _mode3_staged_loader_channels, _mode3_staged_loader_clients
