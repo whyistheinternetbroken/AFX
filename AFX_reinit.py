@@ -23571,11 +23571,64 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 time.sleep(1)
             return True, _out_sc, _m_sc
 
+        # Checkpoint resume state for this peer.
+        _cp2_node = peer_bmc
+        _cp2_1_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_1", node_id=_cp2_node))
+        _cp2_2_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_2", node_id=_cp2_node))
+        _cp2_3_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_3", node_id=_cp2_node))
+        _cp2_4_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_4", node_id=_cp2_node))
+        _cp2_5_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_5", node_id=_cp2_node))
+        _cp2_6_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_6", node_id=_cp2_node))
+        _did_system_reset = False
+        _cp2_flags = [_cp2_1_done, _cp2_2_done, _cp2_3_done, _cp2_4_done, _cp2_5_done, _cp2_6_done]
+        if any(_cp2_flags):
+            _slog(f"[{label}] Resuming peer thread: cp_2_x done = "
+                  f"{[i+1 for i, v in enumerate(_cp2_flags) if v]}")
+
         # Check if already at LOADER or boot menu; skip system reset if so.
         _aal_state = {}
         _already_loader = _already_at_loader(ch, label=label, node_log=node_file, out_state=_aal_state)
         _already_at_menu = _aal_state.get("at_boot_menu", False)
-        if not _already_loader:
+
+        # Fast-path for cp_2_3+ resume: option 4 was already sent, node is past
+        # boot-menu stage (disk erase in progress, node mgmt, or cluster setup).
+        # Skip LOADER probe/reset/wait/commands and boot-menu wait entirely.
+        _fast_skip_to_diskerase = (
+            _cp2_3_done and not _cp2_6_done and not _already_loader
+        )
+        if _fast_skip_to_diskerase:
+            _slog(f"[{label}] cp_2_3 resume: option 4 already sent; "
+                  "entering system console, skipping LOADER/boot-menu sections")
+            with suppress(Exception):
+                ch.send("\r")
+            time.sleep(0.5)
+            _sc_probe, _sc_m = direct_read_until_any(
+                ch,
+                [">", "::>", "login:", "loader-", "selection (1-",
+                 "node management", "create/join"],
+                timeout=8, node_log=node_file,
+            )
+            if _sc_m and "y/n" in str(_sc_m).lower():
+                with suppress(Exception):
+                    ch.send("y\r")
+                time.sleep(1)
+            elif not any(s in str(_sc_probe or "").lower()
+                         for s in ("::>", "create/join", "loader-", "selection (1-")):
+                # Likely at BMC prompt; try entering system console.
+                with suppress(Exception):
+                    ch.send("system console\r")
+                _sc2, _sm2 = direct_read_until_any(
+                    ch,
+                    ["y/n", "ctrl-d", "::>", "login:", "loader-", "autoboot"],
+                    timeout=15, node_log=node_file,
+                )
+                if _sm2 and "y/n" in str(_sm2).lower():
+                    with suppress(Exception):
+                        ch.send("y\r")
+                    time.sleep(1)
+
+        if not _fast_skip_to_diskerase and not _already_loader:
+            _did_system_reset = True
             # Reset the node to begin a clean boot cycle.
             print(f"   🔄 [{label}] Sending system reset...")
             _slog(f"[{label}] sending system reset")
@@ -23596,12 +23649,13 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
 
         # Monitor for AUTOBOOT and LOADER. If _already_at_loader() already
         # confirmed LOADER, skip this wait and continue directly.
+        # Also skip entirely when fast-skipping to the disk-erase phase.
         buf = ""
         start = time.monotonic()
         last_recv = start
         last_keepalive = start
         last_nudge = start
-        loader_seen = bool(_already_loader)
+        loader_seen = bool(_already_loader) or _fast_skip_to_diskerase
         if not loader_seen:
             ch.send("\r")
         while (not loader_seen) and (time.monotonic() - start < 1200):
@@ -23733,16 +23787,27 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     return False
             time.sleep(0.1)
 
-        if not loader_seen:
+        if not loader_seen and not _fast_skip_to_diskerase:
             print(f"   ⚠️  [{label}] LOADER not reached; aborting.")
             _slog(f"[{label}] LOADER not reached", prefix="WARN")
             return False
 
+        if not _fast_skip_to_diskerase:
+            _checkpoint_mark_phase("cp_2_1", node_id=_cp2_node)
+            _run_optional_checkpoint_status_checks()
+
         # LOADER commands (NO destroy storage pods – this node is JOINING).
         # Physical zeroing, if requested, is set on every node so the
         # whole cluster ends up with consistent raid.use-physical-zeroing?
-        # behaviour.  Skipped when already at boot menu (boot_ontap menu already ran).
-        if not _already_at_menu:
+        # behaviour.  Skipped when already at boot menu (boot_ontap menu already ran),
+        # when cp_2_2 is already done (and no system reset was needed this run),
+        # or when fast-skipping to the disk-erase phase.
+        _run_loader_cmds = (
+            not _already_at_menu
+            and not _fast_skip_to_diskerase
+            and not (_cp2_2_done and not _did_system_reset)
+        )
+        if _run_loader_cmds:
             _peer_ld_log_dir = (_session_log.log_dir
                                 if _session_log and hasattr(_session_log, "log_dir")
                                 else os.getcwd())
@@ -23781,12 +23846,19 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     print(f"   ⏳ [{label}] Node booting — takes approximately 3-5 minutes...")
                     if _session_log:
                         _session_log.log(f"[{label}] boot_ontap menu sent; waiting for boot menu")
+            _checkpoint_mark_phase("cp_2_2", node_id=_cp2_node)
+            _run_optional_checkpoint_status_checks()
         else:
-            # Already at boot menu: nudge channel so the menu repaints for detection.
-            _slog(f"[{label}] already at boot menu; skipping LOADER commands")
-            with suppress(Exception):
-                ch.send("\r")
-            time.sleep(0.5)
+            # Already at boot menu, LOADER commands already run, or fast-skipping.
+            _slog(f"[{label}] skipping LOADER commands (already_at_menu={_already_at_menu}, "
+                  f"cp_2_2_done={_cp2_2_done}, fast_skip={_fast_skip_to_diskerase})")
+            if not _fast_skip_to_diskerase:
+                if not _cp2_2_done:
+                    _checkpoint_mark_phase("cp_2_2", node_id=_cp2_node)
+                    _run_optional_checkpoint_status_checks()
+                with suppress(Exception):
+                    ch.send("\r")
+                time.sleep(0.5)
 
         # Wait for boot menu and send option 4.
         sig_lower = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
@@ -23794,10 +23866,13 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         s = time.monotonic()
         last_recv = time.monotonic()
         last_keepalive = time.monotonic()
+        last_nudge_bm = time.monotonic()
         seen_menu = False
         loader_recovery_attempted = False
         boot_wait_extension = 0
-        while time.monotonic() - s < (1200 + boot_wait_extension):
+        if _fast_skip_to_diskerase:
+            seen_menu = True  # already past boot menu; skip wait
+        while not _fast_skip_to_diskerase and time.monotonic() - s < (1200 + boot_wait_extension):
             if _shutdown_event.is_set():
                 return False
             if ch.recv_ready():
@@ -23835,6 +23910,11 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 except Exception:
                     pass
                 last_keepalive = time.monotonic()
+            elif time.monotonic() - last_nudge_bm >= 30.0:
+                # Nudge console every 30s so any waiting boot menu prompt repaints.
+                with suppress(Exception):
+                    ch.send("\r")
+                last_nudge_bm = time.monotonic()
             elif time.monotonic() - last_recv > 120:
                 # No data for 2+ minutes – BMC channel may have silently died.
                 # Reconnect SSH and re-attach to system console.
@@ -23947,27 +24027,37 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         if not seen_menu:
             print(f"   ⚠️  [{label}] boot menu not detected; aborting.")
             return False
-        ch.send("4\r"); time.sleep(2)
-        _cleanup_known_hosts_after_boot_option(peer_bmc, "4", log=_session_log)
-        _t_option4_sent = time.monotonic()
-        print(f"   ⏱️  [{label}] Option 4 sent at +{_t_option4_sent - _t_thread_start:.1f}s")
+        if not _fast_skip_to_diskerase:
+            ch.send("4\r"); time.sleep(2)
+            _cleanup_known_hosts_after_boot_option(peer_bmc, "4", log=_session_log)
+            _t_option4_sent = time.monotonic()
+            print(f"   ⏱️  [{label}] Option 4 sent at +{_t_option4_sent - _t_thread_start:.1f}s")
+        _checkpoint_mark_phase("cp_2_3", node_id=_cp2_node)
+        _run_optional_checkpoint_status_checks()
 
         # Yes confirmations + node mgmt + join wizard.
-        if broker is not None:
-            _interactive_disk_erase_prompts(ch, broker, peer_bmc,
-                                            node_log=node_file,
-                                            reconnect_ctx=_peer_reconnect_ctx)
+        if not _cp2_4_done:
+            if broker is not None:
+                _interactive_disk_erase_prompts(ch, broker, peer_bmc,
+                                                node_log=node_file,
+                                                reconnect_ctx=_peer_reconnect_ctx)
+            else:
+                _auto_answer_disk_erase_prompts(ch, node_log=node_file, label=peer_bmc,
+                                                is_node_add=True,
+                                                reconnect_ctx=_peer_reconnect_ctx)
+            _t_disk_erase_done = time.monotonic()
+            print(f"   ⏱️  [{label}] Disk erase done at +{_t_disk_erase_done - _t_thread_start:.1f}s")
+            _checkpoint_mark_phase("cp_2_4", node_id=_cp2_node)
+            _run_optional_checkpoint_status_checks()
         else:
-            _auto_answer_disk_erase_prompts(ch, node_log=node_file, label=peer_bmc,
-                                            is_node_add=True,
-                                            reconnect_ctx=_peer_reconnect_ctx)
-        _t_disk_erase_done = time.monotonic()
-        print(f"   ⏱️  [{label}] Disk erase done at +{_t_disk_erase_done - _t_thread_start:.1f}s")
+            _slog(f"[{label}] cp_2_4 already done; skipping disk erase")
 
         cfg = _resolve_node_mgmt_config(peer_bmc)
 
-        # Monitor for wipeconfig/autoboot status messages during node reset.
-        _wipe_buf = ""
+        # Monitor for wipeconfig/autoboot status messages during node reset,
+        # then run node-mgmt configuration.  Skipped when resuming from cp_2_5+.
+        if not _cp2_5_done:
+            _wipe_buf = ""
         _wipe_seen = False
         _autoboot_seen_wipe = False
         _node_mgmt_sigs = [
@@ -24002,15 +24092,22 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             else:
                 time.sleep(0.1)
 
-        _mgmt_residual = _auto_answer_node_mgmt(ch, cfg, node_log=node_file,
-                                                initial_buf=_wipe_buf) or ""
-        _t_node_mgmt_done = time.monotonic()
-        print(f"   ⏱️  [{label}] Node mgmt applied at +{_t_node_mgmt_done - _t_thread_start:.1f}s")
+            _mgmt_residual = _auto_answer_node_mgmt(ch, cfg, node_log=node_file,
+                                                    initial_buf=_wipe_buf) or ""
+            _t_node_mgmt_done = time.monotonic()
+            print(f"   ⏱️  [{label}] Node mgmt applied at +{_t_node_mgmt_done - _t_thread_start:.1f}s")
+            _checkpoint_mark_phase("cp_2_5", node_id=_cp2_node)
+            _run_optional_checkpoint_status_checks()
+        else:
+            _mgmt_residual = ""
+            _slog(f"[{label}] cp_2_5 already done; skipping node mgmt")
 
         # ── Abort cluster wizard, log in, and capture cluster IP ──────────────
         # After node-mgmt is applied, Ctrl+C out of the cluster wizard,
         # log in as admin, and read the node's cluster interface IP.
         # The caller collects all IPs and runs cluster add-node in bulk.
+        _checkpoint_mark_phase("cp_2_6", node_id=_cp2_node)
+        _run_optional_checkpoint_status_checks()
         _cluster_ip = _abort_wizard_get_cluster_ip(
             ch, label, admin_password, cluster_ips_out, peer_bmc,
             node_log=node_file,
@@ -24018,16 +24115,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         _t_cluster_ip_done = time.monotonic()
         if _t_loader_seen:
             print(f"   ⏱️  [{label}] Cluster IP captured at +{_t_cluster_ip_done - _t_thread_start:.1f}s")
-
-        # Checkpoint: option-4 and node-mgmt prep done for this peer.
-        if _checkpoint:
-            try:
-                _checkpoint.mark_node_done("peer_option4_done", peer_bmc)
-                _slog(f"[{label}] checkpoint: peer_option4_done saved")
-            except _InjectedCheckpointFailure:
-                raise
-            except Exception:
-                pass
+        _checkpoint_mark_phase("cp_2_7", node_id=_cp2_node)
+        _run_optional_checkpoint_status_checks()
 
         # Record per-node timing for the session summary.
         if timings_record is not None:
