@@ -1537,6 +1537,56 @@ def _checkpoint_phase_done(phase: str, node_id: str = "") -> bool:
         return False
 
 
+def _checkpoint_phase_done_for_peer_resume(phase: str, bmc_ip: str) -> bool:
+    """Checkpoint done check tolerant of legacy/global mode-2 resume markers."""
+    if not _checkpoint:
+        return False
+    _phase = str(phase or "").strip()
+    _bmc = str(bmc_ip or "").strip()
+    if not _phase:
+        return False
+
+    _node_ids = []
+    if _bmc:
+        _node_ids.append(_bmc)
+        _mode3_peer_id = _mode3_peer_checkpoint_node(_bmc)
+        if _mode3_peer_id not in _node_ids:
+            _node_ids.append(_mode3_peer_id)
+
+    for _nid in _node_ids:
+        try:
+            if _checkpoint.is_node_done(_phase, _nid):
+                return True
+        except Exception:
+            pass
+
+    try:
+        if _checkpoint.is_done(_phase):
+            return True
+    except Exception:
+        pass
+
+    _aliases = {
+        "cp_2_4": "peer_option4_done",
+        "cp_2_7": "peer_joined",
+    }
+    _alias = _aliases.get(_phase, "")
+    if _alias:
+        for _nid in _node_ids:
+            try:
+                if _checkpoint.is_node_done(_alias, _nid):
+                    return True
+            except Exception:
+                pass
+        try:
+            if _checkpoint.is_done(_alias):
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
 def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = "",
                            alias_node_id: str = "", promote_global: bool = False,
                            target_node_ids=None) -> bool:
@@ -4371,10 +4421,10 @@ def _list_completed_checkpoints(cp) -> str:
         "2": {
             "cp_2_1": "LOADER reached",
             "cp_2_2": "Boot menu issued",
-            "cp_2_3": "Option 4 completed",
-            "cp_2_4": "Node management configured",
-            "cp_2_5": "Cluster setup menu",
-            "cp_2_6": "Cluster join pending",
+            "cp_2_3": "Option 4 issued",
+            "cp_2_4": "Option 4 completed",
+            "cp_2_5": "Node management configured",
+            "cp_2_6": "Cluster setup menu",
             "cp_2_7": "Node joined",
             "cp_2_8": "Node addition job completed",
         },
@@ -24245,12 +24295,22 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
 
         # Checkpoint resume state for this peer.
         _cp2_node = peer_bmc
-        _cp2_1_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_1", node_id=_cp2_node))
-        _cp2_2_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_2", node_id=_cp2_node))
-        _cp2_3_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_3", node_id=_cp2_node))
-        _cp2_4_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_4", node_id=_cp2_node))
-        _cp2_5_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_5", node_id=_cp2_node))
-        _cp2_6_done = bool(_checkpoint and _checkpoint_phase_done("cp_2_6", node_id=_cp2_node))
+        _cp2_1_done = _checkpoint_phase_done_for_peer_resume("cp_2_1", _cp2_node)
+        _cp2_2_done = _checkpoint_phase_done_for_peer_resume("cp_2_2", _cp2_node)
+        _cp2_3_done = _checkpoint_phase_done_for_peer_resume("cp_2_3", _cp2_node)
+        _cp2_4_done = _checkpoint_phase_done_for_peer_resume("cp_2_4", _cp2_node)
+        _cp2_5_done = _checkpoint_phase_done_for_peer_resume("cp_2_5", _cp2_node)
+        _cp2_6_done = _checkpoint_phase_done_for_peer_resume("cp_2_6", _cp2_node)
+        if _cp2_6_done:
+            _cp2_5_done = _cp2_4_done = _cp2_3_done = _cp2_2_done = _cp2_1_done = True
+        elif _cp2_5_done:
+            _cp2_4_done = _cp2_3_done = _cp2_2_done = _cp2_1_done = True
+        elif _cp2_4_done:
+            _cp2_3_done = _cp2_2_done = _cp2_1_done = True
+        elif _cp2_3_done:
+            _cp2_2_done = _cp2_1_done = True
+        elif _cp2_2_done:
+            _cp2_1_done = True
         _did_system_reset = False
         _cp2_flags = [_cp2_1_done, _cp2_2_done, _cp2_3_done, _cp2_4_done, _cp2_5_done, _cp2_6_done]
         if any(_cp2_flags):
