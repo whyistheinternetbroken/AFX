@@ -1609,19 +1609,43 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
     if not _options:
         print(f"\n🧪 --test: no checkpoint failure injection points are available for mode {_mode_name}.")
         return
+    _resume_cp_for_override = None
+    _resume_cp_available = False
+    try:
+        _resume_cp_for_override = CheckpointManager()
+        if _resume_cp_for_override.load():
+            _resume_mode_key = _checkpoint_mode_to_test_key(_resume_cp_for_override.mode)
+            _resume_cp_available = (_resume_mode_key == operation_mode)
+    except Exception:
+        _resume_cp_for_override = None
+        _resume_cp_available = False
 
     _print_banner(f"🧪 Test failure injection ({_mode_name})")
     print("\n  Select a checkpoint to fail immediately after it is saved.")
     print("  This is intended to validate resume/checkpoint pickup on the next run.")
     print("")
     print("  0. Disable injected checkpoint failure for this run")
+    if _resume_cp_available:
+        print("  B. Back to checkpoint resume-stage override")
     for _idx, (_phase, _label) in enumerate(_options, 1):
         print(f"  {_idx}. {_phase:<22} {_label}")
 
     while True:
-        _sel = _prompt(f"\n  Inject failure after checkpoint [0-{len(_options)}]: ", "0").strip()
+        _sel = _prompt(
+            f"\n  Inject failure after checkpoint [0-{len(_options)}"
+            f"{', B' if _resume_cp_available else ''}]: ",
+            "0",
+        ).strip()
         if _sel == "":
             _sel = "0"
+        if _resume_cp_available and _sel.lower() == "b":
+            _changed = _prompt_checkpoint_resume_target_override(_resume_cp_for_override)
+            if _changed:
+                _slog(
+                    f"--test menu: resume-stage override updated before injection "
+                    f"(next={_checkpoint_resume_phase_id(_resume_cp_for_override) or 'complete'})"
+                )
+            continue
         if not _sel.isdigit():
             print("  ⚠️  Enter a number from the list.")
             continue
@@ -3952,7 +3976,7 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
         _status = "done" if _done else "pending"
         _marker = ""
         if _cp_id == _first_pending:
-            _marker = "  ← detected next"
+            _marker = "  <- detected next"
         print(f"       {_idx:>2}. {_cp_id:<16} {_cp_desc} [{_status}]{_marker}")
 
     _id_lookup = {_cp_id.lower(): _cp_id for _cp_id, __ in _checkpoint_seq}
@@ -3976,9 +4000,22 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
         if _target == _detected_next:
             print("     ℹ️  Selected checkpoint is already the detected next stage.")
             return False
+        _target_desc = ""
+        for _cp_id, _cp_desc in _checkpoint_seq:
+            if _cp_id == _target:
+                _target_desc = _cp_desc
+                break
+        _confirm = _prompt(
+            f"     Confirm resume override to {_target}"
+            f"{f' ({_target_desc})' if _target_desc else ''}? [y/N]: ",
+            "n",
+        ).strip().lower()
+        if _confirm not in ("y", "yes"):
+            print("     Override not applied. Choose another checkpoint or press Enter to keep detected stage.")
+            continue
         if _checkpoint_apply_manual_resume_target(cp, _target):
             _new_stage = _checkpoint_resume_stage_label(cp)
-            print(f"     ✅ Manual checkpoint override applied: next stage is {_new_stage} ({_target}).")
+            print(f"     Manual checkpoint override applied: next stage is {_new_stage} ({_target}).")
             _slog(f"Manual checkpoint override applied: target={_target}, mode={cp.mode}")
             return True
         print("     ⚠️  Could not apply manual checkpoint override.")
