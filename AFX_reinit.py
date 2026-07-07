@@ -538,7 +538,7 @@ class CheckpointManager:
                 _mode_raw == "4.2-3"
                 and _cur_state == "in_progress"
                 and _cur_name in {
-                    "Cluster Setup Wizard (1.2)",
+                    "Cluster Setup Wizard (mode 1)",
                     "4.2 – Cluster Initialization (primary)",
                     "4.2 – Cluster Initialization (primary resume)",
                 }
@@ -2534,7 +2534,7 @@ class _NodeLogWriter:
         "✅", "❌", "⚠️", "🤖", "🔄", "📋", "🔢", "🔒",
         "📡", "📝", "🌐", "🧩", "🔁", "🛑", "⏳", "↻",
         "Now monitoring boot output",
-        "Mode 1.2", "Mode 2.2", "Auto-init", "Auto-join",
+        "Mode 1", "Mode 2.2", "Auto-init", "Auto-join",
         "Monitoring for AUTOBOOT", "Detected LOADER prompt",
         "Boot menu", "Selecting option",
     )
@@ -3799,7 +3799,7 @@ def _checkpoint_menu_option_label(cp_mode: str) -> str:
     if _m == "2":
         return "2.3"
     if _m == "1":
-        return "1.2 (Automatic reinit of primary node in cluster/cluster creation)"
+        return "1 (Automatic reinit of primary node in cluster/cluster creation)"
     return cp_mode or "unknown"
 
 
@@ -4408,7 +4408,7 @@ def select_operation_mode():
             print("")
             print("  " + "*" * 58)
             print("  * CAUTION: 2.2 REQUIRES AN EXISTING CLUSTER. IF NONE    *")
-            print("  * EXISTS, USE 1.1 OR 1.2 INSTEAD.                        *")
+            print("  * EXISTS, USE OPTION 1 INSTEAD.                           *")
             print("  " + "*" * 58)
             print("")
             print("  " + "─" * 58)
@@ -4446,7 +4446,7 @@ def select_operation_mode():
             _print_banner("⚠️  WARNING ⚠️")
             print("")
             print("  Option 3: End-to-end auto initialize.")
-            print("    1) Format + setup the FIRST node automatically (1.2).")
+            print("    1) Format + setup the FIRST node automatically (mode 1).")
             print("    2) Once the cluster is created, format and JOIN every")
             print("       additional BMC in PARALLEL. The 'create or join'")
             print("       step is serialized so each node is fully added")
@@ -4825,7 +4825,7 @@ def select_operation_mode():
             print("\n  \U0001f44b Exiting script. No changes were made.")
             sys.exit(0)
 
-        print("  ⚠️  Invalid choice. Please enter 1.1, 1.2, 2.1, 2.2, 2.3, 3, 4.1-4.3, 5.1-5.15/5.99, 6, or 7.")
+        print("  ⚠️  Invalid choice. Please enter 1, 2.1, 2.2, 2.3, 3, 4.1-4.3, 5.1-5.15/5.99, 6, or 7.")
 
 
 def get_loader_commands():
@@ -6932,12 +6932,12 @@ DESCRIPTION
     Operation modes (selected interactively at startup):
 
       1.1   Initialize first node — interactive wizard
-      1.2   Initialize first node — fully automated
+        1   Initialize first node — fully automated
       2.1   Add node to existing cluster — interactive wizard
            (supports password groups + blank-password fallback retries)
       2.2   Add node to existing cluster — automated (parallel multi-node)
            (supports password groups + blank-password fallback retries)
-       3   End-to-end reinit: mode 1.2 on primary + mode 2.2 on all peers
+       3   End-to-end reinit: mode 1 on primary + mode 2.2 on all peers
            (same credential-grouping/fallback behavior as 2.2; reinit-only)
            ONTAP installs are handled by 4.2/4.3 before running mode 3
            includes per-node join-status output during bulk add-node polling
@@ -7560,14 +7560,14 @@ def parse_args():
                              "LOADER stage.")
     # ── Mode shortcut flags (bypass the interactive menu) ──────────────────
     parser.add_argument("--first-node", action="store_true", default=False,
-                        help="Skip the menu and run mode 1.2: initialize the "
+                        help="Skip the menu and run mode 1: initialize the "
                              "first node and set up the cluster automatically.")
     parser.add_argument("--add-nodes", action="store_true", default=False,
                         help="Skip the menu and run mode 2.2: add node(s) to "
                              "an existing cluster automatically.")
     parser.add_argument("--reinit", action="store_true", default=False,
                         help="Skip the menu and run mode 3: end-to-end "
-                             "automated reinit (1.2 on primary + parallel "
+                             "automated reinit (mode 1 on primary + parallel "
                              "node adds).")
     parser.add_argument("--netboot-install", action="store_true", default=False,
                         help="Skip the menu and run mode 4.2: netboot and "
@@ -11772,7 +11772,7 @@ def collect_node_mgmt_per_bmc(primary_bmc, peer_bmcs):
 
     _print_banner("\U0001F310 Node Management Network Configuration")
     print("\n  Enter node-management network details for each BMC.")
-    print("  These will be auto-answered during cluster setup (mode 1.2).")
+    print("  These will be auto-answered during cluster setup (mode 1).")
     print("  Press Enter to accept the [default] shown in brackets.")
 
     if _session_log:
@@ -11878,7 +11878,7 @@ def collect_cluster_config():
 
     _print_banner("\U0001F3DB\uFE0F  Cluster Setup Configuration")
     print("\n  These values will be used to drive the cluster setup wizard")
-    print("  after option 4 (mode 1.2 only). Press Enter to accept defaults.")
+    print("  after option 4 (mode 1 only). Press Enter to accept defaults.")
 
     if _session_log:
         _session_log.start_phase("Collect Cluster Setup Config")
@@ -12370,6 +12370,86 @@ def _wait_and_send(channel, trigger, response, label, timeout=900,
         else:
             _session_log.log_sent(response if response else "<Enter>")
     time.sleep(0.5)
+
+
+def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None, reconnect_ctx=None):
+    """Watch cluster-create milestones and continue at additional-license prompt."""
+    _license_trigger = "enter an additional license key"
+    _cluster_created_trigger = "cluster has been created"
+    _stages = [
+        ("zeroing disk", "Zeroing disk"),
+        ("addition of disks", "Addition of Disks"),
+        ("updating volume location database", "Updating volume location database"),
+        ("creating root", "Creating root aggregate"),
+        ("mounting root volume", "Mounting root volume"),
+        ("creating data aggregate", "Creating data aggregate"),
+    ]
+    _watch_tokens = [_license_trigger, _cluster_created_trigger] + [t for t, __ in _stages]
+    _t0 = time.monotonic()
+    _deadline = _t0 + max(30, int(timeout))
+    _active_idx = -1
+    _active_t0 = _t0
+    _last_tick = _t0
+    _cluster_created_seen = False
+
+    def _stage_line(msg: str):
+        print(f"   - {msg}")
+
+    while time.monotonic() < _deadline:
+        _remaining = max(1, int(_deadline - time.monotonic()))
+        _out, _matched = direct_read_until_any(
+            channel,
+            _watch_tokens,
+            timeout=min(30, _remaining),
+            node_log=node_log,
+            quiet=True,
+            check_bmc_drop=True,
+            reconnect_ctx=reconnect_ctx,
+        )
+        _scan = (str(_out or "") + "\n" + str(_matched or "")).lower()
+        _now = time.monotonic()
+
+        for _idx, (_token, _label) in enumerate(_stages):
+            if _idx <= _active_idx:
+                continue
+            if _token in _scan:
+                _active_idx = _idx
+                _active_t0 = _now
+                _stage_line(f"{_label} detected ({int(_now - _t0)}s elapsed)")
+                _slog(f"Cluster-create progress: {_label} detected ({int(_now - _t0)}s elapsed)")
+
+        if (not _cluster_created_seen) and (_cluster_created_trigger in _scan):
+            _cluster_created_seen = True
+            _stage_line(f"Cluster has been created. ({int(_now - _t0)}s elapsed)")
+            _slog(f"Cluster-create progress: cluster created ({int(_now - _t0)}s elapsed)")
+
+        if _matched and str(_matched).lower() == _license_trigger:
+            time.sleep(0.2)
+            channel.send("\r")
+            if _session_log:
+                _session_log.log_sent("<Enter>")
+            return True
+
+        if _active_idx >= 0 and (_now - _last_tick) >= 60:
+            _label = _stages[_active_idx][1]
+            _stage_line(
+                f"{_label} in progress ({int(_now - _active_t0)}s in stage, "
+                f"{int(_now - _t0)}s elapsed)"
+            )
+            _last_tick = _now
+
+    _stage_line(
+        f"Timed out waiting for post-create prompt after {int(time.monotonic() - _t0)}s; "
+        "sending Enter to continue."
+    )
+    _slog(
+        "Cluster-create progress monitor timed out waiting for additional license key prompt",
+        prefix="WARN",
+    )
+    channel.send("\r")
+    if _session_log:
+        _session_log.log_sent("<Enter>")
+    return False
 
 
 def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
@@ -15378,12 +15458,12 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     if _do_reinit and _mode_sel is None and not resuming:
         print("\n  Select reinit mode:")
         print("    1.1. Format first node (interactive)")
-        print("    1.2. Format first node + cluster setup (automatic)")
-        print("     3. End-to-end auto initialize (1.2 + auto-add all peer nodes)")
+        print("      1. Format first node + cluster setup (automatic)")
+        print("      3. End-to-end auto initialize (1 + auto-add all peer nodes)")
         print("")
         while True:
-            _mode_sel = _prompt("  Enter 1.1, 1.2, or 3: ").lower()
-            if _mode_sel in ("1.1", "1.2", "3"):
+            _mode_sel = _prompt("  Enter 1.1, 1, or 3: ").lower()
+            if _mode_sel in ("1.1", "1", "1.2", "3"):
                 break
             print("  ⚠️  Invalid choice.")
 
@@ -15393,7 +15473,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             _operation_mode = 1
             _auto_setup = False
             _auto_add = False
-        elif _mode_sel == "1.2":
+        elif _mode_sel in ("1", "1.2"):
             _operation_mode = 1
             _auto_setup = True
             _auto_add = False
@@ -15437,11 +15517,11 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         # Collect node-management IP details for every node.
         collect_node_mgmt_per_bmc(bmc_ips[0], bmc_ips[1:])
 
-        # For automatic modes (1.2/3), collect the cluster-level setup answers.
+        # For automatic modes (1/3), collect the cluster-level setup answers.
         if _auto_setup:
             collect_cluster_config()
 
-        # Ask about passwordless SSH for automatic modes (1.2/3) up-front so
+        # Ask about passwordless SSH for automatic modes (1/3) up-front so
         # nothing needs to be asked mid-run.
         if _auto_setup:
             global _setup_passwordless_ssh
@@ -21823,13 +21903,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
 
     print("\n🤖 Driving ONTAP cluster setup wizard from collected values...")
     if _session_log:
-        _session_log.start_phase("Cluster Setup Wizard (1.2)")
+        _session_log.start_phase("Cluster Setup Wizard (mode 1)")
         loggable = {k: ("<hidden>" if k == "admin_password" else v) for k, v in cc.items()}
         _session_log.log(f"Wizard inputs: {loggable}")
     if _checkpoint and _operation_mode == 1 and _auto_add:
         with suppress(Exception):
             _checkpoint.set_current_phase(
-                "Cluster Setup Wizard (1.2)",
+                "Cluster Setup Wizard (mode 1)",
                 state="in_progress",
                 next_phase="2.2 – Parallel Node Add",
             )
@@ -22018,18 +22098,12 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             "\n⏳ Cluster create started. Waiting for ONTAP to form the cluster "
             "and reach post-create prompts..."
         )
-        _slog("Cluster create started — waiting for additional license key prompt")
-        _create_wait_done = threading.Event()
-        _create_wait_t0 = time.monotonic()
-        def _create_wait_reporter(_ev=_create_wait_done, _t0=_create_wait_t0):
-            while not _ev.wait(60):
-                _elapsed = int(time.monotonic() - _t0)
-                print(f"   ⏳ Cluster creation still in progress... ({_elapsed}s elapsed)")
-        threading.Thread(target=_create_wait_reporter, daemon=True).start()
-        _wait_and_send(channel, "enter an additional license key", "",
-                       "Additional license key -> Enter", timeout=1800,
-                       quiet=True, node_log=node_log)
-        _create_wait_done.set()
+        _slog("Cluster create started - monitoring ONTAP progress milestones")
+        _wait_for_cluster_create_post_prompts(
+            channel,
+            timeout=1800,
+            node_log=node_log,
+        )
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(
             "\n✅ Cluster create reached post-create wizard prompts. "
@@ -22344,7 +22418,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             try:
                 if _auto_setup:
                     _checkpoint.clear()
-                    _slog("checkpoint: cleared after 1.2 complete")
+                    _slog("checkpoint: cleared after mode 1 complete")
                 else:
                     _checkpoint.mark_done("cp_1_8")
                     _slog("checkpoint: cp_1_8 saved")
@@ -26382,10 +26456,10 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     Remaining setup-wizard prompts (cluster name, admin password, etc.) are
     left to the interactive session that runs after this function returns.
     """
-    print(f"\n🤖 {_node_pfx(bmc_host)}Mode 1.2: automated cluster initialization in progress...{_elapsed_str()}")
+    print(f"\n🤖 {_node_pfx(bmc_host)}Mode 1: automated cluster initialization in progress...{_elapsed_str()}")
     if _session_log:
-        _session_log.start_phase("Auto Cluster Init (1.2)")
-        _session_log.log("Mode 1.2 automated init starting after option 9 sent")
+        _session_log.start_phase("Auto Cluster Init (mode 1)")
+        _session_log.log("Mode 1 automated init starting after option 9 sent")
     _boot_log = None
     _boot_log_dir = _session_log.log_dir if _session_log and hasattr(_session_log, "log_dir") else os.getcwd()
     try:
@@ -27193,7 +27267,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             except Exception:
                 pass
 
-    print("\n✅ Mode 1.2 auto-init complete; driving cluster setup wizard...")
+    print("\n✅ Mode 1 auto-init complete; driving cluster setup wizard...")
     if _session_log:
         _session_log.log("Auto-init phase complete; transitioning to wizard automation")
         _session_log.end_phase()
@@ -34586,7 +34660,7 @@ def main():
                 _session_log.log(f"Loaded config file: {config_path}")
 
             if _operation_mode == 3:
-                mode_desc = "End-to-end auto initialize (1.2 primary + parallel auto-add peers)"
+                mode_desc = "End-to-end auto initialize (mode 1 primary + parallel auto-add peers)"
             elif _operation_mode == 1:
                 mode_desc = "Create single node cluster (fully automated)"
             elif _operation_mode == 41:
