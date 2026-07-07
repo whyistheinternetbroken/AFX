@@ -1370,7 +1370,7 @@ _CHECKPOINT_TEST_OPTIONS = {
         ("cp_1_5", "Option 4 completed"),
         ("cp_1_6", "AutoSupport confirmation answered"),
         ("cp_1_7", "Cluster setup started"),
-        ("option1_complete", "Option 1 completion recorded"),
+        ("cp_1_8", "Cluster creation complete"),
     ],
     2: [
         ("cp_2_1", "Node at LOADER"),
@@ -3878,6 +3878,7 @@ def _list_completed_checkpoints(cp) -> str:
             "cp_1_5": "Option 4 completed",
             "cp_1_6": "AutoSupport confirmation answered",
             "cp_1_7": "Cluster setup started",
+            "cp_1_8": "Cluster creation complete",
         },
         "2": {
             "cp_2_1": "LOADER reached",
@@ -22130,8 +22131,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     _checkpoint.clear()
                     _slog("checkpoint: cleared after 1.2 complete")
                 else:
-                    _checkpoint.mark_done("option1_complete")
-                    _slog("checkpoint: option1_complete saved")
+                    _checkpoint.mark_done("cp_1_8")
+                    _slog("checkpoint: cp_1_8 saved")
             except _InjectedCheckpointFailure:
                 raise
             except Exception:
@@ -25115,7 +25116,7 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
     """Detect any prior option-1 checkpoint and initialise a fresh one.
 
     If a prior checkpoint shows the primary node already had its cluster
-    created (``primary_setup_done`` set, ``option1_complete`` not set), warn
+    created (``primary_setup_done`` set, ``cp_1_8`` not set), warn
     the operator that the cluster already exists and suggest exiting.
     On confirmation (or no destructive risk) the prior checkpoint is cleared
     and a fresh one initialised.
@@ -25134,7 +25135,7 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
         prior_install = prior.is_done("primary_install_done")
         prior_format = prior.is_done("primary_format_done")
         prior_primary = prior.is_done("primary_setup_done")
-        prior_complete = prior.is_done("option1_complete")
+        prior_complete = prior.is_done("cp_1_8")
         _print_banner("🔖 Prior option-1 checkpoint found")
         print(f"     BMC IP                : {sp_host}")
         print(f"     Mode                  : {_format_checkpoint_mode(prior.mode)}")
@@ -25147,7 +25148,7 @@ def _option1_init_checkpoint(ctx, sp_host, config_path):
         if prior_primary:
             print("     primary_setup_done    : ✅ (cluster already created)")
         if prior_complete:
-            print("     option1_complete      : ✅")
+            print("     cp_1_8               : ✅")
         print("=" * 60)
         
         _destructive_progress = bool(
