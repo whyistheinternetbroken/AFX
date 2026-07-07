@@ -1665,8 +1665,15 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
 
 
 def _raise_pending_checkpoint_failure() -> None:
-    if _pending_checkpoint_test_failure is not None:
-        raise _pending_checkpoint_test_failure
+    global _pending_checkpoint_test_failure
+    if _pending_checkpoint_test_failure is None:
+        return
+    _err = _pending_checkpoint_test_failure
+    _pending_checkpoint_test_failure = None
+    _msg = f"  Test checkpoint failure reached - returning to main menu.\n    {_err}"
+    print(f"\n{_msg}")
+    _slog(_msg, prefix="INFO")
+    raise _ReturnToMenu
 
 
 def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
@@ -12512,12 +12519,17 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
 
     _cc_done_ev = None  # set when the cluster-creation progress reporter starts
     _menu_sigs = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
+    if _node_add and not _enable_autosupport:
+        _slog(
+            "Node-add flow ignores AutoSupport disable preference for type-yes confirmation; sending 'yes'",
+            prefix="INFO",
+        )
     _prompt_sequence = [
         ("zero disks, reset config and install a new file system", "yes",
          "zero disks confirmation"),
         ("this will erase all the data on the disks", "yes",
          "erase data confirmation"),
-        ("type yes to confirm and continue", "yes" if _enable_autosupport else "no",
+        ("type yes to confirm and continue", "yes",
          "type-yes confirmation"),
     ]
     if expect_option4_unjoin_warning:
@@ -15574,7 +15586,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             , "y").lower()
             _enable_autosupport = (_asup_q != "n")
             if not _enable_autosupport:
-                print("  ℹ️   AutoSupport will be disabled (will respond 'no' to AutoSupport prompt).")
+                print("  ℹ️   AutoSupport will be disabled after setup (confirmation still answers 'yes').")
         if log:
             log.log(f"4.2: AutoSupport: {'enabled' if _enable_autosupport else 'disabled'}")
 
@@ -34575,7 +34587,7 @@ def main():
                             _checkpoint.set_selection("enable_autosupport", _enable_autosupport)
                         
                         if not _enable_autosupport:
-                            print("  ℹ️   AutoSupport will be disabled (will respond 'no' to AutoSupport prompt).")
+                            print("  ℹ️   AutoSupport will be disabled after setup (confirmation still answers 'yes').")
                     
                     if _diag_mode:
                         _diag_bootargs = _load_diag_bootargs()
