@@ -3958,6 +3958,239 @@ def _checkpoint_apply_manual_resume_target(cp, target_phase_id: str) -> bool:
     return True
 
 
+def _checkpoint_mode_choice_to_value(choice: str) -> str:
+    _c = str(choice or "").strip().lower()
+    if _c in ("1", "mode1"):
+        return "1"
+    if _c in ("2", "2.2", "2x", "mode2"):
+        return "2"
+    if _c in ("3", "mode3"):
+        return "3"
+    if _c in ("4.2", "42", "mode4.2"):
+        return "4.2"
+    return ""
+
+
+def _extract_bmc_lists_from_config_dict(cfg: dict) -> "tuple[str, list[str]]":
+    _primary = ""
+    _secondary = []
+    if not isinstance(cfg, dict):
+        return "", []
+    _pn = cfg.get("primary_node")
+    if isinstance(_pn, dict):
+        _primary = str(_pn.get("bmc") or "").strip()
+    _sn = cfg.get("secondary_nodes")
+    if isinstance(_sn, list):
+        for _n in _sn:
+            if isinstance(_n, dict):
+                _b = str(_n.get("bmc") or "").strip()
+                if _b and _b not in _secondary:
+                    _secondary.append(_b)
+    if not _primary and not _secondary:
+        _nodes = cfg.get("nodes")
+        if isinstance(_nodes, list):
+            for _idx, _n in enumerate(_nodes):
+                if not isinstance(_n, dict):
+                    continue
+                _b = str(_n.get("bmc") or "").strip()
+                if not _b:
+                    continue
+                if _idx == 0:
+                    _primary = _b
+                elif _b not in _secondary:
+                    _secondary.append(_b)
+    return _primary, _secondary
+
+
+def _load_config_for_checkpoint_override() -> "tuple[dict, str]":
+    _detected = _find_config_files(deep_scan=True)
+    _path = _select_config_path_interactive(_detected, indent="     ", header_emoji="📄")
+    if not _detected and not _path:
+        _raw = _prompt("     Config path (optional, Enter to skip): ", "").strip()
+        if _raw:
+            _candidate = os.path.expanduser(os.path.expandvars(_raw))
+            if os.path.isfile(_candidate):
+                _path = _candidate
+            else:
+                print(f"     ⚠️  File not found: {_candidate}")
+    if not _path:
+        return {}, ""
+    try:
+        return load_config_file(_path), _path
+    except ValueError as _e:
+        print(f"     ⚠️  {_e}")
+        return {}, ""
+
+
+def _normalize_node_override_phase(raw_value, default_mode_key: int) -> str:
+    _rv = str(raw_value or "").strip().lower()
+    if not _rv:
+        return ""
+    if _rv.startswith("cp_"):
+        return _rv
+    _suffix = ""
+    if _rv.isdigit():
+        _suffix = _rv
+    elif "." in _rv:
+        _parts = _rv.split(".")
+        if _parts and _parts[-1].isdigit():
+            _suffix = _parts[-1]
+    if not _suffix:
+        return ""
+    return f"cp_{default_mode_key}_{_suffix}"
+
+
+def _set_node_phase_target(cp, node_id: str, mode_key: int, target_phase_id: str) -> bool:
+    _seq = list(_CHECKPOINT_TEST_OPTIONS.get(mode_key) or [])
+    if not _seq:
+        return False
+    _target = str(target_phase_id or "").strip()
+    _target_idx = -1
+    for _idx, (_cp_id, __) in enumerate(_seq):
+        if _cp_id == _target:
+            _target_idx = _idx
+            break
+    if _target_idx < 0:
+        return False
+    _np = cp._data.setdefault("node_phases", {})
+    _now = datetime.now().isoformat()
+    _nid = str(node_id or "").strip()
+    if not _nid:
+        return False
+    for _idx, (_cp_id, __) in enumerate(_seq):
+        if _idx < _target_idx:
+            _np.setdefault(_cp_id, {})[_nid] = {"done": True, "ts": _now}
+        else:
+            if _cp_id in _np:
+                _np[_cp_id].pop(_nid, None)
+                if not _np[_cp_id]:
+                    _np.pop(_cp_id, None)
+    return True
+
+
+def _apply_node_overrides_from_config(cp) -> int:
+    """Apply per-node checkpoint overrides from config JSON when present.
+
+    Supported node keys: checkpoint_override, checkpoint_phase_override,
+    resume_checkpoint, checkpoint_phase.
+    """
+    if not cp:
+        return 0
+    _cfg_path = str(getattr(cp, "config_path", "") or "").strip()
+    if not _cfg_path or not os.path.isfile(_cfg_path):
+        return 0
+    try:
+        _cfg = load_config_file(_cfg_path)
+    except Exception:
+        return 0
+
+    _mode_key = _checkpoint_mode_to_test_key(cp.mode)
+    if _mode_key not in (2, 3):
+        return 0
+
+    _applied = 0
+    _entries = []
+    _pn = _cfg.get("primary_node")
+    if isinstance(_pn, dict):
+        _entries.append(("primary", _pn))
+    for _sn in (_cfg.get("secondary_nodes") or []):
+        if isinstance(_sn, dict):
+            _entries.append(("secondary", _sn))
+    if not _entries:
+        for _idx, _n in enumerate(_cfg.get("nodes") or []):
+            if isinstance(_n, dict):
+                _entries.append(("primary" if _idx == 0 else "secondary", _n))
+
+    for _role, _node in _entries:
+        _bmc = str(_node.get("bmc") or "").strip()
+        if not _bmc:
+            continue
+        _raw = (
+            _node.get("checkpoint_override")
+            or _node.get("checkpoint_phase_override")
+            or _node.get("resume_checkpoint")
+            or _node.get("checkpoint_phase")
+        )
+        if not _raw:
+            continue
+
+        if _mode_key == 2:
+            _target = _normalize_node_override_phase(_raw, 2)
+            _node_id = _bmc
+        else:
+            if _role == "primary":
+                _target = _normalize_node_override_phase(_raw, 1)
+                _node_id = _MODE3_PRIMARY_CHECKPOINT_NODE
+            else:
+                _target = _normalize_node_override_phase(_raw, 2)
+                _node_id = _mode3_peer_checkpoint_node(_bmc)
+        if not _target:
+            continue
+        _target_mode_key = 1 if (_mode_key == 3 and _role == "primary") else 2
+        if not _set_node_phase_target(cp, _node_id, _target_mode_key, _target):
+            continue
+        if _mode_key == 3 and _role == "primary":
+            _phases = cp._data.setdefault("phases", {})
+            _now = datetime.now().isoformat()
+            _p_alias = {
+                "cp_1_5": "primary_bootmenu_done",
+                "cp_1_6": "primary_node_mgmt_done",
+                "cp_1_7": "primary_setup_done",
+            }
+            _seq1 = [c for c, __ in (_CHECKPOINT_TEST_OPTIONS.get(1) or [])]
+            _ti = _seq1.index(_target) if _target in _seq1 else -1
+            for _cp_id, _alias in _p_alias.items():
+                _ci = _seq1.index(_cp_id) if _cp_id in _seq1 else -1
+                if _ti >= 0 and _ci >= 0 and _ci < _ti:
+                    _phases[_alias] = {"done": True, "ts": _now}
+                else:
+                    _phases.pop(_alias, None)
+        _applied += 1
+
+    if _applied:
+        cp._save()
+    return _applied
+
+
+def _create_checkpoint_for_manual_override() -> "CheckpointManager | None":
+    print("\n  No checkpoint file found. You can create one now and apply overrides.")
+    while True:
+        _m = _prompt("  Create manual checkpoint for mode [1/2/3/4.2] (Enter=cancel): ", "").strip().lower()
+        if not _m:
+            return None
+        _mode = _checkpoint_mode_choice_to_value(_m)
+        if _mode:
+            break
+        print("  ⚠️  Invalid mode. Enter 1, 2, 3, or 4.2.")
+
+    _cfg_data, _cfg_path = _load_config_for_checkpoint_override()
+    _primary, _secondary = _extract_bmc_lists_from_config_dict(_cfg_data)
+    if _mode == "1":
+        _bmc_ips = [_primary] if _primary else []
+    elif _mode == "2":
+        _bmc_ips = list(_secondary)
+    else:
+        _bmc_ips = []
+        if _primary:
+            _bmc_ips.append(_primary)
+        for _ip in _secondary:
+            if _ip and _ip not in _bmc_ips:
+                _bmc_ips.append(_ip)
+
+    if _mode in ("2", "3", "4.2") and not _bmc_ips:
+        _raw_ips = _prompt(
+            "  Enter BMC IP(s), comma-separated (optional): ",
+            "",
+        ).strip()
+        if _raw_ips:
+            _bmc_ips = [x.strip() for x in _raw_ips.split(",") if x.strip()]
+
+    _cp = CheckpointManager()
+    _cp.init_run(mode=_mode, bmc_ips=_bmc_ips, log_dir="", config_path=_cfg_path)
+    print(f"  ✅ Created checkpoint skeleton: mode={_mode}, nodes={len(_bmc_ips)}")
+    return _cp
+
+
 def _prompt_checkpoint_resume_target_override(cp) -> bool:
     """Let operator optionally override resume start checkpoint."""
     if not cp:
@@ -3966,6 +4199,9 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
     _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
     if not _checkpoint_seq:
         return False
+    _node_applied = _apply_node_overrides_from_config(cp)
+    if _node_applied:
+        print(f"     Applied {_node_applied} per-node override(s) from config file.")
 
     _detected_next = _checkpoint_resume_phase_id(cp)
     _display_default = _detected_next or "(first checkpoint)"
@@ -4270,14 +4506,19 @@ def select_operation_mode():
                 '❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.) or type "checkpoint" to resume the last checkpoint: '
             ).strip().lower()
         else:
-            choice = input("❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.): ").strip().lower()
+            choice = input(
+                '❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.) or type "checkpoint" for manual checkpoint override: '
+            ).strip().lower()
 
         if choice == "checkpoint":
             _cp_manual = CheckpointManager()
             if not _cp_manual.load():
-                print("\n  ⚠️  No valid checkpoint is currently available to resume.")
-                _menu_checkpoint_available = False
-                continue
+                _cp_manual = _create_checkpoint_for_manual_override()
+                if _cp_manual is None:
+                    print("\n  ↩️  Returning to menu...\n")
+                    _menu_checkpoint_available = False
+                    continue
+                _menu_checkpoint_available = True
             _prompt_checkpoint_resume_target_override(_cp_manual)
             _resume_choice = _dispatch_checkpoint_resume(_cp_manual)
             if _resume_choice is not None:
