@@ -10186,6 +10186,7 @@ def wait_for_boot_menu_and_select(channel, timeout=900, node_log=None, node_labe
 
     def _auto_answer_option9_init_prompts(max_wait=180):
         """For cp_1_2 resume, finish option-9 yes/no confirmations if already active."""
+        global _option9_platform_unsupported
         if not _resume_cp_1_2_option9:
             return 0
         if _option9_platform_unsupported:
