@@ -1380,7 +1380,7 @@ _CHECKPOINT_TEST_OPTIONS = {
         ("cp_2_5", "Node management configured"),
         ("cp_2_6", "Node at cluster prompt before join"),
         ("cp_2_7", "Node joined cluster"),
-        ("option2_complete", "Option 2 completion recorded"),
+        ("cp_2_8", "Node addition job completed"),
     ],
     3: [
         ("cp_1_1", "Primary LOADER configuration completed"),
@@ -3888,6 +3888,7 @@ def _list_completed_checkpoints(cp) -> str:
             "cp_2_5": "Cluster setup menu",
             "cp_2_6": "Cluster join pending",
             "cp_2_7": "Node joined",
+            "cp_2_8": "Node addition job completed",
         },
         "4.2": {
             "cp_4b_1": "Nodes at LOADER",
@@ -22499,8 +22500,8 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
             # Checkpoint: mark option 2 as complete
             if _checkpoint and _operation_mode == 2:
                 try:
-                    _checkpoint.mark_done("option2_complete")
-                    _slog("checkpoint: option2_complete saved")
+                    _checkpoint.mark_done("cp_2_8")
+                    _slog("checkpoint: cp_2_8 saved")
                 except _InjectedCheckpointFailure:
                     raise
                 except Exception:
@@ -25202,7 +25203,7 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
     """Detect any prior option-2 checkpoint and initialise a fresh one.
 
     If a prior checkpoint shows the node was already joined to the cluster
-    (``node_joined`` set, ``option2_complete`` not set), warn the operator.
+    (``node_joined`` set, ``cp_2_8`` not set), warn the operator.
     On confirmation (or no destructive risk) the prior checkpoint is cleared
     and a fresh one initialised.
 
@@ -25219,7 +25220,7 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
         prior_install = prior.is_done("node_install_done")
         prior_format = prior.is_done("node_format_done")
         prior_joined = prior.is_done("node_joined")
-        prior_complete = prior.is_done("option2_complete")
+        prior_complete = prior.is_done("cp_2_8")
         _print_banner("🔖 Prior option-2 checkpoint found")
         print(f"     BMC IP                : {secondary_bmc}")
         print(f"     Mode                  : {_format_checkpoint_mode(prior.mode)}")
@@ -25230,7 +25231,7 @@ def _option2_init_checkpoint(ctx, secondary_bmc, config_path):
         if prior_joined:
             print("     node_joined           : ✅ (node already joined cluster)")
         if prior_complete:
-            print("     option2_complete      : ✅")
+            print("     cp_2_8               : ✅")
         print("=" * 60)
         
         _destructive_progress = bool(
