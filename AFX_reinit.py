@@ -11898,6 +11898,7 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
         _asup_info_enter_sent = False
         _asup_prompt_answered = False
         _last_recv_activity = time.monotonic()
+        _last_enter_sent = 0.0
         while trigger_lower not in _buf.lower():
             if time.monotonic() - _trigger_start > _overall_timeout:
                 break
@@ -11939,20 +11940,23 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                     _session_log.log_sent(_asup_resp)
                 _asup_prompt_answered = True
                 _asup_info_enter_sent = True
+                _last_enter_sent = time.monotonic()
                 _buf = ""
-            elif not _asup_info_enter_sent:
+            else:
                 _saw_asup_info = (
                     "enabling autosupport can significantly speed problem determination" in _buf_l
                     or "this system will send event messages" in _buf_l
                 )
                 _console_silent = (time.monotonic() - _last_recv_activity) >= 3
-                if _saw_asup_info or _console_silent:
+                _enter_cooldown = 30.0 if _asup_info_enter_sent else 0.0
+                if (_saw_asup_info or _console_silent) and (time.monotonic() - _last_enter_sent >= _enter_cooldown):
                     time.sleep(0.5)
                     _reason = "AutoSupport info screen detected" if _saw_asup_info else "console silent"
                     _slog(f"{_reason} in node-mgmt wait; sending Enter to advance")
                     with suppress(Exception):
                         channel.send("\r")
                     _asup_info_enter_sent = True
+                    _last_enter_sent = time.monotonic()
             time.sleep(0.1)
 
         # Prompt detected – resolve the value.
