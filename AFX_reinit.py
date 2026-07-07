@@ -4485,10 +4485,10 @@ def select_operation_mode():
         _cp_mode = str(_cp_obj.mode or "").strip()
         if _cp_mode.lower().startswith("4.2"):
             _resume_from_start_menu = True
-            print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 4.2.")
+            print("\n  ✅ Resuming checkpoint via menu option 4.2.")
             return 42, False, False
         if _cp_mode == "2":
-            print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2.3.")
+            print("\n  ✅ Resuming checkpoint via menu option 2.3.")
             return 26, False, False
         if _cp_mode == "3":
             _mode3_peer_opt4 = bool(_cp_obj.nodes_done_for("peer_option4_done"))
@@ -4501,14 +4501,14 @@ def select_operation_mode():
             )
             if _mode3_replay_risk:
                 print(
-                    "\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 2.3 "
+                    "\n  ✅ Resuming checkpoint via menu option 2.3 "
                     "(safe add-node continuation)."
                 )
                 return 26, False, False
-            print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 3.")
+            print("\n  ✅ Resuming checkpoint via menu option 3.")
             return 3, True, True
         if _cp_mode == "1":
-            print("\n  ✅ Resuming EXPERIMENTAL checkpoint via menu option 1.")
+            print("\n  ✅ Resuming checkpoint via menu option 1.")
             return 1, True, False
         print("  ⚠️  Checkpoint mode is not auto-routable from the start menu.")
         return None
@@ -4576,7 +4576,7 @@ def select_operation_mode():
                 _stage = _checkpoint_resume_stage_label(_cp_start)
                 _completed = _list_completed_checkpoints(_cp_start)
                 print("=" * 60)
-                print(f"  🔖 Existing checkpoint found{_cp_age} (EXPERIMENTAL)")
+                print(f"  🔖 Existing checkpoint found{_cp_age}")
                 print(f"     Last menu option : {_menu_opt}")
                 print(f"     Checkpoint mode  : {_format_checkpoint_mode(_cp_mode)}")
                 if _completed:
@@ -4585,7 +4585,7 @@ def select_operation_mode():
                 print("=" * 60)
                 while True:
                     _resume_now = _prompt(
-                        "  Resume from this EXPERIMENTAL checkpoint now? [y/n]: "
+                        "  Resume from this checkpoint now? [y/n]: "
                     ).strip().lower()
                     if _resume_now in ("y", "n"):
                         break
@@ -4596,8 +4596,17 @@ def select_operation_mode():
                     _resume_choice = _dispatch_checkpoint_resume(_cp_start)
                     if _resume_choice is not None:
                         return _resume_choice
-                # Checkpoint was not resumed — print newline before menu selection prompt
-                print("")
+                else:
+                    # User declined resume — offer to clear the stale checkpoint
+                    _clear_q = _prompt(
+                        "  Clear this checkpoint? [y/N]: ", "n"
+                    ).strip().lower()
+                    if _clear_q in ("y", "yes"):
+                        _cp_start.clear()
+                        _menu_checkpoint_available = False
+                        print("  ✅ Checkpoint cleared.\n")
+                    else:
+                        print("  ℹ️  Checkpoint retained.\n")
         if _menu_checkpoint_available:
             choice = input(
                 '❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.) or type "checkpoint" to resume the last checkpoint: '
@@ -7383,7 +7392,7 @@ OPTIONS
         use WSL or a Linux jump host for equivalent functionality.
 
     --resume
-        EXPERIMENTAL (mode 4.2 only).  Resume the previous 4.2 run from its saved
+        Resume the previous 4.2 run from its saved
         checkpoint (checkpoints/afx_checkpoint.json, located alongside this script).
         Phases already completed are skipped — when every BMC IP is
         marked install_done the run jumps straight to Step 6b
@@ -7398,7 +7407,7 @@ OPTIONS
         deleted automatically on successful completion of mode 4.2.
 
     --checkpoint-status
-        EXPERIMENTAL. Print a summary of the saved checkpoint (checkpoints/afx_checkpoint.json)
+        Print a summary of the saved checkpoint (checkpoints/afx_checkpoint.json)
         and exit.  Shows the absolute file path, run mode, created /
         updated timestamps, current phase, next expected phase, age in minutes,
         log directory, config path, BMC IPs, every completed global phase, and
@@ -7460,7 +7469,7 @@ OPTIONS
         Use with -v for verbose output to see checkpoint details.
 
     --test-checkpoint NODE_IP:CHECKPOINT_ID
-        EXPERIMENTAL: Inject failure at a specific checkpoint for a specific node.
+        Inject failure at a specific checkpoint for a specific node.
         Format: '10.1.1.192:cp_1_5' (node IP, colon, checkpoint ID).
         
         Implies --test flag. Useful for testing recovery from specific failure points
@@ -7584,10 +7593,10 @@ EXAMPLES
         nohup python3 AFX_reinit.py --bg --config configs/reinit-config.json \\
               > nohup.out 2>&1 &
 
-    Inspect a saved 4.2 checkpoint (EXPERIMENTAL):
+    Inspect a saved 4.2 checkpoint:
         python3 AFX_reinit.py --checkpoint-status
 
-    Resume an interrupted 4.2 run (EXPERIMENTAL):
+    Resume an interrupted 4.2 run:
         python3 AFX_reinit.py --resume --config configs/reinit-config.json
 
     Check the result of the most recent run:
@@ -7615,7 +7624,7 @@ FILES
         timing, warnings inventory, and errors inventory.
 
     checkpoints/afx_checkpoint.json
-        EXPERIMENTAL mode 4.2 resume checkpoint.  Written under the script's checkpoints/
+        Resume checkpoint written under the script's checkpoints/
         directory; deleted automatically on successful completion.  Inspect with
         --checkpoint-status; resume with --resume.  Ignored if older than
         72 hours.
@@ -7641,14 +7650,14 @@ def _print_runtime_controls_help():
     _pause_path = _pause_sentinel_path()
     _checkpoint_req_path = _checkpoint_request_path()
     _pid = os.getpid()
-    print("\nRuntime pause/checkpoint controls (checkpoint controls are EXPERIMENTAL):\n")
+    print("\nRuntime pause/checkpoint controls:\n")
     print(f"  Pause file (toggle):    {_pause_path}")
     print("  Remove pause file to resume automation.")
     if hasattr(signal, "SIGUSR1"):
         print(f"  Signal pause toggle:    kill -USR1 {_pid}")
     if hasattr(signal, "SIGUSR2"):
         print(f"  Signal force resume:    kill -USR2 {_pid}")
-    print(f"\n  Manual checkpoint file (EXPERIMENTAL): {_checkpoint_req_path}")
+    print(f"\n  Manual checkpoint file: {_checkpoint_req_path}")
     if hasattr(signal, "SIGURG"):
         print(f"  Signal checkpoint:      kill -URG {_pid}")
     print("")
@@ -7856,12 +7865,12 @@ def parse_args():
                              "'screen -r afx-reinit' to reattach. "
                              "No-op if already running inside screen.")
     parser.add_argument("--resume", action="store_true", default=False,
-                        help="EXPERIMENTAL: Resume a previous 4.2 run from its last saved "
+                        help="Resume a previous 4.2 run from its last saved "
                              "checkpoint (checkpoints/afx_checkpoint.json). Skips phases "
                              "already completed so you do not have to restart "
                              "from scratch after a failure.")
     parser.add_argument("--checkpoint-status", action="store_true", default=False,
-                        help="EXPERIMENTAL: Print a summary of the saved checkpoint "
+                        help="Print a summary of the saved checkpoint "
                              "(checkpoints/afx_checkpoint.json) showing current "
                              "and next expected phase, where the last run left "
                              "off, and role-labeled per-node progress, then "
@@ -31742,14 +31751,14 @@ def main():
                 _auto_setup = False
                 _auto_add = False
                 _resume_autodispatch = True
-                print(f"\n  🔖 --resume (EXPERIMENTAL): auto-dispatching to mode 4.2 "
+                print(f"\n  🔖 --resume: auto-dispatching to mode 4.2 "
                       f"from checkpoint (mode={_cp_mode}).")
             else:
-                print(f"\n  ⚠️  --resume (EXPERIMENTAL): checkpoint mode {_cp_mode!r} cannot "
+                print(f"\n  ⚠️  --resume: checkpoint mode {_cp_mode!r} cannot "
                       "be auto-dispatched; falling back to the start menu.")
                 _resume_cp = None
         else:
-            print(f"\n  ⚠️  --resume (EXPERIMENTAL): no valid checkpoint found at "
+            print(f"\n  ⚠️  --resume: no valid checkpoint found at "
                   f"{_resume_cp._path}; falling back to the start menu.")
             _resume_cp = None
 
@@ -31848,13 +31857,13 @@ def main():
                     _resuming = True
                     _checkpoint = _cp
                     _set_resume_log_suffix_from_checkpoint(_cp)
-                    print("\n  ✅ Resuming from EXPERIMENTAL checkpoint (--resume).")
+                    print("\n  ✅ Resuming from checkpoint (--resume).")
                 elif _resume_from_start_menu:
                     if _cp.load():
                         _resuming = True
                         _checkpoint = _cp
                         _set_resume_log_suffix_from_checkpoint(_cp)
-                        print("\n  ✅ Resuming from EXPERIMENTAL checkpoint (startup menu prompt).")
+                        print("\n  ✅ Resuming from checkpoint (startup menu prompt).")
                     else:
                         print("\n  ⚠️  Startup-selected checkpoint is no longer available; "
                               "starting fresh.")
@@ -31874,7 +31883,7 @@ def main():
                         _opt4_done_ips    = _cp.nodes_done_for("peer_option4_done")
                         _joined_ips       = _cp.nodes_done_for("peer_joined")
                         print("\n" + "=" * 60)
-                        print("  🔖 Checkpoint found" + _cp_age + " (EXPERIMENTAL)")
+                        print("  🔖 Checkpoint found" + _cp_age)
                         print(f"     Mode    : {_format_checkpoint_mode(_cp.mode)}")
                         print(f"     BMC IPs : {', '.join(_cp.bmc_ips)}")
                         print(f"     Log dir : {_cp.log_dir}")
@@ -31899,13 +31908,13 @@ def main():
                             print("     option3_complete      : ✅")
                         print("=" * 60)
                         _resume_ans = _prompt(
-                            "\n  Resume from EXPERIMENTAL checkpoint? [Y/n]: "
+                            "\n  Resume from checkpoint? [Y/n]: "
                         , "n").lower()
                         if _resume_ans != "n":
                             _resuming = True
                             _checkpoint = _cp
                             _set_resume_log_suffix_from_checkpoint(_cp)
-                            print("  ✅ Resuming from EXPERIMENTAL checkpoint.")
+                            print("  ✅ Resuming from checkpoint.")
                         else:
                             _cp.clear()
                             print("  ℹ️  Starting fresh run.")
