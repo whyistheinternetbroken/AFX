@@ -7836,7 +7836,7 @@ def enter_system_console(channel, loader_message=True, force_takeover=True):
 # LOADER-check helper — probe before deciding to system reset
 # ---------------------------------------------------------------------------
 
-def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resuming=False):
+def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resuming=False, out_state=None):
     """Probe for an existing LOADER prompt, entering system console only from BMC.
 
     Flow:
@@ -7937,6 +7937,12 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
             if _LOADER_PROMPT_RE.search(buf) or "LOADER-" in buf.upper():
                 loader_found = True
                 break
+            # Boot menu visible — also a stable state that needs no reset.
+            if any(s in buf.lower() for s in ("selection (1-", "(1-9)?", "(1-11)?", "(1-12)?", "boot menu")):
+                if out_state is not None:
+                    out_state["at_boot_menu"] = True
+                loader_found = True
+                break
             # If ONTAP output is seen, no need to keep waiting.
             # Do not break on "starting autoboot" text alone; some consoles
             # replay stale boot lines before showing the current LOADER prompt.
@@ -7963,9 +7969,16 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
         _tail_lower = str((_tail_out or "") + "\n" + (_tail_match or "")).lower()
         if _LOADER_PROMPT_RE.search(_tail_lower) or "loader-" in _tail_lower:
             loader_found = True
+        elif any(s in _tail_lower for s in ("selection (1-", "(1-9)?", "(1-11)?", "(1-12)?", "boot menu")):
+            if out_state is not None:
+                out_state["at_boot_menu"] = True
+            loader_found = True
 
     if loader_found:
-        _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
+        if out_state and out_state.get("at_boot_menu"):
+            _tprint(f"  ✅ {pfx}Already at boot menu — skipping system reset.")
+        else:
+            _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
         return True
 
     # Not at LOADER — exit console and let caller do system reset.
@@ -23558,8 +23571,10 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 time.sleep(1)
             return True, _out_sc, _m_sc
 
-        # Check if already at LOADER; skip system reset if so.
-        _already_loader = _already_at_loader(ch, label=label, node_log=node_file)
+        # Check if already at LOADER or boot menu; skip system reset if so.
+        _aal_state = {}
+        _already_loader = _already_at_loader(ch, label=label, node_log=node_file, out_state=_aal_state)
+        _already_at_menu = _aal_state.get("at_boot_menu", False)
         if not _already_loader:
             # Reset the node to begin a clean boot cycle.
             print(f"   🔄 [{label}] Sending system reset...")
@@ -23726,45 +23741,52 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         # LOADER commands (NO destroy storage pods – this node is JOINING).
         # Physical zeroing, if requested, is set on every node so the
         # whole cluster ends up with consistent raid.use-physical-zeroing?
-        # behaviour.
-        _peer_ld_log_dir = (_session_log.log_dir
-                            if _session_log and hasattr(_session_log, "log_dir")
-                            else os.getcwd())
-        # Capture env before/after set-defaults (non-interactive: no user prompt).
-        _env_restore_state = _loader_env_pre_post_prompt(
-            ch, label, _peer_ld_log_dir,
-            node_log=node_file, interactive=False
-        )
-        if _env_restore_state is None:
-            _slog(f"[{label}] aborting node add due to unsupported boot DNA", prefix="ERROR")
-            return False
-        # set-defaults was already run above; exclude it from the command list.
-        _peer_loader_cmds = []
-        if _prevent_bios_fw_update:
-            _peer_loader_cmds.append("setenv AUTO_FW_UPDATE false")
-        if _force_autoboot_true:
-            _peer_loader_cmds.append("setenv AUTOBOOT true")
-        if _physical_zeroing:
-            _peer_loader_cmds.append("setenv raid.use-physical-zeroing? true")
-        else:
-            _peer_loader_cmds.append("setenv raid.use-physical-zeroing? false")
-        if _diag_mode and _diag_bootargs:
-            for ba in _diag_bootargs:
-                _peer_loader_cmds.append(f"setenv {ba}")
-        _peer_loader_cmds += ["saveenv", "boot_ontap menu"]
-        for cmd in _peer_loader_cmds:
-            if cmd != "boot_ontap menu":
-                _out = direct_send_and_wait(ch, cmd, "LOADER-", timeout=15,
-                                            node_log=node_file)
-                if cmd.startswith("setenv bootarg."):
-                    if any(tok in _out for tok in ("%", "Error", "error", "invalid", "unknown", "Unknown")):
-                        print(f"   ❌ [{label}] LOADER error after '{cmd}': {_out.strip()!r}")
-                        sys.exit(1)
+        # behaviour.  Skipped when already at boot menu (boot_ontap menu already ran).
+        if not _already_at_menu:
+            _peer_ld_log_dir = (_session_log.log_dir
+                                if _session_log and hasattr(_session_log, "log_dir")
+                                else os.getcwd())
+            # Capture env before/after set-defaults (non-interactive: no user prompt).
+            _env_restore_state = _loader_env_pre_post_prompt(
+                ch, label, _peer_ld_log_dir,
+                node_log=node_file, interactive=False
+            )
+            if _env_restore_state is None:
+                _slog(f"[{label}] aborting node add due to unsupported boot DNA", prefix="ERROR")
+                return False
+            # set-defaults was already run above; exclude it from the command list.
+            _peer_loader_cmds = []
+            if _prevent_bios_fw_update:
+                _peer_loader_cmds.append("setenv AUTO_FW_UPDATE false")
+            if _force_autoboot_true:
+                _peer_loader_cmds.append("setenv AUTOBOOT true")
+            if _physical_zeroing:
+                _peer_loader_cmds.append("setenv raid.use-physical-zeroing? true")
             else:
-                ch.send(cmd + "\r"); time.sleep(1)
-                print(f"   ⏳ [{label}] Node booting — takes approximately 3-5 minutes...")
-                if _session_log:
-                    _session_log.log(f"[{label}] boot_ontap menu sent; waiting for boot menu")
+                _peer_loader_cmds.append("setenv raid.use-physical-zeroing? false")
+            if _diag_mode and _diag_bootargs:
+                for ba in _diag_bootargs:
+                    _peer_loader_cmds.append(f"setenv {ba}")
+            _peer_loader_cmds += ["saveenv", "boot_ontap menu"]
+            for cmd in _peer_loader_cmds:
+                if cmd != "boot_ontap menu":
+                    _out = direct_send_and_wait(ch, cmd, "LOADER-", timeout=15,
+                                                node_log=node_file)
+                    if cmd.startswith("setenv bootarg."):
+                        if any(tok in _out for tok in ("%", "Error", "error", "invalid", "unknown", "Unknown")):
+                            print(f"   ❌ [{label}] LOADER error after '{cmd}': {_out.strip()!r}")
+                            sys.exit(1)
+                else:
+                    ch.send(cmd + "\r"); time.sleep(1)
+                    print(f"   ⏳ [{label}] Node booting — takes approximately 3-5 minutes...")
+                    if _session_log:
+                        _session_log.log(f"[{label}] boot_ontap menu sent; waiting for boot menu")
+        else:
+            # Already at boot menu: nudge channel so the menu repaints for detection.
+            _slog(f"[{label}] already at boot menu; skipping LOADER commands")
+            with suppress(Exception):
+                ch.send("\r")
+            time.sleep(0.5)
 
         # Wait for boot menu and send option 4.
         sig_lower = ["selection (1-", "(1-9)?", "(1-11)?", "(1-12)?"]
