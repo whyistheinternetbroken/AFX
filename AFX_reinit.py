@@ -3919,15 +3919,50 @@ def _checkpoint_apply_manual_resume_target(cp, target_phase_id: str) -> bool:
     _now = datetime.now().isoformat()
     _phases = cp._data.setdefault("phases", {})
     _node_phases = cp._data.setdefault("node_phases", {})
+    _all_bmcs = [
+        str(_ip).strip() for _ip in (cp.bmc_ips or [])
+        if str(_ip).strip()
+    ]
+    _primary_bmc = _all_bmcs[0] if _all_bmcs else ""
+    _peer_bmcs = _all_bmcs[1:] if _mode_key == 3 else list(_all_bmcs)
+
+    def _phase_node_ids(_cp_id: str) -> "list[str]":
+        if _mode_key == 2:
+            return list(_all_bmcs)
+        if _mode_key == 3:
+            if str(_cp_id or "").startswith("cp_1_"):
+                return [_MODE3_PRIMARY_CHECKPOINT_NODE] if _primary_bmc else []
+            if str(_cp_id or "").startswith("cp_2_"):
+                _ids = []
+                for _b in _peer_bmcs:
+                    if _b and _b not in _ids:
+                        _ids.append(_b)  # backward-compatible legacy node-id form
+                    _peer_id = _mode3_peer_checkpoint_node(_b)
+                    if _peer_id and _peer_id not in _ids:
+                        _ids.append(_peer_id)
+                return _ids
+        return []
 
     for _idx, (_cp_id, __) in enumerate(_checkpoint_seq):
+        _cp_node_ids = _phase_node_ids(_cp_id)
         if _idx < _target_idx:
             _meta = _phases.get(_cp_id) or {}
             if not _meta.get("done"):
                 _phases[_cp_id] = {"done": True, "ts": _now}
+            if _cp_node_ids:
+                _per = _node_phases.setdefault(_cp_id, {})
+                for _nid in _cp_node_ids:
+                    _per[_nid] = {"done": True, "ts": _now}
         else:
             _phases.pop(_cp_id, None)
-            _node_phases.pop(_cp_id, None)
+            if _cp_node_ids:
+                if _cp_id in _node_phases:
+                    for _nid in _cp_node_ids:
+                        _node_phases[_cp_id].pop(_nid, None)
+                    if not _node_phases[_cp_id]:
+                        _node_phases.pop(_cp_id, None)
+            else:
+                _node_phases.pop(_cp_id, None)
 
     _global_aliases = {
         "cp_1_5": "primary_bootmenu_done",
@@ -3951,7 +3986,19 @@ def _checkpoint_apply_manual_resume_target(cp, target_phase_id: str) -> bool:
     }
     for _src_cp, _alias in _node_aliases.items():
         _done = _checkpoint_phase_effectively_done(cp, _mode_key, _src_cp)
-        if not _done:
+        _alias_node_ids = _all_bmcs if _mode_key == 2 else (_peer_bmcs if _mode_key == 3 else [])
+        if _alias_node_ids:
+            if _done:
+                _per = _node_phases.setdefault(_alias, {})
+                for _nid in _alias_node_ids:
+                    _per[_nid] = {"done": True, "ts": _now}
+            else:
+                if _alias in _node_phases:
+                    for _nid in _alias_node_ids:
+                        _node_phases[_alias].pop(_nid, None)
+                    if not _node_phases[_alias]:
+                        _node_phases.pop(_alias, None)
+        elif not _done:
             _node_phases.pop(_alias, None)
 
     cp._save()
@@ -24829,30 +24876,107 @@ def _omit_nodes_by_number(peer_bmcs, mode_label="", log=None):
 
 
 def _omit_already_joined_nodes(peer_bmcs, primary_channel, mode_label="", log=None):
-    """Remove nodes whose node-mgmt IP already exists in the cluster."""
+    """Option-2 preflight: detect already-joined nodes and prompt operator."""
     if not peer_bmcs or not primary_channel:
         return list(peer_bmcs or [])
+
+    def _cfg_node_name_for_bmc(_bmc: str) -> str:
+        _cfg = _node_cfg_for(_bmc) or {}
+        return str(
+            _cfg.get("name")
+            or _cfg.get("node_name")
+            or _cfg.get("hostname")
+            or ""
+        ).strip()
+
     _c_name = ((_config_data.get("cluster") or {}).get("name")
                if isinstance(_config_data, dict) else None)
     _cluster_nodes = _get_cluster_node_mgmt_ips(primary_channel, cluster_name=_c_name)
+    _cluster_node_names = {str(_n).strip().lower() for _n in (_cluster_nodes or {}).keys() if str(_n).strip()}
     _joined_ips = {str(v).strip() for v in (_cluster_nodes or {}).values() if str(v).strip()}
-    if not _joined_ips:
+    _joined_bmcs = set()
+    try:
+        with _primary_shell_lock:
+            with _suppress_console():
+                _sp_out = _run_cluster_command(
+                    primary_channel,
+                    "set -rows 0; service-processor show -fields address,node",
+                    timeout=30,
+                )
+        _sp_by_node = _parse_sp_show_to_node_map(_sp_out)
+        _joined_bmcs = {
+            str(_sp).strip().lower()
+            for _sp in (_sp_by_node or {}).values()
+            if str(_sp).strip()
+        }
+    except Exception as _sp_err:
+        if log:
+            log.log(
+                f"{mode_label}: service-processor precheck failed: {_sp_err}",
+                prefix="WARN",
+            )
+
+    if not (_joined_ips or _joined_bmcs or _cluster_node_names):
         return list(peer_bmcs)
+
     _already = []
     _keep = []
     for _bmc in peer_bmcs:
         _nip = _node_mgmt_ip_for_bmc(_bmc)
-        if _nip and _nip in _joined_ips:
-            _already.append((_bmc, _nip))
+        _cfg_name = _cfg_node_name_for_bmc(_bmc)
+        _by_mgmt = bool(_nip and _nip in _joined_ips)
+        _by_bmc = str(_bmc or "").strip().lower() in _joined_bmcs
+        _by_name = bool(_cfg_name and _cfg_name.lower() in _cluster_node_names)
+        if _by_mgmt or _by_bmc or _by_name:
+            _reasons = []
+            if _by_bmc:
+                _reasons.append("BMC present in service-processor show")
+            if _by_name:
+                _reasons.append(f"node name '{_cfg_name}' present in cluster show")
+            if _by_mgmt:
+                _reasons.append(f"node-mgmt {_nip} present")
+            _already.append((_bmc, _cfg_name, _nip, _reasons))
         else:
             _keep.append(_bmc)
+
     if _already:
-        print(f"\n  ℹ️  Skipping {len(_already)} node(s) already in cluster:")
-        for _bmc, _nip in _already:
-            print(f"    ✅ {_bmc} (node-mgmt {_nip})")
+        print(f"\n  ⚠️  {len(_already)} requested node(s) appear to be already joined:")
+        for _bmc, _cfg_name, _nip, _reasons in _already:
+            _name_disp = _cfg_name or "(name not set)"
+            _mgmt_disp = _nip or "(node-mgmt unknown)"
+            print(f"    ✅ {_name_disp} | BMC {_bmc} | node-mgmt {_mgmt_disp}")
+            if _reasons:
+                print(f"       ↳ {', '.join(_reasons)}")
         if log:
-            log.log(f"{mode_label}: omitted already-joined nodes: {_already}")
-    return _keep
+            log.log(f"{mode_label}: detected already-joined nodes: {_already}")
+        _omit = _prompt(
+            f"  Omit these already-joined node(s) from {mode_label or 'option 2'} add list? [Y/n]: ",
+            "y",
+        ).strip().lower()
+        if _omit in ("", "y", "yes"):
+            if log:
+                log.log(f"{mode_label}: operator chose to omit already-joined nodes")
+            if _keep:
+                _pending_labels = []
+                for _bmc in _keep:
+                    _nm = _cfg_node_name_for_bmc(_bmc)
+                    _pending_labels.append(f"{_nm} ({_bmc})" if _nm else _bmc)
+                print(f"\n  Pending node(s) not yet in cluster: {', '.join(_pending_labels)}")
+                _cont = _prompt(
+                    f"  Continue adding these {len(_keep)} node(s)? [y/N]: ",
+                    "n",
+                ).strip().lower()
+                if _cont != "y":
+                    print("\n  ↩️  Node-add cancelled by operator after preflight check.")
+                    if log:
+                        log.log(f"{mode_label}: operator declined to continue with pending nodes")
+                    return []
+            return _keep
+        print("\n  ℹ️  Keeping already-joined node(s) in the add list per operator choice.")
+        if log:
+            log.log(f"{mode_label}: operator kept already-joined nodes in add list", prefix="WARN")
+        return list(peer_bmcs)
+    return list(peer_bmcs)
 
 
 def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
@@ -25170,9 +25294,9 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             peer_bmcs, primary_channel, mode_label="2.2", log=log
         )
         if not peer_bmcs:
-            print("\n  ✅ All selected nodes are already in cluster. Nothing to add.")
+            print("\n  ✅ No nodes selected for add after preflight check. Nothing to do.")
             if log:
-                log.log("2.2: all selected nodes already in cluster; no-op")
+                log.log("2.2: no nodes selected after preflight already-joined check; no-op")
             if primary_client:
                 try:
                     primary_client.close()
@@ -25504,9 +25628,9 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             peer_bmcs, primary_channel, mode_label="2.1", log=log
         )
         if not peer_bmcs:
-            print("\n  ✅ All selected nodes are already in cluster. Nothing to add.")
+            print("\n  ✅ No nodes selected for add after preflight check. Nothing to do.")
             if log:
-                log.log("2.1: all selected nodes already in cluster; no-op")
+                log.log("2.1: no nodes selected after preflight already-joined check; no-op")
             if primary_client:
                 try:
                     primary_client.close()
