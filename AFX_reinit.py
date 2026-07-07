@@ -465,6 +465,20 @@ class CheckpointManager:
             if _cur_ts:
                 _cur_parts.append(f"as of {_cur_ts}")
             lines.append(f"Current phase   : {', '.join(_cur_parts)}")
+            _placeholder_next = {
+                "(pending completion of current phase)",
+                "(pending)",
+                "(not recorded)",
+            }
+            if _mode_raw in ("1", "2", "3", "4.1", "4.2", "4.3") and _next_phase in _placeholder_next:
+                with suppress(Exception):
+                    _inferred_cp_id = _checkpoint_resume_phase_id(self)
+                    if _inferred_cp_id:
+                        _inferred_cp_desc = _checkpoint_phase_description(_inferred_cp_id)
+                        _next_phase = (
+                            f"{_inferred_cp_id} - {_inferred_cp_desc}"
+                            if _inferred_cp_desc else _inferred_cp_id
+                        )
             lines.append(f"Next expected phase: {_next_phase}")
         else:
             lines.append("Current phase   : (not recorded)")
@@ -3765,31 +3779,72 @@ def _checkpoint_menu_option_label(cp_mode: str) -> str:
     return cp_mode or "unknown"
 
 
+def _checkpoint_mode_to_test_key(raw_mode: str):
+    _raw_mode = str(raw_mode or "").strip().lower()
+    if _raw_mode.startswith("4.2"):
+        return 42
+    if _raw_mode.startswith("4.1"):
+        return 41
+    if _raw_mode.startswith("4.3"):
+        return 43
+    if _raw_mode == "3":
+        return 3
+    if _raw_mode == "2":
+        return 2
+    if _raw_mode == "1":
+        return 1
+    return None
+
+
+def _checkpoint_phase_recorded_done(cp, phase_id: str) -> bool:
+    if not cp:
+        return False
+    _phase_id = str(phase_id or "").strip()
+    if not _phase_id:
+        return False
+    try:
+        if cp.is_done(_phase_id):
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(cp.nodes_done_for(_phase_id))
+    except Exception:
+        return False
+
+
+def _checkpoint_phase_effectively_done(cp, mode_key, phase_id: str) -> bool:
+    """Treat later checkpoints as implying earlier ones for resume/status UX."""
+    _phase_id = str(phase_id or "").strip()
+    if not _phase_id:
+        return False
+    if _checkpoint_phase_recorded_done(cp, _phase_id):
+        return True
+
+    _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(mode_key) or [])
+    _idx = -1
+    for _i, (_cp_id, __) in enumerate(_checkpoint_seq):
+        if _cp_id == _phase_id:
+            _idx = _i
+            break
+    if _idx < 0:
+        return False
+
+    for _later_id, __ in _checkpoint_seq[_idx + 1:]:
+        if _checkpoint_phase_recorded_done(cp, _later_id):
+            return True
+    return False
+
+
 def _checkpoint_resume_stage_label(cp) -> str:
     """Human-readable checkpoint stage summary for menu prompt context."""
     if not cp:
         return "Unknown stage"
     _mode = str(getattr(cp, "mode", "") or "").strip().lower()
-
-    def _mode_to_test_key(_raw_mode: str):
-        if _raw_mode.startswith("4.2"):
-            return 42
-        if _raw_mode.startswith("4.1"):
-            return 41
-        if _raw_mode.startswith("4.3"):
-            return 43
-        if _raw_mode == "3":
-            return 3
-        if _raw_mode == "2":
-            return 2
-        if _raw_mode == "1":
-            return 1
-        return None
-
-    _mode_key = _mode_to_test_key(_mode)
+    _mode_key = _checkpoint_mode_to_test_key(_mode)
     _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
     for _cp_id, _cp_desc in _checkpoint_seq:
-        if not cp.is_done(_cp_id):
+        if not _checkpoint_phase_effectively_done(cp, _mode_key, _cp_id):
             return _cp_desc
 
     # If all known checkpoints for this mode are done, keep mode-specific
@@ -3804,25 +3859,130 @@ def _checkpoint_resume_phase_id(cp) -> str:
     if not cp:
         return ""
     _mode = str(getattr(cp, "mode", "") or "").strip().lower()
-    if _mode.startswith("4.2"):
-        _mode_key = 42
-    elif _mode.startswith("4.1"):
-        _mode_key = 41
-    elif _mode.startswith("4.3"):
-        _mode_key = 43
-    elif _mode == "3":
-        _mode_key = 3
-    elif _mode == "2":
-        _mode_key = 2
-    elif _mode == "1":
-        _mode_key = 1
-    else:
-        _mode_key = None
+    _mode_key = _checkpoint_mode_to_test_key(_mode)
     _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
     for _cp_id, _cp_desc in _checkpoint_seq:
-        if not cp.is_done(_cp_id):
+        if not _checkpoint_phase_effectively_done(cp, _mode_key, _cp_id):
             return _cp_id
     return ""
+
+
+def _checkpoint_apply_manual_resume_target(cp, target_phase_id: str) -> bool:
+    """Rewrite checkpoint markers so resume starts from *target_phase_id*."""
+    if not cp:
+        return False
+    _mode_key = _checkpoint_mode_to_test_key(getattr(cp, "mode", ""))
+    _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
+    _target = str(target_phase_id or "").strip()
+    if not _target or not _checkpoint_seq:
+        return False
+
+    _target_idx = -1
+    for _idx, (_cp_id, __) in enumerate(_checkpoint_seq):
+        if _cp_id == _target:
+            _target_idx = _idx
+            break
+    if _target_idx < 0:
+        return False
+
+    _now = datetime.now().isoformat()
+    _phases = cp._data.setdefault("phases", {})
+    _node_phases = cp._data.setdefault("node_phases", {})
+
+    for _idx, (_cp_id, __) in enumerate(_checkpoint_seq):
+        if _idx < _target_idx:
+            _meta = _phases.get(_cp_id) or {}
+            if not _meta.get("done"):
+                _phases[_cp_id] = {"done": True, "ts": _now}
+        else:
+            _phases.pop(_cp_id, None)
+            _node_phases.pop(_cp_id, None)
+
+    _global_aliases = {
+        "cp_1_5": "primary_bootmenu_done",
+        "cp_1_6": "primary_node_mgmt_done",
+        "cp_1_7": "primary_setup_done",
+        "cp_1_8": "cluster_formed",
+        "cp_2_7": "node_joined",
+    }
+    for _src_cp, _alias in _global_aliases.items():
+        _done = _checkpoint_phase_effectively_done(cp, _mode_key, _src_cp)
+        if _done:
+            _meta = _phases.get(_alias) or {}
+            if not _meta.get("done"):
+                _phases[_alias] = {"done": True, "ts": _now}
+        else:
+            _phases.pop(_alias, None)
+
+    _node_aliases = {
+        "cp_2_4": "peer_option4_done",
+        "cp_2_7": "peer_joined",
+    }
+    for _src_cp, _alias in _node_aliases.items():
+        _done = _checkpoint_phase_effectively_done(cp, _mode_key, _src_cp)
+        if not _done:
+            _node_phases.pop(_alias, None)
+
+    cp._save()
+    return True
+
+
+def _prompt_checkpoint_resume_target_override(cp) -> bool:
+    """Let operator optionally override resume start checkpoint."""
+    if not cp:
+        return False
+    _mode_key = _checkpoint_mode_to_test_key(getattr(cp, "mode", ""))
+    _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
+    if not _checkpoint_seq:
+        return False
+
+    _detected_next = _checkpoint_resume_phase_id(cp)
+    _display_default = _detected_next or "(first checkpoint)"
+    print("     Resume controls : Press Enter to use detected stage, or pick a checkpoint below.")
+    print(f"     Detected next   : {_display_default}")
+
+    _first_pending = ""
+    for _cp_id, __ in _checkpoint_seq:
+        if not _checkpoint_phase_effectively_done(cp, _mode_key, _cp_id):
+            _first_pending = _cp_id
+            break
+
+    for _idx, (_cp_id, _cp_desc) in enumerate(_checkpoint_seq, 1):
+        _done = _checkpoint_phase_effectively_done(cp, _mode_key, _cp_id)
+        _status = "done" if _done else "pending"
+        _marker = ""
+        if _cp_id == _first_pending:
+            _marker = "  ← detected next"
+        print(f"       {_idx:>2}. {_cp_id:<16} {_cp_desc} [{_status}]{_marker}")
+
+    _id_lookup = {_cp_id.lower(): _cp_id for _cp_id, __ in _checkpoint_seq}
+    while True:
+        _sel = _prompt(
+            "     Override start checkpoint [Enter=detected, number, or cp_id]: ",
+            "",
+        ).strip().lower()
+        if not _sel:
+            return False
+        _target = ""
+        if _sel.isdigit():
+            _pick = int(_sel)
+            if 1 <= _pick <= len(_checkpoint_seq):
+                _target = _checkpoint_seq[_pick - 1][0]
+        else:
+            _target = _id_lookup.get(_sel, "")
+        if not _target:
+            print("     ⚠️  Invalid selection. Use Enter, a list number, or a cp_id.")
+            continue
+        if _target == _detected_next:
+            print("     ℹ️  Selected checkpoint is already the detected next stage.")
+            return False
+        if _checkpoint_apply_manual_resume_target(cp, _target):
+            _new_stage = _checkpoint_resume_stage_label(cp)
+            print(f"     ✅ Manual checkpoint override applied: next stage is {_new_stage} ({_target}).")
+            _slog(f"Manual checkpoint override applied: target={_target}, mode={cp.mode}")
+            return True
+        print("     ⚠️  Could not apply manual checkpoint override.")
+        return False
 
 
 def _set_resume_log_suffix_from_checkpoint(cp) -> None:
@@ -3844,12 +4004,13 @@ def _latest_primary_checkpoint_done(cp):
     """Return the latest completed primary checkpoint id/description."""
     if not cp:
         return "", ""
-    _seq = list(_CHECKPOINT_TEST_OPTIONS.get(1) or [])
+    _mode_key = _checkpoint_mode_to_test_key("1")
+    _seq = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
     for _cp_id, _cp_desc in reversed(_seq):
         if not str(_cp_id).startswith("cp_1_"):
             continue
         try:
-            if cp.is_done(_cp_id):
+            if _checkpoint_phase_effectively_done(cp, _mode_key, _cp_id):
                 return _cp_id, _cp_desc
         except Exception:
             continue
@@ -3905,8 +4066,9 @@ def _list_completed_checkpoints(cp) -> str:
         return ""
     
     completed = []
+    _mode_key = _checkpoint_mode_to_test_key(_mode)
     for cp_id, desc in desc_map.items():
-        if cp.is_done(cp_id):
+        if _checkpoint_phase_effectively_done(cp, _mode_key, cp_id):
             completed.append(f"✅ {desc}")
     
     if not completed:
@@ -4053,6 +4215,7 @@ def select_operation_mode():
                     print("  Please enter y or n.")
                 print("")
                 if _resume_now == "y":
+                    _prompt_checkpoint_resume_target_override(_cp_start)
                     _resume_choice = _dispatch_checkpoint_resume(_cp_start)
                     if _resume_choice is not None:
                         return _resume_choice
@@ -4071,6 +4234,7 @@ def select_operation_mode():
                 print("\n  ⚠️  No valid checkpoint is currently available to resume.")
                 _menu_checkpoint_available = False
                 continue
+            _prompt_checkpoint_resume_target_override(_cp_manual)
             _resume_choice = _dispatch_checkpoint_resume(_cp_manual)
             if _resume_choice is not None:
                 return _resume_choice
@@ -27307,11 +27471,12 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
     global _netboot_pkg_preselected, _mode3_peer_netboot_done
     _reinit_label = sp_host or _reinit_label
     _pfx = _node_pfx()
+    _mode_key = _checkpoint_mode_to_test_key(_operation_mode)
     _resume_cp_1_1_only = bool(
         _operation_mode in (1, 3)
         and _checkpoint is not None
-        and _checkpoint.is_done("cp_1_1")
-        and not _checkpoint.is_done("cp_1_2")
+        and _checkpoint_phase_effectively_done(_checkpoint, _mode_key, "cp_1_1")
+        and not _checkpoint_phase_effectively_done(_checkpoint, _mode_key, "cp_1_2")
         and not resume_skip_loader_commands
     )
     if _resume_cp_1_1_only:
@@ -35924,13 +36089,16 @@ def main():
             _session_log.start_phase("AUTOBOOT/LOADER Monitoring")
              
             # Check if checkpoint 1 is complete (LOADER bootargs already set)
-            if _checkpoint and _checkpoint.is_done("cp_1_1"):
+            _primary_mode_key = _checkpoint_mode_to_test_key(
+                getattr(_checkpoint, "mode", _operation_mode) if _checkpoint else _operation_mode
+            )
+            if _checkpoint and _checkpoint_phase_effectively_done(_checkpoint, _primary_mode_key, "cp_1_1"):
                 _resume_cp_latest_id, _resume_cp_latest_desc = _latest_primary_checkpoint_done(_checkpoint)
                 _resume_cp_num = _checkpoint_display_number(_resume_cp_latest_id) or "1"
-                _cp_1_2_done = _checkpoint.is_done("cp_1_2")
-                _cp_1_3_done = _checkpoint.is_done("cp_1_3")
-                _cp_1_4_done = _checkpoint.is_done("cp_1_4")
-                _cp_1_5_done = _checkpoint.is_done("cp_1_5")
+                _cp_1_2_done = _checkpoint_phase_effectively_done(_checkpoint, _primary_mode_key, "cp_1_2")
+                _cp_1_3_done = _checkpoint_phase_effectively_done(_checkpoint, _primary_mode_key, "cp_1_3")
+                _cp_1_4_done = _checkpoint_phase_effectively_done(_checkpoint, _primary_mode_key, "cp_1_4")
+                _cp_1_5_done = _checkpoint_phase_effectively_done(_checkpoint, _primary_mode_key, "cp_1_5")
                 _real_stdout.write(
                     f"\n🔖 Resuming from checkpoint {_resume_cp_num} ({_resume_cp_latest_desc or 'checkpoint state loaded'}).\n"
                 )
