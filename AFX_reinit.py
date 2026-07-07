@@ -25384,7 +25384,13 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     primary_client.close()
                 except Exception:
                     pass
-            return True
+            if _session_log and hasattr(_session_log, "log_file"):
+                print(f"\n📝 Session log: {_session_log.log_file}")
+            try:
+                input("\n  Press Enter to return to main menu...")
+            except (EOFError, KeyboardInterrupt):
+                pass
+            raise _ReturnToMenu
         # Refresh manifest after cluster comparison so 2.3 resumes only pending nodes.
         _write_node_add_manifest(
             nodes=[
@@ -31378,7 +31384,20 @@ def _run_2c_resume():
             except Exception:
                 pass
         _session_log.set_outcome("PASS", "all nodes already in cluster")
-        return True
+        _session_log.record_completion(normal_exit=True)
+        # Clear stale checkpoint so next run starts fresh.
+        try:
+            _checkpoint.clear()
+            _session_log.log("checkpoint: cleared after all nodes confirmed joined")
+        except Exception:
+            pass
+        if hasattr(_session_log, "log_file"):
+            print(f"\n📝 Session log: {_session_log.log_file}")
+        try:
+            input("\n  Press Enter to return to main menu...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+        raise _ReturnToMenu
 
     # ── 6. Confirm ────────────────────────────────────────────────────────
     _ans_retry = _prompt(
@@ -31805,6 +31824,12 @@ def main():
             # ── Mode 26 (2.3): Resume interrupted node additions ───────────────────
             if _operation_mode == 26:
                 ok = _run_2c_resume()
+                if ok and _checkpoint:
+                    try:
+                        _checkpoint.clear()
+                        _slog("checkpoint: cleared after mode 2.3 complete")
+                    except Exception:
+                        pass
                 if _session_log:
                     _session_log.record_completion(normal_exit=ok)
                     print(f"\n📝 Session log saved to: {_session_log.log_file}")
