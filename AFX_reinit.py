@@ -7680,7 +7680,11 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
             if _session_log and not auto_takeover:
                 _session_log.log("User chose to take over existing session")
                 _session_log.log_sent("y")
-            channel.send("y\r")
+            try:
+                channel.send("y\r")
+            except OSError:
+                _slog("Socket closed before session-takeover send; treating as failed", prefix="WARN")
+                return False
             time.sleep(2)
 
             output = direct_read_until(channel, ">", timeout=15)
