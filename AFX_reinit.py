@@ -23318,6 +23318,82 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
     return _cluster_ip
 
 
+def _resume_rerun_node_mgmt_if_mgmt_auto(ch, label, cfg, node_log=None):
+    """On checkpoint resume, rerun node mgmt setup when shell state is unsafe.
+
+    Trigger conditions:
+      1) console is at ``login:`` and admin login succeeds with blank password
+      2) console is already at ``::>``/``::*>``
+    and ``net int show`` includes a LIF named ``mgmt_auto``.
+    """
+    _at_cluster_prompt = False
+    _blank_login_accepted = False
+
+    ch.send("\r")
+    _out, _matched = direct_read_until_any(
+        ch, ["login:", "::>", "::*>"], timeout=20, node_log=node_log
+    )
+    if _out and (_CLUSTER_PROMPT_RE.search(_out[-200:]) or "::>" in _out or "::*>" in _out):
+        _at_cluster_prompt = True
+    elif _matched and "login:" in _matched.lower():
+        if not _has_real_cluster_login_prompt(_out):
+            _out2, _matched2 = direct_read_until_any(
+                ch, ["::>", "::*>", "login:"], timeout=10, node_log=node_log
+            )
+            _out += _out2
+            if _out and (_CLUSTER_PROMPT_RE.search(_out[-200:]) or "::>" in _out or "::*>" in _out):
+                _at_cluster_prompt = True
+                _matched = _matched2
+        if (not _at_cluster_prompt) and _has_real_cluster_login_prompt(_out):
+            ch.send("admin\r")
+            _pw_out, _pw_matched = direct_read_until_any(
+                ch, ["password:", "::>", "::*>", "login:"], timeout=20, node_log=node_log
+            )
+            if _pw_matched and "password:" in _pw_matched.lower():
+                ch.send("\r")
+                _post_out, _post_matched = direct_read_until_any(
+                    ch, ["::>", "::*>", "login:", "password:"], timeout=20, node_log=node_log
+                )
+                if _post_matched and ("::>" in _post_matched or "::*>" in _post_matched):
+                    _blank_login_accepted = True
+                    _at_cluster_prompt = True
+            elif _pw_matched and ("::>" in _pw_matched or "::*>" in _pw_matched):
+                _blank_login_accepted = True
+                _at_cluster_prompt = True
+
+    if not _at_cluster_prompt:
+        return True
+
+    global _console_quiet
+    _prev_quiet = _console_quiet
+    _console_quiet = True
+    try:
+        _netint_out = _run_cluster_command(
+            ch, "set -rows 0; net int show -fields lif", timeout=40
+        )
+    finally:
+        _console_quiet = _prev_quiet
+
+    if "mgmt_auto" not in str(_netint_out or "").lower():
+        return True
+
+    _reason = "blank-password login prompt" if _blank_login_accepted else "cluster prompt"
+    print(f"   ⚠️  [{label}] Detected mgmt_auto from {_reason}; rerunning cluster setup.")
+    _slog(f"[{label}] checkpoint resume safeguard: mgmt_auto detected; rerunning cluster setup")
+
+    ch.send("cluster setup\r")
+    _wizard_start = _wait_for_wizard_start(
+        ch, timeout=300, node_log=node_log
+    )
+    if not _wizard_start:
+        print(f"   ❌ [{label}] Could not re-enter cluster setup wizard after mgmt_auto detection.")
+        _slog(f"[{label}] cluster setup re-entry failed after mgmt_auto detection", prefix="ERROR")
+        return False
+
+    _auto_answer_node_mgmt(ch, cfg, node_log=node_log)
+    return True
+
+
 def _ordered_cluster_entries_for_add(cluster_ips_out, preferred_bmcs=None):
     """Return ordered cluster add-node rows from cluster_IP.json / memory."""
     if not isinstance(cluster_ips_out, dict) or not cluster_ips_out:
@@ -24629,6 +24705,11 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         else:
             _mgmt_residual = ""
             _slog(f"[{label}] cp_2_5 already done; skipping node mgmt")
+            if any(_cp2_flags):
+                if not _resume_rerun_node_mgmt_if_mgmt_auto(
+                    ch, label, cfg, node_log=node_file
+                ):
+                    return False
 
         # ── Abort cluster wizard, log in, and capture cluster IP ──────────────
         # After node-mgmt is applied, Ctrl+C out of the cluster wizard,
