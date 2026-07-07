@@ -12391,6 +12391,14 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
     pending = list(prompts)
     _overall_start = time.monotonic()
     _overall_timeout = 900
+    _terminal_sigs = (
+        "do you want to create a new cluster or join an existing cluster",
+        "{create, join}",
+        "create/join",
+        "::>",
+        "::*>",
+        "login:",
+    )
 
     while pending:
         if time.monotonic() - _overall_start > _overall_timeout:
@@ -12410,7 +12418,8 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
         _asup_prompt_answered = False
         _last_recv_activity = time.monotonic()
         _last_enter_sent = 0.0
-        while trigger_lower not in _buf.lower():
+        _trigger_found = trigger_lower in _buf.lower()
+        while not _trigger_found:
             if time.monotonic() - _trigger_start > _overall_timeout:
                 break
             if channel.recv_ready():
@@ -12422,6 +12431,13 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                 if _session_log:
                     _session_log.log_console(chunk)
             _buf_l = _buf.lower()
+            if any(_sig in _buf_l for _sig in _terminal_sigs):
+                _slog(
+                    f"Node-mgmt terminal prompt detected before '{label}' prompt; "
+                    "treating node-mgmt as complete",
+                    prefix="WARN",
+                )
+                return _buf
             if not _asup_prompt_answered and "type yes to confirm and continue" in _buf_l:
                 global _enable_autosupport
                 _asup_saved = None
@@ -12468,7 +12484,12 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                         channel.send("\r")
                     _asup_info_enter_sent = True
                     _last_enter_sent = time.monotonic()
+            _trigger_found = trigger_lower in _buf_l
             time.sleep(0.1)
+
+        if not _trigger_found:
+            _slog(f"Node-mgmt prompt timeout before '{label}'", prefix="WARN")
+            return _buf
 
         # Prompt detected – resolve the value.
         value = cfg.get(key)
@@ -24709,42 +24730,43 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         # then run node-mgmt configuration.  Skipped when resuming from cp_2_5+.
         if not _cp2_5_done:
             _wipe_buf = ""
-        _wipe_seen = False
-        _autoboot_seen_wipe = False
-        _node_mgmt_sigs = [
-            "node management interface port",
-            "node management interface ip",
-            "enter node management",
-            "node-setup",
-            "create/join",
-            "::>",
-            "login:",
-        ]
-        _wipe_deadline = time.monotonic() + 600
-        while time.monotonic() < _wipe_deadline:
-            if ch.recv_ready():
-                _wc = ch.recv(4096).decode("utf-8", errors="replace")
-                _wipe_buf += _wc
-                if node_file:
-                    _par_write(node_file, _wc)
-                _wcl = _wipe_buf.lower()
-                if not _wipe_seen and "wipeconfig" in _wcl:
-                    _wipe_seen = True
-                    print(f"   🔧 [{label}] Wiping node configuration...")
-                    _slog(f"[{label}] wipeconfig detected")
-                if not _autoboot_seen_wipe and "autoboot" in _wcl:
-                    _autoboot_seen_wipe = True
-                    print(f"   ⏳ [{label}] Node booting...")
-                    _slog(f"[{label}] autoboot detected during wipe monitoring")
-                if any(s in _wcl for s in _node_mgmt_sigs):
-                    break
-                if len(_wipe_buf) > 16384:
-                    _wipe_buf = _wipe_buf[-8192:]
-            else:
-                time.sleep(0.1)
+            _wipe_seen = False
+            _autoboot_seen_wipe = False
+            _node_mgmt_sigs = [
+                "node management interface port",
+                "node management interface ip",
+                "enter node management",
+                "node-setup",
+                "create/join",
+                "::>",
+                "login:",
+            ]
+            _wipe_deadline = time.monotonic() + 600
+            while time.monotonic() < _wipe_deadline:
+                if ch.recv_ready():
+                    _wc = ch.recv(4096).decode("utf-8", errors="replace")
+                    _wipe_buf += _wc
+                    if node_file:
+                        _par_write(node_file, _wc)
+                    _wcl = _wipe_buf.lower()
+                    if not _wipe_seen and "wipeconfig" in _wcl:
+                        _wipe_seen = True
+                        print(f"   🔧 [{label}] Wiping node configuration...")
+                        _slog(f"[{label}] wipeconfig detected")
+                    if not _autoboot_seen_wipe and "autoboot" in _wcl:
+                        _autoboot_seen_wipe = True
+                        print(f"   ⏳ [{label}] Node booting...")
+                        _slog(f"[{label}] autoboot detected during wipe monitoring")
+                    if any(s in _wcl for s in _node_mgmt_sigs):
+                        break
+                    if len(_wipe_buf) > 16384:
+                        _wipe_buf = _wipe_buf[-8192:]
+                else:
+                    time.sleep(0.1)
 
-            _mgmt_residual = _auto_answer_node_mgmt(ch, cfg, node_log=node_file,
-                                                    initial_buf=_wipe_buf) or ""
+            _mgmt_residual = _auto_answer_node_mgmt(
+                ch, cfg, node_log=node_file, initial_buf=_wipe_buf
+            ) or ""
             _t_node_mgmt_done = time.monotonic()
             print(f"   ⏱️  [{label}] Node mgmt applied at +{_t_node_mgmt_done - _t_thread_start:.1f}s")
             _checkpoint_mark_phase("cp_2_5", node_id=_cp2_node)
