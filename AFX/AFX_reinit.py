@@ -8583,6 +8583,18 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
             and "login:" not in last
         )
 
+    def _looks_like_post_option4_prompt(text: str) -> bool:
+        _lt = str(text or "").lower()
+        return any(
+            _sig in _lt for _sig in (
+                "node management interface",
+                "enter node management",
+                "create a new cluster",
+                "join an existing cluster",
+                "create/join",
+            )
+        )
+
     # Hit Enter first so any existing prompt echoes back.
     channel.send("\r")
     time.sleep(0.3)
@@ -8591,6 +8603,11 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
     if _LOADER_PROMPT_RE.search(_probe) or "LOADER-" in _probe.upper():
         _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
         return True
+    if _looks_like_post_option4_prompt(_probe):
+        if out_state is not None:
+            out_state["past_option4_prompt"] = True
+        _tprint(f"  ✅ {pfx}Detected post-option-4 prompt — skipping system reset.")
+        return False
     if any(sig in _probe.lower() for sig in ("::>", "::*>", "login:")):
         _tprint(f"  ℹ️  {pfx}Not at BMC prompt; skipping system console probe.")
         return False
@@ -8618,6 +8635,7 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
     start = time.monotonic()
     last_nudge = start
     loader_found = False
+    post_option4_found = False
     _takeover_attempted = False
     _entered_console = True
     while time.monotonic() - start < probe_timeout:
@@ -8650,6 +8668,11 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
                     out_state["at_boot_menu"] = True
                 loader_found = True
                 break
+            if _looks_like_post_option4_prompt(buf):
+                if out_state is not None:
+                    out_state["past_option4_prompt"] = True
+                post_option4_found = True
+                break
             # If ONTAP output is seen, no need to keep waiting.
             # Do not break on "starting autoboot" text alone; some consoles
             # replay stale boot lines before showing the current LOADER prompt.
@@ -8668,7 +8691,11 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
         # delayed repaint, so do one last focused read before deciding reset.
         _tail_out, _tail_match = direct_read_until_any(
             channel,
-            ["loader-", "::>", "::*>", "login:", "selection", "autoboot", ">"],
+            [
+                "loader-", "::>", "::*>", "login:", "selection", "autoboot", ">",
+                "node management interface", "enter node management", "create/join",
+                "create a new cluster", "join an existing cluster",
+            ],
             timeout=15,
             node_log=node_log,
             quiet=True,
@@ -8680,6 +8707,10 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
             if out_state is not None:
                 out_state["at_boot_menu"] = True
             loader_found = True
+        elif _looks_like_post_option4_prompt(_tail_lower):
+            if out_state is not None:
+                out_state["past_option4_prompt"] = True
+            post_option4_found = True
 
     if loader_found:
         if out_state and out_state.get("at_boot_menu"):
@@ -8687,6 +8718,9 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
         else:
             _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
         return True
+    if post_option4_found:
+        _tprint(f"  ✅ {pfx}Detected post-option-4 prompt — skipping system reset.")
+        return False
 
     # Not at LOADER — exit console and let caller do system reset.
     if _entered_console:
@@ -25373,12 +25407,21 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         _aal_state = {}
         _already_loader = _already_at_loader(ch, label=label, node_log=node_file, out_state=_aal_state)
         _already_at_menu = _aal_state.get("at_boot_menu", False)
+        _already_post_option4 = _aal_state.get("past_option4_prompt", False)
+        if _already_post_option4 and not _cp2_4_done:
+            _slog(
+                f"[{label}] Runtime prompt indicates post-option-4 state; "
+                "treating cp_2_4 as completed for safe resume",
+                prefix="WARN",
+            )
+            _cp2_4_done = True
+            _cp2_3_done = _cp2_2_done = _cp2_1_done = True
 
         # Fast-path for cp_2_3+ resume: option 4 was already sent, node is past
         # boot-menu stage (disk erase in progress, node mgmt, or cluster setup).
         # Skip LOADER probe/reset/wait/commands and boot-menu wait entirely.
         _fast_skip_to_diskerase = (
-            _cp2_3_done and not _cp2_6_done and not _already_loader
+            (_cp2_3_done or _already_post_option4) and not _cp2_6_done and not _already_loader
         )
         if _fast_skip_to_diskerase:
             _slog(f"[{label}] cp_2_3 resume: option 4 already sent; "
