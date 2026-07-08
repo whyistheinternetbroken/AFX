@@ -12796,64 +12796,116 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
         )
         print(f"\n⏳ {_node_pfx('')}Detected login prompt; attempting to run cluster setup...{_elapsed_str()}")
 
-        with suppress(Exception):
-            channel.send("admin\r")
-        if _session_log:
-            _session_log.log_sent("admin")
-        _lg_out, _lg_match = direct_read_until_any(
-            channel,
-            ["password:", "::>", "::*>", "login:"],
-            timeout=20,
-            node_log=node_log,
-            quiet=True,
-            check_bmc_drop=True,
-        )
-        _lg_scan = (str(_lg_out or "") + "\n" + str(_lg_match or "")).lower()
-        _at_shell = ("::>" in _lg_scan or "::*>" in _lg_scan)
+        def _read_sensitive_until(_tokens, _timeout):
+            _buf = ""
+            _deadline = time.monotonic() + max(1, int(_timeout))
+            _tokens_l = [str(_t).lower() for _t in _tokens]
+            while time.monotonic() < _deadline:
+                if channel.recv_ready():
+                    _chunk = channel.recv(4096).decode("utf-8", errors="replace")
+                    _buf += _chunk
+                    _low = _buf.lower()
+                    for _tok, _tok_l in zip(_tokens, _tokens_l):
+                        if _tok_l in _low:
+                            return _buf, _tok
+                else:
+                    time.sleep(0.1)
+            return _buf, None
 
-        if (not _at_shell) and "password:" in _lg_scan:
-            # First try blank password (common after wipe/reinit transitions).
-            with suppress(Exception):
-                channel.send("\r")
-            if _session_log:
-                _session_log.log_sent("<Enter> (blank password)")
-            _bp_out, _bp_match = direct_read_until_any(
-                channel,
-                ["::>", "::*>", "login:", "password:"],
-                timeout=20,
-                node_log=node_log,
-                quiet=True,
-                check_bmc_drop=True,
-            )
-            _bp_scan = (str(_bp_out or "") + "\n" + str(_bp_match or "")).lower()
-            _at_shell = ("::>" in _bp_scan or "::*>" in _bp_scan)
-            _lg_scan += "\n" + _bp_scan
+        _cluster_ip = str(
+            (_cluster_config or {}).get("mgmt_ip")
+            or (_config_cluster_ip() or "*")
+        ).strip() or "*"
 
-        if (not _at_shell) and "password:" in _lg_scan:
-            _cfg_pw = str((_cluster_config or {}).get("admin_password") or "").strip()
-            if _cfg_pw:
+        _pw_candidates = []
+        for _cand in (
+            _cred_lookup("cluster", _cluster_ip, "admin"),
+            _cred_lookup("cluster", "*", "admin"),
+            str((_cluster_config or {}).get("admin_password") or "").strip(),
+        ):
+            _val = str(_cand or "").strip()
+            if _val and _val not in _pw_candidates:
+                _pw_candidates.append(_val)
+
+        _prompted_manual_pw = False
+        _logged_in = False
+        _used_pw = ""
+
+        while not _logged_in:
+            with _suppress_console():
                 with suppress(Exception):
-                    channel.send(_cfg_pw + "\r")
+                    channel.send("admin\r")
                 if _session_log:
-                    _session_log.log_sent("<hidden>")
-                _cp_out, _cp_match = direct_read_until_any(
-                    channel,
-                    ["::>", "::*>", "login:"],
-                    timeout=30,
-                    node_log=node_log,
-                    quiet=True,
-                    check_bmc_drop=True,
+                    _session_log.log_sent("admin")
+                _lg_out, _lg_match = _read_sensitive_until(
+                    ["password:", "::>", "::*>", "login:"],
+                    20,
                 )
-                _cp_scan = (str(_cp_out or "") + "\n" + str(_cp_match or "")).lower()
-                _at_shell = ("::>" in _cp_scan or "::*>" in _cp_scan)
-                _lg_scan += "\n" + _cp_scan
+            _lg_scan = (str(_lg_out or "") + "\n" + str(_lg_match or "")).lower()
+            if "::>" in _lg_scan or "::*>" in _lg_scan:
+                _logged_in = True
+                break
+            if "password:" not in _lg_scan:
+                break
 
-        if not _at_shell:
+            if not _pw_candidates:
+                # Only try blank password when we truly have no saved/admin password.
+                _pw_candidates.append("")
+
+            _pw_attempted = False
+            while _pw_candidates and not _logged_in:
+                _pw = _pw_candidates.pop(0)
+                _pw_attempted = True
+                with _suppress_console():
+                    with suppress(Exception):
+                        channel.send((_pw or "") + "\r")
+                    if _session_log:
+                        _session_log.log_sent("<hidden>" if _pw else "<Enter> (blank password)")
+                    _pw_out, _pw_match = _read_sensitive_until(
+                        ["::>", "::*>", "login:", "password:"],
+                        30,
+                    )
+                _pw_scan = (str(_pw_out or "") + "\n" + str(_pw_match or "")).lower()
+                if "::>" in _pw_scan or "::*>" in _pw_scan:
+                    _logged_in = True
+                    _used_pw = _pw
+                    break
+                if "password:" in _pw_scan:
+                    # Still at password prompt for admin; try the next candidate.
+                    continue
+                # login: or unknown output means auth failed or state changed;
+                # break and restart at login prompt.
+                break
+
+            if _logged_in:
+                break
+
+            if _pw_attempted and _prompted_manual_pw:
+                break
+
+            if not _prompted_manual_pw:
+                _prompted_manual_pw = True
+                with _stdin_lock:
+                    _manual_pw = getpass.getpass(
+                        "  Enter cluster admin password for wizard recovery: "
+                    ).strip()
+                if _manual_pw:
+                    _pw_candidates = [_manual_pw]
+                    continue
+            break
+
+        if not _logged_in:
             _slog(
                 "Wizard-start login recovery did not reach cluster prompt; will keep waiting",
                 prefix="WARN",
             )
             return False
+
+        if _used_pw:
+            with suppress(Exception):
+                _cred_store("cluster", _cluster_ip, "admin", _used_pw)
+                _cred_store("cluster", "*", "admin", _used_pw)
+            _cluster_config["admin_password"] = _used_pw
 
         with suppress(Exception):
             channel.send("cluster setup\r")
