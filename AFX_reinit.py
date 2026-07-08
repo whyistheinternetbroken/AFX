@@ -25887,6 +25887,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             _wipe_buf = ""
             _wipe_seen = False
             _autoboot_seen_wipe = False
+            _asup_answered = False
             _node_mgmt_sigs = [
                 "node management interface port",
                 "node management interface ip",
@@ -25904,6 +25905,17 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     if node_file:
                         _par_write(node_file, _wc)
                     _wcl = _wipe_buf.lower()
+                    if (not _asup_answered) and (
+                        "type yes to confirm and continue" in _wcl
+                        or "enabling autosupport can significantly speed problem determination" in _wcl
+                    ):
+                        _asup_answered = True
+                        _slog(f"[{label}] AutoSupport confirmation detected during cp_2_5 wait; answering 'yes'")
+                        with suppress(Exception):
+                            ch.send("yes\r")
+                        if _session_log:
+                            _session_log.log_sent("yes")
+                        # Keep reading until node-mgmt / cluster prompts appear.
                     if not _wipe_seen and "wipeconfig" in _wcl:
                         _wipe_seen = True
                         print(f"   🔧 [{label}] Wiping node configuration...")
