@@ -6804,16 +6804,35 @@ def connect_to_sp(host, username, password):
     """Connect to the primary BMC. Returns (client, username, password) so
     the caller can update stored creds if the user re-entered them after an
     initial auth failure.
+    
+    During checkpoint resume, uses interactive=False to avoid re-prompting for
+    credentials (since original credentials are wiped during init). Relies on
+    fallback blank password instead.
     """
     global _active_client, _primary_bmc_host, _primary_bmc_user
     global _primary_bmc_password, _primary_bmc_reconnect_ctx
+    global _checkpoint_mode, _resume_cp_start
     _preclean_bmc_known_hosts(host, log=_session_log, context="before BMC login")
     print(f"Connecting to SP at {host} with username {username}...")
     _slog(f"Connecting to SP at {host} with username {username}")
+    
+    # During checkpoint resume, don't prompt for credentials; rely on fallback
+    # blank password instead (original password was wiped during init).
+    _in_checkpoint_resume = (
+        _checkpoint_mode is not None
+        and _checkpoint_mode in (1, 2, 3, 4.2)
+        and _resume_cp_start is not None
+    )
+    _is_interactive = not _in_checkpoint_resume
+    
+    # Prepare fallback passwords including blank password for post-reset recovery.
+    _fallback_pw = _bmc_fallback_passwords(host, {host: password})
+    
     try:
         client, username, password = _ssh_connect_with_retry(
             host, username, password, label="primary BMC", max_attempts=5,
-            interactive=True,
+            interactive=_is_interactive,
+            fallback_passwords=_fallback_pw,
         )
     except Exception as e:
         print(f"❌ Error connecting to SP: {e}")
@@ -12564,6 +12583,36 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
                     prefix="WARN",
                 )
                 return _buf
+             
+            # During checkpoint resume, if we're stuck in setup wizard (create/join prompt),
+            # send "back" to restart setup from the beginning.
+            if _checkpoint_mode is not None and _resume_cp_start is not None:
+                _at_setup_menu = (
+                    "do you want to create a new cluster or join" in _buf_l
+                    or "{create, join}" in _buf_l
+                    or ("create/join" in _buf_l and time.monotonic() - _last_recv_activity >= 5)
+                )
+                _stuck_long_time = time.monotonic() - _trigger_start > 60 and (
+                    time.monotonic() - _last_recv_activity >= 3
+                )
+                if _at_setup_menu and _stuck_long_time:
+                    _slog(
+                        f"Checkpoint resume stuck at setup menu (label='{label}'); "
+                        "sending 'back' to restart setup",
+                        prefix="WARN"
+                    )
+                    print(f"\n  🔄 Restarting setup (stuck at menu prompt); sending 'back'...")
+                    with suppress(Exception):
+                        channel.send("back\r")
+                    if _session_log:
+                        _session_log.log_sent("back")
+                    time.sleep(1)
+                    _buf = ""
+                    _last_recv_activity = time.monotonic()
+                    # Continue the loop to pick up new output after sending "back"
+                    time.sleep(0.1)
+                    continue
+             
             if not _asup_prompt_answered and "type yes to confirm and continue" in _buf_l:
                 global _enable_autosupport
                 _asup_saved = None
