@@ -12778,6 +12778,105 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
     last_data = start
     last_nudge = start
     _asup_wizard_answered = False
+    _last_login_recovery = 0.0
+    _login_recovery_attempts = 0
+
+    def _try_recover_from_login_prompt() -> bool:
+        nonlocal output, output_lower, start, last_data, last_nudge
+        nonlocal _last_login_recovery, _login_recovery_attempts
+        _now = time.monotonic()
+        if (_now - _last_login_recovery) < 10:
+            return False
+        _last_login_recovery = _now
+        _login_recovery_attempts += 1
+
+        _slog(
+            "Wizard-start wait detected login prompt; attempting admin login and cluster setup recovery",
+            prefix="WARN",
+        )
+        print(f"\n⏳ {_node_pfx('')}Detected login prompt; attempting to run cluster setup...{_elapsed_str()}")
+
+        with suppress(Exception):
+            channel.send("admin\r")
+        if _session_log:
+            _session_log.log_sent("admin")
+        _lg_out, _lg_match = direct_read_until_any(
+            channel,
+            ["password:", "::>", "::*>", "login:"],
+            timeout=20,
+            node_log=node_log,
+            quiet=True,
+            check_bmc_drop=True,
+        )
+        _lg_scan = (str(_lg_out or "") + "\n" + str(_lg_match or "")).lower()
+        _at_shell = ("::>" in _lg_scan or "::*>" in _lg_scan)
+
+        if (not _at_shell) and "password:" in _lg_scan:
+            # First try blank password (common after wipe/reinit transitions).
+            with suppress(Exception):
+                channel.send("\r")
+            if _session_log:
+                _session_log.log_sent("<Enter> (blank password)")
+            _bp_out, _bp_match = direct_read_until_any(
+                channel,
+                ["::>", "::*>", "login:", "password:"],
+                timeout=20,
+                node_log=node_log,
+                quiet=True,
+                check_bmc_drop=True,
+            )
+            _bp_scan = (str(_bp_out or "") + "\n" + str(_bp_match or "")).lower()
+            _at_shell = ("::>" in _bp_scan or "::*>" in _bp_scan)
+            _lg_scan += "\n" + _bp_scan
+
+        if (not _at_shell) and "password:" in _lg_scan:
+            _cfg_pw = str((_cluster_config or {}).get("admin_password") or "").strip()
+            if _cfg_pw:
+                with suppress(Exception):
+                    channel.send(_cfg_pw + "\r")
+                if _session_log:
+                    _session_log.log_sent("<hidden>")
+                _cp_out, _cp_match = direct_read_until_any(
+                    channel,
+                    ["::>", "::*>", "login:"],
+                    timeout=30,
+                    node_log=node_log,
+                    quiet=True,
+                    check_bmc_drop=True,
+                )
+                _cp_scan = (str(_cp_out or "") + "\n" + str(_cp_match or "")).lower()
+                _at_shell = ("::>" in _cp_scan or "::*>" in _cp_scan)
+                _lg_scan += "\n" + _cp_scan
+
+        if not _at_shell:
+            _slog(
+                "Wizard-start login recovery did not reach cluster prompt; will keep waiting",
+                prefix="WARN",
+            )
+            return False
+
+        with suppress(Exception):
+            channel.send("cluster setup\r")
+        if _session_log:
+            _session_log.log_sent("cluster setup")
+
+        _ws_out, _ws_match = direct_read_until_any(
+            channel,
+            _WIZARD_START_TRIGGERS + ["login:"],
+            timeout=45,
+            node_log=node_log,
+            quiet=True,
+            check_bmc_drop=True,
+        )
+        _ws_scan = (str(_ws_out or "") + "\n" + str(_ws_match or "")).lower()
+        for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
+            if trigger_lower in _ws_scan:
+                output = ""
+                output_lower = ""
+                last_data = time.monotonic()
+                last_nudge = last_data
+                return trigger
+        return False
 
     for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
         if trigger_lower in output_lower:
@@ -12821,6 +12920,10 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 output_lower = ""
                 last_data = time.monotonic()
                 continue
+            if "login:" in chunk.lower() and _has_real_cluster_login_prompt(output):
+                _recovered = _try_recover_from_login_prompt()
+                if _recovered:
+                    return _recovered
             for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
                 if trigger_lower in output_lower:
                     return trigger
@@ -12842,6 +12945,10 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                     with suppress(Exception):
                         channel.send("back\r")
                     _asup_wizard_answered = False
+                elif _has_real_cluster_login_prompt(output):
+                    _recovered = _try_recover_from_login_prompt()
+                    if _recovered:
+                        return _recovered
                 else:
                     channel.send("\r")
                     _slog("No wizard prompt seen for 15s; sending CR to nudge")
