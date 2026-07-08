@@ -12648,6 +12648,27 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = "",
                 if _session_log:
                     _session_log.log_console(chunk)
             _buf_l = _buf.lower()
+            # Resume hardening: if we are already at a later node-mgmt prompt,
+            # fast-forward pending prompts instead of waiting forever on an
+            # earlier prompt that will not replay.
+            _matched_idx = -1
+            for _idx, (_k, _trig, _lbl) in enumerate(pending):
+                if str(_trig).lower() in _buf_l:
+                    _matched_idx = _idx
+                    break
+            if _matched_idx > 0:
+                _from_label = label
+                _to_label = pending[_matched_idx][2]
+                _slog(
+                    f"Node-mgmt resume fast-forward: saw '{_to_label}' while waiting for "
+                    f"'{_from_label}'; skipping earlier prompt(s)",
+                    prefix="WARN",
+                )
+                pending = pending[_matched_idx:]
+                key, trigger, label = pending[0]
+                trigger_lower = trigger.lower()
+                _trigger_found = True
+                break
             if any(_sig in _buf_l for _sig in _terminal_sigs):
                 _slog(
                     f"Node-mgmt terminal prompt detected before '{label}' prompt; "
