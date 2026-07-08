@@ -23041,6 +23041,26 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     def _cp_done(_cp_id: str) -> bool:
         return _checkpoint_phase_done(_cp_id, node_id=_primary_cp_node)
 
+    # On resume from any cp_1_7_* sub-checkpoint or later, reload persisted SSH and AutoSupport preferences.
+    if _checkpoint and (_checkpoint_phase_done("cp_1_6", node_id=_primary_cp_node) or 
+                        _checkpoint_phase_done("cp_1_7", node_id=_primary_cp_node)):
+        global _enable_autosupport, _setup_passwordless_ssh
+        _asup_saved = None
+        with suppress(Exception):
+            _asup_saved = _checkpoint.get_selection("enable_autosupport")
+        if _asup_saved is None:
+            with suppress(Exception):
+                _asup_saved = _checkpoint.get_param("enable_autosupport", None)
+        if _asup_saved is not None:
+            _enable_autosupport = bool(_asup_saved)
+            _slog(f"Cluster setup wizard: reloaded enable_autosupport={_enable_autosupport} from checkpoint")
+        _ssh_saved = None
+        with suppress(Exception):
+            _ssh_saved = _checkpoint.get_selection("setup_passwordless_ssh")
+        if _ssh_saved is not None:
+            _setup_passwordless_ssh = bool(_ssh_saved)
+            _slog(f"Cluster setup wizard: reloaded setup_passwordless_ssh={_setup_passwordless_ssh} from checkpoint")
+
     print("\n🤖 Driving ONTAP cluster setup wizard from collected values...")
     if _session_log:
         _session_log.start_phase("Cluster Setup Wizard (mode 1)")
