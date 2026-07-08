@@ -4074,9 +4074,7 @@ def _format_checkpoint_phase_with_delta(phase_id: str, ts_str: str, prev_ts_str:
            pass
     
     return f"{phase_id}{_desc_part}{_delta_part}"
-
-
-
+def _checkpoint_apply_manual_resume_target(cp, target_phase_id: str) -> bool:
     """Rewrite checkpoint markers so resume starts from *target_phase_id*."""
     if not cp:
         return False
