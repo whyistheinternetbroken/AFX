@@ -23286,28 +23286,59 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             f"Continuing management network configuration...{_elapsed_str()}"
         )
         print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
-    if not _cp_done("cp_1_7_6"):
-        _wait_and_send(channel, "cluster management interface port", cc["mgmt_port"],
-                       f"Cluster mgmt port -> {cc['mgmt_port']}", timeout=900,
-                       node_log=node_log, quiet=bool(node_log))
-        _cp_mark("cp_1_7_6")
-    else:
-        _slog("cp_1_7_6 already complete; skipping cluster management port prompt")
-    if not _cp_done("cp_1_7_7"):
-        _wait_and_send(channel, "cluster management interface ip address", cc["mgmt_ip"],
-                       f"Cluster mgmt IP -> {cc['mgmt_ip']}", timeout=600,
-                       node_log=node_log, quiet=bool(node_log))
-        _cp_mark("cp_1_7_7")
-    else:
-        _slog("cp_1_7_7 already complete; skipping cluster management IP prompt")
+    def _wizard_step_checkpoint_aware(cp_id, trigger, response, label, timeout):
+        if _cp_done(cp_id):
+            _slog(f"{cp_id} already complete; probing for replayed prompt '{trigger}'")
+            _probe_match = direct_read_until_any(
+                channel,
+                [trigger],
+                timeout=20,
+                node_log=node_log,
+                quiet=bool(node_log),
+                check_bmc_drop=True,
+            )[1]
+            if _probe_match:
+                print(f"\n↪️ Replaying completed wizard step to advance setup: {label}")
+                _slog(f"{cp_id} replay: prompt reappeared; sending saved value")
+                channel.send((response or "") + "\r")
+                if _session_log:
+                    _session_log.log_sent(response if response else "<Enter>")
+                time.sleep(0.5)
+            else:
+                _slog(f"{cp_id} already complete; prompt not replayed, skipping send")
+            return
+        _wait_and_send(
+            channel,
+            trigger,
+            response,
+            label,
+            timeout=timeout,
+            node_log=node_log,
+            quiet=bool(node_log),
+        )
+        _cp_mark(cp_id)
 
-    if not _cp_done("cp_1_7_8"):
-        _wait_and_send(channel, "cluster management interface netmask", cc["mgmt_netmask"],
-                       f"Cluster mgmt netmask -> {cc['mgmt_netmask']}", timeout=600,
-                       node_log=node_log, quiet=bool(node_log))
-        _cp_mark("cp_1_7_8")
-    else:
-        _slog("cp_1_7_8 already complete; skipping cluster management netmask prompt")
+    _wizard_step_checkpoint_aware(
+        "cp_1_7_6",
+        "cluster management interface port",
+        cc["mgmt_port"],
+        f"Cluster mgmt port -> {cc['mgmt_port']}",
+        timeout=900,
+    )
+    _wizard_step_checkpoint_aware(
+        "cp_1_7_7",
+        "cluster management interface ip address",
+        cc["mgmt_ip"],
+        f"Cluster mgmt IP -> {cc['mgmt_ip']}",
+        timeout=600,
+    )
+    _wizard_step_checkpoint_aware(
+        "cp_1_7_8",
+        "cluster management interface netmask",
+        cc["mgmt_netmask"],
+        f"Cluster mgmt netmask -> {cc['mgmt_netmask']}",
+        timeout=600,
+    )
     # Send the cluster-management gateway and re-prompt on rejection.
     # ONTAP prints "not a valid gateway address" when the supplied value is
     # outside the management interface's subnet.
