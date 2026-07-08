@@ -9,13 +9,13 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- (No new features yet)
+- **Cluster-create milestone reporting.** New-cluster workflows now print live progress updates when cluster setup begins, when option 4 node initialization starts/completes, and as ONTAP advances through VIF manager startup, storage-pod ownership, volume-location updates, zeroing, aggregate creation, and final cluster creation.
 
 ### Changed
-- (No changes yet)
+- **README timing documentation.** Added an observed option 1 sample timeline, plus physical-zeroing notes derived from the uploaded session log so operators can estimate where long waits normally occur.
 
 ### Fixed
-- (No fixes yet)
+- **Long option 4 wait visibility.** Primary-node option 4 automation now surfaces a clear "started" state, periodic progress heartbeat, and explicit completion message before AutoSupport handling instead of leaving the console silent during the longest reinit wait.
 
 ---
 

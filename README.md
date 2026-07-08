@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 6/30/2026
+**Updated:** 7/8/2026
 
 ---
 
@@ -24,6 +24,7 @@ The script automates the following core tasks:
 - Executes LOADER-level boot configuration commands
 - Selects the appropriate boot menu option
 - Drives the ONTAP cluster setup wizard in fully automated mode
+- Emits live Option 4 / cluster-create progress milestones during long waits
 - Adds peer nodes to an existing cluster (sequentially or in parallel)
 - Manages ONTAP software upgrades via rolling takeover/giveback
 - Installs ONTAP via netboot
@@ -202,6 +203,42 @@ The table below compares estimated total wall-clock time for a full end-to-end c
 > Based on observed 4-node run (3094s total): fixed overhead ~1496s (~25m), peer parallel prep ~630s (~10.5m), bulk join last success ~846s + ~120s health poll. Old serial join ~720s avg per peer. Observed new 4-node total was 51.6m; table shows ~52m.
 >
 > \* Extrapolated from 4-node observed data; not tested.
+
+### Observed Option 1 Timeline (sample run)
+
+The timeline below is based on the uploaded run log:
+`logs/20260708_113403_option1/1-bmc_session_20260708_113403.log`
+
+| Elapsed | Approx. local time | Milestone |
+|---|---|---|
+| 0:00 | 11:34:03 | Session start / option 1 begins |
+| 1:08 | 11:35:11 | LOADER command sequence starts |
+| 2:52 | 11:36:55 | Boot menu detected; option 9 sent |
+| 4:37 | 11:38:40 | Storage Availability Zone destroy warning answered `no` |
+| 5:07 | 11:39:10 | Waiting for second boot menu / option 4 path |
+| 6:52 | 11:40:55 | Second boot menu detected; option 4 selected |
+| 9:40 | 11:43:43 | Destructive erase confirmation answered `yes`; node initialization underway |
+| 15:31 | 11:49:34 | Node reinit completes and AutoSupport confirmation is answered |
+| 15:56 | 11:49:59 | Cluster creation starts |
+| 16:14 | 11:50:17 | Volume location database update begins |
+| 18:22 | 11:52:25 | Physical disk-zero completion notices begin |
+| 18:27 | 11:52:30 | Disks finish joining the Storage Availability Zone aggregate |
+| 19:11 | 11:53:14 | Root aggregate creation begins |
+| 19:25 | 11:53:28 | Root volume mount begins |
+| 22:28 | 11:56:31 | Data aggregate creation begins |
+| 23:10 | 11:57:13 | Cluster creation reaches license-key prompt |
+| 23:18 | 11:57:21 | Cluster creation confirmation printed |
+| 23:21 | 11:57:24 | Login prompt appears; cluster setup wizard phase ends |
+| 23:33 | 11:57:36 | Passwordless SSH verification completes |
+| 23:56 | 11:57:59 | Run returns to main menu |
+
+**Physical zeroing details from the same run**
+
+- The controller logged **20** `raid.disk.zero.done` completion notices.
+- All 20 zeroed drives reported model `NETAPP X4034S173A3T8NTE` (3.84 TB SSD class), for an observed zeroed set of roughly **76.8 TB raw**.
+- The first `Updating volume location database` milestone appears at **11:50:17** and the first `raid.disk.zero.done` completion appears at **11:52:25**, so physical zero completion signals started about **2m08s** after that phase began.
+- All observed `raid.disk.zero.done` completions and the first `raid.vol.disk.add.done` notices land by **11:52:30**, making the overall zeroing-to-AZ-add wall-clock window about **2m13s**.
+- Because the disks zero in parallel, the best wall-clock average is approximately **6.7s per drive** (`133s / 20 drives`), which should be treated as a **parallel completion average**, not a serial per-disk service time.
 
 ---
 
@@ -1733,6 +1770,7 @@ current `[Unreleased]` working set.
 
 | Feature | Description |
 |---|---|
+| **Cluster-create progress milestones** | New-cluster workflows now print explicit progress lines when cluster setup begins, when option 4 node initialization starts/completes, and as ONTAP advances through VIF manager startup, storage-pod ownership, volume-location updates, zeroing, aggregate creation, and final cluster creation. |
 | **Mode 3 join-status visibility** | During bulk `cluster add-node`, the primary console now prints per-node join status transitions (for example, pending/in-progress/success rows from `cluster add-node-status`) instead of only periodic "waiting" heartbeats. |
 | **LOADER boot-menu recovery hardening** | Boot-menu recovery no longer depends on AUTOBOOT override state; if a node sits at LOADER too long, the script now runs the LOADER recovery path consistently and retries `boot_ontap menu`. |
 | **Boot integrity fail-fast in boot-menu waits** | Boot-menu wait loops now abort immediately when fatal signatures are detected (for example `SHA256 checksum failure: varfs.tgz` or `/dev/nvrd1` restore failures), preventing indefinite CR-nudge loops on unrecoverable nodes. |

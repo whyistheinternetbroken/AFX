@@ -12874,28 +12874,84 @@ def _wait_and_send(channel, trigger, response, label, timeout=900,
     time.sleep(0.5)
 
 
-def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None, reconnect_ctx=None):
-    """Watch cluster-create milestones and continue at additional-license prompt."""
+def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
+                                          reconnect_ctx=None, cluster_name="",
+                                          node_label=""):
+    """Watch cluster-create milestones and continue at post-create prompts."""
     _license_trigger = "enter an additional license key"
-    _cluster_created_trigger = "cluster has been created"
-    _stages = [
-        ("zeroing disk", "Zeroing disk"),
-        ("addition of disks", "Addition of Disks"),
-        ("updating volume location database", "Updating volume location database"),
-        ("creating root", "Creating root aggregate"),
-        ("mounting root volume", "Mounting root volume"),
-        ("creating data aggregate", "Creating data aggregate"),
-    ]
-    _watch_tokens = [_license_trigger, _cluster_created_trigger] + [t for t, __ in _stages]
+    _cluster_mgmt_port_trigger = "cluster management interface port"
+    _cluster_mgmt_ip_trigger = "cluster management interface ip address"
+    _pfx = _node_pfx(node_label)
+    _cluster_display = str(cluster_name or "").strip()
     _t0 = time.monotonic()
     _deadline = _t0 + max(30, int(timeout))
     _active_idx = -1
     _active_t0 = _t0
     _last_tick = _t0
-    _cluster_created_seen = False
+    _emitted = set()
 
-    def _stage_line(msg: str):
-        print(f"   - {msg}")
+    _milestones = [
+        ("VIF manager started.", [
+            "the logical interface manager (vifmgr) has started.",
+        ]),
+        ("Discovering physical network ports.", [
+            "vifmgr.port.discovered",
+        ]),
+        ("Auto configuring system network ports.", [
+            "vifmgr.port.settings",
+        ]),
+        ("Clearing storage pod disk ownership.", [
+            "diskown.changingstoragepod",
+        ]),
+        ("Updating volume location database.", [
+            "updating volume location database",
+        ]),
+        ("Fast zeroing drives.", [
+            "raid.disk.fast.zero.done",
+        ]),
+        ("Physically zeroing drives.", [
+            "raid.disk.zero.done",
+        ]),
+        ("Adding disks to the Availability Zone.", [
+            "raid.vol.disk.add.done",
+        ]),
+        ("Creating Root Aggregate.", [
+            "creating root aggregate",
+            "creating root",
+        ]),
+        ("Mounting Root Volume.", [
+            "mounting root volume",
+        ]),
+        ("Creating Data Aggregate.", [
+            "creating data aggregate",
+        ]),
+        (f"Cluster {_cluster_display or '[name]'} has been created.", [
+            "cluster has been created",
+        ]),
+        ("Configuring cluster...", [
+            _license_trigger,
+            _cluster_mgmt_port_trigger,
+            _cluster_mgmt_ip_trigger,
+        ]),
+    ]
+    _watch_tokens = []
+    for __label, __signals in _milestones:
+        for __sig in __signals:
+            if __sig not in _watch_tokens:
+                _watch_tokens.append(__sig)
+
+    def _emit_step(_idx: int):
+        nonlocal _active_idx, _active_t0, _last_tick
+        if _idx in _emitted:
+            return
+        _label = _milestones[_idx][0]
+        _active_idx = _idx
+        _active_t0 = time.monotonic()
+        _last_tick = _active_t0
+        _emitted.add(_idx)
+        _prefix = "⏳" if _label.endswith("...") else "✅"
+        print(f"   {_prefix} {_pfx}{_label}{_elapsed_str()}")
+        _slog(f"Cluster-create progress: {_label}")
 
     while time.monotonic() < _deadline:
         _remaining = max(1, int(_deadline - time.monotonic()))
@@ -12911,21 +12967,14 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None, 
         _scan = (str(_out or "") + "\n" + str(_matched or "")).lower()
         _now = time.monotonic()
 
-        for _idx, (_token, _label) in enumerate(_stages):
-            if _idx <= _active_idx:
+        for _idx, (__label, _signals) in enumerate(_milestones):
+            if _idx in _emitted:
                 continue
-            if _token in _scan:
-                _active_idx = _idx
-                _active_t0 = _now
-                _stage_line(f"{_label} detected ({int(_now - _t0)}s elapsed)")
-                _slog(f"Cluster-create progress: {_label} detected ({int(_now - _t0)}s elapsed)")
+            if any(_sig in _scan for _sig in _signals):
+                _emit_step(_idx)
 
-        if (not _cluster_created_seen) and (_cluster_created_trigger in _scan):
-            _cluster_created_seen = True
-            _stage_line(f"Cluster has been created. ({int(_now - _t0)}s elapsed)")
-            _slog(f"Cluster-create progress: cluster created ({int(_now - _t0)}s elapsed)")
-
-        if _matched and str(_matched).lower() == _license_trigger:
+        if _matched and str(_matched).lower() in (
+                _license_trigger, _cluster_mgmt_port_trigger, _cluster_mgmt_ip_trigger):
             time.sleep(0.2)
             channel.send("\r")
             if _session_log:
@@ -12933,19 +12982,24 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None, 
             return True
 
         if _active_idx >= 0 and (_now - _last_tick) >= 60:
-            _label = _stages[_active_idx][1]
-            _stage_line(
-                f"{_label} in progress ({int(_now - _active_t0)}s in stage, "
-                f"{int(_now - _t0)}s elapsed)"
+            _label = _milestones[_active_idx][0].rstrip(".")
+            _stage_elapsed = int(_now - _active_t0)
+            print(
+                f"   ⏳ {_pfx}{_label} still in progress... "
+                f"({_stage_elapsed}s in this phase{_elapsed_str()})"
+            )
+            _slog(
+                f"Cluster-create progress heartbeat: {_label} "
+                f"({_stage_elapsed}s in this phase)"
             )
             _last_tick = _now
 
-    _stage_line(
-        f"Timed out waiting for post-create prompt after {int(time.monotonic() - _t0)}s; "
-        "sending Enter to continue."
+    print(
+        f"   ⚠️  {_pfx}Timed out waiting for post-create prompt after "
+        f"{int(time.monotonic() - _t0)}s; sending Enter to continue.{_elapsed_str()}"
     )
     _slog(
-        "Cluster-create progress monitor timed out waiting for additional license key prompt",
+        "Cluster-create progress monitor timed out waiting for post-create prompts",
         prefix="WARN",
     )
     channel.send("\r")
@@ -13071,28 +13125,42 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             _start_idx = _idx
             break
 
+    _reinit_wait_ev = None
+
+    def _start_primary_reinit_reporter():
+        nonlocal _reinit_wait_ev
+        if _node_add or _reinit_wait_ev is not None:
+            return
+        print(f"\n⏳ {_pfx}Node initialization (option 4) started...{_elapsed_str()}")
+        _print_wait_log_hint(node_log=node_log)
+        _reinit_wait_ev = threading.Event()
+        _phase_t0 = time.monotonic()
+
+        def _reinit_reporter(_ev=_reinit_wait_ev, _t0=_phase_t0):
+            while not _ev.wait(60):
+                _elapsed = int(time.monotonic() - _t0)
+                print(
+                    f"   ⏳ {_pfx}Node initialization (option 4) still in progress... "
+                    f"({_elapsed}s in this phase{_elapsed_str()})"
+                )
+
+        threading.Thread(target=_reinit_reporter, daemon=True).start()
+
+    def _stop_primary_reinit_reporter():
+        nonlocal _reinit_wait_ev
+        if _reinit_wait_ev is not None:
+            _reinit_wait_ev.set()
+            _reinit_wait_ev = None
+
     for trigger, resp, lbl in _prompt_sequence[_start_idx:]:
         if lbl == "erase data confirmation" and _erase_answered:
             _slog("erase data confirmation already answered during zero-disks wait; skipping")
             continue
-            _resolve_asup_response(prompt_if_missing=True)  # capture and save user preference
-            resp = "yes"  # always answer yes; disable via autosupport modify after cluster setup if needed
-            if _node_add:
-                _boot_action = "get ready for node add"
-                _still_waiting_msg = "Still waiting for node add readiness"
-            else:
-                _boot_action = "begin cluster creation"
-                _still_waiting_msg = "Node booting after initialization"
-            print(f"\n⏳ {_pfx}Waiting for node to boot and {_boot_action}.{_elapsed_str()}")
-            _print_wait_log_hint(node_log=node_log)
-            _cc_done_ev = threading.Event()
-            _cc_t0 = time.monotonic()
-            def _cc_reporter(_ev=_cc_done_ev, _t0=_cc_t0, _msg=_still_waiting_msg, _p=_pfx):
-                while not _ev.wait(60):
-                    elapsed = int(time.monotonic() - _t0)
-                    reinit_elapsed = _elapsed_str()
-                    print(f"   ⏳ {_p}{_msg}... ({elapsed}s in this phase{reinit_elapsed})")
-            threading.Thread(target=_cc_reporter, daemon=True).start()
+        if lbl == "type-yes confirmation" and not _node_add:
+            _resolve_asup_response(prompt_if_missing=True)
+            resp = "yes"
+            _start_primary_reinit_reporter()
+            print(f"\n⏳ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
         elif not _node_add:
             print(f"\n⏳ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
         _slog(f"Waiting for {lbl}")
@@ -13184,21 +13252,48 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                         _session_log.log(_msg, prefix="ERROR")
                     raise RuntimeError(_msg)
                 _slog("Timeout waiting for zero disks confirmation", prefix="WARN")
+        elif lbl == "type-yes confirmation" and not _node_add:
+            _deadline = time.monotonic() + 1800
+            _answered = False
+            while time.monotonic() < _deadline and not _answered:
+                _remaining = max(1, int(_deadline - time.monotonic()))
+                _out, _matched = direct_read_until_any(
+                    channel,
+                    [trigger],
+                    timeout=min(60, _remaining),
+                    node_log=node_log,
+                    check_bmc_drop=True,
+                    quiet=False,
+                    reconnect_ctx=reconnect_ctx,
+                )
+                _raise_if_fatal_boot_integrity(_out, lbl)
+                if _matched and str(_matched).lower() == trigger.lower():
+                    _stop_primary_reinit_reporter()
+                    print(f"\n✅ {_pfx}Node reinit completed.{_elapsed_str()}")
+                    time.sleep(0.3)
+                    channel.send(resp + "\r")
+                    if _session_log:
+                        _session_log.log(f"Detected '{trigger}' – auto-responded with '{resp}'")
+                        _session_log.log_sent(resp)
+                    print(f"\n✅ {_pfx}Detected '{trigger}' – auto-responded with '{resp}'{_elapsed_str()}")
+                    print(f"\n   ⏳ {_pfx}Configuring node management network...{_elapsed_str()}")
+                    _answered = True
+                    break
+            if not _answered:
+                _stop_primary_reinit_reporter()
+                _slog("Timeout waiting for type-yes confirmation", prefix="WARN")
         else:
             _out = direct_send_and_wait(channel, "", trigger, timeout=1800, auto_respond=resp,
                                         check_bmc_drop=True, quiet=_node_add, node_log=node_log,
                                         reconnect_ctx=reconnect_ctx)
             _raise_if_fatal_boot_integrity(_out, lbl)
-            if lbl == "type-yes confirmation" and not _node_add:
-                print(f"\n   ⏳ {_pfx}Configuring node management network...{_elapsed_str()}")
-        if _cc_done_ev is not None:
-            _cc_done_ev.set()
-            _cc_done_ev = None
-            if not _node_add:
-                print(f"\n   ⏳ {_pfx}Starting cluster creation...{_elapsed_str()}")
+            if lbl == "erase data confirmation" and not _node_add:
+                _start_primary_reinit_reporter()
 
     if _node_add:
         print(f"\n   ⏳ {_pfx}Node(s) resetting; takes 3-5 minutes.")
+    else:
+        _stop_primary_reinit_reporter()
 
     # Checkpoint: disks have been formatted and ONTAP image installed
     if _checkpoint:
@@ -22424,7 +22519,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     # Some ONTAP builds show "Press Enter to complete cluster setup" first;
     # others jump directly to the create/join question. Wait for whichever
     # comes first, sending CR every 15 s of silence to nudge the prompt.
-    print("\n⏳ Waiting for cluster setup wizard to begin...")
+    _wizard_pfx = _node_pfx(primary_bmc)
+    print(f"\n⏳ {_wizard_pfx}Waiting for cluster setup wizard to begin...{_elapsed_str()}")
     _slog("Waiting for wizard start (press-enter or create/join prompt)")
     _which = _wait_for_wizard_start(
         channel, timeout=1800, node_log=node_log, initial_buf=initial_buf
@@ -22435,6 +22531,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _session_log.log("Timeout waiting for wizard start", prefix="ERROR")
             _session_log.set_outcome("FAIL", "wizard start timeout")
         return False
+    print(f"\n⏳ {_wizard_pfx}Cluster setup has begun...{_elapsed_str()}")
+    _slog("Cluster setup wizard started")
     _skip_create_steps = bool(_which and "cluster management interface port" in _which.lower())
     # If node management prompts are still pending (session resumed past them or they
     # were missed), drive them before attempting the wizard create/join flow.
@@ -22602,19 +22700,21 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
         _checkpoint_mark_phase("cp_1_7", node_id=_primary_cp_node, alias_phase="primary_setup_done")
         print(
-            "\n⏳ Cluster create started. Waiting for ONTAP to form the cluster "
-            "and reach post-create prompts..."
+            f"\n⏳ {_wizard_pfx}Cluster create started. Waiting for ONTAP to form "
+            f"the cluster and reach post-create prompts...{_elapsed_str()}"
         )
         _slog("Cluster create started - monitoring ONTAP progress milestones")
         _wait_for_cluster_create_post_prompts(
             channel,
             timeout=1800,
             node_log=node_log,
+            cluster_name=cc.get("name", ""),
+            node_label=primary_bmc or "",
         )
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(
-            "\n✅ Cluster create reached post-create wizard prompts. "
-            "Continuing management network configuration..."
+            f"\n✅ {_wizard_pfx}Cluster create reached post-create wizard prompts. "
+            f"Continuing management network configuration...{_elapsed_str()}"
         )
         print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
         _wait_and_send(channel, "cluster management interface port", cc["mgmt_port"],
