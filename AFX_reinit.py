@@ -1907,10 +1907,16 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
                 print("  ↩️  Returning to main menu...")
                 raise _ReturnToMenu
             if _strict_yn and val == "" and _yn_default_to:
+                if _session_log:
+                    with suppress(Exception):
+                        _session_log.log_choice(prompt, _yn_default_to)
                 return _yn_default_to
             if _strict_yn and not _is_valid_yes_no_input(val):
                 print("  Please enter y, n, yes, or no.")
                 continue
+            if _session_log:
+                with suppress(Exception):
+                    _session_log.log_choice(prompt, val)
             return val
     except (EOFError, KeyboardInterrupt):
         return default
@@ -1967,7 +1973,11 @@ def _tracked_input(prompt=""):
             )
     try:
         if not _prompt_is_yes_no(prompt):
-            return _orig_input(prompt)
+            _answer = _orig_input(prompt)
+            if _session_log:
+                with suppress(Exception):
+                    _session_log.log_choice(prompt, _answer)
+            return _answer
         # Determine the default answer from the prompt bracket, e.g. [y/N] → "n", [Y/n] → "y".
         _yn_default = ""
         _yn_m = re.search(r"\[([Yy])/([Nn])\]", str(prompt or ""))
@@ -1980,8 +1990,14 @@ def _tracked_input(prompt=""):
                 return _val
             # Blank Enter accepts the capitalised default when one is present.
             if _vl == "" and _yn_default:
+                if _session_log:
+                    with suppress(Exception):
+                        _session_log.log_choice(prompt, _yn_default)
                 return _yn_default
             if _is_valid_yes_no_input(_val):
+                if _session_log:
+                    with suppress(Exception):
+                        _session_log.log_choice(prompt, _val)
                 return _val
             print("  Please enter y, n, yes, or no.")
     finally:
@@ -2863,6 +2879,20 @@ class SessionLogger:
         self._screen_log = open(
             self.screen_log_file, "w", encoding="utf-8", buffering=1
         )
+        # Operator choices log: records every interactive prompt + answer so
+        # decisions made during a run can be audited without reading the full
+        # BMC session log.
+        self.choices_log_file = _build_numbered_log_path(
+            self.log_dir, f"operator_choices_{timestamp}.log", scope_dir=self.log_dir
+        )
+        self._choices_log = open(
+            self.choices_log_file, "w", encoding="utf-8", buffering=1
+        )
+        self._choices_log.write("Operator Choices Log\n")
+        self._choices_log.write(
+            f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+        self._choices_log.write("=" * 70 + "\n\n")
         self._orig_stdout = sys.stdout
         self._stdout_restored = False
         sys.stdout = _TeeStdout(self._orig_stdout, self._screen_log)
@@ -3508,6 +3538,28 @@ class SessionLogger:
             display = repr(data) if any(ord(c) < 32 and c not in '\r\n' for c in data) else data.strip()
             self._file.write(f"[{self._ts_with_elapsed()}] [SENT] {display}\n")
 
+    def log_choice(self, prompt: str, answer: str):
+        """Record an operator prompt→answer pair to the choices log.
+
+        Answers to prompts whose text contains password-related keywords are
+        masked so credentials are never written to the choices file.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            try:
+                _label = re.sub(r"\x1b\[[0-9;]*m", "", str(prompt or ""))
+                _label = _label.strip().splitlines()[-1] if _label.strip() else ""
+                _is_secret = any(
+                    w in _label.lower()
+                    for w in ("password", "passphrase", "secret", "token", "passwd")
+                )
+                _display = "***" if _is_secret else (answer if answer else "(blank/default)")
+                ts = datetime.now().strftime("%H:%M:%S")
+                self._choices_log.write(f"[{ts}] {_label}\n         → {_display}\n\n")
+            except Exception:
+                pass
+
     def close(self):
         # Stop the heartbeat thread BEFORE taking the lock so it can drain
         # any in-flight tick that may already be holding the lock.
@@ -3692,6 +3744,11 @@ class SessionLogger:
         try:
             if not self._screen_log.closed:
                 self._screen_log.close()
+        except Exception:
+            pass
+        try:
+            if not self._choices_log.closed:
+                self._choices_log.close()
         except Exception:
             pass
 
@@ -8429,6 +8486,16 @@ def _relaunch_in_screen():
 # ---------------------------------------------------------------------------
 
 def wait_for_bmc_prompt(channel, auto_takeover=False):
+    """Wait for the BMC ``>`` prompt, transparently answering ``y`` to a
+    session-takeover prompt when *auto_takeover* is True.
+
+    Returns the live channel (possibly a newly reconnected one) on success,
+    or ``False`` on failure.  Callers should update their channel reference:
+
+        channel = wait_for_bmc_prompt(channel, auto_takeover=True)
+        if not channel:
+            ...
+    """
     global _primary_bmc_reconnect_ctx
     if _primary_bmc_reconnect_ctx:
         _primary_bmc_reconnect_ctx["channel"] = channel
@@ -8459,6 +8526,58 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
             try:
                 channel.send("y\r")
             except OSError:
+                # The socket closed mid-send (race: old session's TCP teardown
+                # hit our channel).  The existing session is now gone, so
+                # reconnect SSH and get a fresh BMC prompt.
+                _slog(
+                    "Socket closed before session-takeover send; reconnecting to get fresh BMC prompt",
+                    prefix="WARN",
+                )
+                _rc = _primary_bmc_reconnect_ctx
+                _new_ch = None
+                if _rc and _rc.get("host"):
+                    # 1st try: reopen shell on same transport (faster).
+                    try:
+                        _ec = _rc.get("client")
+                        _t = _ec.get_transport() if _ec else None
+                        if _t and _t.is_active():
+                            _new_ch = _open_shell(_ec)
+                    except Exception:
+                        _new_ch = None
+                    # 2nd try: full SSH reconnect.
+                    if _new_ch is None:
+                        try:
+                            time.sleep(1)
+                            _nc, _nu, _np = _ssh_connect_with_retry(
+                                _rc["host"],
+                                _rc.get("user", "admin"),
+                                _rc.get("password", ""),
+                                label="BMC-takeover-retry",
+                                max_attempts=3,
+                                interactive=False,
+                                fallback_passwords=_bmc_fallback_passwords(
+                                    _rc["host"], {_rc["host"]: _rc.get("password", "")}
+                                ),
+                            )
+                            _new_ch = _open_shell(_nc)
+                            global _active_client
+                            with _client_lock:
+                                _active_client = _nc
+                            _rc["client"] = _nc
+                            _rc["user"] = _nu
+                            _rc["password"] = _np
+                        except Exception as _re:
+                            _slog(
+                                f"BMC reconnect after socket-close failed: {_re}",
+                                prefix="WARN",
+                            )
+                if _new_ch:
+                    _rc["channel"] = _new_ch
+                    _out2, _m2 = direct_read_until_any(_new_ch, [">"], timeout=10)
+                    if _m2 and ">" in _m2:
+                        print("✅ BMC prompt reached on reconnected channel.")
+                        _slog("BMC prompt reached on reconnected channel after session-takeover race")
+                        return _new_ch
                 _slog("Socket closed before session-takeover send; treating as failed", prefix="WARN")
                 return False
             time.sleep(2)
@@ -8470,7 +8589,7 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
                 return False
             print("✅ BMC prompt detected after session takeover.")
             _slog("BMC prompt detected after session takeover")
-            return True
+            return channel
         else:
             print("❌ Cannot continue without taking over the session. Exiting.")
             if _session_log:
@@ -8482,7 +8601,7 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
     elif matched and ">" in matched:
         print("✅ BMC prompt detected.")
         _slog("BMC prompt detected (no existing session)")
-        return True
+        return channel
 
     else:
         print("❌ Did not receive BMC prompt. Exiting.")
@@ -21192,7 +21311,8 @@ def _run_ontap_upgrade(log):
                 log.end_phase()
 
             # ── Step 4: BMC prompt + system console ──────────────────────────
-            if not wait_for_bmc_prompt(channel_41, auto_takeover=True):
+            channel_41 = wait_for_bmc_prompt(channel_41, auto_takeover=True)
+            if not channel_41:
                 print("  \u274c BMC prompt not received. Exiting.")
                 if log:
                     log.log("BMC prompt not received", prefix="ERROR")
@@ -30018,6 +30138,15 @@ def _make_session_log(label: str) -> "SessionLogger":
     appeared inline in each mode section of ``main()``.
     """
     global _session_log
+    # Reset per-run prompt-wait counters so each run's summary reflects only
+    # prompts answered in that run, not the accumulated total for the session.
+    global _prompt_wait_seconds, _prompt_wait_count
+    global _prompt_wait_max, _prompt_wait_max_label, _prompt_wait_extended
+    _prompt_wait_seconds = 0.0
+    _prompt_wait_count = 0
+    _prompt_wait_max = 0.0
+    _prompt_wait_max_label = ""
+    _prompt_wait_extended = []
     _session_log = SessionLogger(
         bg_mode=_bg_mode,
         label=label,
@@ -33247,7 +33376,8 @@ def main():
                 keepalive_thread_44.start()
                 _session_log.end_phase()
 
-                if not wait_for_bmc_prompt(channel_44, auto_takeover=True):
+                channel_44 = wait_for_bmc_prompt(channel_44, auto_takeover=True)
+                if not channel_44:
                     print("\n  \u274c BMC prompt not received. Exiting.")
                     _session_log.set_outcome("FAIL", "BMC prompt not received")
                     _session_log.close()
@@ -33486,11 +33616,13 @@ def main():
                             _session_log.log(
                                 "5.3: BMC prompt already consumed by probe; skipping wait"
                             )
-                        elif not wait_for_bmc_prompt(_ch46, auto_takeover=True):
-                            print("  \u274c BMC prompt not received. Exiting.")
-                            _session_log.set_outcome("FAIL", "BMC prompt not received")
-                            _session_log.close()
-                            sys.exit(1)
+                        else:
+                            _ch46 = wait_for_bmc_prompt(_ch46, auto_takeover=True)
+                            if not _ch46:
+                                print("  \u274c BMC prompt not received. Exiting.")
+                                _session_log.set_outcome("FAIL", "BMC prompt not received")
+                                _session_log.close()
+                                sys.exit(1)
 
                     # Run the full retain capture (name + network + peer SPs).
                     _cname46r, _net46, _peers46 = collect_retain_data(
@@ -33746,7 +33878,8 @@ def main():
                         _bkt46.start()
                         _session_log.end_phase()
 
-                        if not wait_for_bmc_prompt(_bch46, auto_takeover=True):
+                        _bch46 = wait_for_bmc_prompt(_bch46, auto_takeover=True)
+                        if not _bch46:
                             print("  \u274c BMC prompt not received. Exiting.")
                             _session_log.set_outcome("FAIL", "BMC prompt not received")
                             _session_log.close()
@@ -36573,7 +36706,8 @@ def main():
 
             # Phase: BMC Prompt & Validation
             _session_log.start_phase("BMC Prompt & Validation")
-            if not wait_for_bmc_prompt(channel, auto_takeover=True):
+            channel = wait_for_bmc_prompt(channel, auto_takeover=True)
+            if not channel:
                 _session_log.set_outcome("FAIL", "BMC prompt not received")
                 _session_log.close()
                 sys.exit(1)
@@ -38086,7 +38220,8 @@ def main():
                 _session_log.end_phase()
 
                 _session_log.start_phase(f"BMC Prompt ({sp_host})")
-                if not wait_for_bmc_prompt(channel):
+                channel = wait_for_bmc_prompt(channel)
+                if not channel:
                     print(f"⚠️  Could not reach BMC prompt on {sp_host}; aborting.")
                     _session_log.log(f"BMC prompt timeout on {sp_host}; aborting next-node",
                                      prefix="ERROR")
