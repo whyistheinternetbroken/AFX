@@ -29151,7 +29151,16 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             v = cfg.get(k)
             print(f"📋   {k:<8} = {v if v else '(prompt manually)'}")
         _slog(f"Node mgmt config to use: {cfg}")
-        _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
+        _mgmt_residual = _auto_answer_node_mgmt(
+            channel, cfg,
+            checkpoint_marks={
+                "port":    "cp_1_7_1",
+                "ip":      "cp_1_7_2",
+                "netmask": "cp_1_7_3",
+                "gateway": "cp_1_7_4",
+            },
+            checkpoint_node_id=_primary_cp_node,
+        ) or ""
         if _checkpoint:
             try:
                 _checkpoint_mark_phase("cp_1_6", node_id=_primary_cp_node, alias_phase="primary_node_mgmt_done")
