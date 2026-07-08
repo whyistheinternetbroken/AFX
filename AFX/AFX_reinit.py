@@ -358,6 +358,7 @@ class CheckpointManager:
             "done": True, "ts": datetime.now().isoformat(),
         }
         self._save()
+        _log_pending_checkpoint_test_target(phase)
         _maybe_inject_checkpoint_failure(phase)
 
     def is_done(self, phase: str) -> bool:
@@ -371,6 +372,7 @@ class CheckpointManager:
             "done": True, "ts": datetime.now().isoformat(),
         }
         self._save()
+        _log_pending_checkpoint_test_target(phase, ip)
         _maybe_inject_checkpoint_failure(phase, ip)
 
     def is_node_done(self, phase: str, ip: str) -> bool:
@@ -1749,6 +1751,25 @@ def _raise_pending_checkpoint_failure() -> None:
     print(f"\n{_msg}")
     _slog(_msg, prefix="INFO")
     raise _ReturnToMenu
+
+
+def _log_pending_checkpoint_test_target(phase: str, node_id: str = "") -> None:
+    """Log test-mode progress when a non-target checkpoint is saved."""
+    _phase = str(phase or "").strip()
+    if not _phase:
+        return
+    if (not _checkpoint_test_enabled
+            or _checkpoint_test_consumed
+            or not _checkpoint_test_target
+            or _phase == _checkpoint_test_target):
+        return
+    _node_id = str(node_id or "").strip()
+    _node_suffix = f" for {_node_id}" if _node_id else ""
+    _msg = (
+        f"--test armed for checkpoint '{_checkpoint_test_target}'; "
+        f"saved '{_phase}'{_node_suffix}, waiting for target"
+    )
+    _slog(_msg, prefix="INFO")
 
 
 def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
