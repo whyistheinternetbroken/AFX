@@ -12889,6 +12889,9 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
     _active_t0 = _t0
     _last_tick = _t0
     _emitted = set()
+    _default_heartbeat_seconds = 60
+    _mounting_root_heartbeat_seconds = 30
+    _panic_sig = "panic"
 
     _milestones = [
         ("VIF manager started.", [
@@ -12939,6 +12942,210 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
         for __sig in __signals:
             if __sig not in _watch_tokens:
                 _watch_tokens.append(__sig)
+    if _panic_sig not in _watch_tokens:
+        _watch_tokens.append(_panic_sig)
+
+    def _prompt_continue_after_panic() -> bool:
+        _ans = _prompt_with_timeout(
+            "\n  Node panic/reboot complete. Would you like to continue the reinit? (Y/N): ",
+            default="n",
+            timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+        ).strip().lower()
+        return _ans in ("y", "yes")
+
+    def _loader_recovery_allowed() -> bool:
+        if not _checkpoint:
+            return False
+        _cp_mode_key = _checkpoint_mode_to_test_key(getattr(_checkpoint, "mode", ""))
+        if _cp_mode_key in (1, 3):
+            return _checkpoint_phase_effectively_done(_checkpoint, 1, "cp_1_1")
+        return _checkpoint_phase_effectively_done(_checkpoint, _cp_mode_key, "cp_1_1")
+
+    def _run_cluster_create_retry_then_setup() -> bool:
+        print(f"   ⏳ {_pfx}Running cluster create retry command...{_elapsed_str()}")
+        _slog("Panic recovery: running 'set diag -c off; cluster create -retry true'")
+        _retry_out = _run_cluster_command(
+            channel,
+            "set diag -c off; cluster create -retry true",
+            timeout=240,
+        )
+        if _retry_out:
+            print(_retry_out.rstrip())
+        print(f"   ⏳ {_pfx}Restarting cluster setup wizard...{_elapsed_str()}")
+        _slog("Panic recovery: running 'cluster setup'")
+        with suppress(Exception):
+            channel.send("cluster setup\r")
+        if _session_log:
+            _session_log.log_sent("cluster setup")
+        _wizard_seen = _wait_for_wizard_start(
+            channel,
+            timeout=600,
+            node_log=node_log,
+        )
+        return bool(_wizard_seen)
+
+    def _recover_from_panic() -> bool:
+        print(f"   ⚠️  {_pfx}Node panic detected. Node rebooting.{_elapsed_str()}")
+        _slog("Node panic detected during cluster-create progress monitor", prefix="WARN")
+        _deadline_local = time.monotonic() + 2400
+        _scan_local = ""
+
+        while time.monotonic() < _deadline_local:
+            _remain = max(1, int(_deadline_local - time.monotonic()))
+            _out_r, _matched_r = direct_read_until_any(
+                channel,
+                [
+                    "loader-",
+                    "selection (1-",
+                    "(1-9)?",
+                    "(1-11)?",
+                    "(1-12)?",
+                    "login:",
+                    "password:",
+                    "::>",
+                    "::*>",
+                    "press enter to complete cluster setup",
+                    "do you want to create a new cluster or join",
+                    "cluster management interface port",
+                    "node management interface port",
+                    "panic",
+                ],
+                timeout=min(30, _remain),
+                node_log=node_log,
+                quiet=True,
+                check_bmc_drop=True,
+                reconnect_ctx=reconnect_ctx,
+            )
+            _scan_local = (_scan_local + "\n" + str(_out_r or "") + "\n" + str(_matched_r or "")).lower()
+            if len(_scan_local) > 16384:
+                _scan_local = _scan_local[-8192:]
+
+            if "loader-" in _scan_local:
+                if not _loader_recovery_allowed():
+                    _msg = "Node is now at LOADER. Please resolve the node issue before continuing."
+                    print(f"\n❌ {_msg}")
+                    _slog(_msg, prefix="ERROR")
+                    raise RuntimeError(_msg)
+                print(f"   ⚠️  {_pfx}Node at LOADER after panic; issuing boot_ontap menu...{_elapsed_str()}")
+                with suppress(Exception):
+                    channel.send("boot_ontap menu\r")
+                if _session_log:
+                    _session_log.log_sent("boot_ontap menu")
+                _scan_local = ""
+                continue
+
+            _is_boot_menu = (
+                "selection (1-" in _scan_local
+                or "(1-9)?" in _scan_local
+                or "(1-11)?" in _scan_local
+                or "(1-12)?" in _scan_local
+            )
+            if _is_boot_menu:
+                if not _prompt_continue_after_panic():
+                    _msg = "Operator chose to exit after panic/reboot for troubleshooting."
+                    _slog(_msg, prefix="WARN")
+                    raise RuntimeError(_msg)
+                print(f"   ⏳ {_pfx}Continuing reboot from boot menu...{_elapsed_str()}")
+                with suppress(Exception):
+                    channel.send("1\r")
+                if _session_log:
+                    _session_log.log_sent("1")
+                _scan_local = ""
+                continue
+
+            if "::>" in _scan_local or "::*>" in _scan_local:
+                if not _prompt_continue_after_panic():
+                    _msg = "Operator chose to exit after panic/reboot for troubleshooting."
+                    _slog(_msg, prefix="WARN")
+                    raise RuntimeError(_msg)
+                if not _run_cluster_create_retry_then_setup():
+                    _msg = "Unable to restart cluster setup after panic recovery."
+                    _slog(_msg, prefix="ERROR")
+                    raise RuntimeError(_msg)
+                return True
+
+            if "login:" in _scan_local:
+                with suppress(Exception):
+                    channel.send("admin\r")
+                if _session_log:
+                    _session_log.log_sent("admin")
+                _lp_out, _lp_match = direct_read_until_any(
+                    channel,
+                    ["password:", "::>", "::*>", "login:"],
+                    timeout=30,
+                    node_log=node_log,
+                    quiet=True,
+                    check_bmc_drop=True,
+                    reconnect_ctx=reconnect_ctx,
+                )
+                _lp_scan = (str(_lp_out or "") + "\n" + str(_lp_match or "")).lower()
+
+                if "::>" in _lp_scan or "::*>" in _lp_scan:
+                    if not _prompt_continue_after_panic():
+                        _msg = "Operator chose to exit after panic/reboot for troubleshooting."
+                        _slog(_msg, prefix="WARN")
+                        raise RuntimeError(_msg)
+                    with suppress(Exception):
+                        channel.send("cluster setup\r")
+                    if _session_log:
+                        _session_log.log_sent("cluster setup")
+                    _wizard_seen = _wait_for_wizard_start(
+                        channel,
+                        timeout=600,
+                        node_log=node_log,
+                    )
+                    if not _wizard_seen:
+                        _msg = "Unable to restart cluster setup wizard after panic recovery login."
+                        _slog(_msg, prefix="ERROR")
+                        raise RuntimeError(_msg)
+                    return True
+
+                if "password:" in _lp_scan:
+                    if not _prompt_continue_after_panic():
+                        _msg = (
+                            "Operator chose to exit after password-gated panic recovery. "
+                            "Recommended manual recovery: set diag -c off; cluster create -retry true"
+                        )
+                        _slog(_msg, prefix="WARN")
+                        raise RuntimeError(_msg)
+                    _pw = getpass.getpass("  Enter cluster admin password for panic recovery: ")
+                    with suppress(Exception):
+                        channel.send((_pw or "") + "\r")
+                    if _session_log:
+                        _session_log.log_sent("<hidden>")
+                    _post_out, _post_match = direct_read_until_any(
+                        channel,
+                        ["::>", "::*>", "login:"],
+                        timeout=60,
+                        node_log=node_log,
+                        quiet=True,
+                        check_bmc_drop=True,
+                        reconnect_ctx=reconnect_ctx,
+                    )
+                    _post_scan = (str(_post_out or "") + "\n" + str(_post_match or "")).lower()
+                    if "::>" not in _post_scan and "::*>" not in _post_scan:
+                        _msg = "Failed to reach cluster prompt after panic recovery password login."
+                        _slog(_msg, prefix="ERROR")
+                        raise RuntimeError(_msg)
+                    if not _run_cluster_create_retry_then_setup():
+                        _msg = "Unable to restart cluster setup after cluster create retry."
+                        _slog(_msg, prefix="ERROR")
+                        raise RuntimeError(_msg)
+                    return True
+
+                _scan_local = ""
+                continue
+
+            if (
+                "press enter to complete cluster setup" in _scan_local
+                or "do you want to create a new cluster or join" in _scan_local
+                or "cluster management interface port" in _scan_local
+                or "node management interface port" in _scan_local
+            ):
+                return True
+
+        _slog("Panic recovery timed out waiting for a recoverable console state", prefix="ERROR")
+        return False
 
     def _emit_step(_idx: int):
         nonlocal _active_idx, _active_t0, _last_tick
@@ -12967,6 +13174,15 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
         _scan = (str(_out or "") + "\n" + str(_matched or "")).lower()
         _now = time.monotonic()
 
+        if _panic_sig in _scan:
+            _recovered = _recover_from_panic()
+            if not _recovered:
+                return False
+            _deadline = time.monotonic() + max(30, int(timeout))
+            _last_tick = time.monotonic()
+            _active_t0 = _last_tick
+            continue
+
         for _idx, (__label, _signals) in enumerate(_milestones):
             if _idx in _emitted:
                 continue
@@ -12981,7 +13197,11 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
                 _session_log.log_sent("<Enter>")
             return True
 
-        if _active_idx >= 0 and (_now - _last_tick) >= 60:
+        _heartbeat_seconds = _default_heartbeat_seconds
+        if _active_idx >= 0 and _milestones[_active_idx][0] == "Mounting Root Volume.":
+            _heartbeat_seconds = _mounting_root_heartbeat_seconds
+
+        if _active_idx >= 0 and (_now - _last_tick) >= _heartbeat_seconds:
             _label = _milestones[_active_idx][0].rstrip(".")
             _stage_elapsed = int(_now - _active_t0)
             print(
@@ -13126,27 +13346,70 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             break
 
     _reinit_wait_ev = None
+    _reinit_progress_scan = ""
+    _reinit_progress_seen = set()
+    _reinit_stage_label = "Node initialization (option 4)"
+    _reinit_stage_t0 = None
 
-    def _start_primary_reinit_reporter():
-        nonlocal _reinit_wait_ev
-        if _node_add or _reinit_wait_ev is not None:
+    def _emit_option4_progress(_message: str, _key: str):
+        nonlocal _reinit_stage_label, _reinit_stage_t0
+        if _key in _reinit_progress_seen:
             return
+        _reinit_progress_seen.add(_key)
+        _reinit_stage_label = _message
+        _reinit_stage_t0 = time.monotonic()
+        print(f"   ⏳ {_pfx}{_message}{_elapsed_str()}")
+        _slog(f"Option-4 progress: {_message}")
+
+    def _consume_option4_progress(_text: str):
+        nonlocal _reinit_progress_scan
+        if not _text:
+            return
+        _reinit_progress_scan += "\n" + str(_text).lower()
+        if len(_reinit_progress_scan) > 16384:
+            _reinit_progress_scan = _reinit_progress_scan[-8192:]
+        if ("wipe filer procedure requested" in _reinit_progress_scan
+                or "unsetting bootarg " in _reinit_progress_scan):
+            _emit_option4_progress("Clearing boot configuration...", "wipecfg")
+        if "starting netapp_loadnvram" in _reinit_progress_scan:
+            _emit_option4_progress("Loading NVRAM state...", "loadnvram")
+        if "cryptomod_fips: executing crypto fips self tests." in _reinit_progress_scan:
+            _emit_option4_progress("Running cryptographic self-tests...", "cryptotest")
+        if ("rebooting to finish wipeconfig request" in _reinit_progress_scan
+                or "starting autoboot press ctrl-c to abort" in _reinit_progress_scan):
+            _emit_option4_progress("Booting ONTAP after wipe...", "autoboot")
+        if "netif.linkinfo:notice" in _reinit_progress_scan:
+            _emit_option4_progress("Bringing up network links...", "netlinks")
+        if ("nvme-of: setting up port" in _reinit_progress_scan
+                or "nvmeof.subsystem.add" in _reinit_progress_scan):
+            _emit_option4_progress("Initializing NVMe-oF ports...", "nvmeof")
+        if "qat provider init started." in _reinit_progress_scan:
+            _emit_option4_progress("Initializing QAT acceleration...", "qat")
+
+    def _start_option4_reinit_reporter():
+        nonlocal _reinit_wait_ev, _reinit_stage_label, _reinit_stage_t0
+        if _reinit_wait_ev is not None:
+            return
+        _reinit_stage_label = "Node initialization (option 4)"
+        _reinit_stage_t0 = time.monotonic()
         print(f"\n⏳ {_pfx}Node initialization (option 4) started...{_elapsed_str()}")
         _print_wait_log_hint(node_log=node_log)
         _reinit_wait_ev = threading.Event()
-        _phase_t0 = time.monotonic()
+        _phase_t0 = _reinit_stage_t0
 
         def _reinit_reporter(_ev=_reinit_wait_ev, _t0=_phase_t0):
             while not _ev.wait(60):
-                _elapsed = int(time.monotonic() - _t0)
+                _stage_label = (_reinit_stage_label or "Node initialization (option 4)").rstrip(".")
+                _stage_t0 = _reinit_stage_t0 or _t0
+                _elapsed = int(time.monotonic() - _stage_t0)
                 print(
-                    f"   ⏳ {_pfx}Node initialization (option 4) still in progress... "
+                    f"   ⏳ {_pfx}{_stage_label} still in progress... "
                     f"({_elapsed}s in this phase{_elapsed_str()})"
                 )
 
         threading.Thread(target=_reinit_reporter, daemon=True).start()
 
-    def _stop_primary_reinit_reporter():
+    def _stop_option4_reinit_reporter():
         nonlocal _reinit_wait_ev
         if _reinit_wait_ev is not None:
             _reinit_wait_ev.set()
@@ -13156,12 +13419,9 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
         if lbl == "erase data confirmation" and _erase_answered:
             _slog("erase data confirmation already answered during zero-disks wait; skipping")
             continue
-        if lbl == "type-yes confirmation" and not _node_add:
-            _resolve_asup_response(prompt_if_missing=True)
-            resp = "yes"
-            _start_primary_reinit_reporter()
-            print(f"\n⏳ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
-        elif not _node_add:
+        if lbl == "zero disks confirmation" and not _node_add:
+            print(f"\n⏳ {_pfx}Node rebooting to initialize...{_elapsed_str()}")
+        if lbl != "type-yes confirmation" and not _node_add:
             print(f"\n⏳ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
         _slog(f"Waiting for {lbl}")
         if lbl == "zero disks confirmation":
@@ -13222,6 +13482,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     channel.send("yes\r")
                     if _session_log:
                         _session_log.log_sent("yes")
+                    _start_option4_reinit_reporter()
                     _answered = True
                     _erase_answered = True
                     break
@@ -13252,7 +13513,12 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                         _session_log.log(_msg, prefix="ERROR")
                     raise RuntimeError(_msg)
                 _slog("Timeout waiting for zero disks confirmation", prefix="WARN")
-        elif lbl == "type-yes confirmation" and not _node_add:
+        elif lbl == "type-yes confirmation":
+            if not _node_add:
+                _resolve_asup_response(prompt_if_missing=True)
+                resp = "yes"
+                print(f"\n⏳ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
+            _start_option4_reinit_reporter()
             _deadline = time.monotonic() + 1800
             _answered = False
             while time.monotonic() < _deadline and not _answered:
@@ -13267,20 +13533,23 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     reconnect_ctx=reconnect_ctx,
                 )
                 _raise_if_fatal_boot_integrity(_out, lbl)
+                _consume_option4_progress(_out)
                 if _matched and str(_matched).lower() == trigger.lower():
-                    _stop_primary_reinit_reporter()
-                    print(f"\n✅ {_pfx}Node reinit completed.{_elapsed_str()}")
+                    _stop_option4_reinit_reporter()
+                    if not _node_add:
+                        print(f"\n✅ {_pfx}Node reinit completed.{_elapsed_str()}")
                     time.sleep(0.3)
                     channel.send(resp + "\r")
                     if _session_log:
                         _session_log.log(f"Detected '{trigger}' – auto-responded with '{resp}'")
                         _session_log.log_sent(resp)
                     print(f"\n✅ {_pfx}Detected '{trigger}' – auto-responded with '{resp}'{_elapsed_str()}")
-                    print(f"\n   ⏳ {_pfx}Configuring node management network...{_elapsed_str()}")
+                    if not _node_add:
+                        print(f"\n   ⏳ {_pfx}Configuring node management network...{_elapsed_str()}")
                     _answered = True
                     break
             if not _answered:
-                _stop_primary_reinit_reporter()
+                _stop_option4_reinit_reporter()
                 _slog("Timeout waiting for type-yes confirmation", prefix="WARN")
         else:
             _out = direct_send_and_wait(channel, "", trigger, timeout=1800, auto_respond=resp,
@@ -13288,12 +13557,12 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                                         reconnect_ctx=reconnect_ctx)
             _raise_if_fatal_boot_integrity(_out, lbl)
             if lbl == "erase data confirmation" and not _node_add:
-                _start_primary_reinit_reporter()
+                _start_option4_reinit_reporter()
 
     if _node_add:
         print(f"\n   ⏳ {_pfx}Node(s) resetting; takes 3-5 minutes.")
     else:
-        _stop_primary_reinit_reporter()
+        _stop_option4_reinit_reporter()
 
     # Checkpoint: disks have been formatted and ONTAP image installed
     if _checkpoint:
@@ -22704,13 +22973,22 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             f"the cluster and reach post-create prompts...{_elapsed_str()}"
         )
         _slog("Cluster create started - monitoring ONTAP progress milestones")
-        _wait_for_cluster_create_post_prompts(
+        _post_prompt_ok = _wait_for_cluster_create_post_prompts(
             channel,
             timeout=1800,
             node_log=node_log,
             cluster_name=cc.get("name", ""),
             node_label=primary_bmc or "",
         )
+        if not _post_prompt_ok:
+            print("\n❌ Cluster create did not recover to post-create prompts.")
+            if _session_log:
+                _session_log.log(
+                    "Cluster create monitor failed to recover to post-create prompts",
+                    prefix="ERROR",
+                )
+                _session_log.set_outcome("FAIL", "cluster create monitor recovery failed")
+            return False
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(
             f"\n✅ {_wizard_pfx}Cluster create reached post-create wizard prompts. "
