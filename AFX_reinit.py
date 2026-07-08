@@ -26286,6 +26286,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         return False
     if log:
         log.log(f"Mode 2.2 parallel add confirmed for {len(peer_bmcs)} node(s): {peer_bmcs}")
+    _print_autopilot_banner()
 
     # Write node-add manifest so option 2.3 can resume if this run is interrupted.
     _write_node_add_manifest(
@@ -37580,7 +37581,6 @@ def main():
                 except Exception:
                     pass
 
-                _print_autopilot_banner()
                 ok = _run_2b_parallel_add(
                     _2b_all_peers, sp_user,
                     {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "")
