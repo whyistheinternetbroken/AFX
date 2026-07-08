@@ -1379,6 +1379,25 @@ class _InjectedCheckpointFailure(RuntimeError):
     """Synthetic failure raised by ``--test`` immediately after a checkpoint is saved."""
 
 
+_CP_1_7_SUBCHECKPOINTS = [
+    ("cp_1_7_1", "Node management port selected"),
+    ("cp_1_7_2", "Node management IP applied"),
+    ("cp_1_7_3", "Node management subnet applied"),
+    ("cp_1_7_4", "Node management gateway applied"),
+    ("cp_1_7_5", "License keys resolved"),
+    ("cp_1_7_6", "Cluster management port selected"),
+    ("cp_1_7_7", "Cluster management IP applied"),
+    ("cp_1_7_8", "Cluster management subnet applied"),
+    ("cp_1_7_9", "Cluster management gateway applied"),
+    ("cp_1_7_10", "DNS configuration applied"),
+    ("cp_1_7_11", "Location set"),
+    ("cp_1_7_12", "Storage failover enabled"),
+    ("cp_1_7_13", "NTP config applied"),
+    ("cp_1_7_14", "Passwordless SSH applied"),
+    ("cp_1_7_15", "AutoSupport enabled/disabled"),
+]
+
+
 _CHECKPOINT_TEST_OPTIONS = {
     1: [
         ("cp_1_1", "LOADER configuration completed"),
@@ -1388,6 +1407,7 @@ _CHECKPOINT_TEST_OPTIONS = {
         ("cp_1_5", "Option 4 completed"),
         ("cp_1_6", "AutoSupport confirmation answered"),
         ("cp_1_7", "Cluster setup started"),
+        *_CP_1_7_SUBCHECKPOINTS,
         ("cp_1_8", "Cluster creation complete"),
     ],
     2: [
@@ -1408,6 +1428,7 @@ _CHECKPOINT_TEST_OPTIONS = {
         ("cp_1_5", "Primary option 4 completed"),
         ("cp_1_6", "Primary AutoSupport confirmation answered"),
         ("cp_1_7", "Primary cluster setup started"),
+        *_CP_1_7_SUBCHECKPOINTS,
         ("cp_2_1", "Peer at LOADER"),
         ("cp_2_2", "Peer boot_ontap menu issued"),
         ("cp_2_3", "Peer option 4 issued"),
@@ -3975,6 +3996,7 @@ def _checkpoint_phase_description(phase_id: str) -> str:
        "cp_1_5": "Option 4 completed",
        "cp_1_6": "AutoSupport confirmation answered",
        "cp_1_7": "Cluster setup started",
+       **{_cp_id: _cp_desc for _cp_id, _cp_desc in _CP_1_7_SUBCHECKPOINTS},
        "cp_1_8": "Cluster creation complete",
        # Mode 2
        "cp_2_1": "LOADER reached",
@@ -4492,6 +4514,7 @@ def _list_completed_checkpoints(cp) -> str:
             "cp_1_5": "Option 4 completed",
             "cp_1_6": "AutoSupport confirmation answered",
             "cp_1_7": "Cluster setup started",
+            **{_cp_id: _cp_desc for _cp_id, _cp_desc in _CP_1_7_SUBCHECKPOINTS},
             "cp_1_8": "Cluster creation complete",
         },
         "2": {
@@ -7554,9 +7577,9 @@ OPTIONS
         
         Supported modes: 1, 2, 3, 4.1, 4.2, 4.3
         Available checkpoints vary by mode:
-          â€¢ Mode 1: 7 checkpoints (cp_1_1 through cp_1_7)
-          â€¢ Mode 2: 7 checkpoints (cp_2_1 through cp_2_7)
-          â€¢ Mode 3: 14 checkpoints (combined primary + peers)
+          â€¢ Mode 1: 23 checkpoints (cp_1_1 through cp_1_8, including cp_1_7_1...cp_1_7_15)
+          â€¢ Mode 2: 8 checkpoints (cp_2_1 through cp_2_8)
+          â€¢ Mode 3: 30 checkpoints (combined primary + peers)
           â€¢ Mode 4.1: 6 checkpoints
           â€¢ Mode 4.2: 6 checkpoints (no option 6)
           â€¢ Mode 4.3: 6 checkpoints
@@ -8048,8 +8071,9 @@ def parse_args():
                         metavar="NODE_IP:CHECKPOINT_ID",
                         help="EXPERIMENTAL: Inject failure at a specific checkpoint for a "
                              "specific node. Format: '10.1.1.192:cp_1_5'. Implies --test "
-                             "flag. Checkpoint IDs vary by mode: cp_1_1 through cp_1_7 for "
-                             "mode 1, cp_2_1 through cp_2_7 for mode 2, etc. "
+                             "flag. Checkpoint IDs vary by mode: cp_1_1 through cp_1_8 "
+                             "(including cp_1_7_1...cp_1_7_15) for "
+                             "mode 1, cp_2_1 through cp_2_8 for mode 2, etc. "
                              "Useful for testing recovery from specific failure points.")
 
     def _resolve_option_dest(raw_token: str) -> "str | None":
@@ -12518,7 +12542,8 @@ def collect_cluster_config():
         _session_log.end_phase()
 
 
-def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
+def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = "",
+                           checkpoint_marks=None, checkpoint_node_id: str = ""):
     """Wait for each node-management setup prompt and answer it, falling back
     to interactive input() when the value isn't in the config.
 
@@ -12555,6 +12580,8 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
         "::*>",
         "login:",
     )
+
+    _cp_marks = dict(checkpoint_marks or {})
 
     while pending:
         if time.monotonic() - _overall_start > _overall_timeout:
@@ -12730,6 +12757,9 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
         # Carry the recheck window output forward: the next prompt may already
         # be in it (ONTAP often sends prompts back-to-back).
         _buf = _recheck
+        _cp_id = str(_cp_marks.get(key) or "").strip()
+        if _cp_id:
+            _checkpoint_mark_phase(_cp_id, node_id=checkpoint_node_id)
         pending.pop(0)
 
     # Return the residual buffer so callers can detect prompts that arrived
@@ -23003,6 +23033,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         return False
 
     cc = _cluster_config
+    _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+
+    def _cp_mark(_cp_id: str, _alias: str = ""):
+        _checkpoint_mark_phase(_cp_id, node_id=_primary_cp_node, alias_phase=_alias)
+
+    def _cp_done(_cp_id: str) -> bool:
+        return _checkpoint_phase_done(_cp_id, node_id=_primary_cp_node)
 
     print("\n🤖 Driving ONTAP cluster setup wizard from collected values...")
     if _session_log:
@@ -23044,6 +23081,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _nm_residual = _auto_answer_node_mgmt(
             channel, _nm_cfg, node_log=node_log,
             initial_buf="node management interface port",
+            checkpoint_marks={
+                "port": "cp_1_7_1",
+                "ip": "cp_1_7_2",
+                "netmask": "cp_1_7_3",
+                "gateway": "cp_1_7_4",
+            },
+            checkpoint_node_id=_primary_cp_node,
         ) or ""
         _which = _wait_for_wizard_start(
             channel, timeout=1800, initial_buf=_nm_residual, node_log=node_log
@@ -23059,14 +23103,12 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     if _skip_create_steps:
         _slog("Wizard already at cluster management port; marking cp_1_7 and skipping create steps")
         print("\n⏭️ Wizard already at cluster management port; skipping to management interface configuration.")
-        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
-        _checkpoint_mark_phase("cp_1_7", node_id=_primary_cp_node, alias_phase="primary_setup_done")
+        _cp_mark("cp_1_7", _alias="primary_setup_done")
+        for _cp_id in ("cp_1_7_1", "cp_1_7_2", "cp_1_7_3", "cp_1_7_4", "cp_1_7_5"):
+            if not _cp_done(_cp_id):
+                _cp_mark(_cp_id)
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
-        channel.send(cc["mgmt_port"] + "\r")
-        if _session_log:
-            _session_log.log_sent(cc["mgmt_port"])
-        time.sleep(0.5)
     if not _skip_create_steps:
         # Always send one Enter after wizard-start detection. In fast paths, the
         # create/join text can be present in residual output while ONTAP still
@@ -23198,8 +23240,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         # After the cluster name is submitted, ONTAP begins the real cluster-create
         # work immediately. Mark cp_1_7 first so an exit-after-checkpoint run stops
         # before the long "waiting for cluster to form" phase.
-        _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
-        _checkpoint_mark_phase("cp_1_7", node_id=_primary_cp_node, alias_phase="primary_setup_done")
+        _cp_mark("cp_1_7", _alias="primary_setup_done")
         print(
             f"\n⏳ {_wizard_pfx}Cluster create started. Waiting for ONTAP to form "
             f"the cluster and reach post-create prompts...{_elapsed_str()}"
@@ -23221,85 +23262,104 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 )
                 _session_log.set_outcome("FAIL", "cluster create monitor recovery failed")
             return False
+        _cp_mark("cp_1_7_5")
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(
             f"\n✅ {_wizard_pfx}Cluster create reached post-create wizard prompts. "
             f"Continuing management network configuration...{_elapsed_str()}"
         )
         print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
+    if not _cp_done("cp_1_7_6"):
         _wait_and_send(channel, "cluster management interface port", cc["mgmt_port"],
                        f"Cluster mgmt port -> {cc['mgmt_port']}", timeout=900,
                        node_log=node_log, quiet=bool(node_log))
-    _wait_and_send(channel, "cluster management interface ip address", cc["mgmt_ip"],
-                   f"Cluster mgmt IP -> {cc['mgmt_ip']}", timeout=600,
-                   node_log=node_log, quiet=bool(node_log))
-    _wait_and_send(channel, "cluster management interface netmask", cc["mgmt_netmask"],
-                   f"Cluster mgmt netmask -> {cc['mgmt_netmask']}", timeout=600,
-                   node_log=node_log, quiet=bool(node_log))
+        _cp_mark("cp_1_7_6")
+    else:
+        _slog("cp_1_7_6 already complete; skipping cluster management port prompt")
+    if not _cp_done("cp_1_7_7"):
+        _wait_and_send(channel, "cluster management interface ip address", cc["mgmt_ip"],
+                       f"Cluster mgmt IP -> {cc['mgmt_ip']}", timeout=600,
+                       node_log=node_log, quiet=bool(node_log))
+        _cp_mark("cp_1_7_7")
+    else:
+        _slog("cp_1_7_7 already complete; skipping cluster management IP prompt")
+
+    if not _cp_done("cp_1_7_8"):
+        _wait_and_send(channel, "cluster management interface netmask", cc["mgmt_netmask"],
+                       f"Cluster mgmt netmask -> {cc['mgmt_netmask']}", timeout=600,
+                       node_log=node_log, quiet=bool(node_log))
+        _cp_mark("cp_1_7_8")
+    else:
+        _slog("cp_1_7_8 already complete; skipping cluster management netmask prompt")
     # Send the cluster-management gateway and re-prompt on rejection.
     # ONTAP prints "not a valid gateway address" when the supplied value is
     # outside the management interface's subnet.
-    _gw_to_send = cc.get("mgmt_gateway") or ""
-    while True:
-        print("\n⏳ Waiting for: Cluster mgmt gateway...")
-        _slog("Waiting for: cluster management interface default gateway")
-        direct_send_and_wait(
-            channel, "", "cluster management interface default gateway",
-            timeout=600, node_log=node_log, quiet=bool(node_log),
-            check_bmc_drop=True,
-        )
-        channel.send(_gw_to_send + "\r")
-        if _session_log:
-            _session_log.log_sent(_gw_to_send if _gw_to_send else "<Enter>")
-        time.sleep(0.5)
-        # Read briefly to detect ONTAP gateway-validation errors.
-        _gw_recheck = ""
-        _gw_rc_start = time.monotonic()
-        while time.monotonic() - _gw_rc_start < 4:
-            if channel.recv_ready():
-                _gc = channel.recv(4096).decode("utf-8", errors="replace")
-                _gw_recheck += _gc
-                if node_log:
-                    _par_write(node_log, _gc)
-                else:
-                    sys.stdout.write(_gc)
-                    sys.stdout.flush()
-                if _session_log:
-                    _session_log.log_console(_gc)
-            else:
-                time.sleep(0.1)
-        if "not a valid gateway" in _gw_recheck.lower():
-            print(
-                f"\n  ❌ Gateway '{_gw_to_send}' rejected by ONTAP "
-                "('not a valid gateway address')."
+    _gw_recheck = ""
+    if not _cp_done("cp_1_7_9"):
+        _gw_to_send = cc.get("mgmt_gateway") or ""
+        while True:
+            print("\n⏳ Waiting for: Cluster mgmt gateway...")
+            _slog("Waiting for: cluster management interface default gateway")
+            direct_send_and_wait(
+                channel, "", "cluster management interface default gateway",
+                timeout=600, node_log=node_log, quiet=bool(node_log),
+                check_bmc_drop=True,
             )
+            channel.send(_gw_to_send + "\r")
             if _session_log:
-                _session_log.log(
-                    f"Gateway '{_gw_to_send}' rejected: 'not a valid gateway address'",
-                    prefix="WARN",
-                )
-            _gw_to_send = _prompt_with_timeout(
-                "  Enter a valid cluster management gateway: ",
-                default="",
-                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
-            )
-            if not _gw_to_send:
+                _session_log.log_sent(_gw_to_send if _gw_to_send else "<Enter>")
+            time.sleep(0.5)
+            # Read briefly to detect ONTAP gateway-validation errors.
+            _gw_recheck = ""
+            _gw_rc_start = time.monotonic()
+            while time.monotonic() - _gw_rc_start < 4:
+                if channel.recv_ready():
+                    _gc = channel.recv(4096).decode("utf-8", errors="replace")
+                    _gw_recheck += _gc
+                    if node_log:
+                        _par_write(node_log, _gc)
+                    else:
+                        sys.stdout.write(_gc)
+                        sys.stdout.flush()
+                    if _session_log:
+                        _session_log.log_console(_gc)
+                else:
+                    time.sleep(0.1)
+            if "not a valid gateway" in _gw_recheck.lower():
                 print(
-                    "\n  ❌ No replacement gateway provided in time; "
-                    "aborting wizard automation."
+                    f"\n  ❌ Gateway '{_gw_to_send}' rejected by ONTAP "
+                    "('not a valid gateway address')."
                 )
                 if _session_log:
                     _session_log.log(
-                        "Cluster wizard aborted: no replacement gateway provided",
-                        prefix="ERROR",
+                        f"Gateway '{_gw_to_send}' rejected: 'not a valid gateway address'",
+                        prefix="WARN",
                     )
-                return False
-            # Update cc so the corrected value is persisted in _cluster_config.
-            cc["mgmt_gateway"] = _gw_to_send
-            _cluster_config["mgmt_gateway"] = _gw_to_send
-            # Loop back: ONTAP will re-prompt after the bad value.
-            continue
-        break  # value accepted — move on
+                _gw_to_send = _prompt_with_timeout(
+                    "  Enter a valid cluster management gateway: ",
+                    default="",
+                    timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                )
+                if not _gw_to_send:
+                    print(
+                        "\n  ❌ No replacement gateway provided in time; "
+                        "aborting wizard automation."
+                    )
+                    if _session_log:
+                        _session_log.log(
+                            "Cluster wizard aborted: no replacement gateway provided",
+                            prefix="ERROR",
+                        )
+                    return False
+                # Update cc so the corrected value is persisted in _cluster_config.
+                cc["mgmt_gateway"] = _gw_to_send
+                _cluster_config["mgmt_gateway"] = _gw_to_send
+                # Loop back: ONTAP will re-prompt after the bad value.
+                continue
+            break  # value accepted — move on
+        _cp_mark("cp_1_7_9")
+    else:
+        _slog("cp_1_7_9 already complete; skipping cluster management gateway prompt")
     # The 4-second gateway-validation drain may have already consumed the DNS /
     # name-server / location prompts when ONTAP accepts the gateway quickly.
     # For each step, if the trigger was already seen in _gw_recheck, send the
@@ -23320,12 +23380,21 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _wait_and_send(channel, trigger, response, label,
                            timeout=timeout, hide_in_log=hide_in_log,
                            node_log=node_log, quiet=bool(node_log))
-    _wizard_step("dns domain name", cc["dns_domains"] or "",
-                 f"DNS domain names -> {cc['dns_domains']}")
-    _wizard_step("name server ip address", cc["dns_servers"] or "",
-                 f"DNS servers -> {cc['dns_servers']}")
-    _wizard_step("where is the controller located", cc["location"] or "",
-                 f"Controller location -> {cc['location']}")
+    if not _cp_done("cp_1_7_10"):
+        _wizard_step("dns domain name", cc["dns_domains"] or "",
+                     f"DNS domain names -> {cc['dns_domains']}")
+        _wizard_step("name server ip address", cc["dns_servers"] or "",
+                     f"DNS servers -> {cc['dns_servers']}")
+        _cp_mark("cp_1_7_10")
+    else:
+        _slog("cp_1_7_10 already complete; skipping DNS prompts")
+
+    if not _cp_done("cp_1_7_11"):
+        _wizard_step("where is the controller located", cc["location"] or "",
+                     f"Controller location -> {cc['location']}")
+        _cp_mark("cp_1_7_11")
+    else:
+        _slog("cp_1_7_11 already complete; skipping location prompt")
 
     # Watch the post-wizard console output for milestone log lines and
     # print friendly status updates before waiting for login:.
@@ -23444,6 +23513,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     _cluster_shell_ready = _login_primary_cluster_shell(channel, cc.get("admin_password"))
     if _cluster_shell_ready:
         _cluster_cfg_probe = _probe_cluster_setup_configuration(channel, cc)
+        if not _cp_done("cp_1_7_12"):
+            try:
+                _slog("Running storage failover show for cp_1_7_12")
+                _run_cluster_command(channel, "set -rows 0; storage failover show", timeout=30)
+                _cp_mark("cp_1_7_12")
+            except Exception as _sfo_e:
+                _slog(f"storage failover show failed for cp_1_7_12: {_sfo_e}", prefix="WARN")
     else:
         print("\n  ⚠️  Could not log in to cluster shell for configuration pre-checks.")
         if _session_log:
@@ -23488,6 +23564,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     "Cluster shell login failed for NTP configuration",
                     prefix="WARN",
                 )
+    if not _cp_done("cp_1_7_13"):
+        _cp_mark("cp_1_7_13")
 
     # Disable AutoSupport phone-home if the operator opted out.
     if not _enable_autosupport:
@@ -23508,22 +23586,31 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     "Cluster shell login failed for AutoSupport configuration",
                     prefix="WARN",
                 )
+    # Mark cp_1_7_15 unconditionally after AutoSupport handling (enabled or disabled)
+    if not _cp_done("cp_1_7_15"):
+        _cp_mark("cp_1_7_15")
 
     # Set up passwordless SSH if the operator requested it during 1.1/1.2.
     if _setup_passwordless_ssh:
-        _ssh_mgmt_ip = cc.get("mgmt_ip") or ""
-        if not _ssh_mgmt_ip:
-            _ssh_mgmt_ip = _prompt_with_timeout(
-                "  Cluster management IP for SSH setup: ",
-                default="",
-                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
-            ).strip()
-        if _ssh_mgmt_ip:
-            # Ensure we're logged in to the cluster shell before calling.
-            if not _login_primary_cluster_shell(channel, cc.get("admin_password")):
-                print("  \u26a0\ufe0f  Could not log in for SSH setup; skipping.")
-            else:
-                _setup_ssh_publickey(channel, _ssh_mgmt_ip, ssh_user="admin")
+        if not _cp_done("cp_1_7_14"):
+            _ssh_mgmt_ip = cc.get("mgmt_ip") or ""
+            if not _ssh_mgmt_ip:
+                _ssh_mgmt_ip = _prompt_with_timeout(
+                    "  Cluster management IP for SSH setup: ",
+                    default="",
+                    timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                ).strip()
+            if _ssh_mgmt_ip:
+                # Ensure we're logged in to the cluster shell before calling.
+                if not _login_primary_cluster_shell(channel, cc.get("admin_password")):
+                    print("  \u26a0\ufe0f  Could not log in for SSH setup; skipping.")
+                else:
+                    _setup_ssh_publickey(channel, _ssh_mgmt_ip, ssh_user="admin")
+                    _cp_mark("cp_1_7_14")
+        else:
+            _slog("cp_1_7_14 already complete; skipping SSH setup")
+    else:
+        _slog("Passwordless SSH not requested; skipping cp_1_7_14")
 
     # Mode 3: launch parallel auto-add for every peer BMC.
     if _operation_mode == 3 and _peer_bmc_list:
