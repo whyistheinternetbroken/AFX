@@ -23286,26 +23286,62 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             f"Continuing management network configuration...{_elapsed_str()}"
         )
         print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
+    def _wizard_send_value_with_default(trigger, response, label, prompt_text=""):
+        _resp = "" if response is None else str(response)
+        _prompt_lower = str(prompt_text or "").lower()
+        _trigger_lower = str(trigger or "").lower()
+        _default_val = ""
+        if _trigger_lower:
+            _m = re.search(
+                re.escape(_trigger_lower) + r"\s*\[([^\]]*)\]",
+                _prompt_lower,
+            )
+            if _m:
+                _default_val = (_m.group(1) or "").strip()
+        if _default_val and _resp.strip().lower() == _default_val.lower():
+            channel.send("\r")
+            _slog(f"{label}: prompt default matches config ('{_default_val}'); sending <Enter>")
+            if _session_log:
+                _session_log.log_sent("<Enter> (accepted prompt default)")
+            time.sleep(0.5)
+            return
+        channel.send(_resp + "\r")
+        if _session_log:
+            _session_log.log_sent(_resp if _resp else "<Enter>")
+        time.sleep(0.5)
+
     def _wizard_step_checkpoint_aware(cp_id, trigger, response, label, timeout):
         if _cp_done(cp_id):
             _slog(f"{cp_id} already complete; probing for replayed prompt '{trigger}'")
-            _probe_match = direct_read_until_any(
+            _probe_out, _probe_match = direct_read_until_any(
                 channel,
-                [trigger],
+                [
+                    trigger,
+                    "cluster management interface default gateway",
+                    "dns domain name",
+                    "where is the controller located",
+                    "login:",
+                    "::>",
+                    "::*>",
+                ],
                 timeout=20,
                 node_log=node_log,
                 quiet=bool(node_log),
                 check_bmc_drop=True,
-            )[1]
-            if _probe_match:
+            )
+            _probe_combined = (_probe_out or "") + (_probe_match or "")
+            _probe_lower = _probe_combined.lower()
+            if _probe_match and trigger in _probe_lower:
                 print(f"\n↪️ Replaying completed wizard step to advance setup: {label}")
                 _slog(f"{cp_id} replay: prompt reappeared; sending saved value")
-                channel.send((response or "") + "\r")
-                if _session_log:
-                    _session_log.log_sent(response if response else "<Enter>")
-                time.sleep(0.5)
+                _wizard_send_value_with_default(trigger, response, label, prompt_text=_probe_combined)
+            elif _probe_match:
+                _slog(
+                    f"{cp_id} already complete; wizard advanced to '{_probe_match}' without replay of this prompt"
+                )
             else:
-                _slog(f"{cp_id} already complete; prompt not replayed, skipping send")
+                _slog(f"{cp_id} already complete; prompt not replayed, proactively sending saved value")
+                _wizard_send_value_with_default(trigger, response, label, prompt_text="")
             return
         _wait_and_send(
             channel,
