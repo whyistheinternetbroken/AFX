@@ -3848,6 +3848,16 @@ _auto_add = False
 _resume_from_start_menu = False
 # Directory suffix for resumed-run logs (e.g. "_cp_1_2").
 _resume_checkpoint_log_suffix = ""
+# Global checkpoint-resume context used by connection/setup helpers.
+_checkpoint_mode = None
+_resume_cp_start = None
+
+
+def _checkpoint_resume_active() -> bool:
+    """Return True when execution is currently in checkpoint-resume flow."""
+    _mode = str(globals().get("_checkpoint_mode") or "").strip().lower()
+    _start = globals().get("_resume_cp_start")
+    return _mode in {"1", "2", "3", "4.2"} and _start not in (None, "")
 
 
 def _checkpoint_menu_option_label(cp_mode: str) -> str:
@@ -4542,13 +4552,18 @@ def select_operation_mode():
     global _loader_env_stage_enabled
     global _diag_bootargs, _netboot_static_ip
     global _resume_from_start_menu
+    global _checkpoint_mode, _resume_cp_start
     _startup_checkpoint_prompt_done = False
     _menu_checkpoint_available = False
+    _checkpoint_mode = None
+    _resume_cp_start = None
 
     def _dispatch_checkpoint_resume(_cp_obj):
-        global _resume_from_start_menu
+        global _resume_from_start_menu, _checkpoint_mode, _resume_cp_start
         _set_resume_log_suffix_from_checkpoint(_cp_obj)
         _cp_mode = str(_cp_obj.mode or "").strip()
+        _checkpoint_mode = _cp_mode
+        _resume_cp_start = _checkpoint_resume_phase_id(_cp_obj) or "start"
         if _cp_mode.lower().startswith("4.2"):
             _resume_from_start_menu = True
             print("\n  ✅ Resuming checkpoint via menu option 4.2.")
@@ -6818,11 +6833,7 @@ def connect_to_sp(host, username, password):
     
     # During checkpoint resume, don't prompt for credentials; rely on fallback
     # blank password instead (original password was wiped during init).
-    _in_checkpoint_resume = (
-        _checkpoint_mode is not None
-        and _checkpoint_mode in (1, 2, 3, 4.2)
-        and _resume_cp_start is not None
-    )
+    _in_checkpoint_resume = _checkpoint_resume_active()
     _is_interactive = not _in_checkpoint_resume
     
     # Prepare fallback passwords including blank password for post-reset recovery.
@@ -12586,7 +12597,7 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = ""):
              
             # During checkpoint resume, if we're stuck in setup wizard (create/join prompt),
             # send "back" to restart setup from the beginning.
-            if _checkpoint_mode is not None and _resume_cp_start is not None:
+            if _checkpoint_resume_active():
                 _at_setup_menu = (
                     "do you want to create a new cluster or join" in _buf_l
                     or "{create, join}" in _buf_l
