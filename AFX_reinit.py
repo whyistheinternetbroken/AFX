@@ -19593,36 +19593,46 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 if log:
                     log.log("4.2 mode 3: cluster show health check failed", prefix="ERROR")
 
-            _fo_out = ""
-            try:
-                with _suppress_console():
-                    _fo_out = _run_cluster_command(
-                        _4b_pch, "set -rows 0; storage failover show", timeout=30
-                    )
-            except Exception as _fo_exc:
-                _run_ok = False
-                if log:
-                    log.log(f"4.2 mode 3: could not query storage failover show: {_fo_exc}",
-                            prefix="ERROR")
-            _expected_nodes = []
-            if _fo_out:
-                _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out) if r.get("node")]
-            if len(_expected_nodes) >= _target_nodes:
-                _expected_nodes = _expected_nodes[:_target_nodes]
-                print("\n  🔍 Final failover/giveback check...")
-                if not _wait_for_cluster_healthy(
-                    _4b_pch, _expected_nodes, total_timeout=1200, poll_interval=60, log=log
-                ):
+            if _should_run_storage_failover_gate(_target_nodes, label="4.2 mode 3"):
+                _fo_out = ""
+                try:
+                    with _suppress_console():
+                        _fo_out = _run_cluster_command(
+                            _4b_pch, "set -rows 0; storage failover show", timeout=30
+                        )
+                except Exception as _fo_exc:
                     _run_ok = False
                     if log:
-                        log.log("4.2 mode 3: final failover/giveback check failed", prefix="ERROR")
+                        log.log(f"4.2 mode 3: could not query storage failover show: {_fo_exc}",
+                                prefix="ERROR")
+                _expected_nodes = []
+                if _fo_out:
+                    _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out) if r.get("node")]
+                if len(_expected_nodes) >= _target_nodes:
+                    _expected_nodes = _expected_nodes[:_target_nodes]
+                    print("\n  🔍 Final failover/giveback check...")
+                    if not _wait_for_cluster_healthy(
+                        _4b_pch, _expected_nodes, total_timeout=1200, poll_interval=60, log=log
+                    ):
+                        _run_ok = False
+                        if log:
+                            log.log("4.2 mode 3: final failover/giveback check failed", prefix="ERROR")
+                else:
+                    _run_ok = False
+                    if log:
+                        log.log(
+                            f"4.2 mode 3: expected {_target_nodes} nodes in storage failover show, "
+                            f"found {len(_expected_nodes)}",
+                            prefix="ERROR",
+                        )
             else:
-                _run_ok = False
+                print(
+                    f"\n  ℹ️  Skipping final storage failover checks for {_target_nodes}-node cluster "
+                    "(single or unpaired node present)."
+                )
                 if log:
                     log.log(
-                        f"4.2 mode 3: expected {_target_nodes} nodes in storage failover show, "
-                        f"found {len(_expected_nodes)}",
-                        prefix="ERROR",
+                        f"4.2 mode 3: skipped storage failover checks for cluster size {_target_nodes}"
                     )
             if log:
                 try:
@@ -23599,8 +23609,16 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _cluster_cfg_probe = _probe_cluster_setup_configuration(channel, cc)
         if not _cp_done("cp_1_7_12"):
             try:
-                _slog("Running storage failover show for cp_1_7_12")
-                _run_cluster_command(channel, "set -rows 0; storage failover show", timeout=30)
+                _cp12_nodes = _cluster_show_node_count(channel)
+                if _cp12_nodes < 0 and _operation_mode == 1:
+                    _cp12_nodes = 1
+                if _should_run_storage_failover_gate(_cp12_nodes, label="cp_1_7_12"):
+                    _slog("Running storage failover show for cp_1_7_12")
+                    _run_cluster_command(channel, "set -rows 0; storage failover show", timeout=30)
+                else:
+                    _slog(
+                        "Skipping cp_1_7_12 storage failover step for single/odd-node cluster state"
+                    )
                 _cp_mark("cp_1_7_12")
             except Exception as _sfo_e:
                 _slog(f"storage failover show failed for cp_1_7_12: {_sfo_e}", prefix="WARN")
@@ -24799,6 +24817,25 @@ def _cluster_show_node_count(channel):
     """
     rows, _, _ = _cluster_show_node_status(channel)
     return rows
+
+
+def _should_run_storage_failover_gate(node_count, *, label=""):
+    """Return True when storage-failover checks should run for current size."""
+    _pfx = f"[{label}] " if label else ""
+    if node_count is None or int(node_count) < 0:
+        _slog(f"{_pfx}storage failover gate: unknown cluster size; running checks")
+        return True
+    _count = int(node_count)
+    if _count <= 1:
+        _slog(f"{_pfx}storage failover gate: cluster has {_count} node(s); skipping")
+        return False
+    if _count % 2 != 0:
+        _slog(
+            f"{_pfx}storage failover gate: cluster has odd node count ({_count}); "
+            "skipping until partner node is added"
+        )
+        return False
+    return True
 
 
 def _cluster_show_node_status(channel):
@@ -26502,23 +26539,31 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             total_timeout=1800, poll_interval=120,
             label="2.2", final_count=_target,
         )
-        _fo_out = ""
-        try:
-            with _suppress_console():
-                _fo_out = _run_cluster_command(
-                    primary_channel, "set -rows 0; storage failover show", timeout=30)
-        except Exception:
-            pass
-        _expected_nodes = []
-        if _fo_out:
-            _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out)
-                               if r.get("node")]
-        if len(_expected_nodes) >= _target:
-            _expected_nodes = _expected_nodes[:_target]
-            print("\n  🔍 Final failover/giveback check...")
-            _wait_for_cluster_healthy(
-                primary_channel, _expected_nodes,
-                total_timeout=1200, poll_interval=60, log=log)
+        if _should_run_storage_failover_gate(_target, label="2.2"):
+            _fo_out = ""
+            try:
+                with _suppress_console():
+                    _fo_out = _run_cluster_command(
+                        primary_channel, "set -rows 0; storage failover show", timeout=30)
+            except Exception:
+                pass
+            _expected_nodes = []
+            if _fo_out:
+                _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out)
+                                   if r.get("node")]
+            if len(_expected_nodes) >= _target:
+                _expected_nodes = _expected_nodes[:_target]
+                print("\n  🔍 Final failover/giveback check...")
+                _wait_for_cluster_healthy(
+                    primary_channel, _expected_nodes,
+                    total_timeout=1200, poll_interval=60, log=log)
+        else:
+            print(
+                f"\n  ℹ️  Skipping final storage failover checks for {_target}-node cluster "
+                "(single or unpaired node present)."
+            )
+            if log:
+                log.log(f"2.2: skipped storage failover checks for cluster size {_target}")
 
     if primary_client:
         try:
@@ -26852,23 +26897,31 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             total_timeout=1800, poll_interval=120,
             label="2.1", final_count=_target,
         )
-        _fo_out = ""
-        try:
-            with _suppress_console():
-                _fo_out = _run_cluster_command(
-                    primary_channel, "set -rows 0; storage failover show", timeout=30)
-        except Exception:
-            pass
-        _expected_nodes = []
-        if _fo_out:
-            _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out)
-                               if r.get("node")]
-        if len(_expected_nodes) >= _target:
-            _expected_nodes = _expected_nodes[:_target]
-            print("\n  🔍 Final failover/giveback check...")
-            _wait_for_cluster_healthy(
-                primary_channel, _expected_nodes,
-                total_timeout=1200, poll_interval=60, log=log)
+        if _should_run_storage_failover_gate(_target, label="2.1"):
+            _fo_out = ""
+            try:
+                with _suppress_console():
+                    _fo_out = _run_cluster_command(
+                        primary_channel, "set -rows 0; storage failover show", timeout=30)
+            except Exception:
+                pass
+            _expected_nodes = []
+            if _fo_out:
+                _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out)
+                                   if r.get("node")]
+            if len(_expected_nodes) >= _target:
+                _expected_nodes = _expected_nodes[:_target]
+                print("\n  🔍 Final failover/giveback check...")
+                _wait_for_cluster_healthy(
+                    primary_channel, _expected_nodes,
+                    total_timeout=1200, poll_interval=60, log=log)
+        else:
+            print(
+                f"\n  ℹ️  Skipping final storage failover checks for {_target}-node cluster "
+                "(single or unpaired node present)."
+            )
+            if log:
+                log.log(f"2.1: skipped storage failover checks for cluster size {_target}")
 
     if primary_client:
         try:
