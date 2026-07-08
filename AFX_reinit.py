@@ -14507,15 +14507,18 @@ def _apply_license(channel):
 
 
 
-def _apply_ntp_servers(channel):
+def _apply_ntp_servers(channel, servers_override=None):
     """Apply NTP server(s) from _cluster_config after cluster creation.
 
     Must be called while the console channel is logged in to the cluster
     shell (``::>`` prompt). Does nothing when no ``ntp_servers`` entry is
     present in ``_cluster_config``.
     """
-    ntp_raw = _cluster_config.get("ntp_servers") or ""
-    servers = [s.strip() for s in ntp_raw.replace(";", ",").split(",") if s.strip()]
+    if servers_override is None:
+        ntp_raw = _cluster_config.get("ntp_servers") or ""
+        servers = [s.strip() for s in ntp_raw.replace(";", ",").split(",") if s.strip()]
+    else:
+        servers = [str(s).strip() for s in (servers_override or []) if str(s).strip()]
     if not servers:
         return
 
@@ -14548,6 +14551,76 @@ def _apply_ntp_servers(channel):
 
     if _session_log:
         _session_log.end_phase()
+
+
+def _split_cluster_config_values(raw_value):
+    """Split comma/space/semicolon separated values into lowercase tokens."""
+    vals = []
+    for token in re.split(r"[\s,;]+", str(raw_value or "")):
+        t = token.strip().lower()
+        if t and t not in vals:
+            vals.append(t)
+    return vals
+
+
+def _probe_cluster_setup_configuration(channel, cc):
+    """Check whether cluster-mgmt IP, DNS and NTP are already configured."""
+    mgmt_ip = str((cc or {}).get("mgmt_ip") or "").strip()
+    dns_expect = _split_cluster_config_values((cc or {}).get("dns_domains"))
+    dns_expect += [v for v in _split_cluster_config_values((cc or {}).get("dns_servers")) if v not in dns_expect]
+    ntp_expect = _split_cluster_config_values((cc or {}).get("ntp_servers"))
+
+    result = {
+        "mgmt_ip_expected": mgmt_ip,
+        "mgmt_ip_present": False,
+        "dns_expected": dns_expect,
+        "dns_present": (not dns_expect),
+        "ntp_expected": ntp_expect,
+        "ntp_present": (not ntp_expect),
+        "ntp_missing": list(ntp_expect),
+    }
+
+    print("\n⏳ Checking existing cluster configuration before re-running setup steps...")
+    _slog("Resume preflight: net int show / dns show / ntp server show")
+
+    _net_out = _run_cluster_command(channel, "set -rows 0; net int show", timeout=60)
+    _net_l = (_net_out or "").lower()
+    if mgmt_ip:
+        result["mgmt_ip_present"] = (mgmt_ip.lower() in _net_l)
+    print(
+        f"  {'✅' if result['mgmt_ip_present'] else '⚠️'} net int show: "
+        f"cluster mgmt IP {mgmt_ip or '<not specified>'} "
+        f"{'already present' if result['mgmt_ip_present'] else 'not detected'}."
+    )
+
+    _dns_out = _run_cluster_command(channel, "set -rows 0; dns show", timeout=45)
+    _dns_l = (_dns_out or "").lower()
+    if dns_expect:
+        result["dns_present"] = all(v in _dns_l for v in dns_expect)
+    print(
+        f"  {'✅' if result['dns_present'] else '⚠️'} dns show: "
+        f"{'expected DNS values already present' if result['dns_present'] else 'expected DNS values not fully present'}."
+    )
+
+    _ntp_out = _run_cluster_command(channel, "set -rows 0; ntp server show", timeout=45)
+    _ntp_l = (_ntp_out or "").lower()
+    if ntp_expect:
+        result["ntp_missing"] = [v for v in ntp_expect if v not in _ntp_l]
+        result["ntp_present"] = (len(result["ntp_missing"]) == 0)
+    print(
+        f"  {'✅' if result['ntp_present'] else '⚠️'} ntp server show: "
+        f"{'all expected NTP servers are present' if result['ntp_present'] else 'missing expected NTP server(s): ' + ', '.join(result['ntp_missing'])}."
+    )
+
+    if _session_log:
+        _session_log.log(
+            "Cluster setup precheck: "
+            f"mgmt_ip_present={result['mgmt_ip_present']}, "
+            f"dns_present={result['dns_present']}, "
+            f"ntp_present={result['ntp_present']}, "
+            f"ntp_missing={result['ntp_missing']}"
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -23270,7 +23343,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _remaining_ms = max(10, int(_create_deadline - time.monotonic()))
         _out, _matched = direct_read_until_any(
             channel,
-            ["creating root aggregate", "has been created", "login:"],
+            ["creating root aggregate", "has been created", "login:", "::>", "::*>"],
             timeout=_remaining_ms,
             node_log=node_log,
             quiet=bool(node_log),
@@ -23301,6 +23374,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             continue
         if "login:" in _ml:
             break  # cluster creation fully complete
+        if "::>" in _ml or "::*>" in _ml:
+            break  # cluster setup complete and shell prompt is available
 
     if _shutdown_event.is_set():
         print("\n👋 Interrupted while finishing cluster configuration; exiting wizard.")
@@ -23310,13 +23385,26 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _session_log.set_outcome("FAIL", "user interrupted during cluster create completion")
         return False
 
-    # If we exited the loop without seeing login: yet, wait for it now.
-    if not _matched or "login:" not in _matched.lower():
-        _slog("Waiting for login: prompt to confirm cluster creation")
-        direct_send_and_wait(
-            channel, "", "login:", timeout=1800,
-            node_log=node_log, quiet=bool(node_log)
-        )
+    # If we exited the loop without seeing a completion prompt yet, wait for one now.
+    if (not _matched) or all(_t not in _matched.lower() for _t in ("login:", "::>", "::*>")):
+        _slog("Waiting for login or cluster shell prompt to confirm cluster creation")
+        _wait_match = direct_read_until_any(
+            channel,
+            ["login:", "::>", "::*>"],
+            timeout=1800,
+            node_log=node_log,
+            quiet=bool(node_log),
+            check_bmc_drop=True,
+        )[1]
+        if not _wait_match:
+            print("\n❌ Timed out waiting for login/cluster shell prompt after cluster setup.")
+            if _session_log:
+                _session_log.log(
+                    "Timeout waiting for login/cluster shell prompt after cluster setup",
+                    prefix="ERROR",
+                )
+                _session_log.set_outcome("FAIL", "cluster setup completion prompt timeout")
+            return False
         if _shutdown_event.is_set():
             print("\n👋 Interrupted while waiting for login prompt; exiting wizard.")
             if _session_log:
@@ -23352,9 +23440,21 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         except Exception:
             pass
 
+    _cluster_cfg_probe = None
+    _cluster_shell_ready = _login_primary_cluster_shell(channel, cc.get("admin_password"))
+    if _cluster_shell_ready:
+        _cluster_cfg_probe = _probe_cluster_setup_configuration(channel, cc)
+    else:
+        print("\n  ⚠️  Could not log in to cluster shell for configuration pre-checks.")
+        if _session_log:
+            _session_log.log(
+                "Cluster shell login failed for cluster setup pre-checks",
+                prefix="WARN",
+            )
+
     # Apply any pre-configured ONTAP license(s).
     if _license_mode:
-        if _login_primary_cluster_shell(channel, cc.get("admin_password")):
+        if _cluster_shell_ready or _login_primary_cluster_shell(channel, cc.get("admin_password")):
             _apply_license(channel)
         else:
             print(
@@ -23369,8 +23469,18 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
 
     # Apply NTP servers if configured.
     if cc.get("ntp_servers"):
-        if _login_primary_cluster_shell(channel, cc.get("admin_password")):
-            _apply_ntp_servers(channel)
+        if _cluster_shell_ready or _login_primary_cluster_shell(channel, cc.get("admin_password")):
+            _ntp_missing = list((_cluster_cfg_probe or {}).get("ntp_missing") or [])
+            _ntp_expected = list((_cluster_cfg_probe or {}).get("ntp_expected") or [])
+            if _cluster_cfg_probe and _cluster_cfg_probe.get("ntp_present"):
+                print("\n✅ NTP already configured (ntp server show); skipping NTP reconfiguration.")
+                _slog("Skipping NTP configuration because expected servers are already present")
+            elif _ntp_missing and _ntp_expected:
+                print("\n⏳ Configuring only missing NTP servers...")
+                _slog(f"NTP precheck missing servers: {_ntp_missing}")
+                _apply_ntp_servers(channel, servers_override=_ntp_missing)
+            else:
+                _apply_ntp_servers(channel)
         else:
             print("\n  ⚠️  Could not log in to cluster shell for NTP configuration.")
             if _session_log:
