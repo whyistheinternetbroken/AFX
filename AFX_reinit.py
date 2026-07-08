@@ -12772,7 +12772,17 @@ _WIZARD_START_TRIGGERS = [
     "press enter to complete cluster setup",
     "do you want to create a new cluster or join",
     "cluster management interface port",
+    "cluster management interface ip address",
+    "cluster management interface netmask",
+    "cluster management interface default gateway",
+    "dns domain name",
+    "dns name server",
+    "name server ip address",
+    "where is the controller located",
     "node management interface port",
+    "node management interface ip address",
+    "node management interface netmask",
+    "node management interface default gateway",
 ]
 
 _FATAL_BOOT_INTEGRITY_SIGS = [
@@ -13014,20 +13024,7 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
         else:
             now = time.monotonic()
             if now - last_data > 15 and now - last_nudge > 15:
-                _ol = output_lower
-                if ("cluster management interface ip address" in _ol
-                        and "cluster management interface port" not in _ol):
-                    _slog("Cluster mgmt IP prompt seen before port; sending 'back' to reach port prompt")
-                    with suppress(Exception):
-                        channel.send("back\r")
-                    _asup_wizard_answered = False
-                elif ("node management interface ip address" in _ol
-                        and "node management interface port" not in _ol):
-                    _slog("Node mgmt IP prompt seen before port; sending 'back' to reach port prompt")
-                    with suppress(Exception):
-                        channel.send("back\r")
-                    _asup_wizard_answered = False
-                elif _has_real_cluster_login_prompt(output):
+                if _has_real_cluster_login_prompt(output):
                     _recovered = _try_recover_from_login_prompt()
                     if _recovered:
                         return _recovered
@@ -13193,10 +13190,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
                     "password:",
                     "::>",
                     "::*>",
-                    "press enter to complete cluster setup",
-                    "do you want to create a new cluster or join",
-                    "cluster management interface port",
-                    "node management interface port",
+                ] + _WIZARD_START_TRIGGERS + [
                     "panic",
                 ],
                 timeout=min(30, _remain),
@@ -13325,12 +13319,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
                 _scan_local = ""
                 continue
 
-            if (
-                "press enter to complete cluster setup" in _scan_local
-                or "do you want to create a new cluster or join" in _scan_local
-                or "cluster management interface port" in _scan_local
-                or "node management interface port" in _scan_local
-            ):
+            if _output_contains_wizard_start(_scan_local):
                 return True
 
         _slog("Panic recovery timed out waiting for a recoverable console state", prefix="ERROR")
@@ -23101,16 +23090,24 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         return False
     print(f"\n⏳ {_wizard_pfx}Cluster setup has begun...{_elapsed_str()}")
     _slog("Cluster setup wizard started")
-    _skip_create_steps = bool(_which and "cluster management interface port" in _which.lower())
+    _which_l = str(_which or "").lower()
+    _skip_create_steps = bool(
+        _which_l and (
+            "cluster management interface" in _which_l
+            or "dns domain name" in _which_l
+            or "dns name server" in _which_l
+            or "where is the controller located" in _which_l
+        )
+    )
     # If node management prompts are still pending (session resumed past them or they
     # were missed), drive them before attempting the wizard create/join flow.
-    while _which and "node management interface port" in _which.lower():
+    while _which and "node management interface" in str(_which).lower():
         _slog("Node management port prompt detected at wizard start; driving node management config")
         print("\n⏭️ Node management prompts still pending; driving node management config...")
         _nm_cfg = _resolve_node_mgmt_config(primary_bmc)
         _nm_residual = _auto_answer_node_mgmt(
             channel, _nm_cfg, node_log=node_log,
-            initial_buf="node management interface port",
+            initial_buf=str(_which or "node management interface port"),
             checkpoint_marks={
                 "port": "cp_1_7_1",
                 "ip": "cp_1_7_2",
@@ -23128,7 +23125,15 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 _session_log.log("Timeout waiting for wizard start after node management", prefix="ERROR")
                 _session_log.set_outcome("FAIL", "wizard start timeout after node management")
             return False
-        _skip_create_steps = bool(_which and "cluster management interface port" in _which.lower())
+        _which_l = str(_which or "").lower()
+        _skip_create_steps = bool(
+            _which_l and (
+                "cluster management interface" in _which_l
+                or "dns domain name" in _which_l
+                or "dns name server" in _which_l
+                or "where is the controller located" in _which_l
+            )
+        )
         break
     if _skip_create_steps:
         _slog("Wizard already at cluster management port; marking cp_1_7 and skipping create steps")
@@ -27930,11 +27935,8 @@ def _wait_for_autosupport_confirmation(channel, *, bmc_host=None, node_log=None,
     _sigs = [
         "enabling autosupport can significantly speed problem determination",
         "type yes to confirm and continue",
+    ] + _WIZARD_START_TRIGGERS + [
         "welcome to the cluster setup wizard",
-        "node management interface port",
-        "node management interface ip address",
-        "cluster management interface port",
-        "cluster management interface ip address",
     ]
     while time.monotonic() < _deadline:
         _ch = (_rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel)
@@ -27964,17 +27966,7 @@ def _wait_for_autosupport_confirmation(channel, *, bmc_host=None, node_log=None,
             if _session_log:
                 _session_log.log_sent(_resp)
             return _resp
-        if ("cluster management interface ip address" in _combined
-                and "cluster management interface port" not in _combined):
-            _slog("Cluster management IP prompt appeared before port prompt; sending 'back'")
-            with suppress(Exception):
-                channel.send("back\r")
-            _scan = ""
-            continue
-        if ("node management interface port" in _combined
-                or "node management interface ip address" in _combined
-                or "cluster management interface port" in _combined
-                or "cluster management interface ip address" in _combined):
+        if _output_contains_wizard_start(_combined):
             _slog("AutoSupport confirmation already passed; node/cluster-management prompts detected")
             return ""
         if not _out and not _matched:
@@ -28511,10 +28503,8 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         "this will erase all the data on the disks",
         "type yes to confirm and continue",
         "welcome to the cluster setup wizard",
-        "node management interface port",
-        "node management interface ip address",
         "login:",
-    ]
+    ] + _WIZARD_START_TRIGGERS
     output_lower = ""
     start = time.monotonic()
     last_progress = start
@@ -28527,10 +28517,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         "zero disks, reset config and install a new file system",
         "this will erase all the data on the disks",
         "type yes to confirm and continue",
-        "welcome to the cluster setup wizard",
-        "node management interface port",
-        "node management interface ip address",
-    ]
+    ] + _WIZARD_START_TRIGGERS
     if _already_in_wizard or _second_bootmenu_visible:
         found = True
     while (not found) and time.monotonic() - start < (2400 + boot_wait_extension):
