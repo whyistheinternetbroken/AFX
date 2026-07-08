@@ -24780,6 +24780,13 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     if log:
         log.log("cluster add-node command accepted; waiting for add-node-status milestones")
 
+    print(
+        "\n  ✅ Per-node (2b_node) log phase is complete.\n"
+        "  Move on to the BMC log to follow cluster join progress."
+    )
+    if _session_log and hasattr(_session_log, "log_file") and _session_log.log_file:
+        print(f"     📝 BMC log: {_session_log.log_file}")
+
     total_timeout = max(900, len(_rows) * 150)   # 2.5 min/node, min 15 min
     poll_interval = 120   # 2 minutes
     start = time.monotonic()
