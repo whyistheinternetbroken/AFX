@@ -32336,8 +32336,13 @@ def _run_2c_resume():
         print("  ❌ No nodes found in manifest or config. Aborting.")
         return False
 
+    global _checkpoint
     _cp2c = CheckpointManager()
     _cp2c_loaded = _cp2c.load()
+    if _cp2c_loaded:
+        # Keep mode 2.3 worker threads on the same loaded checkpoint state
+        # (including manual resume overrides) used by this resume entrypoint.
+        _checkpoint = _cp2c
     _cp2c_joined = set(_cp2c.nodes_done_for("peer_joined")) if _cp2c_loaded else set()
     _cp2c_opt4 = set(_cp2c.nodes_done_for("peer_option4_done")) if _cp2c_loaded else set()
     if _cp2c_loaded and (_cp2c_joined or _cp2c_opt4):
