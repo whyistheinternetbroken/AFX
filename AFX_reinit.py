@@ -4780,6 +4780,7 @@ def select_operation_mode():
                 _setup_passwordless_ssh = (_ssh_ans == "y")
                 if _checkpoint:
                     _checkpoint.set_selection("setup_passwordless_ssh", _setup_passwordless_ssh)
+                    _checkpoint.set_param("setup_passwordless_ssh", _setup_passwordless_ssh)
                 
                 # Check checkpoint for saved netboot_before_reinit preference
                 _saved_nb = _checkpoint.get_selection("netboot_before_reinit") if _checkpoint else None
@@ -4925,6 +4926,9 @@ def select_operation_mode():
                         break
                     print("  Please enter y or N.")
                 _setup_passwordless_ssh = (_ssh_ans == "y")
+                if _checkpoint:
+                    _checkpoint.set_selection("setup_passwordless_ssh", _setup_passwordless_ssh)
+                    _checkpoint.set_param("setup_passwordless_ssh", _setup_passwordless_ssh)
                 while True:
                     _nb_ans = input("  Do you want to install a specific version of ONTAP on all nodes first? [y/N]: ").strip().lower()
                     if _nb_ans in ("y", "n", ""):
@@ -23056,6 +23060,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _ssh_saved = None
         with suppress(Exception):
             _ssh_saved = _checkpoint.get_selection("setup_passwordless_ssh")
+        if _ssh_saved is None:
+            with suppress(Exception):
+                _ssh_saved = _checkpoint.get_param("setup_passwordless_ssh", None)
         if _ssh_saved is not None:
             _setup_passwordless_ssh = bool(_ssh_saved)
             _slog(f"Cluster setup wizard: reloaded setup_passwordless_ssh={_setup_passwordless_ssh} from checkpoint")
@@ -28091,6 +28098,9 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             _ssh_saved = None
             with suppress(Exception):
                 _ssh_saved = _checkpoint.get_selection("setup_passwordless_ssh")
+            if _ssh_saved is None:
+                with suppress(Exception):
+                    _ssh_saved = _checkpoint.get_param("setup_passwordless_ssh", None)
             if _ssh_saved is not None:
                 _setup_passwordless_ssh = bool(_ssh_saved)
                 _slog(f"cp_1_6 resume: loaded setup_passwordless_ssh={_setup_passwordless_ssh} from checkpoint")
@@ -36129,7 +36139,9 @@ def main():
                         _enable_autosupport = _saved_selections.get("enable_autosupport", True)
                         _prevent_bios_fw_update = _saved_selections.get("prevent_bios_fw_update", False)
                         _loader_env_stage_enabled = _saved_selections.get("loader_env_stage_enabled", True)
-                        _setup_passwordless_ssh = _saved_selections.get("setup_passwordless_ssh", False)
+                        _saved_ssh = _saved_selections.get("setup_passwordless_ssh", None)
+                        if _saved_ssh is not None:
+                            _setup_passwordless_ssh = bool(_saved_ssh)
                         _netboot_before_reinit = _saved_selections.get("netboot_before_reinit", False)
                         _need_to_ask_questions = False  # Skip re-prompting - we have all values
                     else:
