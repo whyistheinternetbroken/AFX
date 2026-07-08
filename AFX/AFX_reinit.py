@@ -27278,6 +27278,8 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     _second_bootmenu_visible = False
     _option9_progress_confirmed = False
     _primary_cp_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
+    _opt9_progress_scan = ""
+    _opt9_progress_seen = set()
     _resume_cp_1_3 = bool(
         resume_from_cp_1_3
         or (_operation_mode in (1, 3)
@@ -27413,6 +27415,14 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         _opt9_yesno_count = 0
         _opt9_cp_1_2_saved = False
         _opt9_deadline = time.monotonic() + 1800
+        _opt9_last_status = time.monotonic()
+
+        def _emit_opt9_progress(_message: str, _key: str) -> None:
+            if _key in _opt9_progress_seen:
+                return
+            _opt9_progress_seen.add(_key)
+            print(f"   ⏳ {_node_pfx(bmc_host)}{_message}{_elapsed_str()}")
+            _slog(f"Option-9 progress: {_message}")
 
         while time.monotonic() < _opt9_deadline:
             _opt9_remaining = max(1, int(_opt9_deadline - time.monotonic()))
@@ -27430,6 +27440,34 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 channel = _ch_init = _rc["channel"]
             _init_buf = (_init_chunk or "").lower()
             _init_l = str(_init_matched or "").lower()
+            if _init_buf:
+                _opt9_progress_scan += "\n" + _init_buf
+                if len(_opt9_progress_scan) > 16384:
+                    _opt9_progress_scan = _opt9_progress_scan[-8192:]
+
+                if ("nvme-of: setting up port" in _opt9_progress_scan
+                        or "nvmeof.subsystem.add" in _opt9_progress_scan):
+                    _emit_opt9_progress("Initializing NVMe-oF ports...", "nvmeof")
+                if "netif.linkinfo:notice" in _opt9_progress_scan:
+                    _emit_opt9_progress("Bringing up network links...", "netlinks")
+                if "qat provider init started." in _opt9_progress_scan:
+                    _emit_opt9_progress("Initializing QAT acceleration...", "qat")
+                if "cryptomod_fips: executing crypto fips self tests." in _opt9_progress_scan:
+                    _emit_opt9_progress("Running cryptographic self-tests...", "cryptotest")
+                if "destroying existing aggregates" in _opt9_progress_scan:
+                    _emit_opt9_progress("Destroying existing aggregates...", "destroy_aggr")
+                if "unpartitioning disks" in _opt9_progress_scan:
+                    _emit_opt9_progress("Unpartitioning disks...", "unpartition")
+                if "removing disk ownership" in _opt9_progress_scan:
+                    _emit_opt9_progress("Removing disk ownership...", "remove_ownership")
+                _opt9_last_status = time.monotonic()
+            elif time.monotonic() - _opt9_last_status >= 60:
+                print(
+                    f"   ⏳ {_node_pfx(bmc_host)}Option-9 initialization still in progress..."
+                    f"{_elapsed_str()}"
+                )
+                _slog("Option-9 initialization still in progress")
+                _opt9_last_status = time.monotonic()
 
             # "not supported" can appear anywhere in the output buffer
             if "boot menu option 9 or 9a is not supported" in _init_buf:
