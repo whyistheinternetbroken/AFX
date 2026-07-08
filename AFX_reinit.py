@@ -1849,6 +1849,11 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
         return _prompt(prompt, default=default)
 
     _strict_yn = _prompt_is_yes_no(prompt)
+    _yn_default_to = ""
+    if _strict_yn:
+        _yn_m_to = re.search(r"\[([Yy])/([Nn])\]", str(prompt or ""))
+        if _yn_m_to:
+            _yn_default_to = "y" if _yn_m_to.group(1).isupper() else "n"
     _deadline = time.monotonic() + timeout
     try:
         while True:
@@ -1901,6 +1906,8 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
             if val.lower() == "menu":
                 print("  ↩️  Returning to main menu...")
                 raise _ReturnToMenu
+            if _strict_yn and val == "" and _yn_default_to:
+                return _yn_default_to
             if _strict_yn and not _is_valid_yes_no_input(val):
                 print("  Please enter y, n, yes, or no.")
                 continue
@@ -1961,11 +1968,19 @@ def _tracked_input(prompt=""):
     try:
         if not _prompt_is_yes_no(prompt):
             return _orig_input(prompt)
+        # Determine the default answer from the prompt bracket, e.g. [y/N] → "n", [Y/n] → "y".
+        _yn_default = ""
+        _yn_m = re.search(r"\[([Yy])/([Nn])\]", str(prompt or ""))
+        if _yn_m:
+            _yn_default = "y" if _yn_m.group(1).isupper() else "n"
         while True:
             _val = _orig_input(prompt)
             _vl = str(_val or "").strip().lower()
             if _vl == "menu":
                 return _val
+            # Blank Enter accepts the capitalised default when one is present.
+            if _vl == "" and _yn_default:
+                return _yn_default
             if _is_valid_yes_no_input(_val):
                 return _val
             print("  Please enter y, n, yes, or no.")
