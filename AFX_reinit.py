@@ -1848,52 +1848,63 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
     if timeout <= 0:
         return _prompt(prompt, default=default)
 
+    _strict_yn = _prompt_is_yes_no(prompt)
+    _deadline = time.monotonic() + timeout
     try:
-        if os.name != "nt":
-            # POSIX: wait for stdin readability, then read one line.
-            sys.stdout.write(prompt)
-            sys.stdout.flush()
-            ready, _, _ = select.select([sys.stdin], [], [], timeout)
-            if not ready:
+        while True:
+            _remaining = _deadline - time.monotonic()
+            if _remaining <= 0:
                 print("")
                 print(f"  ⏱️  No response in {timeout}s; defaulting to '{default or ''}'.")
                 return default
-            val = sys.stdin.readline()
-            if val == "":
-                return default
-            val = val.strip()
-        else:
-            # Windows console fallback.
-            import msvcrt
-            sys.stdout.write(prompt)
-            sys.stdout.flush()
-            buf = []
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                if msvcrt.kbhit():
-                    ch = msvcrt.getwche()
-                    if ch in ("\r", "\n"):
-                        print("")
-                        break
-                    if ch == "\003":  # Ctrl+C
-                        raise KeyboardInterrupt
-                    if ch == "\b":
-                        if buf:
-                            buf.pop()
-                        continue
-                    buf.append(ch)
-                else:
-                    time.sleep(0.05)
-            else:
-                print("")
-                print(f"  ⏱️  No response in {timeout}s; defaulting to '{default or ''}'.")
-                return default
-            val = "".join(buf).strip()
 
-        if val.lower() == "menu":
-            print("  ↩️  Returning to main menu...")
-            raise _ReturnToMenu
-        return val
+            if os.name != "nt":
+                # POSIX: wait for stdin readability, then read one line.
+                sys.stdout.write(prompt)
+                sys.stdout.flush()
+                ready, _, _ = select.select([sys.stdin], [], [], _remaining)
+                if not ready:
+                    print("")
+                    print(f"  ⏱️  No response in {timeout}s; defaulting to '{default or ''}'.")
+                    return default
+                val = sys.stdin.readline()
+                if val == "":
+                    return default
+                val = val.strip()
+            else:
+                # Windows console fallback.
+                import msvcrt
+                sys.stdout.write(prompt)
+                sys.stdout.flush()
+                buf = []
+                while time.monotonic() < _deadline:
+                    if msvcrt.kbhit():
+                        ch = msvcrt.getwche()
+                        if ch in ("\r", "\n"):
+                            print("")
+                            break
+                        if ch == "\003":  # Ctrl+C
+                            raise KeyboardInterrupt
+                        if ch == "\b":
+                            if buf:
+                                buf.pop()
+                            continue
+                        buf.append(ch)
+                    else:
+                        time.sleep(0.05)
+                else:
+                    print("")
+                    print(f"  ⏱️  No response in {timeout}s; defaulting to '{default or ''}'.")
+                    return default
+                val = "".join(buf).strip()
+
+            if val.lower() == "menu":
+                print("  ↩️  Returning to main menu...")
+                raise _ReturnToMenu
+            if _strict_yn and not _is_valid_yes_no_input(val):
+                print("  Please enter y, n, yes, or no.")
+                continue
+            return val
     except (EOFError, KeyboardInterrupt):
         return default
 
@@ -1920,6 +1931,18 @@ _prompt_wait_extended = []  # list[(label, seconds)]
 _orig_input = _builtins.input
 
 
+def _prompt_is_yes_no(prompt="") -> bool:
+    _p = str(prompt or "")
+    if re.search(r"\[[Yy]\s*/\s*[Nn]\]", _p):
+        return True
+    _pl = _p.lower()
+    return ("yes" in _pl) and ("no" in _pl)
+
+
+def _is_valid_yes_no_input(value: str) -> bool:
+    return str(value or "").strip().lower() in {"y", "n", "yes", "no"}
+
+
 def _tracked_input(prompt=""):
     """Drop-in replacement for the builtin ``input`` that records how long
     the operator spent at each prompt. Behaves identically otherwise; raised
@@ -1936,7 +1959,16 @@ def _tracked_input(prompt=""):
                 "operator prompt wait"
             )
     try:
-        return _orig_input(prompt)
+        if not _prompt_is_yes_no(prompt):
+            return _orig_input(prompt)
+        while True:
+            _val = _orig_input(prompt)
+            _vl = str(_val or "").strip().lower()
+            if _vl == "menu":
+                return _val
+            if _is_valid_yes_no_input(_val):
+                return _val
+            print("  Please enter y, n, yes, or no.")
     finally:
         _elapsed = time.monotonic() - _start
         if _session_log:
@@ -1987,14 +2019,17 @@ def _suppress_console():
 
 
 def _menu_confirm(prompt: str = "  Enter 'yes' to continue or 'no' to go back: ") -> bool:
-    """Return True if user types 'yes'. Re-prompt on blank Enter; return False on any non-yes input."""
+    """Return True for yes/y, False for no/n. Re-prompt on invalid input."""
     while True:
         try:
             _ans = input(prompt).strip().lower()
         except (EOFError, KeyboardInterrupt):
             return False
-        if _ans:
-            return _ans == "yes"
+        if _ans in ("yes", "y"):
+            return True
+        if _ans in ("no", "n"):
+            return False
+        print("  Please enter y, n, yes, or no.")
 
 
 def _print_banner(title: str, *, width: int = 60) -> None:
@@ -7130,7 +7165,7 @@ def _reset_reconnect_notice_suppression(state_holder):
 
 
 def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=False,
-               quiet=False, reconnect_ctx=None):
+               quiet=False, reconnect_ctx=None, cr_nudge_interval=None):
     """Shared receive loop used by direct_send_and_wait / direct_read_until /
     direct_read_until_any.
 
@@ -7148,12 +7183,16 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
     firing during long waits (e.g., waiting for the boot menu during a reboot).
     Null bytes are ignored by the ONTAP/LOADER console but reset the BMC's
     idle timer.
+
+    When *cr_nudge_interval* is set (seconds), a carriage-return is sent after
+    that many seconds of console silence to elicit the current prompt.
     """
     output = ""
     output_lower = ""
     start_time = time.monotonic()
     last_console_data = time.monotonic()
     last_keepalive_send = 0.0
+    last_cr_nudge = time.monotonic()
     last_silence_reconnect_attempt = 0.0
 
     if reconnect_ctx and reconnect_ctx.get("channel") is not None:
@@ -7205,6 +7244,17 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
             except Exception:
                 pass
             last_keepalive_send = _now
+
+        # After cr_nudge_interval seconds of console silence, send a carriage
+        # return to elicit the current prompt (LOADER, boot menu, or shell).
+        if (cr_nudge_interval is not None
+                and _idle >= cr_nudge_interval
+                and (_now - last_cr_nudge) >= cr_nudge_interval):
+            try:
+                channel.send("\r")
+            except Exception:
+                pass
+            last_cr_nudge = _now
 
         # If this is a BMC-aware read path and console output has gone silent
         # for too long, attempt a full SSH reconnect and re-enter system console.
@@ -7333,14 +7383,16 @@ def direct_read_until(channel, look_for, timeout=15, node_log=None, check_bmc_dr
 
 
 def direct_read_until_any(channel, look_for_list, timeout=15, node_log=None,
-                          check_bmc_drop=False, quiet=False, reconnect_ctx=None):
+                          check_bmc_drop=False, quiet=False, reconnect_ctx=None,
+                          cr_nudge_interval=None):
     _rc = reconnect_ctx
     if _rc is None and check_bmc_drop and _primary_bmc_reconnect_ctx:
         _rc = _primary_bmc_reconnect_ctx
     _ch = _rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel
     matchers = [(s.lower(), s) for s in look_for_list]
     output, matched = _recv_loop(_ch, matchers, timeout, node_log, check_bmc_drop,
-                                 quiet=quiet, reconnect_ctx=_rc)
+                                 quiet=quiet, reconnect_ctx=_rc,
+                                 cr_nudge_interval=cr_nudge_interval)
     if matched is None and _session_log:
         _session_log.log(f"Timeout ({timeout}s) waiting for any of {look_for_list}", prefix="WARN")
     return output, matched
@@ -25898,10 +25950,12 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 "login:",
             ]
             _wipe_deadline = time.monotonic() + 600
+            _last_wipe_cr_nudge = time.monotonic()
             while time.monotonic() < _wipe_deadline:
                 if ch.recv_ready():
                     _wc = ch.recv(4096).decode("utf-8", errors="replace")
                     _wipe_buf += _wc
+                    _last_wipe_cr_nudge = time.monotonic()
                     if node_file:
                         _par_write(node_file, _wc)
                     _wcl = _wipe_buf.lower()
@@ -25929,6 +25983,11 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     if len(_wipe_buf) > 16384:
                         _wipe_buf = _wipe_buf[-8192:]
                 else:
+                    _now_wipe = time.monotonic()
+                    if _now_wipe - _last_wipe_cr_nudge >= 60.0:
+                        with suppress(Exception):
+                            ch.send("\r")
+                        _last_wipe_cr_nudge = _now_wipe
                     time.sleep(0.1)
 
             _mgmt_residual = _auto_answer_node_mgmt(
