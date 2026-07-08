@@ -314,13 +314,14 @@ class CheckpointManager:
         """Load a checkpoint from disk.  Returns True if a valid,
         non-expired checkpoint was loaded, False otherwise.
         """
-        if not os.path.isfile(self._path):
-            return False
-        try:
-            with open(self._path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            return False
+        with _checkpoint_io_lock:
+            if not os.path.isfile(self._path):
+                return False
+            try:
+                with open(self._path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                return False
         if data.get("version") != 1:
             return False
         created_str = data.get("created", "")
@@ -341,8 +342,9 @@ class CheckpointManager:
 
     def clear(self) -> None:
         """Delete the checkpoint file (call on successful run completion)."""
-        with suppress(Exception):
-            os.remove(self._path)
+        with _checkpoint_io_lock:
+            with suppress(Exception):
+                os.remove(self._path)
         self._data = {}
 
     @property
@@ -708,13 +710,19 @@ class CheckpointManager:
 
     def _save(self) -> None:
         self._data["updated"] = datetime.now().isoformat()
+        tmp = (
+            f"{self._path}.{os.getpid()}."
+            f"{threading.get_ident()}.{time.time_ns()}.tmp"
+        )
         try:
-            tmp = self._path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, indent=2)
-            os.replace(tmp, self._path)
+            with _checkpoint_io_lock:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self._data, f, indent=2)
+                os.replace(tmp, self._path)
         except Exception:
-            pass
+            with suppress(Exception):
+                if os.path.exists(tmp):
+                    os.remove(tmp)
 
 
 def _handle_checkpoint_confirmation_with_selective_mod(checkpoint, diag_mode=False):
@@ -1005,6 +1013,7 @@ _checkpoint_test_mode_label = ""
 _checkpoint_test_consumed = False
 _pending_checkpoint_test_failure: "Exception | None" = None
 _checkpoint_test_lock = threading.Lock()
+_checkpoint_io_lock = threading.RLock()
 
 # Set to True by _run_4b_standalone when the operator selected a reinit
 # sub-mode (1.1/1.2/3).  Read by main() to decide whether to offer the
