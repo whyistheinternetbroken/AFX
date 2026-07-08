@@ -23124,9 +23124,6 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _slog("Wizard already at cluster management port; marking cp_1_7 and skipping create steps")
         print("\n⏭️ Wizard already at cluster management port; skipping to management interface configuration.")
         _cp_mark("cp_1_7", _alias="primary_setup_done")
-        for _cp_id in ("cp_1_7_1", "cp_1_7_2", "cp_1_7_3", "cp_1_7_4", "cp_1_7_5"):
-            if not _cp_done(_cp_id):
-                _cp_mark(_cp_id)
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
     if not _skip_create_steps:
