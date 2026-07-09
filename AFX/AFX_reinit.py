@@ -24857,8 +24857,10 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
         _checkpoint_mark_phase("cp_2_6", node_id=str(checkpoint_node_id or "").strip())
     if not join_existing_cluster:
         _slog(f"[{label}] resume recovery path: exiting setup wizard to continue bulk add-node flow")
+        # Resume hardening: don't sit at create/join for minutes. We only need to
+        # stabilize briefly, then force exit and continue primary-side bulk add-node.
         _wait_start = time.monotonic()
-        _wait_limit = 180
+        _wait_limit = 30
         _prompt_seen = _is_create_join
         while (not _prompt_seen) and (time.monotonic() - _wait_start < _wait_limit):
             _out_w, _m_w = direct_read_until_any(
@@ -24876,7 +24878,7 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
                     "::>",
                     "::*>",
                 ],
-                timeout=20,
+                timeout=8,
                 node_log=node_log,
                 quiet=bool(node_log),
                 check_bmc_drop=True,
@@ -24904,6 +24906,11 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
             with suppress(Exception):
                 channel.send("\r")
             time.sleep(0.3)
+
+        if _prompt_seen:
+            _slog(f"[{label}] create/join prompt observed; exiting setup wizard immediately for bulk add-node flow")
+        else:
+            _slog(f"[{label}] create/join prompt not observed quickly; forcing setup exit to avoid long wait", prefix="WARN")
 
         print(f"\n🛑 [{label}] Exiting cluster setup wizard (Ctrl+C) for bulk add-node flow...")
         _slog(f"[{label}] sending Ctrl+C to exit setup wizard before bulk add-node")
