@@ -2350,14 +2350,40 @@ def _reach_bmc_prompt(ch, *, timeout=15, node_log=None, takeover_msg=None):
     _out, matched = direct_read_until_any(
         ch, ["y/n", ">"], timeout=timeout, node_log=node_log,
     )
-    if matched and "y/n" in matched.lower():
-        if takeover_msg:
-            _slog(takeover_msg)
-        ch.send("y\r")
-        time.sleep(2)
-        direct_read_until(ch, ">", timeout=timeout, node_log=node_log)
+    if matched and ">" in matched:
         return True
-    return bool(matched and ">" in matched)
+    if not (matched and "y/n" in matched.lower()):
+        return False
+    if takeover_msg:
+        _slog(takeover_msg)
+
+    _deadline = time.monotonic() + max(20, int(timeout) * 3)
+    _round = 0
+    while time.monotonic() < _deadline:
+        _round += 1
+        try:
+            ch.send("y\r")
+        except OSError:
+            _slog(
+                "Socket closed while answering BMC session takeover prompt",
+                prefix="WARN",
+            )
+            return False
+        time.sleep(1.5)
+        _remain = max(1, int(_deadline - time.monotonic()))
+        _out2, _m2 = direct_read_until_any(
+            ch, ["y/n", ">"], timeout=min(max(5, timeout), _remain), node_log=node_log,
+        )
+        if _m2 and ">" in _m2:
+            if _round > 1:
+                _slog(f"BMC prompt reached after {_round} stacked session takeovers")
+            return True
+        if _m2 and "y/n" in _m2.lower():
+            if _round == 1:
+                _slog("Detected stacked BMC takeover prompt; continuing auto-disconnect", prefix="WARN")
+            continue
+        break
+    return False
 
 
 def load_config_file(path: str) -> dict:
