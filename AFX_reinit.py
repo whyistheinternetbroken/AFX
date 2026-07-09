@@ -4036,7 +4036,7 @@ def _checkpoint_menu_option_label(cp_mode: str) -> str:
     if _m == "3":
         return "3"
     if _m == "2":
-        return "2.3"
+        return "2.2"
     if _m == "1":
         return "1 (Automatic reinit of primary node in cluster/cluster creation)"
     return cp_mode or "unknown"
@@ -4737,8 +4737,8 @@ def select_operation_mode():
             print("\n  ✅ Resuming checkpoint via menu option 4.2.")
             return 42, False, False
         if _cp_mode == "2":
-            print("\n  ✅ Resuming checkpoint via menu option 2.3.")
-            return 26, False, False
+            print("\n  ✅ Resuming checkpoint via menu option 2.2.")
+            return 2, False, True
         if _cp_mode == "3":
             _mode3_peer_opt4 = bool(_cp_obj.nodes_done_for("peer_option4_done"))
             _mode3_replay_risk = bool(
