@@ -13602,6 +13602,18 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 _cred_store("cluster", "*", "admin", _used_pw)
             _cluster_config["admin_password"] = _used_pw
 
+        # Mode 1 resume hardening: if we already have a cluster shell and
+        # cluster show is healthy, do not force cluster setup again.
+        if _operation_mode == 1:
+            _rows, _all_true, _has_warn = _cluster_show_node_status(channel)
+            if _rows >= 1:
+                _slog(
+                    "Wizard-start login recovery detected active cluster shell; "
+                    "skipping cluster setup replay for mode 1",
+                    prefix="WARN",
+                )
+                return "__cluster_shell_ready__"
+
         with suppress(Exception):
             channel.send("cluster setup\r")
         if _session_log:
@@ -23747,8 +23759,17 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _session_log.log("Timeout waiting for wizard start", prefix="ERROR")
             _session_log.set_outcome("FAIL", "wizard start timeout")
         return False
-    print(f"\n⏳ {_wizard_pfx}Cluster setup has begun...{_elapsed_str()}")
-    _slog("Cluster setup wizard started")
+    _cluster_shell_resume_ready = (str(_which or "").strip() == "__cluster_shell_ready__")
+    if _cluster_shell_resume_ready:
+        print(f"\n⏭️ {_wizard_pfx}Resume detected active cluster shell; skipping initial cluster-create wizard prompts.{_elapsed_str()}")
+        _slog("Mode 1 resume: cluster shell already active; skipping create/join replay")
+        _cp_mark("cp_1_7", _alias="primary_setup_done")
+        for _cp_seed in ("cp_1_7_6", "cp_1_7_7", "cp_1_7_8", "cp_1_7_9", "cp_1_7_10", "cp_1_7_11"):
+            if not _cp_done(_cp_seed):
+                _cp_mark(_cp_seed)
+    else:
+        print(f"\n⏳ {_wizard_pfx}Cluster setup has begun...{_elapsed_str()}")
+        _slog("Cluster setup wizard started")
     _which_l = str(_which or "").lower()
     _skip_create_steps = bool(
         _which_l and (
@@ -23760,7 +23781,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     )
     # If node management prompts are still pending (session resumed past them or they
     # were missed), drive them before attempting the wizard create/join flow.
-    while _which and "node management interface" in str(_which).lower():
+    while (not _cluster_shell_resume_ready) and _which and "node management interface" in str(_which).lower():
         _slog("Node management port prompt detected at wizard start; driving node management config")
         print("\n⏭️ Node management prompts still pending; driving node management config...")
         _nm_cfg = _resolve_node_mgmt_config(primary_bmc)
@@ -23794,13 +23815,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             )
         )
         break
-    if _skip_create_steps:
+    if _skip_create_steps and (not _cluster_shell_resume_ready):
         _slog("Wizard already at cluster management port; marking cp_1_7 and skipping create steps")
         print("\n⏭️ Wizard already at cluster management port; skipping to management interface configuration.")
         _cp_mark("cp_1_7", _alias="primary_setup_done")
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
-    if not _skip_create_steps:
+    if (not _skip_create_steps) and (not _cluster_shell_resume_ready):
         # Always send one Enter after wizard-start detection. In fast paths, the
         # create/join text can be present in residual output while ONTAP still
         # requires Enter to continue from the "Otherwise, press Enter..." gate.
@@ -24196,8 +24217,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     _saz_done = False
     _cluster_created = False
     _create_deadline = time.monotonic() + 1800
-    _matched = None
-    while (not _shutdown_event.is_set()) and (time.monotonic() < _create_deadline):
+    _matched = "::>" if _cluster_shell_resume_ready else None
+    while (not _cluster_shell_resume_ready) and (not _shutdown_event.is_set()) and (time.monotonic() < _create_deadline):
         _remaining_ms = max(10, int(_create_deadline - time.monotonic()))
         _out, _matched = direct_read_until_any(
             channel,
@@ -25015,15 +25036,62 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
         print(f"\n⏳ [{label}] Logging in as admin...")
         ch.send("admin\r")
         _pw_out, _pw_matched = direct_read_until_any(
-            ch, ["password:", "::>", "::*>"], timeout=30, node_log=node_log)
+            ch, ["password:", "::>", "::*>", "login:"], timeout=30, node_log=node_log)
         if _pw_matched and "password:" in _pw_matched.lower():
             ch.send((admin_password or "") + "\r")
             _shell_out, _shell_matched = direct_read_until_any(
-                ch, ["::>", "::*>", "login:"], timeout=60, node_log=node_log)
+                ch, ["::>", "::*>", "login:", "password:"], timeout=60, node_log=node_log)
+            if _shell_matched and "password:" in str(_shell_matched).lower():
+                # Some nodes require one more CR before prompt stabilizes.
+                ch.send("\r")
+                _shell_out2, _shell_matched2 = direct_read_until_any(
+                    ch, ["::>", "::*>", "login:"], timeout=30, node_log=node_log
+                )
+                _shell_out = (_shell_out or "") + (_shell_out2 or "")
+                _shell_matched = _shell_matched2 or _shell_matched
             if not (_shell_matched and ("::>" in _shell_matched or "::*>" in _shell_matched)):
                 print(f"   ⚠️  [{label}] Could not reach ::> after login; aborting.")
                 _slog(f"[{label}] no ::> after admin login", prefix="WARN")
                 return None
+        elif not (_pw_matched and ("::>" in _pw_matched or "::*>" in _pw_matched)):
+            print(f"   ⚠️  [{label}] Could not reach ::> after login prompt; aborting.")
+            _slog(f"[{label}] login prompt did not transition to cluster shell", prefix="WARN")
+            return None
+
+    # Resume hardening: react to the live shell state before extracting cluster IP.
+    # If login landed on a non-cluster context, re-enter cluster setup and continue.
+    _cluster_rows = -1
+    try:
+        _cluster_rows, _, _ = _cluster_show_node_status(ch)
+    except Exception as _cs_err:
+        _slog(f"[{label}] cluster show probe failed before cluster-IP capture: {_cs_err}", prefix="WARN")
+    if _cluster_rows < 1:
+        print(f"\n   ⚠️  [{label}] cluster show did not report an active cluster; running cluster setup...")
+        _slog(f"[{label}] cluster show rows={_cluster_rows}; running cluster setup recovery", prefix="WARN")
+        ch.send("cluster setup\r")
+        _wiz_start = _wait_for_wizard_start(ch, timeout=300, node_log=node_log)
+        if not _wiz_start:
+            print(f"   ❌ [{label}] Could not enter cluster setup after login recovery.")
+            _slog(f"[{label}] cluster setup recovery failed (no wizard start)", prefix="ERROR")
+            return None
+        if not _run_join_wizard(
+            ch,
+            label=f"{label}/resume-recovery",
+            initial_buf=str(_wiz_start or ""),
+            checkpoint_node_id=str(peer_bmc or "").strip(),
+        ):
+            print(f"   ❌ [{label}] Cluster setup recovery did not reach join wizard.")
+            _slog(f"[{label}] cluster setup recovery join wizard failed", prefix="ERROR")
+            return None
+        if not _login_primary_cluster_shell(ch, admin_password):
+            print(f"   ❌ [{label}] Could not re-enter cluster shell after setup recovery.")
+            _slog(f"[{label}] cluster setup recovery login failed", prefix="ERROR")
+            return None
+        _cluster_rows, _, _ = _cluster_show_node_status(ch)
+        if _cluster_rows < 1:
+            print(f"   ❌ [{label}] cluster show still reports no cluster after recovery.")
+            _slog(f"[{label}] cluster show rows={_cluster_rows} after recovery", prefix="ERROR")
+            return None
 
     def _capture_cluster_netint(_cmd):
         _slog(f"[{label}] running {_cmd}")
@@ -25042,9 +25110,8 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             time.sleep(0.2)
         return _buf
 
-    def _parse_cluster_node_and_ip(_buf):
-        _cluster_node = ""
-        _cluster_ip_local = None
+    def _parse_cluster_rows(_buf):
+        _rows = []
         _in_table = False
         for _line in _buf.splitlines():
             _sline = _line.strip()
@@ -25065,16 +25132,34 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             if not _ips:
                 continue
             _cluster_ip_local = _ips[0]
+            _cluster_node = ""
             if _parts:
                 _cand = _parts[0]
                 if not _is_valid_ipv4(_cand) and _cand.lower() not in ("node", "vserver", "lif", "address"):
                     _cluster_node = _cand
-            return _cluster_node, _cluster_ip_local
-        return "", None
+            _rows.append({"node_name": _cluster_node, "cluster_ip": _cluster_ip_local})
+        return _rows
 
     print(f"\n📡 [{label}] Capturing cluster interface IP...")
     _cluster_node_name = ""
     _cluster_ip = None
+    _target_node_name = ""
+    try:
+        _sp_raw = _run_cluster_command(
+            ch,
+            "set -rows 0; service-processor show -fields address,node",
+            timeout=30,
+        )
+        _node_to_sp = _parse_sp_show_to_node_map(_sp_raw)
+        _peer_bmc_s = str(peer_bmc or "").strip()
+        for _node_name, _sp_addr in (_node_to_sp or {}).items():
+            if str(_sp_addr or "").strip() == _peer_bmc_s:
+                _target_node_name = str(_node_name or "").strip()
+                break
+        if _target_node_name:
+            _slog(f"[{label}] cluster-IP capture target node resolved from SP map: {_target_node_name}")
+    except Exception as _sp_err:
+        _slog(f"[{label}] could not map peer BMC to node name from service-processor show: {_sp_err}", prefix="WARN")
     for _cmd in (
         "set -rows 0; net int show -role cluster -fields home-node,address",
         "net int show -role cluster -fields home-node,address",
@@ -25082,7 +25167,18 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
         "net int show -role cluster -fields address",
     ):
         _netint_buf = _capture_cluster_netint(_cmd)
-        _cluster_node_name, _cluster_ip = _parse_cluster_node_and_ip(_netint_buf)
+        _rows = _parse_cluster_rows(_netint_buf)
+        if not _rows:
+            continue
+        if _target_node_name:
+            for _row in _rows:
+                if str(_row.get("node_name") or "").strip() == _target_node_name:
+                    _cluster_node_name = _target_node_name
+                    _cluster_ip = str(_row.get("cluster_ip") or "").strip()
+                    break
+        if not _cluster_ip:
+            _cluster_node_name = str(_rows[0].get("node_name") or "").strip()
+            _cluster_ip = str(_rows[0].get("cluster_ip") or "").strip()
         if _cluster_ip:
             break
 
