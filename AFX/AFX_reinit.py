@@ -24261,6 +24261,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                         "Skipping cp_1_7_12 storage failover step for single/odd-node cluster state"
                     )
                 _cp_mark("cp_1_7_12")
+            except _InjectedCheckpointFailure:
+                raise
             except Exception as _sfo_e:
                 _slog(f"storage failover show failed for cp_1_7_12: {_sfo_e}", prefix="WARN")
     else:
