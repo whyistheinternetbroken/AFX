@@ -36566,6 +36566,16 @@ def main():
                     _loader_env_stage_enabled = (_env_q in ("n", "no"))
                     if _checkpoint:
                         _checkpoint.set_selection("loader_env_stage_enabled", _loader_env_stage_enabled)
+                    # Backfill values collected in select_operation_mode() before the
+                    # checkpoint existed so they appear in the saved-selections summary
+                    # and are restored without re-prompting on resume.
+                    if _checkpoint:
+                        # setup_passwordless_ssh is asked for modes 1, 3 and auto-add mode 2 (2.2).
+                        _ssh_asked = _operation_mode in (1, 3) or (_operation_mode == 2 and _auto_add)
+                        if _ssh_asked and _checkpoint.get_selection("setup_passwordless_ssh") is None:
+                            _checkpoint.set_selection("setup_passwordless_ssh", bool(_setup_passwordless_ssh))
+                        if _operation_mode == 1 and _checkpoint.get_selection("netboot_before_reinit") is None:
+                            _checkpoint.set_selection("netboot_before_reinit", bool(_netboot_before_reinit))
             elif _operation_mode == 4 and not _mode3_skip_presets:
                 # Modes 4.1, 4.2, 4.3 - check for checkpoint with fewer options
                 _print_banner("Node pre-config")
