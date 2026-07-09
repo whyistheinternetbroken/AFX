@@ -8943,6 +8943,7 @@ def enter_system_console(channel, loader_message=True, force_takeover=True):
         channel,
         ["::>", "bmc", "login:", ">", "#"],
         timeout=10,
+        quiet=True,
     )
     probe_lower = probe_out.lower()
 
