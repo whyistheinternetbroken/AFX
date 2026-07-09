@@ -25726,15 +25726,17 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             _cp2_4_done = True
             _cp2_3_done = _cp2_2_done = _cp2_1_done = True
 
-        # Fast-path for cp_2_3+ resume: option 4 was already sent, node is past
-        # boot-menu stage (disk erase in progress, node mgmt, or cluster setup).
-        # Skip LOADER probe/reset/wait/commands and boot-menu wait entirely.
+        # Fast-path for resume states that are already past the boot-menu stage
+        # (option 4 already sent, disk erase/node-mgmt in progress, or cluster
+        # setup prompt reached). Skip reset/LOADER/boot-menu handling entirely.
         _fast_skip_to_diskerase = (
-            (_cp2_3_done or _already_post_option4) and not _cp2_6_done and not _already_loader
+            (_cp2_3_done or _already_post_option4) and not _already_loader
         )
         if _fast_skip_to_diskerase:
-            _slog(f"[{label}] cp_2_3 resume: option 4 already sent; "
-                  "entering system console, skipping LOADER/boot-menu sections")
+            _slog(
+                f"[{label}] resume state already past option 4; "
+                "entering system console, skipping reset/LOADER/boot-menu sections"
+            )
             with suppress(Exception):
                 ch.send("\r")
             time.sleep(0.5)
