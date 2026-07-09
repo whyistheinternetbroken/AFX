@@ -25184,7 +25184,11 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     print("\n  Using previously collected cluster network IP(s)")
     print("  Running add-node command")
     print(f"     {cmd}")
-    print(f"\n  ➕ Adding {len(_rows)} node(s) to cluster...")
+    _resume_mode = str(globals().get("_checkpoint_mode") or "").strip().lower()
+    if _checkpoint_resume_active() and _resume_mode in {"2", "3"}:
+        print(f"\n  Resuming node add process for {len(_rows)} nodes...")
+    else:
+        print(f"\n  ➕ Adding {len(_rows)} node(s) to cluster...")
     if log:
         log.log(cmd)
 
@@ -26636,6 +26640,25 @@ def _omit_already_joined_nodes(peer_bmcs, primary_channel, mode_label="", log=No
             _keep.append(_bmc)
 
     if _already:
+        _cp2_status_only_resume = False
+        if _checkpoint:
+            try:
+                _cp_mode = str(getattr(_checkpoint, "mode", "") or "").strip().lower()
+                _cp_next = _checkpoint_resume_phase_id(_checkpoint)
+                _cp2_status_only_resume = (
+                    _cp_mode == "2" and _cp_next in ("cp_2_7", "cp_2_8")
+                )
+            except Exception:
+                _cp2_status_only_resume = False
+
+        if _cp2_status_only_resume:
+            if log:
+                log.log(
+                    f"{mode_label}: resume stage {_cp_next} auto-omitting "
+                    f"{len(_already)} already-joined node(s) without prompt"
+                )
+            return _keep
+
         print(f"\n  ⚠️  {len(_already)} requested node(s) appear to be already joined:")
         for _bmc, _cfg_name, _nip, _reasons in _already:
             _name_disp = _cfg_name or "(name not set)"
@@ -26994,6 +27017,61 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             print("\n  ✅ No nodes selected for add after preflight check. Nothing to do.")
             if log:
                 log.log("2.2: no nodes selected after preflight already-joined check; no-op")
+            _cp2_status_only_resume = False
+            _cp_next = ""
+            if _checkpoint:
+                try:
+                    _cp_mode = str(getattr(_checkpoint, "mode", "") or "").strip().lower()
+                    _cp_next = _checkpoint_resume_phase_id(_checkpoint)
+                    _cp2_status_only_resume = (
+                        _checkpoint_resume_active()
+                        and _cp_mode == "2"
+                        and _cp_next in ("cp_2_7", "cp_2_8")
+                    )
+                except Exception:
+                    _cp2_status_only_resume = False
+                    _cp_next = ""
+            if _cp2_status_only_resume:
+                _target = max(1, int(baseline) if isinstance(baseline, int) else 1)
+                print(f"\n  🔍 Final health check (resume): verifying {_target} healthy node(s)...")
+                _wait_for_cluster_nodes_healthy(
+                    primary_channel, target_count=_target,
+                    total_timeout=1800, poll_interval=120,
+                    label="2.2-resume", final_count=_target,
+                )
+                if _should_run_storage_failover_gate(_target, label="2.2-resume"):
+                    _fo_out = ""
+                    try:
+                        with _suppress_console():
+                            _fo_out = _run_cluster_command(
+                                primary_channel, "set -rows 0; storage failover show", timeout=30)
+                    except Exception:
+                        pass
+                    _expected_nodes = []
+                    if _fo_out:
+                        _expected_nodes = [r.get("node") for r in _parse_failover_show(_fo_out)
+                                           if r.get("node")]
+                    if len(_expected_nodes) >= _target:
+                        _expected_nodes = _expected_nodes[:_target]
+                        print("\n  🔍 Final failover/giveback check (resume)...")
+                        _wait_for_cluster_healthy(
+                            primary_channel, _expected_nodes,
+                            total_timeout=1200, poll_interval=60, log=log)
+                else:
+                    print(
+                        f"\n  ℹ️  Skipping final storage failover checks for {_target}-node cluster "
+                        "(single or unpaired node present)."
+                    )
+                    if log:
+                        log.log(f"2.2-resume: skipped storage failover checks for cluster size {_target}")
+                if _checkpoint:
+                    with suppress(Exception):
+                        _checkpoint.mark_done("cp_2_8")
+                        if log:
+                            log.log(
+                                f"2.2-resume: marked cp_2_8 after already-joined preflight "
+                                f"(next={_cp_next or 'n/a'})"
+                            )
             if primary_client:
                 try:
                     primary_client.close()
