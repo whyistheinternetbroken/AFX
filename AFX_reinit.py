@@ -1012,6 +1012,8 @@ _checkpoint_test_target = ""
 _checkpoint_test_mode_label = ""
 _checkpoint_test_consumed = False
 _pending_checkpoint_test_failure: "Exception | None" = None
+_checkpoint_test_parallel_expected_nodes: "set[str]" = set()
+_checkpoint_test_parallel_seen_nodes: "set[str]" = set()
 _checkpoint_test_lock = threading.Lock()
 _checkpoint_io_lock = threading.RLock()
 
@@ -1480,11 +1482,39 @@ def _clear_checkpoint_test_config() -> None:
     global _checkpoint_test_enabled, _checkpoint_test_target
     global _checkpoint_test_mode_label, _checkpoint_test_consumed
     global _pending_checkpoint_test_failure
+    global _checkpoint_test_parallel_expected_nodes, _checkpoint_test_parallel_seen_nodes
     _checkpoint_test_enabled = False
     _checkpoint_test_target = ""
     _checkpoint_test_mode_label = ""
     _checkpoint_test_consumed = False
     _pending_checkpoint_test_failure = None
+    _checkpoint_test_parallel_expected_nodes = set()
+    _checkpoint_test_parallel_seen_nodes = set()
+
+
+def _set_checkpoint_test_parallel_scope(node_ids) -> None:
+    """Configure node IDs that must hit the injected checkpoint in parallel runs."""
+    global _checkpoint_test_parallel_expected_nodes, _checkpoint_test_parallel_seen_nodes
+    _nodes = {
+        str(_nid).strip()
+        for _nid in (node_ids or [])
+        if str(_nid).strip()
+    }
+    with _checkpoint_test_lock:
+        if (not _checkpoint_test_enabled
+                or _checkpoint_test_consumed
+                or not _checkpoint_test_target
+                or len(_nodes) <= 1):
+            _checkpoint_test_parallel_expected_nodes = set()
+            _checkpoint_test_parallel_seen_nodes = set()
+            return
+        _checkpoint_test_parallel_expected_nodes = set(_nodes)
+        _checkpoint_test_parallel_seen_nodes = set()
+    _slog(
+        f"--test parallel scope armed for checkpoint '{_checkpoint_test_target}': "
+        f"{sorted(_nodes)}",
+        prefix="INFO",
+    )
 
 
 def _checkpoint_phase_description(phase: str) -> str:
@@ -1784,6 +1814,7 @@ def _log_pending_checkpoint_test_target(phase: str, node_id: str = "") -> None:
 def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
     """Abort once when the configured checkpoint phase is saved."""
     global _checkpoint_test_consumed, _pending_checkpoint_test_failure
+    global _checkpoint_test_parallel_seen_nodes
 
     _phase = str(phase or "").strip()
     if (not _checkpoint_test_enabled
@@ -1792,24 +1823,57 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
             or _phase != _checkpoint_test_target):
         return
 
+    _pending_err = None
+    _msg = ""
+    _wait_msg = ""
     with _checkpoint_test_lock:
         if (not _checkpoint_test_enabled
                 or _checkpoint_test_consumed
                 or _phase != _checkpoint_test_target):
             return
-        _checkpoint_test_consumed = True
-        _msg = f"Injected --test failure after checkpoint '{_phase}' was saved"
-        _node_id = str(node_id or "").strip()
-        if _node_id:
-            _msg += f" for {_node_id}"
-        _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_msg)
 
-    print(f"\n🧪 {_msg}")
-    _slog(_msg, prefix="FATAL")
-    if _session_log:
-        with suppress(Exception):
-            _session_log.log(_msg, prefix="FATAL")
-    raise _pending_checkpoint_test_failure
+        _node_id = str(node_id or "").strip()
+        _parallel_expected = set(_checkpoint_test_parallel_expected_nodes)
+        if _node_id and _parallel_expected:
+            _checkpoint_test_parallel_seen_nodes.add(_node_id)
+            _msg = (
+                f"Injected --test failure after checkpoint '{_phase}' "
+                f"was saved for {_node_id}"
+            )
+            _remaining = sorted(_parallel_expected - _checkpoint_test_parallel_seen_nodes)
+            if _remaining:
+                _wait_msg = (
+                    f"--test checkpoint '{_phase}' hit for {_node_id}; "
+                    f"waiting for remaining node(s): {', '.join(_remaining)}"
+                )
+            else:
+                _checkpoint_test_consumed = True
+                _msg += (
+                    f" (all targeted nodes reached: "
+                    f"{', '.join(sorted(_parallel_expected))})"
+                )
+                _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_msg)
+                _pending_err = _pending_checkpoint_test_failure
+        else:
+            _checkpoint_test_consumed = True
+            _msg = f"Injected --test failure after checkpoint '{_phase}' was saved"
+            if _node_id:
+                _msg += f" for {_node_id}"
+            _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_msg)
+            _pending_err = _pending_checkpoint_test_failure
+
+    if _wait_msg:
+        _slog(_wait_msg, prefix="INFO")
+    if _msg:
+        print(f"\n🧪 {_msg}")
+        _slog(_msg, prefix="FATAL")
+        if _session_log:
+            with suppress(Exception):
+                _session_log.log(_msg, prefix="FATAL")
+    if _pending_err is not None:
+        raise _pending_err
+    if _msg:
+        raise _InjectedCheckpointFailure(_msg)
 
 
 def _prompt(prompt: str, default: str = "") -> str:
@@ -26612,8 +26676,8 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     # ── 4. Final confirmation ──────────────────────────────────────────────
     print()
     _confirm = _prompt(
-        f"  Proceed with adding all {len(peer_bmcs)} node(s) to the cluster? [y/n]: "
-    , "n").lower()
+        f"  Proceed with adding all {len(peer_bmcs)} node(s) to the cluster? [Y/n]: "
+    , "y").lower()
     if _confirm != "y":
         print("\n  Aborting.")
         if log:
@@ -26790,6 +26854,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     _pending = list(peer_bmcs)
 
     while _pending:
+        _set_checkpoint_test_parallel_scope(_pending)
         _n = len(_pending)
         _batch_results = [None] * _n
 
@@ -27104,6 +27169,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     _pending = list(peer_bmcs)
 
     while _pending:
+        _set_checkpoint_test_parallel_scope(_pending)
         _n = len(_pending)
         _batch_results = [None] * _n
 
@@ -28125,6 +28191,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         _m3_pending = list(dict.fromkeys(_m3_pending + _pipeline_failed))
 
     while _m3_pending:
+        _set_checkpoint_test_parallel_scope(_m3_pending)
         _n3 = len(_m3_pending)
         _m3_results = [None] * _n3
 
@@ -32972,6 +33039,7 @@ def _run_2c_resume():
 
     _session_log.start_phase("2.3 – Resume Node Add")
     threads = []
+    _set_checkpoint_test_parallel_scope(retry_bmc_list)
     for _idx, _bmc in enumerate(retry_bmc_list):
         _creds = _peer_bmc_creds.get(_bmc) or {}
         _u = _creds.get("user") or "admin"
