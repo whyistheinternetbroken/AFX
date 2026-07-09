@@ -13465,6 +13465,8 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
     activity and renders the prompt even if it is waiting for input.
 
     Returns the matched trigger string, or None on timeout.
+    May also return "__loader_resume_declined__" when operator chooses to
+    stop after a LOADER prompt is detected during mode-1 resume.
     """
     triggers_lower = [t.lower() for t in _WIZARD_START_TRIGGERS]
     output = initial_buf or ""
@@ -13475,6 +13477,8 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
     _asup_wizard_answered = False
     _last_login_recovery = 0.0
     _login_recovery_attempts = 0
+    _last_loader_recovery = 0.0
+    _loader_recovery_attempts = 0
 
     def _try_recover_from_login_prompt() -> bool:
         nonlocal output, output_lower, start, last_data, last_nudge
@@ -13637,6 +13641,105 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 return trigger
         return False
 
+    def _can_offer_mode1_loader_resume() -> bool:
+        if _operation_mode != 1:
+            return False
+        try:
+            return any(
+                _checkpoint_phase_done(_cp_id)
+                for _cp_id in (
+                    "cp_1_5",  # option 4 completed
+                    "cp_1_6",  # node mgmt completed
+                    "cp_1_7",
+                    "cp_1_7_6",
+                    "cp_1_7_7",
+                    "cp_1_7_8",
+                    "cp_1_7_9",
+                )
+            )
+        except Exception:
+            return False
+
+    def _try_recover_from_loader_prompt():
+        nonlocal output, output_lower, start, last_data, last_nudge
+        nonlocal _last_loader_recovery, _loader_recovery_attempts
+        if not _can_offer_mode1_loader_resume():
+            return False
+        _now = time.monotonic()
+        if (_now - _last_loader_recovery) < 15:
+            return False
+        _last_loader_recovery = _now
+        _loader_recovery_attempts += 1
+
+        _slog(
+            "Wizard-start wait detected LOADER prompt after option-4 stage; prompting operator for boot_ontap recovery",
+            prefix="WARN",
+        )
+        print(
+            f"\n⚠️  {_node_pfx('')}Detected LOADER prompt while resuming post-option-4 checkpoint.{_elapsed_str()}"
+        )
+        _ans = _prompt_with_timeout(
+            "  Boot this node with 'boot_ontap' and continue resume? [Y/n]: ",
+            default="y",
+            timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+        ).strip().lower()
+        if _ans in ("n", "no"):
+            _slog(
+                "Operator chose to stop after LOADER detection during wizard-start resume",
+                prefix="WARN",
+            )
+            print("\n🛑 Operator chose to stop and troubleshoot node issues.")
+            return "__loader_resume_declined__"
+
+        print(f"\n⏳ {_node_pfx('')}Sending boot_ontap and waiting for login prompt...{_elapsed_str()}")
+        with suppress(Exception):
+            channel.send("boot_ontap\r")
+        if _session_log:
+            _session_log.log_sent("boot_ontap")
+
+        _boot_out, _boot_match = direct_read_until_any(
+            channel,
+            _WIZARD_START_TRIGGERS + ["login:", "::>", "::*>", "loader-", "selection (1-"],
+            timeout=1800,
+            node_log=node_log,
+            quiet=bool(node_log),
+            check_bmc_drop=True,
+        )
+        _boot_scan = (str(_boot_out or "") + "\n" + str(_boot_match or "")).lower()
+
+        for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
+            if trigger_lower in _boot_scan:
+                output = ""
+                output_lower = ""
+                last_data = time.monotonic()
+                last_nudge = last_data
+                return trigger
+
+        if "::>" in _boot_scan or "::*>" in _boot_scan:
+            _rows, _all_true, _has_warn = _cluster_show_node_status(channel)
+            if _rows >= 1:
+                _slog(
+                    "LOADER recovery reached active cluster shell; skipping cluster setup replay for mode 1",
+                    prefix="WARN",
+                )
+                return "__cluster_shell_ready__"
+
+        if "login:" in _boot_scan:
+            output = str(_boot_out or "")
+            output_lower = output.lower()
+            last_data = time.monotonic()
+            last_nudge = last_data
+            _recovered = _try_recover_from_login_prompt()
+            if _recovered:
+                return _recovered
+            return False
+
+        _slog(
+            "LOADER recovery did not reach login/wizard prompts after boot_ontap; continuing wait",
+            prefix="WARN",
+        )
+        return False
+
     for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
         if trigger_lower in output_lower:
             return trigger
@@ -13679,6 +13782,10 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 output_lower = ""
                 last_data = time.monotonic()
                 continue
+            if _LOADER_PROMPT_RE.search(chunk) or "loader-" in chunk.lower():
+                _loader_recovered = _try_recover_from_loader_prompt()
+                if _loader_recovered:
+                    return _loader_recovered
             if "login:" in chunk.lower() and _has_real_cluster_login_prompt(output):
                 _recovered = _try_recover_from_login_prompt()
                 if _recovered:
@@ -13691,7 +13798,11 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
         else:
             now = time.monotonic()
             if now - last_data > 15 and now - last_nudge > 15:
-                if _has_real_cluster_login_prompt(output):
+                if _LOADER_PROMPT_RE.search(output) or "loader-" in output_lower:
+                    _loader_recovered = _try_recover_from_loader_prompt()
+                    if _loader_recovered:
+                        return _loader_recovered
+                elif _has_real_cluster_login_prompt(output):
                     _recovered = _try_recover_from_login_prompt()
                     if _recovered:
                         return _recovered
@@ -23753,6 +23864,15 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     _which = _wait_for_wizard_start(
         channel, timeout=1800, node_log=node_log, initial_buf=initial_buf
     )
+    if str(_which or "").strip() == "__loader_resume_declined__":
+        print("\n🛑 Stopped: node reached LOADER and operator chose troubleshooting instead of resume.")
+        if _session_log:
+            _session_log.log(
+                "Wizard start aborted after LOADER detection: operator chose troubleshooting",
+                prefix="WARN",
+            )
+            _session_log.set_outcome("FAIL", "operator stopped after LOADER detection during resume")
+        return False
     if _which is None:
         print("\n❌ Timed out waiting for cluster setup wizard start.")
         if _session_log:
