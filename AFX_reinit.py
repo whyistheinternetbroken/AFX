@@ -1014,6 +1014,7 @@ _checkpoint_test_consumed = False
 _pending_checkpoint_test_failure: "Exception | None" = None
 _checkpoint_test_parallel_expected_nodes: "set[str]" = set()
 _checkpoint_test_parallel_seen_nodes: "set[str]" = set()
+_checkpoint_test_targets_by_node: "dict[str, str]" = {}
 _checkpoint_test_lock = threading.Lock()
 _checkpoint_io_lock = threading.RLock()
 
@@ -1483,6 +1484,7 @@ def _clear_checkpoint_test_config() -> None:
     global _checkpoint_test_mode_label, _checkpoint_test_consumed
     global _pending_checkpoint_test_failure
     global _checkpoint_test_parallel_expected_nodes, _checkpoint_test_parallel_seen_nodes
+    global _checkpoint_test_targets_by_node
     _checkpoint_test_enabled = False
     _checkpoint_test_target = ""
     _checkpoint_test_mode_label = ""
@@ -1490,6 +1492,7 @@ def _clear_checkpoint_test_config() -> None:
     _pending_checkpoint_test_failure = None
     _checkpoint_test_parallel_expected_nodes = set()
     _checkpoint_test_parallel_seen_nodes = set()
+    _checkpoint_test_targets_by_node = {}
 
 
 def _set_checkpoint_test_parallel_scope(node_ids) -> None:
@@ -1501,20 +1504,42 @@ def _set_checkpoint_test_parallel_scope(node_ids) -> None:
         if str(_nid).strip()
     }
     with _checkpoint_test_lock:
-        if (not _checkpoint_test_enabled
-                or _checkpoint_test_consumed
-                or not _checkpoint_test_target
-                or len(_nodes) <= 1):
+        _per_node_targets = dict(_checkpoint_test_targets_by_node)
+        if not _checkpoint_test_enabled or _checkpoint_test_consumed:
             _checkpoint_test_parallel_expected_nodes = set()
             _checkpoint_test_parallel_seen_nodes = set()
             return
-        _checkpoint_test_parallel_expected_nodes = set(_nodes)
-        _checkpoint_test_parallel_seen_nodes = set()
-    _slog(
-        f"--test parallel scope armed for checkpoint '{_checkpoint_test_target}': "
-        f"{sorted(_nodes)}",
-        prefix="INFO",
-    )
+        if _per_node_targets:
+            _targeted_nodes = {nid for nid in _nodes if nid in _per_node_targets}
+            if len(_targeted_nodes) > 1:
+                _checkpoint_test_parallel_expected_nodes = set(_targeted_nodes)
+                _checkpoint_test_parallel_seen_nodes = set()
+            else:
+                _checkpoint_test_parallel_expected_nodes = set()
+                _checkpoint_test_parallel_seen_nodes = set()
+                return
+        else:
+            if not _checkpoint_test_target or len(_nodes) <= 1:
+                _checkpoint_test_parallel_expected_nodes = set()
+                _checkpoint_test_parallel_seen_nodes = set()
+                return
+            _checkpoint_test_parallel_expected_nodes = set(_nodes)
+            _checkpoint_test_parallel_seen_nodes = set()
+    if _checkpoint_test_targets_by_node:
+        _mapping = ", ".join(
+            f"{_nid}:{_checkpoint_test_targets_by_node.get(_nid)}"
+            for _nid in sorted(_checkpoint_test_parallel_expected_nodes)
+        )
+        _slog(
+            f"--test parallel scope armed for per-node checkpoints: {_mapping}",
+            prefix="INFO",
+        )
+    else:
+        _slog(
+            f"--test parallel scope armed for checkpoint '{_checkpoint_test_target}': "
+            f"{sorted(_nodes)}",
+            prefix="INFO",
+        )
 
 
 def _checkpoint_phase_description(phase: str) -> str:
@@ -1713,9 +1738,103 @@ def _run_optional_checkpoint_status_checks() -> None:
                 _func()
 
 
+def _checkpoint_test_secondary_nodes_for_mode(operation_mode: int) -> "list[str]":
+    """Return candidate per-node --test targets from manifest/runtime state."""
+    _nodes = []
+    _cfg = globals().get("_config_data")
+    if isinstance(_cfg, dict):
+        __primary, _secondary = _extract_bmc_lists_from_config_dict(_cfg)
+        for _bmc in _secondary:
+            _b = str(_bmc).strip()
+            if _b and _b not in _nodes:
+                _nodes.append(_b)
+    for _bmc in (globals().get("_peer_bmc_list") or []):
+        _b = str(_bmc).strip()
+        if _b and _b not in _nodes:
+            _nodes.append(_b)
+    if operation_mode == 2:
+        for _bmc in (globals().get("other_sps") or []):
+            _b = str(_bmc).strip()
+            if _b and _b not in _nodes:
+                _nodes.append(_b)
+    return _nodes
+
+
+def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids) -> bool:
+    """Interactive helper for per-node --test checkpoint injection selection."""
+    global _checkpoint_test_enabled, _checkpoint_test_target, _checkpoint_test_mode_label
+    global _checkpoint_test_targets_by_node
+
+    _nodes = [str(_nid).strip() for _nid in (node_ids or []) if str(_nid).strip()]
+    if len(_nodes) <= 1:
+        return False
+
+    print("\n  P-mode: choose checkpoint injection strategy for individual nodes.")
+    print("  1. Select a checkpoint per node")
+    print("  2. Select one checkpoint and apply it to all listed nodes")
+    _mode_sel = _prompt("  Strategy [1/2]: ", "1").strip()
+    if _mode_sel not in ("1", "2"):
+        print("  ⚠️  Invalid strategy.")
+        return False
+
+    _target_map = {}
+    if _mode_sel == "2":
+        _idx_raw = _prompt(
+            f"  Checkpoint index for all nodes [1-{len(options)}]: ",
+            "1",
+        ).strip()
+        if not _idx_raw.isdigit():
+            print("  ⚠️  Enter a valid checkpoint number.")
+            return False
+        _idx = int(_idx_raw)
+        if not (1 <= _idx <= len(options)):
+            print("  ⚠️  Out of range.")
+            return False
+        _phase, _label = options[_idx - 1]
+        for _nid in _nodes:
+            _target_map[_nid] = _phase
+        print(f"  ✅ All nodes mapped to '{_phase}' ({_label}).")
+    else:
+        print("  Enter checkpoint index per node (0 = skip node).")
+        for _nid in _nodes:
+            _idx_raw = _prompt(
+                f"    {_nid} checkpoint [0-{len(options)}]: ",
+                "0",
+            ).strip()
+            if not _idx_raw.isdigit():
+                print(f"  ⚠️  Skipping {_nid} (invalid input).")
+                continue
+            _idx = int(_idx_raw)
+            if _idx == 0:
+                continue
+            if 1 <= _idx <= len(options):
+                _target_map[_nid] = options[_idx - 1][0]
+            else:
+                print(f"  ⚠️  Skipping {_nid} (out of range).")
+
+    if not _target_map:
+        print("  ⚠️  No per-node checkpoints selected.")
+        return False
+
+    _checkpoint_test_enabled = True
+    _checkpoint_test_target = ""
+    _checkpoint_test_mode_label = mode_name
+    _checkpoint_test_targets_by_node = dict(_target_map)
+    _slog(
+        f"--test armed for mode {mode_name}: per-node checkpoints "
+        f"{dict(sorted(_target_map.items()))}"
+    )
+    print("  ✅ Per-node checkpoint failure injection configured:")
+    for _nid in sorted(_target_map):
+        print(f"     - {_nid}: {_target_map[_nid]}")
+    print("  ℹ️  Failure fires after all targeted nodes reach their configured checkpoints.")
+    return True
+
+
 def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> None:
     """When ``--test`` is enabled, let the operator choose a checkpoint to fail at."""
     global _checkpoint_test_enabled, _checkpoint_test_target, _checkpoint_test_mode_label
+    global _checkpoint_test_targets_by_node
     _clear_checkpoint_test_config()
     if not enabled:
         return
@@ -1741,6 +1860,10 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
     print("  This is intended to validate resume/checkpoint pickup on the next run.")
     print("")
     print("  0. Disable injected checkpoint failure for this run")
+    _per_node_nodes = _checkpoint_test_secondary_nodes_for_mode(operation_mode)
+    _per_node_available = operation_mode in (2, 3) and len(_per_node_nodes) > 1
+    if _per_node_available:
+        print("  P. Configure per-node checkpoint failures for secondary_nodes")
     if _resume_cp_available:
         print("  B. Back to checkpoint resume-stage override")
     for _idx, (_phase, _label) in enumerate(_options, 1):
@@ -1754,6 +1877,10 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
         ).strip()
         if _sel == "":
             _sel = "0"
+        if _per_node_available and _sel.lower() == "p":
+            if _configure_per_node_checkpoint_injection(_mode_name, _options, _per_node_nodes):
+                return
+            continue
         if _resume_cp_available and _sel.lower() == "b":
             _changed = _prompt_checkpoint_resume_target_override(_resume_cp_for_override)
             if _changed:
@@ -1774,6 +1901,7 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
             _checkpoint_test_enabled = True
             _checkpoint_test_target = _phase
             _checkpoint_test_mode_label = _mode_name
+            _checkpoint_test_targets_by_node = {}
             _slog(f"--test armed for mode {_mode_name}: checkpoint '{_phase}' ({_label})")
             print(f"  ✅ Will fail after checkpoint '{_phase}' is saved.")
             return
@@ -1797,15 +1925,19 @@ def _log_pending_checkpoint_test_target(phase: str, node_id: str = "") -> None:
     _phase = str(phase or "").strip()
     if not _phase:
         return
-    if (not _checkpoint_test_enabled
-            or _checkpoint_test_consumed
-            or not _checkpoint_test_target
-            or _phase == _checkpoint_test_target):
+    if not _checkpoint_test_enabled or _checkpoint_test_consumed:
         return
     _node_id = str(node_id or "").strip()
+    _target_phase = ""
+    if _checkpoint_test_targets_by_node and _node_id:
+        _target_phase = str(_checkpoint_test_targets_by_node.get(_node_id) or "").strip()
+    if not _target_phase:
+        _target_phase = str(_checkpoint_test_target or "").strip()
+    if not _target_phase or _phase == _target_phase:
+        return
     _node_suffix = f" for {_node_id}" if _node_id else ""
     _msg = (
-        f"--test armed for checkpoint '{_checkpoint_test_target}'; "
+        f"--test armed for checkpoint '{_target_phase}'; "
         f"saved '{_phase}'{_node_suffix}, waiting for target"
     )
     _slog(_msg, prefix="INFO")
@@ -1817,10 +1949,15 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
     global _checkpoint_test_parallel_seen_nodes
 
     _phase = str(phase or "").strip()
-    if (not _checkpoint_test_enabled
-            or _checkpoint_test_consumed
-            or not _phase
-            or _phase != _checkpoint_test_target):
+    if not _checkpoint_test_enabled or _checkpoint_test_consumed or not _phase:
+        return
+
+    _node_id = str(node_id or "").strip()
+    _node_target = ""
+    if _checkpoint_test_targets_by_node and _node_id:
+        _node_target = str(_checkpoint_test_targets_by_node.get(_node_id) or "").strip()
+    _active_target = _node_target or str(_checkpoint_test_target or "").strip()
+    if not _active_target or _phase != _active_target:
         return
 
     _pending_err = None
@@ -1829,12 +1966,38 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
     with _checkpoint_test_lock:
         if (not _checkpoint_test_enabled
                 or _checkpoint_test_consumed
-                or _phase != _checkpoint_test_target):
+                or _phase != (_node_target or _checkpoint_test_target)):
             return
 
-        _node_id = str(node_id or "").strip()
+        _per_node_targets = dict(_checkpoint_test_targets_by_node)
         _parallel_expected = set(_checkpoint_test_parallel_expected_nodes)
-        if _node_id and _parallel_expected:
+        if _node_id and _parallel_expected and _per_node_targets:
+            _checkpoint_test_parallel_seen_nodes.add(_node_id)
+            _target_desc = _per_node_targets.get(_node_id) or _phase
+            _msg = (
+                f"Injected --test failure after checkpoint '{_target_desc}' "
+                f"was saved for {_node_id}"
+            )
+            _remaining = sorted(_parallel_expected - _checkpoint_test_parallel_seen_nodes)
+            if _remaining:
+                _rem = ", ".join(
+                    f"{_nid}:{_per_node_targets.get(_nid, '?')}"
+                    for _nid in _remaining
+                )
+                _wait_msg = (
+                    f"--test checkpoint '{_target_desc}' hit for {_node_id}; "
+                    f"waiting for remaining node targets: {_rem}"
+                )
+            else:
+                _checkpoint_test_consumed = True
+                _all = ", ".join(
+                    f"{_nid}:{_per_node_targets.get(_nid, '?')}"
+                    for _nid in sorted(_parallel_expected)
+                )
+                _msg += f" (all targeted per-node checkpoints reached: {_all})"
+                _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_msg)
+                _pending_err = _pending_checkpoint_test_failure
+        elif _node_id and _parallel_expected:
             _checkpoint_test_parallel_seen_nodes.add(_node_id)
             _msg = (
                 f"Injected --test failure after checkpoint '{_phase}' "
@@ -4145,10 +4308,28 @@ def _checkpoint_phase_effectively_done(cp, mode_key, phase_id: str) -> bool:
     _phase_id = str(phase_id or "").strip()
     if not _phase_id:
         return False
-    if _checkpoint_phase_recorded_done(cp, _phase_id):
+    _mode_key = mode_key
+
+    def _phase_recorded_done(_cp_id: str) -> bool:
+        _id = str(_cp_id or "").strip()
+        if not _id:
+            return False
+        if _mode_key in (2, 3) and _id.startswith("cp_2_"):
+            _bmc_ips = [str(_ip).strip() for _ip in (getattr(cp, "bmc_ips", []) or []) if str(_ip).strip()]
+            _targets = _bmc_ips[1:] if _mode_key == 3 else _bmc_ips
+            if _targets:
+                try:
+                    if cp.is_done(_id):
+                        return True
+                except Exception:
+                    pass
+                return all(_checkpoint_phase_done_for_peer_resume(_id, _nid) for _nid in _targets)
+        return _checkpoint_phase_recorded_done(cp, _id)
+
+    if _phase_recorded_done(_phase_id):
         return True
 
-    _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(mode_key) or [])
+    _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
     _idx = -1
     for _i, (_cp_id, __) in enumerate(_checkpoint_seq):
         if _cp_id == _phase_id:
@@ -4158,7 +4339,7 @@ def _checkpoint_phase_effectively_done(cp, mode_key, phase_id: str) -> bool:
         return False
 
     for _later_id, __ in _checkpoint_seq[_idx + 1:]:
-        if _checkpoint_phase_recorded_done(cp, _later_id):
+        if _phase_recorded_done(_later_id):
             return True
     return False
 
@@ -24298,7 +24479,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
 # Mode 2.2 / Mode 3 peer: auto join wizard
 # ---------------------------------------------------------------------------
 
-def _run_join_wizard(channel, label="join wizard", initial_buf: str = ""):
+def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
+                     checkpoint_node_id: str = ""):
     """Drive the post-option-4 setup wizard to JOIN an existing cluster.
 
     Assumes node-management config has already been answered. Acquires
@@ -24329,7 +24511,7 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = ""):
     channel.send("\r")
     time.sleep(0.5)
     if _operation_mode == 2:
-        _checkpoint_mark_phase("cp_2_6")
+        _checkpoint_mark_phase("cp_2_6", node_id=str(checkpoint_node_id or "").strip())
     if "press enter" in _which.lower():
         # Serialize the join keystroke across peer-add threads.
         print(f"\n🔒 [{label}] Waiting for join lock...")
@@ -24371,13 +24553,14 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         sp_host, sp_user, sp_pass,
         client=client, channel=channel, label=f"2.2/{bmc_host or sp_host or 'node'}",
     )
+    _cp_node = str(bmc_host or sp_host or "").strip()
 
     # Yes confirmations after option 4.
     _auto_answer_disk_erase_prompts(
         channel, label=bmc_host or sp_host or "", is_node_add=True,
         reconnect_ctx=_join_reconnect_ctx,
     )
-    _checkpoint_mark_phase("cp_2_4")
+    _checkpoint_mark_phase("cp_2_4", node_id=_cp_node)
     _run_optional_checkpoint_status_checks()
 
     # Node mgmt config (from per-BMC pre-collection).
@@ -24388,11 +24571,11 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
         print(f"   {k:<8} = {v if v else '(prompt manually)'}")
     _slog(f"Node mgmt config to use: {cfg}")
     _mgmt_residual = _auto_answer_node_mgmt(channel, cfg) or ""
-    _checkpoint_mark_phase("cp_2_5")
+    _checkpoint_mark_phase("cp_2_5", node_id=_cp_node)
 
     # Drive the join wizard (sends "join" at create-or-join prompt).
     _run_join_wizard(channel, label=f"2.2/{bmc_host or 'this node'}",
-                     initial_buf=_mgmt_residual)
+                     initial_buf=_mgmt_residual, checkpoint_node_id=_cp_node)
 
     # ---- Post-create/join: drive every remaining prompt through "login:".
     # 1. Confirm "use this configuration?" with yes.
@@ -24493,8 +24676,14 @@ def auto_complete_join(channel, client, sp_host, sp_user, sp_pass, bmc_host=None
     # Checkpoint: node has joined the cluster
     if _checkpoint and _operation_mode == 2:
         try:
+            _checkpoint_mark_phase(
+                "cp_2_7",
+                node_id=_cp_node,
+                alias_phase="peer_joined",
+                alias_node_id=_cp_node,
+            )
             _checkpoint_mark_phase("cp_2_7", alias_phase="node_joined")
-            _slog("checkpoint: cp_2_7/node_joined saved")
+            _slog(f"checkpoint: cp_2_7 saved for {_cp_node} (node_joined + peer_joined)")
         except _InjectedCheckpointFailure:
             raise
         except Exception:
