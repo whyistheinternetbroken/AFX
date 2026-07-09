@@ -13318,6 +13318,21 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = "",
 
     _cp_marks = dict(checkpoint_marks or {})
 
+    def _extract_prompt_default(_text: str, _trigger: str) -> str:
+        try:
+            _matches = list(
+                re.finditer(
+                    re.escape(str(_trigger or "")) + r"\s*\[([^\]]*)\]",
+                    str(_text or ""),
+                    flags=re.IGNORECASE,
+                )
+            )
+            if not _matches:
+                return ""
+            return str(_matches[-1].group(1) or "").strip()
+        except Exception:
+            return ""
+
     while pending:
         if time.monotonic() - _overall_start > _overall_timeout:
             print("\n  ⚠️  Timed out waiting for node management prompts.")
@@ -13462,17 +13477,38 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = "",
 
         # Prompt detected – resolve the value.
         value = cfg.get(key)
+        _use_default_enter = False
+        _prompt_default = _extract_prompt_default(_buf, trigger)
         if not value:
             value = _prompt(f"  Enter {label}: ")
             if _session_log:
                 _session_log.log_user_input(f"{label} (manual): {value}")
         else:
-            print(f"  ✅ Using config {label}: {value}")
-            _slog(f"Auto-answering {label}: {value}")
-
-        channel.send(value + "\r")
-        if _session_log:
-            _session_log.log_sent(value)
+            _target = str(value).strip()
+            _prompt_val = str(_prompt_default or "").strip()
+            _match = False
+            if _prompt_val:
+                if key == "port":
+                    _match = (_prompt_val.lower() == _target.lower())
+                else:
+                    _match = (_prompt_val == _target)
+            if _match:
+                _use_default_enter = True
+                print(f"  ✅ Keeping existing {label}: {_prompt_val} (matches config)")
+                _slog(f"Accepting existing {label} default via Enter: {_prompt_val}")
+                channel.send("\r")
+                if _session_log:
+                    _session_log.log_sent(f"<Enter> (accept {label} default: {_prompt_val})")
+            else:
+                if _prompt_val:
+                    print(f"  🔁 Correcting {label}: prompt has '{_prompt_val}', config requires '{_target}'")
+                    _slog(f"Correcting {label} default '{_prompt_val}' -> '{_target}'")
+                else:
+                    print(f"  ✅ Using config {label}: {value}")
+                    _slog(f"Auto-answering {label}: {value}")
+                channel.send(_target + "\r")
+                if _session_log:
+                    _session_log.log_sent(_target)
 
         # Rejection check: read for up to 5 s.  If the same prompt re-appears
         # the value was rejected.  The recheck output becomes the new _buf so
@@ -13492,23 +13528,54 @@ def _auto_answer_node_mgmt(channel, cfg, node_log=None, initial_buf: str = "",
                 time.sleep(0.1)
 
         if trigger_lower in _recheck.lower():
+            if _use_default_enter and value:
+                _explicit = str(value).strip()
+                print(f"\n  ⚠️  {label} prompt repeated after accepting default; sending configured value '{_explicit}'.")
+                if _session_log:
+                    _session_log.log(
+                        f"{label}: prompt repeated after Enter default; sending configured value '{_explicit}'",
+                        prefix="WARN",
+                    )
+                channel.send(_explicit + "\r")
+                if _session_log:
+                    _session_log.log_sent(_explicit)
+                time.sleep(0.5)
+                _recheck = ""
+                _use_default_enter = False
+                _prompt_default = ""
+            elif _use_default_enter:
+                print(f"\n  ⚠️  {label} prompt repeated after accepting default. Please enter a value.")
+                if _session_log:
+                    _session_log.log(
+                        f"{label}: prompt repeated after Enter default; prompting operator",
+                        prefix="WARN",
+                    )
+                value = _prompt(f"  Enter {label}: ")
+                if _session_log:
+                    _session_log.log_user_input(f"{label} (after default retry): {value}")
+                channel.send(value + "\r")
+                if _session_log:
+                    _session_log.log_sent(value)
+                time.sleep(0.5)
+                _recheck = ""
             # ONTAP re-prompted — the value was rejected.
-            print(f"\n  ⚠️  Value '{value}' was rejected for {label}. Please re-enter.")
-            if _session_log:
-                _session_log.log(
-                    f"{label}: value '{value}' rejected by ONTAP; prompting operator",
-                    prefix="WARN",
-                )
-            cfg.pop(key, None)   # prevent the same bad value being reused
-            value = _prompt(f"  Enter {label}: ")
-            if _session_log:
-                _session_log.log_user_input(f"{label} (corrected): {value}")
-            channel.send(value + "\r")
-            if _session_log:
-                _session_log.log_sent(value)
-            time.sleep(0.5)
-            # Don't seed _buf with rejection text; start fresh for next prompt.
-            _recheck = ""
+            else:
+                print(f"\n  ⚠️  Value '{value}' was rejected for {label}. Please re-enter.")
+                if _session_log:
+                    _session_log.log(
+                        f"{label}: value '{value}' rejected by ONTAP; prompting operator",
+                        prefix="WARN",
+                    )
+                cfg.pop(key, None)   # prevent the same bad value being reused
+                value = _prompt(f"  Enter {label}: ")
+                if _session_log:
+                    _session_log.log_user_input(f"{label} (corrected): {value}")
+                channel.send(value + "\r")
+                if _session_log:
+                    _session_log.log_sent(value)
+                time.sleep(0.5)
+                # Don't seed _buf with rejection text; start fresh for next prompt.
+                _recheck = ""
 
         # Carry the recheck window output forward: the next prompt may already
         # be in it (ONTAP often sends prompts back-to-back).
@@ -24884,7 +24951,11 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
             return False
         _which_l = str(_which or "").lower()
 
-    _is_press_enter = ("press enter to complete cluster setup" in _which_l)
+    _is_press_enter = any(_tok in _which_l for _tok in (
+        "press enter to complete cluster setup",
+        "otherwise, press enter to complete cluster setup",
+        "use your web browser to complete cluster setup by accessing",
+    ))
     _is_create_join = any(_tok in _which_l for _tok in (
         "do you want to create a new cluster or join",
         "{create, join}",
@@ -24892,11 +24963,29 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
         "create/join",
     ))
     if not (_is_press_enter or _is_create_join):
+        # Some builds briefly surface non-actionable setup text first. Nudge once,
+        # then re-probe for the actual create/join gate before failing.
+        _slog(f"[{label}] wizard state not actionable yet ({_which!r}); sending Enter and rechecking")
+        channel.send("\r")
+        time.sleep(0.5)
+        _which_retry = _wait_for_wizard_start(channel, timeout=120)
+        if _which_retry is not None:
+            _which = _which_retry
+            _which_l = str(_which or "").lower()
+            _is_press_enter = any(_tok in _which_l for _tok in (
+                "press enter to complete cluster setup",
+                "otherwise, press enter to complete cluster setup",
+                "use your web browser to complete cluster setup by accessing",
+            ))
+            _is_create_join = any(_tok in _which_l for _tok in (
+                "do you want to create a new cluster or join",
+                "{create, join}",
+                "create or join",
+                "create/join",
+            ))
+    if not (_is_press_enter or _is_create_join):
         print(f"\n❌ [{label}] Unexpected wizard state; create/join prompt not detected.")
-        _slog(
-            f"[{label}] unexpected wizard state before join send: {_which!r}",
-            prefix="ERROR",
-        )
+        _slog(f"[{label}] unexpected wizard state before join send: {_which!r}", prefix="ERROR")
         return False
     # Always send one Enter after wizard-start detection. As with mode 1.2,
     # residual create/join text can appear before ONTAP consumes the required
