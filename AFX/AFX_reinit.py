@@ -24666,10 +24666,47 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
         print(f"\n❌ [{label}] Timed out waiting for cluster setup wizard start.")
         _slog(f"[{label}] Timeout waiting for wizard start", prefix="ERROR")
         return False
+    _which_l = str(_which or "").lower()
+
+    # Resume hardening: if wizard is still at node-mgmt prompts, finish them
+    # before attempting create/join.
+    while "node management interface" in _which_l:
+        _slog(f"[{label}] wizard start landed at node-mgmt prompt; answering node-mgmt fields")
+        _cfg = _resolve_node_mgmt_config(str(checkpoint_node_id or "").strip())
+        _nm_residual = _auto_answer_node_mgmt(
+            channel,
+            _cfg,
+            initial_buf=str(_which or "node management interface"),
+        ) or ""
+        if _operation_mode == 2:
+            _checkpoint_mark_phase("cp_2_5", node_id=str(checkpoint_node_id or "").strip())
+        _which = _wait_for_wizard_start(
+            channel, timeout=900, initial_buf=_nm_residual
+        )
+        if _which is None:
+            print(f"\n❌ [{label}] Timed out waiting for create/join prompt after node management.")
+            _slog(f"[{label}] timeout waiting for create/join after node management", prefix="ERROR")
+            return False
+        _which_l = str(_which or "").lower()
+
+    _is_press_enter = ("press enter to complete cluster setup" in _which_l)
+    _is_create_join = any(_tok in _which_l for _tok in (
+        "do you want to create a new cluster or join",
+        "{create, join}",
+        "create or join",
+        "create/join",
+    ))
+    if not (_is_press_enter or _is_create_join):
+        print(f"\n❌ [{label}] Unexpected wizard state; create/join prompt not detected.")
+        _slog(
+            f"[{label}] unexpected wizard state before join send: {_which!r}",
+            prefix="ERROR",
+        )
+        return False
     # Always send one Enter after wizard-start detection. As with mode 1.2,
     # residual create/join text can appear before ONTAP consumes the required
     # Enter from the "Otherwise, press Enter..." screen.
-    if "press enter" in _which.lower():
+    if _is_press_enter:
         print(f"\n✅ [{label}] 'Press Enter' prompt detected – sending Enter")
     else:
         print(f"\nℹ️  [{label}] Sending Enter to advance past any pending wizard gate...")
@@ -24678,7 +24715,7 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
     time.sleep(0.5)
     if _operation_mode == 2:
         _checkpoint_mark_phase("cp_2_6", node_id=str(checkpoint_node_id or "").strip())
-    if "press enter" in _which.lower():
+    if _is_press_enter:
         # Serialize the join keystroke across peer-add threads.
         print(f"\n🔒 [{label}] Waiting for join lock...")
         _slog(f"[{label}] waiting to acquire _join_lock")
@@ -27424,6 +27461,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     _2b_peer_timings: "dict[str, dict]" = {}
     _2b_timings_lock = threading.Lock()
     _pending = list(peer_bmcs)
+    _failed = []
 
     while _pending:
         _n = len(_pending)
@@ -27482,6 +27520,19 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         if log:
             log.log(f"2.2: operator chose to retry: {_failed}")
         _pending = _failed
+
+    if _failed:
+        print("\n  ❌ Mode 2.2 aborted due to failed node(s).")
+        if log:
+            log.log(f"2.2: aborting after failed nodes with no retry: {_failed}", prefix="ERROR")
+            with suppress(Exception):
+                log.end_phase()
+        if primary_client:
+            try:
+                primary_client.close()
+            except Exception:
+                pass
+        return False
 
     # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
     _2b_add_node_timings: "dict[str, float]" = {}
@@ -27743,6 +27794,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     _2a_peer_timings: "dict[str, dict]" = {}
     _2a_timings_lock = threading.Lock()
     _pending = list(peer_bmcs)
+    _failed = []
 
     while _pending:
         _n = len(_pending)
@@ -27799,6 +27851,19 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         if _retry_ans != "y":
             break
         _pending = _failed
+
+    if _failed:
+        print("\n  ❌ Mode 2.1 aborted due to failed node(s).")
+        if log:
+            log.log(f"2.1: aborting after failed nodes with no retry: {_failed}", prefix="ERROR")
+            with suppress(Exception):
+                log.end_phase()
+        if primary_client:
+            try:
+                primary_client.close()
+            except Exception:
+                pass
+        return False
 
     # ── 5. Interactive node selection + cluster add-node ─────────────────────
     _2a_add_node_timings: "dict[str, float]" = {}
