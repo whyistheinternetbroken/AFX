@@ -38404,6 +38404,13 @@ def main():
 
                 collect_node_mgmt_per_bmc(sp_host, [])
 
+            # Option 2 runs can branch directly into 2.1/2.2 parallel workers
+            # before the legacy checkpoint-init block below. Ensure checkpoint
+            # metadata exists first so per-node marks (e.g., cp_2_1) persist
+            # as a valid checkpoint file rather than writing partial JSON.
+            if _operation_mode == 2 and (_checkpoint is None or not str(_checkpoint.mode or "").strip()):
+                _option2_init_checkpoint(_run_context, sp_host, config_path)
+
             # ── Mode 2.2: run parallel add for all 2.2 configurations ────────────────
             # Collect all peers, run every node through LOADER → option 4 → join in
             # parallel (joins serialized), then repair node names/LIFs and run a
