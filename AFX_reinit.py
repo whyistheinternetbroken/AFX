@@ -7003,18 +7003,16 @@ def connect_to_sp(host, username, password):
     print(f"Connecting to SP at {host} with username {username}...")
     _slog(f"Connecting to SP at {host} with username {username}")
     
-    # During checkpoint resume, don't prompt for credentials; rely on fallback
-    # blank password instead (original password was wiped during init).
-    _in_checkpoint_resume = _checkpoint_resume_active()
-    _is_interactive = not _in_checkpoint_resume
-    
     # Prepare fallback passwords including blank password for post-reset recovery.
+    # Fallbacks are always tried silently first; if all fail the operator is
+    # re-prompted (up to max_attempts) regardless of whether this is a fresh
+    # run or a checkpoint resume.
     _fallback_pw = _bmc_fallback_passwords(host, {host: password})
     
     try:
         client, username, password = _ssh_connect_with_retry(
-            host, username, password, label="primary BMC", max_attempts=5,
-            interactive=_is_interactive,
+            host, username, password, label="primary BMC", max_attempts=8,
+            interactive=True,
             fallback_passwords=_fallback_pw,
         )
     except Exception as e:
@@ -10131,7 +10129,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
             _fb_peer = _bmc_fallback_passwords(host, {host: password})
             client, username, password = _ssh_connect_with_retry(
                 host, username, password, label=f"peer/{host}",
-                max_attempts=5, interactive=True,
+                max_attempts=8, interactive=True,
                 fallback_passwords=_fb_peer,
             )
         except Exception as e:
