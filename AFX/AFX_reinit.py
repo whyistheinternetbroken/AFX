@@ -1029,6 +1029,9 @@ _netboot_static_ip = False
 # _write_node_add_manifest). Used by option 2.3 to locate the last run.
 _last_node_add_manifest: str = ""
 _cluster_ip_manifest_lock = threading.Lock()
+_cluster_interface_log_lock = threading.Lock()
+_cluster_interface_log_file = None
+_cluster_interface_log_path = ""
 
 # --test: injected checkpoint failure configuration.
 _checkpoint_test_enabled = False
@@ -16478,6 +16481,50 @@ def _node_log_open(ip, log_dir, prefix="node", previous_log=None):
     return new_file
 
 
+def _cluster_interface_log_write(message: str, output: str = ""):
+    """Write cluster-interface command activity to a dedicated run log."""
+    global _cluster_interface_log_file, _cluster_interface_log_path
+    _msg = str(message or "").strip()
+    _out = str(output or "")
+    if not _msg and not _out:
+        return
+    try:
+        _log_dir = ""
+        if _session_log and hasattr(_session_log, "log_dir"):
+            _log_dir = str(getattr(_session_log, "log_dir") or "").strip()
+        if not _log_dir:
+            return
+        with _cluster_interface_log_lock:
+            if (_cluster_interface_log_file is None) or getattr(_cluster_interface_log_file, "closed", True):
+                _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                _cluster_interface_log_path = _build_numbered_log_path(
+                    _log_dir,
+                    f"primary_cluster_interface_{_ts}.log",
+                    scope_dir=_log_dir,
+                )
+                _cluster_interface_log_file = open(
+                    _cluster_interface_log_path, "w", encoding="utf-8", buffering=1
+                )
+                _cluster_interface_log_file.write(
+                    "Primary Cluster Interface Command Log\n"
+                    f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    + "=" * 72 + "\n\n"
+                )
+                print(f"  📝 Primary cluster interface log: {_cluster_interface_log_path}")
+                if _session_log:
+                    _session_log.log(
+                        f"Primary cluster interface log: {_cluster_interface_log_path}"
+                    )
+            _ts_line = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if _msg:
+                _cluster_interface_log_file.write(f"[{_ts_line}] {_msg}\n")
+            if _out:
+                _cluster_interface_log_file.write(_out.rstrip("\n") + "\n")
+            _cluster_interface_log_file.flush()
+    except Exception:
+        pass
+
+
 def _run_netboot_install_sequence(channel, pkg_url, node_label="node",
                                   log=None, boot_menu_timeout=900,
                                   node_file=None, status_cb=None,
@@ -22873,6 +22920,8 @@ def _run_ontap_upgrade(log):
                                 if _CLUSTER_PROMPT_RE.search(_buf[-200:]):
                                     break
                             time.sleep(0.2)
+                    if _buf:
+                            _cluster_interface_log_write(f"[{label}] <<< {_cmd}", _buf)
                     return _buf
 
                 _out = ""
@@ -24713,12 +24762,14 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
 # ---------------------------------------------------------------------------
 
 def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
-                     checkpoint_node_id: str = ""):
+                     checkpoint_node_id: str = "", join_existing_cluster: bool = True,
+                     node_log=None):
     """Drive the post-option-4 setup wizard to JOIN an existing cluster.
 
-    Assumes node-management config has already been answered. Acquires
-    `_join_lock` around the create/join answer so parallel peer-add threads
-    don't collide. Returns True on success, False on timeout/abort.
+    Assumes node-management config has already been answered.
+    When ``join_existing_cluster`` is True, sends ``join`` at create/join.
+    When False, advances to create/join (if needed) then exits wizard with
+    Ctrl+C so callers can continue cluster-IP capture for bulk add-node.
     """
     print(f"\n🤖 [{label}] Driving join wizard...")
     _slog(f"[{label}] starting join wizard automation")
@@ -24804,6 +24855,68 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
     time.sleep(0.5)
     if _operation_mode == 2:
         _checkpoint_mark_phase("cp_2_6", node_id=str(checkpoint_node_id or "").strip())
+    if not join_existing_cluster:
+        _slog(f"[{label}] resume recovery path: exiting setup wizard to continue bulk add-node flow")
+        _wait_start = time.monotonic()
+        _wait_limit = 180
+        _prompt_seen = _is_create_join
+        while (not _prompt_seen) and (time.monotonic() - _wait_start < _wait_limit):
+            _out_w, _m_w = direct_read_until_any(
+                channel,
+                [
+                    "do you want to create a new cluster or join",
+                    "{create, join}",
+                    "create or join",
+                    "create/join",
+                    "node management interface port",
+                    "node management interface ip address",
+                    "node management interface netmask",
+                    "node management interface default gateway",
+                    "login:",
+                    "::>",
+                    "::*>",
+                ],
+                timeout=20,
+                node_log=node_log,
+                quiet=bool(node_log),
+                check_bmc_drop=True,
+            )
+            _scan = (str(_out_w or "") + "\n" + str(_m_w or "")).lower()
+            if any(_sig in _scan for _sig in (
+                "do you want to create a new cluster or join",
+                "{create, join}",
+                "create or join",
+                "create/join",
+            )):
+                _prompt_seen = True
+                break
+            if "node management interface" in _scan:
+                _cfg = _resolve_node_mgmt_config(str(checkpoint_node_id or "").strip())
+                _auto_answer_node_mgmt(
+                    channel,
+                    _cfg,
+                    node_log=node_log,
+                    initial_buf=str(_out_w or ""),
+                ) or ""
+                continue
+            if ("::>" in _scan) or ("::*>" in _scan) or ("login:" in _scan):
+                break
+            with suppress(Exception):
+                channel.send("\r")
+            time.sleep(0.3)
+
+        print(f"\n🛑 [{label}] Exiting cluster setup wizard (Ctrl+C) for bulk add-node flow...")
+        _slog(f"[{label}] sending Ctrl+C to exit setup wizard before bulk add-node")
+        for _ in range(5):
+            with suppress(Exception):
+                channel.send("\x03")
+            time.sleep(0.2)
+        with suppress(Exception):
+            channel.send("\r")
+        direct_read_until_any(
+            channel, ["login:", "::>", "::*>"], timeout=60, node_log=node_log, quiet=bool(node_log)
+        )
+        return True
     if _is_press_enter:
         # Serialize the join keystroke across peer-add threads.
         print(f"\n🔒 [{label}] Waiting for join lock...")
@@ -25231,9 +25344,11 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             label=f"{label}/resume-recovery",
             initial_buf=str(_wiz_start or ""),
             checkpoint_node_id=str(peer_bmc or "").strip(),
+            join_existing_cluster=False,
+            node_log=node_log,
         ):
-            print(f"   ❌ [{label}] Cluster setup recovery did not reach join wizard.")
-            _slog(f"[{label}] cluster setup recovery join wizard failed", prefix="ERROR")
+            print(f"   ❌ [{label}] Cluster setup recovery did not reach CLI recovery point.")
+            _slog(f"[{label}] cluster setup recovery CLI recovery failed", prefix="ERROR")
             return None
         if not _login_primary_cluster_shell(ch, admin_password):
             print(f"   ❌ [{label}] Could not re-enter cluster shell after setup recovery.")
@@ -25247,6 +25362,7 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
 
     def _capture_cluster_netint(_cmd):
         _slog(f"[{label}] running {_cmd}")
+        _cluster_interface_log_write(f"[{label}] >>> {_cmd}")
         ch.send(_cmd + "\r")
         time.sleep(1)
         _buf = ""
@@ -25297,10 +25413,17 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
     _cluster_ip = None
     _target_node_name = ""
     try:
+        _cluster_interface_log_write(
+            f"[{label}] >>> set -rows 0; service-processor show -fields address,node"
+        )
         _sp_raw = _run_cluster_command(
             ch,
             "set -rows 0; service-processor show -fields address,node",
             timeout=30,
+        )
+        _cluster_interface_log_write(
+            f"[{label}] <<< set -rows 0; service-processor show -fields address,node",
+            _sp_raw,
         )
         _node_to_sp = _parse_sp_show_to_node_map(_sp_raw)
         _peer_bmc_s = str(peer_bmc or "").strip()
@@ -25587,6 +25710,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
         print(f"\n  ➕ Adding {len(_rows)} node(s) to cluster...")
     if log:
         log.log(cmd)
+    _cluster_interface_log_write(f"[bulk-add] >>> {cmd}")
 
     _baseline_count = -1
     _target_count = None
@@ -25607,11 +25731,12 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     _console_quiet = True
     try:
         with _primary_shell_lock:
-            _run_cluster_command(
+            _add_out = _run_cluster_command(
                 primary_channel,
                 f"cluster add-node -cluster-ips {ips_str}",
                 timeout=60,
             )
+            _cluster_interface_log_write(f"[bulk-add] <<< {cmd}", _add_out)
     finally:
         _console_quiet = _prev_quiet
 
@@ -25634,8 +25759,13 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
         try:
             with _primary_shell_lock:
                 _status_timeout = max(30, len(_requested_ips - _already_succeeded) * 5)
+                _cluster_interface_log_write("[bulk-add] >>> cluster add-node-status")
                 status_out = _run_cluster_command(
                     primary_channel, "cluster add-node-status", timeout=_status_timeout)
+                _cluster_interface_log_write(
+                    "[bulk-add] <<< cluster add-node-status",
+                    status_out,
+                )
         finally:
             _console_quiet = _prev_quiet
 
