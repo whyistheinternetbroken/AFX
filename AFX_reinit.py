@@ -1907,16 +1907,12 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
                 print("  ↩️  Returning to main menu...")
                 raise _ReturnToMenu
             if _strict_yn and val == "" and _yn_default_to:
-                if _session_log:
-                    with suppress(Exception):
-                        _session_log.log_choice(prompt, _yn_default_to)
+                _record_choice(prompt, _yn_default_to)
                 return _yn_default_to
             if _strict_yn and not _is_valid_yes_no_input(val):
                 print("  Please enter y, n, yes, or no.")
                 continue
-            if _session_log:
-                with suppress(Exception):
-                    _session_log.log_choice(prompt, val)
+            _record_choice(prompt, val)
             return val
     except (EOFError, KeyboardInterrupt):
         return default
@@ -1942,6 +1938,23 @@ _PROMPT_WAIT_EXTENDED_THRESHOLD = 60.0
 _prompt_wait_extended = []  # list[(label, seconds)]
 
 _orig_input = _builtins.input
+
+
+def _record_choice(prompt: str, answer: str) -> None:
+    """Log a prompt→answer pair to the choices log.
+
+    If the session log exists, delegates immediately to ``log_choice``.
+    Otherwise the pair is buffered in ``_pre_session_choices`` and will be
+    flushed (in order) once a session log is created by ``_make_session_log``.
+    """
+    if _session_log:
+        with suppress(Exception):
+            _session_log.log_choice(prompt, answer)
+    else:
+        try:
+            _pre_session_choices.append((str(prompt or ""), str(answer or "")))
+        except Exception:
+            pass
 
 
 def _prompt_is_yes_no(prompt="") -> bool:
@@ -1974,9 +1987,7 @@ def _tracked_input(prompt=""):
     try:
         if not _prompt_is_yes_no(prompt):
             _answer = _orig_input(prompt)
-            if _session_log:
-                with suppress(Exception):
-                    _session_log.log_choice(prompt, _answer)
+            _record_choice(prompt, _answer)
             return _answer
         # Determine the default answer from the prompt bracket, e.g. [y/N] → "n", [Y/n] → "y".
         _yn_default = ""
@@ -1990,14 +2001,10 @@ def _tracked_input(prompt=""):
                 return _val
             # Blank Enter accepts the capitalised default when one is present.
             if _vl == "" and _yn_default:
-                if _session_log:
-                    with suppress(Exception):
-                        _session_log.log_choice(prompt, _yn_default)
+                _record_choice(prompt, _yn_default)
                 return _yn_default
             if _is_valid_yes_no_input(_val):
-                if _session_log:
-                    with suppress(Exception):
-                        _session_log.log_choice(prompt, _val)
+                _record_choice(prompt, _val)
                 return _val
             print("  Please enter y, n, yes, or no.")
     finally:
@@ -3944,6 +3951,9 @@ class SessionLogger:
 
 
 _session_log = None
+# Choices logged before _session_log exists are buffered here and flushed
+# into the choices log once a session log is created.
+_pre_session_choices: list = []
 
 
 def _write_crash_trace(exc_type, exc_value, exc_tb, context="Unhandled exception"):
@@ -30151,6 +30161,7 @@ def _make_session_log(label: str) -> "SessionLogger":
     # prompts answered in that run, not the accumulated total for the session.
     global _prompt_wait_seconds, _prompt_wait_count
     global _prompt_wait_max, _prompt_wait_max_label, _prompt_wait_extended
+    global _pre_session_choices
     _prompt_wait_seconds = 0.0
     _prompt_wait_count = 0
     _prompt_wait_max = 0.0
@@ -30161,6 +30172,13 @@ def _make_session_log(label: str) -> "SessionLogger":
         label=label,
         resume_suffix=_consume_resume_log_suffix(),
     )
+    # Flush any choices that were buffered before this session log existed
+    # (e.g. main menu selection, pre-run confirmations, checkpoint options).
+    if _pre_session_choices:
+        for _pc_prompt, _pc_answer in _pre_session_choices:
+            with suppress(Exception):
+                _session_log.log_choice(_pc_prompt, _pc_answer)
+        _pre_session_choices.clear()
     _banner = _version_banner_line()
     print(f"\n🚀 {_banner}")
 
