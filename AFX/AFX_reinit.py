@@ -25363,9 +25363,11 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             return None
         _cluster_rows, _, _ = _cluster_show_node_status(ch)
         if _cluster_rows < 1:
-            print(f"   ❌ [{label}] cluster show still reports no cluster after recovery.")
-            _slog(f"[{label}] cluster show rows={_cluster_rows} after recovery", prefix="ERROR")
-            return None
+            # Resume hardening: after exiting setup for bulk add-node, some nodes
+            # remain at CLI with no active local cluster. Continue with cluster-IP
+            # capture/add-node flow instead of failing this node early.
+            print(f"   ⚠️  [{label}] cluster show still reports no cluster after recovery; continuing with cluster-IP capture.")
+            _slog(f"[{label}] cluster show rows={_cluster_rows} after recovery; proceeding with cluster-IP capture", prefix="WARN")
 
     def _capture_cluster_netint(_cmd):
         _slog(f"[{label}] running {_cmd}")
