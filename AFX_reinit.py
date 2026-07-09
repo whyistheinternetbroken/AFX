@@ -8592,13 +8592,54 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
                 return False
             time.sleep(2)
 
-            output = direct_read_until(channel, ">", timeout=15)
-            if ">" not in output:
+            # After the first "y", the BMC may present additional stacked
+            # session-takeover prompts (e.g. two leftover sessions from prior
+            # runs).  Loop answering "y" until we see the BMC ">" prompt.
+            _takeover_deadline = time.monotonic() + 45
+            _takeover_rounds = 0
+            while time.monotonic() < _takeover_deadline:
+                _tk_out, _tk_m = direct_read_until_any(
+                    channel, ["y/n", ">"], timeout=15
+                )
+                if _tk_m and ">" in _tk_m:
+                    break
+                if _tk_m and "y/n" in _tk_m.lower():
+                    _takeover_rounds += 1
+                    _slog(
+                        f"Additional stacked session detected after takeover "
+                        f"(round {_takeover_rounds}); sending 'y'",
+                        prefix="WARN",
+                    )
+                    print(
+                        f"   ⚠️  Another stacked session detected; "
+                        f"disconnecting (round {_takeover_rounds})..."
+                    )
+                    try:
+                        channel.send("y\r")
+                    except OSError:
+                        _slog(
+                            "Socket closed on stacked-session takeover; "
+                            "treating as fully taken over",
+                            prefix="WARN",
+                        )
+                        break
+                    continue
+                # timeout or unrecognised output — stop waiting
+                _tk_m = None
+                break
+            else:
+                _tk_m = None  # deadline hit
+
+            if not (_tk_m and ">" in _tk_m):
                 print("❌ Did not receive BMC prompt after session takeover. Exiting.")
                 _slog("BMC prompt not received after session takeover", prefix="ERROR")
                 return False
-            print("✅ BMC prompt detected after session takeover.")
-            _slog("BMC prompt detected after session takeover")
+            if _takeover_rounds:
+                print(f"✅ BMC prompt detected after {_takeover_rounds + 1} stacked-session takeovers.")
+                _slog(f"BMC prompt after {_takeover_rounds + 1} stacked-session takeovers")
+            else:
+                print("✅ BMC prompt detected after session takeover.")
+                _slog("BMC prompt detected after session takeover")
             return channel
         else:
             print("❌ Cannot continue without taking over the session. Exiting.")
