@@ -2338,6 +2338,22 @@ def _open_shell(client, **kwargs):
     return ch
 
 
+def _looks_like_session_takeover_prompt(text: str) -> bool:
+    """Return True when console output looks like a BMC session-takeover prompt."""
+    _t = str(text or "").lower()
+    if not _t:
+        return False
+    if "another user has an active cli session" in _t:
+        return True
+    if "disconnect that session" in _t:
+        return True
+    if "start yours [y/n" in _t:
+        return True
+    if "do you want to disconnect the other session" in _t:
+        return True
+    return ("active session" in _t and "[y/n" in _t)
+
+
 def _reach_bmc_prompt(ch, *, timeout=15, node_log=None, takeover_msg=None):
     """Read until the BMC ``'>'`` prompt, transparently answering ``y`` to a
     ``y/n`` takeover prompt if another session is active.
@@ -2348,11 +2364,20 @@ def _reach_bmc_prompt(ch, *, timeout=15, node_log=None, takeover_msg=None):
     ``_slog`` so the operator sees a single consistent log line.
     """
     _out, matched = direct_read_until_any(
-        ch, ["y/n", ">"], timeout=timeout, node_log=node_log,
+        ch,
+        [
+            "y/n",
+            ">",
+            "another user has an active cli session",
+            "disconnect that session",
+            "start yours [y/n",
+        ],
+        timeout=timeout,
+        node_log=node_log,
     )
     if matched and ">" in matched:
         return True
-    if not (matched and "y/n" in matched.lower()):
+    if not ((matched and "y/n" in matched.lower()) or _looks_like_session_takeover_prompt(_out)):
         return False
     if takeover_msg:
         _slog(takeover_msg)
@@ -2372,13 +2397,22 @@ def _reach_bmc_prompt(ch, *, timeout=15, node_log=None, takeover_msg=None):
         time.sleep(1.5)
         _remain = max(1, int(_deadline - time.monotonic()))
         _out2, _m2 = direct_read_until_any(
-            ch, ["y/n", ">"], timeout=min(max(5, timeout), _remain), node_log=node_log,
+            ch,
+            [
+                "y/n",
+                ">",
+                "another user has an active cli session",
+                "disconnect that session",
+                "start yours [y/n",
+            ],
+            timeout=min(max(5, timeout), _remain),
+            node_log=node_log,
         )
         if _m2 and ">" in _m2:
             if _round > 1:
                 _slog(f"BMC prompt reached after {_round} stacked session takeovers")
             return True
-        if _m2 and "y/n" in _m2.lower():
+        if (_m2 and "y/n" in _m2.lower()) or _looks_like_session_takeover_prompt(_out2):
             if _round == 1:
                 _slog("Detected stacked BMC takeover prompt; continuing auto-disconnect", prefix="WARN")
             continue
@@ -5104,12 +5138,18 @@ def select_operation_mode():
                 print(f"     Resume stage     : {_stage}")
                 print("=" * 60)
                 while True:
-                    _resume_now = _prompt(
-                        "  Resume from this checkpoint now? [y/n]: "
+                    _resume_now = _prompt_with_timeout(
+                        "  Resume from this checkpoint now? [y/n]: ",
+                        default="n",
+                        timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
                     ).strip().lower()
-                    if _resume_now in ("y", "n"):
+                    if _resume_now in ("yes", "y"):
+                        _resume_now = "y"
                         break
-                    print("  Please enter y or n.")
+                    if _resume_now in ("no", "n"):
+                        _resume_now = "n"
+                        break
+                    print("  Please enter y, n, yes, or no.")
                 print("")
                 if _resume_now == "y":
                     _prompt_checkpoint_resume_target_override(_cp_start)
@@ -5118,8 +5158,10 @@ def select_operation_mode():
                         return _resume_choice
                 else:
                     # User declined resume — offer to clear the stale checkpoint
-                    _clear_q = _prompt(
-                        "  Clear this checkpoint? [y/N]: ", "n"
+                    _clear_q = _prompt_with_timeout(
+                        "  Clear this checkpoint? [y/N]: ",
+                        default="n",
+                        timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
                     ).strip().lower()
                     if _clear_q in ("y", "yes"):
                         _cp_start.clear()
@@ -8782,9 +8824,19 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
     _slog("Waiting for initial BMC prompt (watching for existing session y/n)")
 
     channel.send("\r")
-    output, matched = direct_read_until_any(channel, ["y/n", ">"], timeout=30)
+    output, matched = direct_read_until_any(
+        channel,
+        [
+            "y/n",
+            ">",
+            "another user has an active cli session",
+            "disconnect that session",
+            "start yours [y/n",
+        ],
+        timeout=30,
+    )
 
-    if matched and "y/n" in matched.lower():
+    if (matched and "y/n" in matched.lower()) or _looks_like_session_takeover_prompt(output):
         print("\n⚠️  An existing session is active on this BMC!")
         if auto_takeover:
             print("   Auto-disconnecting existing session...")
@@ -8868,11 +8920,20 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
             _takeover_rounds = 0
             while time.monotonic() < _takeover_deadline:
                 _tk_out, _tk_m = direct_read_until_any(
-                    channel, ["y/n", ">"], timeout=15
+                    channel,
+                    [
+                        "y/n",
+                        ">",
+                        "another user has an active cli session",
+                        "disconnect that session",
+                        "start yours [y/n",
+                    ],
+                    timeout=15,
                 )
                 if _tk_m and ">" in _tk_m:
                     break
-                if _tk_m and "y/n" in _tk_m.lower():
+                if ((_tk_m and "y/n" in _tk_m.lower())
+                        or _looks_like_session_takeover_prompt(_tk_out)):
                     _takeover_rounds += 1
                     _slog(
                         f"Additional stacked session detected after takeover "
@@ -23953,8 +24014,10 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     f"{cp_id} already complete; wizard advanced to '{_probe_match}' without replay of this prompt"
                 )
             else:
-                _slog(f"{cp_id} already complete; prompt not replayed, proactively sending saved value")
-                _wizard_send_value_with_default(trigger, response, label, prompt_text="")
+                _slog(
+                    f"{cp_id} already complete; no known wizard prompt replayed; "
+                    "skipping fallback send to avoid misaligned input"
+                )
             return
         _wait_and_send(
             channel,
@@ -23994,14 +24057,41 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     _gw_recheck = ""
     if not _cp_done("cp_1_7_9"):
         _gw_to_send = cc.get("mgmt_gateway") or ""
+        _gw_completed = False
         while True:
             print("\n⏳ Waiting for: Cluster mgmt gateway...")
             _slog("Waiting for: cluster management interface default gateway")
-            direct_send_and_wait(
-                channel, "", "cluster management interface default gateway",
-                timeout=600, node_log=node_log, quiet=bool(node_log),
+            _gw_probe_out, _gw_probe_match = direct_read_until_any(
+                channel,
+                [
+                    "cluster management interface default gateway",
+                    "dns domain name",
+                    "where is the controller located",
+                    "login:",
+                    "::>",
+                    "::*>",
+                ],
+                timeout=600,
+                node_log=node_log,
+                quiet=bool(node_log),
                 check_bmc_drop=True,
             )
+            _gw_probe_combined = (_gw_probe_out or "") + (_gw_probe_match or "")
+            _gw_probe_lower = _gw_probe_combined.lower()
+            if _gw_probe_match and "cluster management interface default gateway" not in _gw_probe_lower:
+                _slog(
+                    "cp_1_7_9 resume: wizard already advanced to "
+                    f"'{_gw_probe_match}' without replaying the gateway prompt"
+                )
+                _gw_recheck = _gw_probe_combined
+                _gw_completed = True
+                break
+            if not _gw_probe_match:
+                _slog(
+                    "cp_1_7_9: timeout waiting for gateway/downstream prompts; "
+                    "aborting wizard automation to avoid misaligned input"
+                )
+                return False
             channel.send(_gw_to_send + "\r")
             if _session_log:
                 _session_log.log_sent(_gw_to_send if _gw_to_send else "<Enter>")
@@ -24053,8 +24143,10 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 _cluster_config["mgmt_gateway"] = _gw_to_send
                 # Loop back: ONTAP will re-prompt after the bad value.
                 continue
+            _gw_completed = True
             break  # value accepted — move on
-        _cp_mark("cp_1_7_9")
+        if _gw_completed:
+            _cp_mark("cp_1_7_9")
     else:
         _slog("cp_1_7_9 already complete; skipping cluster management gateway prompt")
     # The 4-second gateway-validation drain may have already consumed the DNS /
@@ -25093,7 +25185,24 @@ def _resume_rerun_node_mgmt_if_mgmt_auto(ch, label, cfg, node_log=None):
         _slog(f"[{label}] cluster setup re-entry failed after mgmt_auto detection", prefix="ERROR")
         return False
 
-    _auto_answer_node_mgmt(ch, cfg, node_log=node_log)
+    _wizard_start_l = str(_wizard_start or "").lower()
+    if any(_sig in _wizard_start_l for _sig in (
+        "do you want to create a new cluster or join",
+        "{create, join}",
+        "create/join",
+    )):
+        _slog(
+            f"[{label}] mgmt_auto safeguard: wizard already past node-mgmt prompts "
+            f"({_wizard_start!r}); skipping forced node-mgmt replay"
+        )
+        return True
+
+    _auto_answer_node_mgmt(
+        ch,
+        cfg,
+        node_log=node_log,
+        initial_buf=str(_wizard_start or ""),
+    )
     return True
 
 
@@ -25214,6 +25323,13 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     _resume_mode = str(globals().get("_checkpoint_mode") or "").strip().lower()
     if _checkpoint_resume_active() and _resume_mode in {"2", "3"}:
         print(f"\n  Resuming node add process for {len(_rows)} nodes...")
+        _resume_cp_id = _checkpoint_resume_phase_id(_checkpoint) if _checkpoint else ""
+        _resume_cp_desc = _checkpoint_phase_description(_resume_cp_id) if _resume_cp_id else ""
+        if _resume_cp_id:
+            print(
+                f"  ⏭️  Resuming from checkpoint "
+                f"[{_resume_cp_id}: {_resume_cp_desc or 'checkpoint state loaded'}]..."
+            )
     else:
         print(f"\n  ➕ Adding {len(_rows)} node(s) to cluster...")
     if log:
@@ -25929,6 +26045,22 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         _did_system_reset = False
         _cp2_flags = [_cp2_1_done, _cp2_2_done, _cp2_3_done, _cp2_4_done, _cp2_5_done, _cp2_6_done]
         if any(_cp2_flags):
+            _cp2_latest_id = ""
+            for _cp2_idx in range(len(_cp2_flags), 0, -1):
+                if _cp2_flags[_cp2_idx - 1]:
+                    _cp2_latest_id = f"cp_2_{_cp2_idx}"
+                    break
+            _cp2_resume_desc = _checkpoint_phase_description(_cp2_latest_id) if _cp2_latest_id else ""
+            if _cp2_latest_id:
+                print(
+                    f"   ⏭️  [{label}] Resuming from checkpoint "
+                    f"[{_cp2_latest_id}: {_cp2_resume_desc or 'checkpoint state loaded'}]..."
+                )
+                if _session_log:
+                    _session_log.log(
+                        f"[{label}] resuming from checkpoint {_cp2_latest_id}"
+                        f"{f' ({_cp2_resume_desc})' if _cp2_resume_desc else ''}"
+                    )
             _slog(f"[{label}] Resuming peer thread: cp_2_x done = "
                   f"{[i+1 for i, v in enumerate(_cp2_flags) if v]}")
 
@@ -27059,6 +27191,11 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     _cp2_status_only_resume = False
                     _cp_next = ""
             if _cp2_status_only_resume:
+                _cp_next_desc = _checkpoint_phase_description(_cp_next) if _cp_next else ""
+                print(
+                    f"\n  ⏭️  Resuming from checkpoint "
+                    f"[{_cp_next or 'cp_2_7'}: {_cp_next_desc or 'checkpoint state loaded'}]..."
+                )
                 _target = max(1, int(baseline) if isinstance(baseline, int) else 1)
                 print(f"\n  🔍 Final health check (resume): verifying {_target} healthy node(s)...")
                 _wait_for_cluster_nodes_healthy(
@@ -28728,10 +28865,8 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     Remaining setup-wizard prompts (cluster name, admin password, etc.) are
     left to the interactive session that runs after this function returns.
     """
-    print(f"\n🤖 {_node_pfx(bmc_host)}Mode 1: automated cluster initialization in progress...{_elapsed_str()}")
     if _session_log:
         _session_log.start_phase("Auto Cluster Init (mode 1)")
-        _session_log.log("Mode 1 automated init starting after option 9 sent")
     _boot_log = None
     _boot_log_dir = _session_log.log_dir if _session_log and hasattr(_session_log, "log_dir") else os.getcwd()
     try:
@@ -28794,6 +28929,16 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         _operation_mode in (1, 3)
         and _checkpoint_phase_done("cp_1_6", node_id=_primary_cp_node)
     )
+
+    _resume_beyond_bootmenu_wait = bool(_resume_cp_1_5 or _resume_cp_1_6)
+    if _resume_beyond_bootmenu_wait:
+        _slog("Mode 1 resume: skipping already-completed LOADER/boot-menu wait status messages")
+        if _session_log:
+            _session_log.log("Mode 1 resume: continuing from checkpointed stage (boot-menu wait already completed)")
+    else:
+        print(f"\n🤖 {_node_pfx(bmc_host)}Mode 1: automated cluster initialization in progress...{_elapsed_str()}")
+        if _session_log:
+            _session_log.log("Mode 1 automated init starting after option 9 sent")
 
     if _resume_cp_1_6:
         print(
@@ -29219,8 +29364,11 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                     f"fallback peers: {_fallback_peers}"
                 )
 
-    print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for second boot menu (auto-select option 4)...{_elapsed_str()}")
-    _slog("Waiting for second boot menu (option 4)")
+    if not _second_bootmenu_visible:
+        print(f"\n⏳ {_node_pfx(bmc_host)}Waiting for second boot menu (auto-select option 4)...{_elapsed_str()}")
+        _slog("Waiting for second boot menu (option 4)")
+    else:
+        _slog("Skipping second boot-menu wait banner (checkpoint resume already at/after this stage)")
     sig_lower = [
         "selection (1-",
         "selection (1-9)?",
@@ -29584,7 +29732,10 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
             except Exception:
                 pass
 
-    print("\n✅ Mode 1 auto-init complete; driving cluster setup wizard...")
+    if _resume_cp_1_6:
+        print("\n✅ Resume checkpoint stage confirmed; driving cluster setup wizard...")
+    else:
+        print("\n✅ Mode 1 auto-init complete; driving cluster setup wizard...")
     if _session_log:
         _session_log.log("Auto-init phase complete; transitioning to wizard automation")
         _session_log.end_phase()
@@ -29916,6 +30067,8 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
             f"\n⏳ {_pfx}Resuming from cp_1_1: booting node to boot menu "
             f"(issuing 'boot_ontap menu')...{_elapsed_str()}"
         )
+    elif resume_skip_loader_commands:
+        _slog("Checkpoint resume: LOADER stage already complete; suppressing LOADER setup banner")
     else:
         print(f"\n⏳ {_pfx}Setting LOADER boot options...{_elapsed_str()}")
     if _session_log:
@@ -38596,30 +38749,10 @@ def main():
                     _ift_node = _MODE3_PRIMARY_CHECKPOINT_NODE if _operation_mode == 3 else ""
                     if _checkpoint_phase_done(_checkpoint_test_target, node_id=_ift_node):
                         _maybe_inject_checkpoint_failure(_checkpoint_test_target, node_id=_ift_node)
-                if _cp_1_5_done:
-                    _real_stdout.write(
-                        "⏭️  Option 4 complete checkpoint reached; waiting for AutoSupport "
-                        "confirmation (auto-answer from stored admin choice) and then advancing to checkpoint 1_6...\n\n"
-                    )
-                elif _cp_1_4_done:
-                    _real_stdout.write(
-                        "⏭️  Option 4 already started; waiting for option-4 confirmation prompts "
-                        "(auto-answer 'yes') and then advancing to checkpoint 1_5...\n\n"
-                    )
-                elif _cp_1_3_done:
-                    _real_stdout.write(
-                        "⏭️  Option 9 already completed (SAZ cleanup done); "
-                        "continuing at option 4 stage...\n\n"
-                    )
-                elif _cp_1_2_done:
-                    _real_stdout.write(
-                        "⏭️  boot_ontap menu already issued; continuing at boot menu selection...\n\n"
-                    )
-                else:
-                    _real_stdout.write(
-                        "⏭️  Resuming from cp_1_1: issuing boot_ontap menu to reach boot menu "
-                        "and then advancing to checkpoint 1_2...\n\n"
-                    )
+                _resume_desc = _resume_cp_latest_desc or "checkpoint state loaded"
+                _real_stdout.write(
+                    f"⏭️  Resuming from checkpoint [{_resume_cp_latest_id or 'cp_1_1'}: {_resume_desc}]...\n\n"
+                )
                 _real_stdout.flush()
                 _session_log.log(
                     f"Checkpoint resume ({_resume_cp_latest_id or 'cp_1_1'}) loaded; bypassing monitor and resuming from saved stage"
