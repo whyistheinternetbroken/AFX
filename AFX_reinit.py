@@ -18,6 +18,7 @@ warnings.filterwarnings(
 )
 
 import atexit
+import copy
 import subprocess
 import sys
 import os
@@ -272,6 +273,7 @@ class CheckpointManager:
         os.makedirs(_cp_dir, exist_ok=True)
         self._path = path or os.path.join(_cp_dir, self.CHECKPOINT_FILE)
         self._data: "dict" = {}
+        self._data_lock = threading.RLock()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -281,33 +283,34 @@ class CheckpointManager:
         existing checkpoint file.
         """
         now = datetime.now().isoformat()
-        self._data = {
-            "version": 1,
-            "created": now,
-            "updated": now,
-            "mode": mode,
-            "log_dir": log_dir,
-            "config_path": config_path,
-            "bmc_ips": list(bmc_ips),
-            "current_phase": {
-                "name": "Run initialization",
-                "state": "in_progress",
-                "next_phase": "(pending completion of current phase)",
-                "node_ip": "",
-                "ts": now,
-            },
-            "phases": {},        # phase_name -> {"done": bool, "ts": str}
-            "node_phases": {},   # phase_name -> {ip -> {"done": bool, "ts": str}}
-            "selections": {      # Operator selections to persist across resume
-                "enable_autosupport": None,      # bool or None
-                "physical_zeroing": None,        # bool or None
-                "prevent_bios_fw_update": None,  # bool or None
-                "setup_passwordless_ssh": None,  # bool or None
-                "netboot_before_reinit": None,   # bool or None
-                "loader_env_stage_enabled": None, # bool or None
-                "skip_loader_env_backup": None,  # bool or None
-            },
-        }
+        with self._data_lock:
+            self._data = {
+                "version": 1,
+                "created": now,
+                "updated": now,
+                "mode": mode,
+                "log_dir": log_dir,
+                "config_path": config_path,
+                "bmc_ips": list(bmc_ips),
+                "current_phase": {
+                    "name": "Run initialization",
+                    "state": "in_progress",
+                    "next_phase": "(pending completion of current phase)",
+                    "node_ip": "",
+                    "ts": now,
+                },
+                "phases": {},        # phase_name -> {"done": bool, "ts": str}
+                "node_phases": {},   # phase_name -> {ip -> {"done": bool, "ts": str}}
+                "selections": {      # Operator selections to persist across resume
+                    "enable_autosupport": None,      # bool or None
+                    "physical_zeroing": None,        # bool or None
+                    "prevent_bios_fw_update": None,  # bool or None
+                    "setup_passwordless_ssh": None,  # bool or None
+                    "netboot_before_reinit": None,   # bool or None
+                    "loader_env_stage_enabled": None, # bool or None
+                    "skip_loader_env_backup": None,  # bool or None
+                },
+            }
         self._save()
 
     def load(self) -> bool:
@@ -333,7 +336,8 @@ class CheckpointManager:
                     return False
             except Exception:
                 pass
-        self._data = data
+        with self._data_lock:
+            self._data = data
         return True
 
     def save(self) -> None:
@@ -345,7 +349,8 @@ class CheckpointManager:
         with _checkpoint_io_lock:
             with suppress(Exception):
                 os.remove(self._path)
-        self._data = {}
+        with self._data_lock:
+            self._data = {}
 
     @property
     def path(self) -> str:
@@ -356,9 +361,10 @@ class CheckpointManager:
 
     def mark_done(self, phase: str) -> None:
         """Mark a global (non-per-node) phase as complete."""
-        self._data.setdefault("phases", {})[phase] = {
-            "done": True, "ts": datetime.now().isoformat(),
-        }
+        with self._data_lock:
+            self._data.setdefault("phases", {})[phase] = {
+                "done": True, "ts": datetime.now().isoformat(),
+            }
         self._save()
         _log_pending_checkpoint_test_target(phase)
         _maybe_inject_checkpoint_failure(phase)
@@ -369,10 +375,11 @@ class CheckpointManager:
 
     def mark_node_done(self, phase: str, ip: str) -> None:
         """Mark a per-node phase as complete for *ip*."""
-        np = self._data.setdefault("node_phases", {})
-        np.setdefault(phase, {})[ip] = {
-            "done": True, "ts": datetime.now().isoformat(),
-        }
+        with self._data_lock:
+            np = self._data.setdefault("node_phases", {})
+            np.setdefault(phase, {})[ip] = {
+                "done": True, "ts": datetime.now().isoformat(),
+            }
         self._save()
         _log_pending_checkpoint_test_target(phase, ip)
         _maybe_inject_checkpoint_failure(phase, ip)
@@ -411,13 +418,14 @@ class CheckpointManager:
                 _next = "(pending)"
         if _name and _next == _name:
             _next = "(pending completion of current phase)"
-        self._data["current_phase"] = {
-            "name": _name,
-            "state": _state,
-            "next_phase": _next,
-            "node_ip": str(node_ip or "").strip(),
-            "ts": datetime.now().isoformat(),
-        }
+        with self._data_lock:
+            self._data["current_phase"] = {
+                "name": _name,
+                "state": _state,
+                "next_phase": _next,
+                "node_ip": str(node_ip or "").strip(),
+                "ts": datetime.now().isoformat(),
+            }
         self._save()
 
     def summary(self) -> str:
@@ -638,7 +646,8 @@ class CheckpointManager:
 
     def set_param(self, key: str, value) -> None:
         """Store an arbitrary non-sensitive run parameter. Saved immediately."""
-        self._data.setdefault("params", {})[key] = value
+        with self._data_lock:
+            self._data.setdefault("params", {})[key] = value
         self._save()
 
     def get_param(self, key: str, default=None):
@@ -647,16 +656,17 @@ class CheckpointManager:
 
     def resume_run(self, mode: str, log_dir: str = "") -> None:
         """Update metadata for a resumed run without clearing phase data."""
-        self._data["mode"] = mode
-        if log_dir:
-            self._data["log_dir"] = log_dir
-        self._data["current_phase"] = {
-            "name": "Resume initialization",
-            "state": "in_progress",
-            "next_phase": "(pending completion of current phase)",
-            "node_ip": "",
-            "ts": datetime.now().isoformat(),
-        }
+        with self._data_lock:
+            self._data["mode"] = mode
+            if log_dir:
+                self._data["log_dir"] = log_dir
+            self._data["current_phase"] = {
+                "name": "Resume initialization",
+                "state": "in_progress",
+                "next_phase": "(pending completion of current phase)",
+                "node_ip": "",
+                "ts": datetime.now().isoformat(),
+            }
         self._save()
 
     # ── Selection persistence (for operator choices like AutoSupport, physical zeroing, etc.)
@@ -664,7 +674,8 @@ class CheckpointManager:
     def set_selection(self, key: str, value: "bool | None") -> None:
         """Store an operator selection (e.g., AutoSupport y/n) for re-use on resume."""
         if key:
-            self._data.setdefault("selections", {})[key] = value
+            with self._data_lock:
+                self._data.setdefault("selections", {})[key] = value
             self._save()
 
     def get_selection(self, key: str) -> "bool | None":
@@ -675,13 +686,20 @@ class CheckpointManager:
         """Return dict of all saved selections."""
         return self._data.get("selections", {})
 
-    def has_saved_selections(self) -> bool:
-        """Return True if any selections are saved."""
-        return bool(any(v is not None for v in self.get_saved_selections().values()))
+    def _get_mode_filtered_selections(self, operation_mode: int = None) -> "dict[str, bool | None]":
+        """Return saved selections filtered for the current operation mode."""
+        _selections = dict(self.get_saved_selections() or {})
+        if operation_mode == 2:
+            _selections.pop("setup_passwordless_ssh", None)
+        return _selections
 
-    def print_saved_selections_summary(self) -> None:
+    def has_saved_selections(self, operation_mode: int = None) -> bool:
+        """Return True if any selections are saved."""
+        return bool(any(v is not None for v in self._get_mode_filtered_selections(operation_mode).values()))
+
+    def print_saved_selections_summary(self, operation_mode: int = None) -> None:
         """Print a formatted summary of all saved selections."""
-        selections = self.get_saved_selections()
+        selections = self._get_mode_filtered_selections(operation_mode)
         if not selections or not any(v is not None for v in selections.values()):
             return
         
@@ -709,7 +727,9 @@ class CheckpointManager:
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _save(self) -> None:
-        self._data["updated"] = datetime.now().isoformat()
+        with self._data_lock:
+            self._data["updated"] = datetime.now().isoformat()
+            _payload = copy.deepcopy(self._data)
         tmp = (
             f"{self._path}.{os.getpid()}."
             f"{threading.get_ident()}.{time.time_ns()}.tmp"
@@ -717,15 +737,19 @@ class CheckpointManager:
         try:
             with _checkpoint_io_lock:
                 with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(self._data, f, indent=2)
+                    json.dump(_payload, f, indent=2)
+                    f.write("\n")
                 os.replace(tmp, self._path)
-        except Exception:
+        except Exception as exc:
             with suppress(Exception):
                 if os.path.exists(tmp):
                     os.remove(tmp)
+            raise RuntimeError(
+                f"Checkpoint save failed for {self._path}: {exc}"
+            ) from exc
 
 
-def _handle_checkpoint_confirmation_with_selective_mod(checkpoint, diag_mode=False):
+def _handle_checkpoint_confirmation_with_selective_mod(checkpoint, diag_mode=False, operation_mode=None):
     """
     Handle checkpoint confirmation with optional selective modification.
     
@@ -740,10 +764,10 @@ def _handle_checkpoint_confirmation_with_selective_mod(checkpoint, diag_mode=Fal
          - N = Re-answer all (clear all, return as modified)
          - C = Selective modification (show menu, return as modified)
     """
-    if not checkpoint or not checkpoint.has_saved_selections():
+    if not checkpoint or not checkpoint.has_saved_selections(operation_mode):
         return None, False
     
-    checkpoint.print_saved_selections_summary()
+    checkpoint.print_saved_selections_summary(operation_mode)
     
     while True:
         _choice = _prompt(
@@ -753,7 +777,7 @@ def _handle_checkpoint_confirmation_with_selective_mod(checkpoint, diag_mode=Fal
         if _choice in ("y", "yes", ""):
             # Use all saved selections
             print("\n  ✅ Using saved selections. Proceeding...\n")
-            saved = checkpoint.get_saved_selections()
+            saved = checkpoint._get_mode_filtered_selections(operation_mode)
             if diag_mode:
                 _diag_bootargs = _load_diag_bootargs()
             return saved, False
@@ -767,13 +791,13 @@ def _handle_checkpoint_confirmation_with_selective_mod(checkpoint, diag_mode=Fal
         
         elif _choice in ("c", "customize"):
             # Selective modification
-            return _handle_selective_modification(checkpoint, diag_mode), True
+            return _handle_selective_modification(checkpoint, diag_mode, operation_mode), True
         
         else:
             print("  Please enter Y, N, or C.")
 
 
-def _handle_selective_modification(checkpoint, diag_mode=False):
+def _handle_selective_modification(checkpoint, diag_mode=False, operation_mode=None):
     """
     Show a menu for selective modification of checkpoint selections.
     Operator can choose which selections to keep and which to re-enter.
@@ -793,7 +817,7 @@ def _handle_selective_modification(checkpoint, diag_mode=False):
         "skip_loader_env_backup": "Skip LOADER env backup",
     }
     
-    selections = checkpoint.get_saved_selections()
+    selections = checkpoint._get_mode_filtered_selections(operation_mode)
     keys_to_show = [k for k, v in selections.items() if v is not None]
     
     if not keys_to_show:
@@ -832,7 +856,7 @@ def _handle_selective_modification(checkpoint, diag_mode=False):
     if diag_mode:
         _diag_bootargs = _load_diag_bootargs()
     
-    return checkpoint.get_saved_selections()
+    return checkpoint._get_mode_filtered_selections(operation_mode)
 
 
 def _format_checkpoint_mode(mode: str) -> str:
@@ -1725,8 +1749,14 @@ def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = 
         print(f"\n{_msg}")
         _slog(_msg, prefix="INFO")
         raise _ReturnToMenu
-    except Exception:
-        pass
+    except Exception as _cp_exc:
+        _cp_label = f" [{node_id}]" if node_id else ""
+        _warn = f"Checkpoint save failed for {phase}{_cp_label}: {_cp_exc}"
+        print(f"  ⚠️  {_warn}")
+        _slog(_warn, prefix="WARN")
+        if _session_log:
+            with suppress(Exception):
+                _session_log.log(_warn, prefix="WARN")
     return marked
 
 
@@ -1760,7 +1790,24 @@ def _checkpoint_test_secondary_nodes_for_mode(operation_mode: int) -> "list[str]
     return _nodes
 
 
-def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids) -> bool:
+def _checkpoint_injection_min_allowed_index(options, resume_cp=None) -> "tuple[int, str]":
+    """Return the earliest checkpoint index allowed for --test injection."""
+    _opts = list(options or [])
+    if not _opts:
+        return 1, ""
+    if not resume_cp:
+        return 1, ""
+    _next_id = str(_checkpoint_resume_phase_id(resume_cp) or "").strip()
+    if not _next_id:
+        return len(_opts) + 1, "checkpoint is already complete"
+    for _idx, (_cp_id, __) in enumerate(_opts, 1):
+        if _cp_id == _next_id:
+            return _idx, f"resume start is {_next_id}"
+    return 1, ""
+
+
+def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
+                                             min_allowed_index: int = 1) -> bool:
     """Interactive helper for per-node --test checkpoint injection selection."""
     global _checkpoint_test_enabled, _checkpoint_test_target, _checkpoint_test_mode_label
     global _checkpoint_test_targets_by_node
@@ -1778,16 +1825,18 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids) 
         return False
 
     _target_map = {}
+    _min_idx = max(1, int(min_allowed_index or 1))
+
     if _mode_sel == "2":
         _idx_raw = _prompt(
-            f"  Checkpoint index for all nodes [1-{len(options)}]: ",
-            "1",
+            f"  Checkpoint index for all nodes [{_min_idx}-{len(options)}]: ",
+            str(_min_idx),
         ).strip()
         if not _idx_raw.isdigit():
             print("  ⚠️  Enter a valid checkpoint number.")
             return False
         _idx = int(_idx_raw)
-        if not (1 <= _idx <= len(options)):
+        if not (_min_idx <= _idx <= len(options)):
             print("  ⚠️  Out of range.")
             return False
         _phase, _label = options[_idx - 1]
@@ -1806,6 +1855,12 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids) 
                 continue
             _idx = int(_idx_raw)
             if _idx == 0:
+                continue
+            if _idx < _min_idx:
+                print(
+                    f"  ⚠️  Skipping {_nid} (checkpoint {_idx} is before "
+                    f"resume start index {_min_idx})."
+                )
                 continue
             if 1 <= _idx <= len(options):
                 _target_map[_nid] = options[_idx - 1][0]
@@ -1866,6 +1921,20 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
         print("  P. Configure per-node checkpoint failures for secondary_nodes")
     if _resume_cp_available:
         print("  B. Back to checkpoint resume-stage override")
+    _min_allowed_idx, _min_reason = _checkpoint_injection_min_allowed_index(
+        _options, _resume_cp_for_override if _resume_cp_available else None
+    )
+    if _min_allowed_idx > 1 and _min_allowed_idx <= len(_options):
+        _min_cp_id = _options[_min_allowed_idx - 1][0]
+        print(
+            f"  ℹ️  Injection targets before index {_min_allowed_idx} "
+            f"({_min_cp_id}) are blocked ({_min_reason})."
+        )
+    elif _min_allowed_idx > len(_options):
+        print(
+            "  ℹ️  No injection targets are eligible at the current resume stage "
+            f"({_min_reason})."
+        )
     for _idx, (_phase, _label) in enumerate(_options, 1):
         print(f"  {_idx}. {_phase:<22} {_label}")
 
@@ -1878,16 +1947,35 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
         if _sel == "":
             _sel = "0"
         if _per_node_available and _sel.lower() == "p":
-            if _configure_per_node_checkpoint_injection(_mode_name, _options, _per_node_nodes):
+            if _configure_per_node_checkpoint_injection(
+                _mode_name,
+                _options,
+                _per_node_nodes,
+                min_allowed_index=_min_allowed_idx,
+            ):
                 return
             continue
         if _resume_cp_available and _sel.lower() == "b":
             _changed = _prompt_checkpoint_resume_target_override(_resume_cp_for_override)
             if _changed:
+                _min_allowed_idx, _min_reason = _checkpoint_injection_min_allowed_index(
+                    _options, _resume_cp_for_override
+                )
                 _slog(
                     f"--test menu: resume-stage override updated before injection "
                     f"(next={_checkpoint_resume_phase_id(_resume_cp_for_override) or 'complete'})"
                 )
+                if _min_allowed_idx > len(_options):
+                    print(
+                        "  ℹ️  Resume override currently points beyond the final checkpoint; "
+                        "choose B to move it earlier or 0 to disable injection."
+                    )
+                elif _min_allowed_idx > 1:
+                    _min_cp_id = _options[_min_allowed_idx - 1][0]
+                    print(
+                        f"  ℹ️  Injection floor updated to index {_min_allowed_idx} "
+                        f"({_min_cp_id}) based on resume override."
+                    )
             continue
         if not _sel.isdigit():
             print("  ⚠️  Enter a number from the list.")
@@ -1896,6 +1984,19 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
         if _idx == 0:
             print("  ✅ Checkpoint failure injection disabled for this run.")
             return
+        if _idx < _min_allowed_idx:
+            if _min_allowed_idx <= len(_options):
+                _min_cp_id = _options[_min_allowed_idx - 1][0]
+                print(
+                    f"  ⚠️  Not allowed: selected checkpoint is earlier than current "
+                    f"resume start ({_min_cp_id})."
+                )
+            else:
+                print(
+                    "  ⚠️  Not allowed: no eligible injection checkpoints remain at the "
+                    "current resume stage. Use B to set an earlier resume checkpoint."
+                )
+            continue
         if 1 <= _idx <= len(_options):
             _phase, _label = _options[_idx - 1]
             _checkpoint_test_enabled = True
@@ -25526,6 +25627,11 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             _rows.append({"cluster_ip": _ip, "node_name": _node})
     if not _rows:
         return True
+    _row_by_ip = {
+        str(_r.get("cluster_ip") or "").strip(): _r
+        for _r in _rows
+        if str(_r.get("cluster_ip") or "").strip()
+    }
 
     ips_str = ",".join(r["cluster_ip"] for r in _rows)
     node_names = [r["node_name"] for r in _rows]
@@ -25702,11 +25808,21 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
             if _node_status.lower() == "success" and _row_ip:
                 if _row_ip not in _already_succeeded:
                     _already_succeeded.add(_row_ip)
+                    _row_meta = _row_by_ip.get(_row_ip) or {}
+                    _row_bmc = str(_row_meta.get("bmc") or "").strip()
+                    if _row_bmc:
+                        _checkpoint_mark_phase(
+                            "cp_2_7",
+                            node_id=_row_bmc,
+                            alias_phase="peer_joined",
+                            alias_node_id=_row_bmc,
+                        )
                     if node_timings_out is not None:
                         node_timings_out[_row_ip] = round(
                             time.monotonic() - start, 1)
 
         if _requested_ips and _requested_ips.issubset(_already_succeeded):
+            _checkpoint_mark_phase("cp_2_7", alias_phase="node_joined")
             elapsed_total = round(time.monotonic() - start, 1)
             print(f"\n  ✅ All {len(cluster_ips)} node(s) added successfully "
                   f"({elapsed_total}s).")
@@ -25740,6 +25856,16 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                         "ONTAP is still finishing add-node finalization..."
                     )
                 if _count >= _target_count and _all_true and not _has_warning and _ports_ok:
+                    for _row in _rows:
+                        _row_bmc = str(_row.get("bmc") or "").strip()
+                        if _row_bmc:
+                            _checkpoint_mark_phase(
+                                "cp_2_7",
+                                node_id=_row_bmc,
+                                alias_phase="peer_joined",
+                                alias_node_id=_row_bmc,
+                            )
+                    _checkpoint_mark_phase("cp_2_7", alias_phase="node_joined")
                     elapsed_total = round(time.monotonic() - start, 1)
                     print(f"\n  ✅ Cluster reports {_count} healthy node(s); "
                           f"treating cluster add-node as complete ({elapsed_total}s).")
@@ -26846,7 +26972,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         _t_cluster_ip_done = time.monotonic()
         if _t_loader_seen:
             print(f"   ⏱️  [{label}] Cluster IP captured at +{_t_cluster_ip_done - _t_thread_start:.1f}s")
-        _checkpoint_mark_phase("cp_2_7", node_id=_cp2_node)
+        # cp_2_7 (node joined) is marked only after ONTAP add-node success,
+        # not at cluster-IP capture time.
         _run_optional_checkpoint_status_checks()
 
         # Record per-node timing for the session summary.
@@ -27653,6 +27780,11 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
             primary_client.close()
         except Exception:
             pass
+
+    if _checkpoint:
+        with suppress(Exception):
+            _checkpoint.mark_done("cp_2_8")
+            _slog("checkpoint: cp_2_8 saved (2.2 parallel add complete)")
 
     print("\n  ✅ Mode 2.2 parallel add complete.")
     if log:
@@ -37251,12 +37383,15 @@ def main():
                 _print_banner("Node pre-config")
                 
                 # Show saved selections summary and ask for confirmation (with selective mod)
-                _has_saved = _checkpoint.has_saved_selections() if _checkpoint else False
+                _has_saved = _checkpoint.has_saved_selections(_operation_mode) if _checkpoint else False
                 _need_to_ask_questions = True  # Flag: do we need to ask prompts?
+                if _operation_mode == 2:
+                    # Passwordless SSH is a mode-1 concern; never carry it into node-add.
+                    _setup_passwordless_ssh = False
                 
                 if _has_saved:
                     _saved_selections, _was_modified = _handle_checkpoint_confirmation_with_selective_mod(
-                        _checkpoint, diag_mode=_diag_mode
+                        _checkpoint, diag_mode=_diag_mode, operation_mode=_operation_mode
                     )
                     
                     if _saved_selections and not _was_modified:
@@ -37266,7 +37401,7 @@ def main():
                         _prevent_bios_fw_update = _saved_selections.get("prevent_bios_fw_update", False)
                         _loader_env_stage_enabled = _saved_selections.get("loader_env_stage_enabled", True)
                         _saved_ssh = _saved_selections.get("setup_passwordless_ssh", None)
-                        if _saved_ssh is not None:
+                        if _operation_mode != 2 and _saved_ssh is not None:
                             _setup_passwordless_ssh = bool(_saved_ssh)
                         _netboot_before_reinit = _saved_selections.get("netboot_before_reinit", False)
                         _need_to_ask_questions = False  # Skip re-prompting - we have all values
@@ -37345,8 +37480,8 @@ def main():
                     # checkpoint existed so they appear in the saved-selections summary
                     # and are restored without re-prompting on resume.
                     if _checkpoint:
-                        # setup_passwordless_ssh is asked for modes 1, 3 and auto-add mode 2 (2.2).
-                        _ssh_asked = _operation_mode in (1, 3) or (_operation_mode == 2 and _auto_add)
+                        # setup_passwordless_ssh is only asked for modes 1 and 3.
+                        _ssh_asked = _operation_mode in (1, 3)
                         if _ssh_asked and _checkpoint.get_selection("setup_passwordless_ssh") is None:
                             _checkpoint.set_selection("setup_passwordless_ssh", bool(_setup_passwordless_ssh))
                         if _operation_mode == 1 and _checkpoint.get_selection("netboot_before_reinit") is None:
