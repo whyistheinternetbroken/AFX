@@ -1743,8 +1743,11 @@ def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = 
             _cp_label = f" [{node_id}]" if node_id else ""
             _cp_desc = _checkpoint_phase_description(phase)
             _cp_suffix = f" — {_cp_desc}" if _cp_desc else ""
-            print(f"  ✅ Checkpoint created{_cp_label}: {phase}{_cp_suffix}")
-            _slog(f"Checkpoint marked: {phase}{_cp_label}{_cp_suffix}", prefix="INFO")
+            _cp_mode_key = _checkpoint_mode_to_test_key(getattr(_checkpoint, "mode", ""))
+            _cp_tag = _checkpoint_stage_tag(_cp_mode_key, phase)
+            _tag_suffix = f" [{_cp_tag}]" if _cp_tag else ""
+            print(f"  ✅ Checkpoint created{_cp_label}: {phase}{_cp_suffix}{_tag_suffix}")
+            _slog(f"Checkpoint marked: {phase}{_cp_label}{_cp_suffix}{_tag_suffix}", prefix="INFO")
             _maybe_inject_checkpoint_failure(phase, node_id)
     except _InjectedCheckpointFailure as _e:
         # Test failure injection: exit gracefully to menu instead of crashing
@@ -4537,6 +4540,77 @@ def _checkpoint_resume_phase_id(cp) -> str:
         if not _checkpoint_phase_effectively_done(cp, _mode_key, _cp_id):
             return _cp_id
     return ""
+
+
+def _checkpoint_phase_index(mode_key, phase_id: str) -> int:
+    """Return 1-based checkpoint index for a phase within a mode; 0 when unknown."""
+    _phase = str(phase_id or "").strip()
+    if not _phase:
+        return 0
+    _seq = list(_CHECKPOINT_TEST_OPTIONS.get(mode_key) or [])
+    for _idx, (_cp_id, __) in enumerate(_seq, 1):
+        if _cp_id == _phase:
+            return _idx
+    return 0
+
+
+def _checkpoint_stage_tag(mode_key, phase_id: str) -> str:
+    """Stable stage tag used to identify checkpoint position and prevent drift."""
+    _phase = str(phase_id or "").strip()
+    _idx = _checkpoint_phase_index(mode_key, _phase)
+    if not _phase or _idx <= 0:
+        return ""
+    return f"m{mode_key}:i{_idx}:{_phase}"
+
+
+def _checkpoint_reconcile_runtime_stage(runtime_phase_id: str, *, context: str = "",
+                                        cp_obj=None) -> bool:
+    """Align selected resume stage with live runtime-detected stage.
+
+    Prevents accidental or intentional wrong checkpoint starts from causing
+    repeated or skipped steps when live prompt state disagrees with selection.
+    """
+    global _resume_cp_start
+    _runtime = str(runtime_phase_id or "").strip()
+    if not _runtime:
+        return False
+    _cp = cp_obj or _checkpoint
+    if not _cp:
+        return False
+    _mode_raw = str(getattr(_cp, "mode", "") or "").strip().lower()
+    _mode_key = _checkpoint_mode_to_test_key(_mode_raw)
+    if _checkpoint_phase_index(_mode_key, _runtime) <= 0:
+        return False
+    _selected = str(_resume_cp_start or "").strip()
+    if not _selected:
+        _selected = str(_checkpoint_resume_phase_id(_cp) or "").strip()
+    if not _selected or _selected == _runtime:
+        return False
+
+    _sel_idx = _checkpoint_phase_index(_mode_key, _selected)
+    _run_idx = _checkpoint_phase_index(_mode_key, _runtime)
+    if _sel_idx <= 0 or _run_idx <= 0 or _sel_idx == _run_idx:
+        return False
+
+    _sel_tag = _checkpoint_stage_tag(_mode_key, _selected)
+    _run_tag = _checkpoint_stage_tag(_mode_key, _runtime)
+    _ctx = f" ({context})" if context else ""
+    _dir = "repeat-risk" if _sel_idx < _run_idx else "skip-risk"
+    print(
+        f"  ⚠️  Runtime checkpoint guard{_ctx}: selected {_selected} [{_sel_tag}] "
+        f"does not match detected {_runtime} [{_run_tag}] ({_dir})."
+    )
+    print(f"     ✅ Auto-aligning resume stage to {_runtime} to prevent step drift.")
+    _slog(
+        f"runtime checkpoint guard{_ctx}: selected={_selected}({_sel_tag}) "
+        f"detected={_runtime}({_run_tag}) -> auto-align",
+        prefix="WARN",
+    )
+
+    _applied = _checkpoint_apply_manual_resume_target(_cp, _runtime)
+    if _applied:
+        _resume_cp_start = _runtime
+    return bool(_applied)
 
 
 def _checkpoint_phase_description(phase_id: str) -> str:
@@ -30780,6 +30854,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
         )
         if _at_or_beyond_boot_menu and not _at_loader:
             resume_skip_loader_commands = True
+            _checkpoint_reconcile_runtime_stage("cp_1_2", context="cp_1_1 resume probe")
             print(
                 f"\n🔎 {_pfx}Checkpoint resume probe: console is already at boot-menu/"
                 "option-9 prompts; skipping LOADER command replay."
@@ -30794,6 +30869,7 @@ def handle_loader_commands(channel, client, sp_host, sp_user, sp_pass,
             _run_optional_checkpoint_status_checks()
         elif _at_loader:
             _resume_cp_1_1_issue_boot_menu = True
+            _checkpoint_reconcile_runtime_stage("cp_1_1", context="cp_1_1 resume probe")
             _slog(
                 "Checkpoint resume probe (cp_1_1): LOADER prompt confirmed; "
                 "issuing boot_ontap menu only (no LOADER setenv replay)"
@@ -31255,30 +31331,13 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                 # with a raw string literal recompiled on every iteration.
                 elif _LOADER_PROMPT_RE.search(output_buffer[-200:]):
                     _slog("LOADER prompt detected")
+                    _checkpoint_reconcile_runtime_stage("cp_1_1", context="AUTOBOOT/LOADER monitor")
                     handle_loader_commands(channel, client, sp_host, sp_user, sp_pass)
                     break
                 elif any(_sig in output_buffer.lower() for _sig in _boot_menu_sigs):
-                    _slog(f"[{sp_host}] boot menu prompt detected during monitoring; proceeding to boot-menu selection")
-                    _rc = {
-                        "host": sp_host,
-                        "user": sp_user,
-                        "password": sp_pass,
-                        "client": client,
-                        "channel": channel,
-                        "label": f"primary/{sp_host or 'node'}",
-                    }
-                    wait_for_boot_menu_and_select(
-                        channel,
-                        timeout=900,
-                        node_label=sp_host,
-                        reconnect_ctx=_rc,
-                    )
-                    if _rc.get("client") is not None:
-                        client = _rc["client"]
-                    if _rc.get("channel") is not None:
-                        channel = _rc["channel"]
-                    sp_user = _rc.get("user", sp_user)
-                    sp_pass = _rc.get("password", sp_pass)
+                    _slog(f"[{sp_host}] boot menu prompt detected during monitoring; proceeding with full loader flow")
+                    _checkpoint_reconcile_runtime_stage("cp_1_2", context="AUTOBOOT/LOADER monitor")
+                    handle_loader_commands(channel, client, sp_host, sp_user, sp_pass)
                     break
 
                 elif "\nlogin:" in output_buffer or output_buffer.lstrip().startswith("login:"):
@@ -31334,27 +31393,9 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                         channel.send("y\r")
                         time.sleep(2)
                     elif _sc_matched and "selection" in _sc_matched.lower():
-                        _slog(f"[{sp_host}] boot menu prompt detected right after reconnect; proceeding to boot-menu selection")
-                        _rc = {
-                            "host": sp_host,
-                            "user": sp_user,
-                            "password": sp_pass,
-                            "client": client,
-                            "channel": channel,
-                            "label": f"primary/{sp_host or 'node'}",
-                        }
-                        wait_for_boot_menu_and_select(
-                            channel,
-                            timeout=900,
-                            node_label=sp_host,
-                            reconnect_ctx=_rc,
-                        )
-                        if _rc.get("client") is not None:
-                            client = _rc["client"]
-                        if _rc.get("channel") is not None:
-                            channel = _rc["channel"]
-                        sp_user = _rc.get("user", sp_user)
-                        sp_pass = _rc.get("password", sp_pass)
+                        _slog(f"[{sp_host}] boot menu prompt detected right after reconnect; proceeding with full loader flow")
+                        _checkpoint_reconcile_runtime_stage("cp_1_2", context="AUTOBOOT/LOADER reconnect")
+                        handle_loader_commands(channel, client, sp_host, sp_user, sp_pass)
                         break
                     elif _sc_matched and "login:" in _sc_matched.lower():
                         print(f"\n❌ [{sp_host}] Node has already booted to ONTAP (login: prompt on reconnect).")
