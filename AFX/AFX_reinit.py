@@ -64,7 +64,7 @@ _COMPLETION_BLOCK_START = "# >>> AFX_reinit argcomplete >>>"
 _COMPLETION_BLOCK_END = "# <<< AFX_reinit argcomplete <<<"
 _completion_startup_warning_shown = False
 
-SCRIPT_VERSION = "1.1.1"
+SCRIPT_VERSION = "1.2"
 
 try:
     _DEFAULT_INTERACTIVE_TIMEOUT = max(
@@ -25852,6 +25852,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     print("  ⏳ ONTAP accepted cluster add-node. Waiting for node join stages to progress...")
     if log:
         log.log("cluster add-node command accepted; waiting for add-node-status milestones")
+    print("  📺 Live per-node status snapshots (cluster add-node-status) will be shown below.")
 
     total_timeout = max(900, len(_rows) * 150)   # 2.5 min/node, min 15 min
     poll_interval = 120   # 2 minutes
@@ -25983,6 +25984,44 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
                     if node_timings_out is not None:
                         node_timings_out[_row_ip] = round(
                             time.monotonic() - start, 1)
+
+        print("\n  📊 Current per-node add-node-status:")
+        _rows_by_ip = {
+            str(_r.get("cluster_ip") or "").strip(): _r
+            for _r in _relevant_rows
+            if str(_r.get("cluster_ip") or "").strip()
+        }
+        _rows_by_name = {
+            str(_r.get("node") or "").strip().lower(): _r
+            for _r in _relevant_rows
+            if str(_r.get("node") or "").strip()
+        }
+        for _requested in _rows:
+            _req_ip = str(_requested.get("cluster_ip") or "").strip()
+            _req_name = str(_requested.get("node_name") or "").strip()
+            _match = _rows_by_ip.get(_req_ip)
+            if _match is None and _req_name:
+                _match = _rows_by_name.get(_req_name.lower())
+            _disp_name = _req_name or str((_match or {}).get("node") or "unknown-node")
+            _disp_ip = _req_ip or str((_match or {}).get("cluster_ip") or "")
+            _disp_ip_suffix = f" [{_disp_ip}]" if _disp_ip else ""
+            if _match is None:
+                print(f"     ⏳ {_disp_name}{_disp_ip_suffix} -> waiting for status row")
+                continue
+            _disp_status = str(_match.get("status") or "unknown").strip()
+            _disp_err = str(_match.get("error") or "").strip()
+            _status_l = _disp_status.lower()
+            if _status_l == "success":
+                _disp_icon = "✅"
+            elif "fail" in _status_l:
+                _disp_icon = "❌"
+            else:
+                _disp_icon = "⏳"
+            _disp_err_suffix = f" ({_disp_err})" if _disp_err else ""
+            print(
+                f"     {_disp_icon} {_disp_name}{_disp_ip_suffix} -> "
+                f"{_disp_status}{_disp_err_suffix}"
+            )
 
         if _requested_ips and _requested_ips.issubset(_already_succeeded):
             _checkpoint_mark_phase("cp_2_7", alias_phase="node_joined")
