@@ -13500,6 +13500,7 @@ _WIZARD_START_TRIGGERS = [
     "cluster management interface netmask",
     "cluster management interface default gateway",
     "dns domain name",
+    "dns domain names",
     "dns name server",
     "name server ip address",
     "where is the controller located",
@@ -24009,6 +24010,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _which_l and (
             "cluster management interface" in _which_l
             or "dns domain name" in _which_l
+            or "dns domain names" in _which_l
             or "dns name server" in _which_l
             or "where is the controller located" in _which_l
         )
@@ -24044,6 +24046,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _which_l and (
                 "cluster management interface" in _which_l
                 or "dns domain name" in _which_l
+                or "dns domain names" in _which_l
                 or "dns name server" in _which_l
                 or "where is the controller located" in _which_l
             )
@@ -24242,12 +24245,16 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     def _wizard_step_checkpoint_aware(cp_id, trigger, response, label, timeout):
         if _cp_done(cp_id):
             _slog(f"{cp_id} already complete; probing for replayed prompt '{trigger}'")
+            with suppress(Exception):
+                channel.send("\r")
+            time.sleep(0.2)
             _probe_out, _probe_match = direct_read_until_any(
                 channel,
                 [
                     trigger,
                     "cluster management interface default gateway",
                     "dns domain name",
+                    "dns domain names",
                     "where is the controller located",
                     "login:",
                     "::>",
@@ -24321,6 +24328,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 [
                     "cluster management interface default gateway",
                     "dns domain name",
+                    "dns domain names",
                     "where is the controller located",
                     "login:",
                     "::>",
