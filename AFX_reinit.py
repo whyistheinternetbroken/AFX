@@ -31182,6 +31182,7 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
     output_buffer = ""
     _last_data = time.monotonic()
     _BMC_IDLE_TIMEOUT = 60  # seconds of no console data before reconnecting
+    _boot_menu_sigs = ("selection (1-", "(1-9)?", "(1-11)?", "(1-12)?")
     _monitor_reconnect_notice_state = {
         "reconnect_notice_limit": _BMC_RECONNECT_NOTICE_LIMIT,
         "reconnect_notice_streak": 0,
@@ -31256,6 +31257,29 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     _slog("LOADER prompt detected")
                     handle_loader_commands(channel, client, sp_host, sp_user, sp_pass)
                     break
+                elif any(_sig in output_buffer.lower() for _sig in _boot_menu_sigs):
+                    _slog(f"[{sp_host}] boot menu prompt detected during monitoring; proceeding to boot-menu selection")
+                    _rc = {
+                        "host": sp_host,
+                        "user": sp_user,
+                        "password": sp_pass,
+                        "client": client,
+                        "channel": channel,
+                        "label": f"primary/{sp_host or 'node'}",
+                    }
+                    wait_for_boot_menu_and_select(
+                        channel,
+                        timeout=900,
+                        node_label=sp_host,
+                        reconnect_ctx=_rc,
+                    )
+                    if _rc.get("client") is not None:
+                        client = _rc["client"]
+                    if _rc.get("channel") is not None:
+                        channel = _rc["channel"]
+                    sp_user = _rc.get("user", sp_user)
+                    sp_pass = _rc.get("password", sp_pass)
+                    break
 
                 elif "\nlogin:" in output_buffer or output_buffer.lstrip().startswith("login:"):
                     print(f"\n❌ [{sp_host}] Node has already booted to ONTAP (login: prompt detected).")
@@ -31309,6 +31333,29 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                     if _sc_matched and "y/n" in _sc_matched.lower():
                         channel.send("y\r")
                         time.sleep(2)
+                    elif _sc_matched and "selection" in _sc_matched.lower():
+                        _slog(f"[{sp_host}] boot menu prompt detected right after reconnect; proceeding to boot-menu selection")
+                        _rc = {
+                            "host": sp_host,
+                            "user": sp_user,
+                            "password": sp_pass,
+                            "client": client,
+                            "channel": channel,
+                            "label": f"primary/{sp_host or 'node'}",
+                        }
+                        wait_for_boot_menu_and_select(
+                            channel,
+                            timeout=900,
+                            node_label=sp_host,
+                            reconnect_ctx=_rc,
+                        )
+                        if _rc.get("client") is not None:
+                            client = _rc["client"]
+                        if _rc.get("channel") is not None:
+                            channel = _rc["channel"]
+                        sp_user = _rc.get("user", sp_user)
+                        sp_pass = _rc.get("password", sp_pass)
+                        break
                     elif _sc_matched and "login:" in _sc_matched.lower():
                         print(f"\n❌ [{sp_host}] Node has already booted to ONTAP (login: prompt on reconnect).")
                         print("   Cannot intercept AUTOBOOT. Manual intervention or re-run required.")
