@@ -5241,38 +5241,56 @@ def select_operation_mode():
                     print(_completed)
                 print(f"     Resume stage     : {_stage}")
                 print("=" * 60)
-                while True:
-                    _resume_now = _prompt_with_timeout(
-                        "  Resume from this checkpoint now? [y/n]: ",
-                        default="n",
-                        timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
-                    ).strip().lower()
-                    if _resume_now in ("yes", "y"):
-                        _resume_now = "y"
-                        break
-                    if _resume_now in ("no", "n"):
-                        _resume_now = "n"
-                        break
-                    print("  Please enter y, n, yes, or no.")
-                print("")
-                if _resume_now == "y":
-                    _prompt_checkpoint_resume_target_override(_cp_start)
-                    _resume_choice = _dispatch_checkpoint_resume(_cp_start)
-                    if _resume_choice is not None:
-                        return _resume_choice
-                else:
-                    # User declined resume — offer to clear the stale checkpoint
+                _is_fully_completed = (
+                    str(_checkpoint_resume_phase_id(_cp_start) or "").strip() == ""
+                    and not str(_cp_mode or "").strip().lower().startswith("4.2")
+                )
+                if _is_fully_completed:
+                    print("  ℹ️  All checkpoints are complete; there is nothing to resume.")
                     _clear_q = _prompt_with_timeout(
-                        "  Clear this checkpoint? [y/N]: ",
-                        default="n",
+                        "  Clear this completed checkpoint? [Y/n]: ",
+                        default="y",
                         timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
                     ).strip().lower()
-                    if _clear_q in ("y", "yes"):
+                    if _clear_q in ("", "y", "yes"):
                         _cp_start.clear()
                         _menu_checkpoint_available = False
-                        print("  ✅ Checkpoint cleared.\n")
+                        print("  ✅ Completed checkpoint cleared.\n")
                     else:
-                        print("  ℹ️  Checkpoint retained.\n")
+                        print("  ℹ️  Completed checkpoint retained.\n")
+                else:
+                    while True:
+                        _resume_now = _prompt_with_timeout(
+                            "  Resume from this checkpoint now? [y/n]: ",
+                            default="n",
+                            timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                        ).strip().lower()
+                        if _resume_now in ("yes", "y"):
+                            _resume_now = "y"
+                            break
+                        if _resume_now in ("no", "n"):
+                            _resume_now = "n"
+                            break
+                        print("  Please enter y, n, yes, or no.")
+                    print("")
+                    if _resume_now == "y":
+                        _prompt_checkpoint_resume_target_override(_cp_start)
+                        _resume_choice = _dispatch_checkpoint_resume(_cp_start)
+                        if _resume_choice is not None:
+                            return _resume_choice
+                    else:
+                        # User declined resume — offer to clear the stale checkpoint
+                        _clear_q = _prompt_with_timeout(
+                            "  Clear this checkpoint? [y/N]: ",
+                            default="n",
+                            timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                        ).strip().lower()
+                        if _clear_q in ("y", "yes"):
+                            _cp_start.clear()
+                            _menu_checkpoint_available = False
+                            print("  ✅ Checkpoint cleared.\n")
+                        else:
+                            print("  ℹ️  Checkpoint retained.\n")
         if _menu_checkpoint_available:
             choice = input(
                 '❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.) or type "checkpoint" to resume the last checkpoint: '
