@@ -37661,12 +37661,19 @@ def main():
             # allows immediate resume discovery after injected --test failures.
             if _operation_mode in (1, 2, 3) and _checkpoint is None and not _mode3_skip_presets:
                 try:
-                    # Load any existing checkpoint to check for resume
+                    # Load any existing checkpoint to check for an active resume.
+                    # For fresh runs (no resume requested), always initialize a new
+                    # checkpoint for the selected mode so stale checkpoints from a
+                    # prior mode cannot leak into a new run's pre-config flow.
                     _cp_test = CheckpointManager()
                     _checkpoint_exists = _cp_test.load()
-                    if not _checkpoint_exists:
-                        # No prior checkpoint - create a fully valid checkpoint now so
-                        # checkpoint-status/resume discovery can see it immediately.
+                    _resume_active = _checkpoint_resume_active()
+                    if _checkpoint_exists and _resume_active:
+                        # Reuse the loaded checkpoint
+                        _checkpoint = _cp_test
+                    else:
+                        # Fresh run (or stale checkpoint present): initialize a valid
+                        # checkpoint skeleton for the current selected mode.
                         _early_mode = {1: "1", 2: "2", 3: "3"}.get(_operation_mode, str(_operation_mode))
                         _checkpoint = CheckpointManager()
                         _checkpoint.init_run(
@@ -37675,9 +37682,6 @@ def main():
                             log_dir="",
                             config_path=(config_path or ""),
                         )
-                    else:
-                        # Reuse the loaded checkpoint
-                        _checkpoint = _cp_test
                 except Exception:
                     # Fallback: create a valid checkpoint skeleton.
                     _early_mode = {1: "1", 2: "2", 3: "3"}.get(_operation_mode, str(_operation_mode))
