@@ -1892,6 +1892,76 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
     return True
 
 
+def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node_ids) -> None:
+    """Offer per-node --test mapping when multi-node scope becomes known later."""
+    global _checkpoint_test_enabled, _checkpoint_test_target
+    global _checkpoint_test_mode_label, _checkpoint_test_targets_by_node
+    if operation_mode not in (2, 3):
+        return
+    if not _checkpoint_test_enabled:
+        return
+    if _checkpoint_test_targets_by_node:
+        return
+    _global_target = str(_checkpoint_test_target or "").strip()
+    if not _global_target:
+        return
+    _nodes = []
+    for _nid in (node_ids or []):
+        _clean = str(_nid).strip()
+        if _clean and _clean not in _nodes:
+            _nodes.append(_clean)
+    if len(_nodes) <= 1:
+        return
+
+    _options = list(_CHECKPOINT_TEST_OPTIONS.get(operation_mode) or [])
+    if not _options:
+        return
+    _mode_name = _checkpoint_test_mode_name(operation_mode)
+
+    _resume_cp_for_override = None
+    _min_allowed_idx = 1
+    try:
+        _resume_cp_for_override = CheckpointManager()
+        if _resume_cp_for_override.load():
+            _resume_mode_key = _checkpoint_mode_to_test_key(_resume_cp_for_override.mode)
+            if _resume_mode_key == operation_mode:
+                _min_allowed_idx, _ = _checkpoint_injection_min_allowed_index(
+                    _options, _resume_cp_for_override
+                )
+    except Exception:
+        _resume_cp_for_override = None
+
+    print("\n  🧪 Multiple nodes detected for this run.")
+    print(
+        f"  Current --test checkpoint '{_global_target}' applies to all "
+        f"{len(_nodes)} nodes."
+    )
+    _choice = _prompt(
+        "  Keep global injection or configure per-node now? [g/P]: ",
+        "g",
+    ).strip().lower()
+    if _choice != "p":
+        _slog(
+            f"--test mode {_mode_name}: keeping global checkpoint "
+            f"'{_global_target}' across {len(_nodes)} nodes",
+            prefix="INFO",
+        )
+        return
+
+    if _configure_per_node_checkpoint_injection(
+        _mode_name,
+        _options,
+        _nodes,
+        min_allowed_index=_min_allowed_idx,
+    ):
+        return
+
+    print(
+        f"  ℹ️  Keeping global checkpoint '{_global_target}' for all nodes "
+        "for this run."
+    )
+
+
 def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> None:
     """When ``--test`` is enabled, let the operator choose a checkpoint to fail at."""
     global _checkpoint_test_enabled, _checkpoint_test_target, _checkpoint_test_mode_label
@@ -1922,6 +1992,9 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
     print("  Press Enter with no value to run without failure injection.")
     print("")
     print("  0. Disable injected checkpoint failure for this run")
+    _allow_menu_escape = operation_mode == 2
+    if _allow_menu_escape:
+        print("  M. Return to main menu")
     _per_node_nodes = _checkpoint_test_secondary_nodes_for_mode(operation_mode)
     _per_node_available = operation_mode in (2, 3) and len(_per_node_nodes) > 1
     if _per_node_available:
@@ -1945,14 +2018,26 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
     for _idx, (_phase, _label) in enumerate(_options, 1):
         print(f"  {_idx}. {_phase:<22} {_label}")
 
+    _prompt_extras = []
+    if _per_node_available:
+        _prompt_extras.append("P")
+    if _resume_cp_available:
+        _prompt_extras.append("B")
+    if _allow_menu_escape:
+        _prompt_extras.append("M")
+
     while True:
         _sel = _prompt(
             f"\n  Inject failure after checkpoint [0-{len(_options)}"
-            f"{', B' if _resume_cp_available else ''}] (Enter=0/no injection): ",
+            f"{', ' + ', '.join(_prompt_extras) if _prompt_extras else ''}] "
+            f"(Enter=0/no injection): ",
             "0",
         ).strip()
         if _sel == "":
             _sel = "0"
+        if _allow_menu_escape and _sel.lower() == "m":
+            print("  ↩️  Returning to main menu...")
+            raise _ReturnToMenu
         if _per_node_available and _sel.lower() == "p":
             if _configure_per_node_checkpoint_injection(
                 _mode_name,
@@ -1985,7 +2070,8 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
                     )
             continue
         if not _sel.isdigit():
-            print("  ⚠️  Enter a number from the list.")
+            print("  ⚠️  Enter a number from the list or one of: "
+                  + ", ".join(_prompt_extras) + ".")
             continue
         _idx = int(_sel)
         if _idx == 0:
@@ -37724,8 +37810,19 @@ def main():
                                 _run_context.apply_to_globals()
                                 print(f"    ✅ Added: {_ex_bmc}")
                                 _extra_num += 1
-                            if _extra_num > 1:
-                                print(f"\n  ✅ {_extra_num - 1} additional node(s) added.")
+
+                        _sn_bmcs = []
+                        for _sn in (_config_data.get("secondary_nodes") or []):
+                            if not isinstance(_sn, dict):
+                                continue
+                            _bmc = str(_sn.get("bmc") or "").strip()
+                            if _bmc and _bmc not in _sn_bmcs:
+                                _sn_bmcs.append(_bmc)
+                        _maybe_offer_per_node_checkpoint_injection_upgrade(
+                            _operation_mode, _sn_bmcs
+                        )
+                        if _extra_num > 1:
+                            print(f"\n  ✅ {_extra_num - 1} additional node(s) added.")
 
                 except ValueError as e:
                     print(f"⚠️  {e}")
