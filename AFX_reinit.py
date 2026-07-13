@@ -9101,8 +9101,11 @@ def wait_for_bmc_prompt(channel, auto_takeover=False):
                             )
                 if _new_ch:
                     _rc["channel"] = _new_ch
-                    _out2, _m2 = direct_read_until_any(_new_ch, [">"], timeout=10)
-                    if _m2 and ">" in _m2:
+                    if _reach_bmc_prompt(
+                        _new_ch,
+                        timeout=20,
+                        takeover_msg="Detected takeover prompt after reconnect; continuing auto-disconnect",
+                    ):
                         print("✅ BMC prompt reached on reconnected channel.")
                         _slog("BMC prompt reached on reconnected channel after session-takeover race")
                         return _new_ch
