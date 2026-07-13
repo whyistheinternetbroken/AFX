@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 7/9/2026
+**Updated:** 7/13/2026
 
 ---
 
@@ -608,6 +608,9 @@ The script prompts for a checkpoint injection target by mode. On hitting that
 checkpoint, it injects a failure after saving state so resume behavior can be
 validated.
 
+At the injection prompt, pressing **Enter** with no value now maps to `0`
+(no failure injection) and continues the run normally.
+
 For targeted tests:
 
 ```bash
@@ -715,11 +718,11 @@ This example demonstrates Mode 4.2's strict 6-checkpoint sequence:
 $ python AFX_reinit.py
 ? Select operation mode: 4
 ? Select upgrade/install option:
-  a. Rolling upgrade (4a)
-  b. Netboot + cluster reinit (4b)
-  c. Install image only (4c)
+  4.1. Rolling upgrade
+  4.2. Netboot + cluster reinit
+  4.3. Install image only
 
-? Select [a/b/c]: b
+? Select [4.1/4.2/4.3]: 4.2
 
 # Mode 4.2 runs with 6 checkpoints (NO Option 6)
 Checkpoint 1/6: Nodes at LOADER

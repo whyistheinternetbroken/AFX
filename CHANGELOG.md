@@ -16,12 +16,14 @@ revision labels rather than strict [SemVer](https://semver.org/).
 - **README timing documentation.** Added an observed option 1 sample timeline, plus physical-zeroing notes derived from the uploaded session log so operators can estimate where long waits normally occur.
 - **Node-add resume status-stage UX.** Mode 2 resume now suppresses the already-joined confirmation at `cp_2_7`/`cp_2_8` status-only stages and prints a resume-specific banner (`Resuming node add process for N nodes...`).
 - **Checkpoint docs refreshed for actual runtime model.** README checkpoint documentation now reflects the live `checkpoints/afx_checkpoint.json` structure (global + per-node phase maps), `cp_2_8` semantics, and per-node multi-node resume behavior.
+- **Checkpoint test prompt clarity.** `--test` checkpoint injection menus now explicitly document that pressing Enter with no value runs with injection disabled (`0`), matching existing runtime behavior.
 
 ### Fixed
 - **Long option 4 wait visibility.** Primary-node option 4 automation now surfaces a clear "started" state, periodic progress heartbeat, and explicit completion message before AutoSupport handling instead of leaving the console silent during the longest reinit wait.
 - **Per-node mode-2 checkpoint progression.** Node-add resume now evaluates `cp_2_*` completion per node so failures in one node no longer incorrectly force all nodes through the same checkpoint stage.
 - **Mode 2 `cp_2_7` resume re-entry.** If target nodes are already joined when resuming at `cp_2_7`/`cp_2_8`, the script now runs final health verification and marks `cp_2_8` complete instead of re-running `cluster add-node`.
 - **BMC takeover prompt loops on resume.** Resume connect paths now handle repeated stacked `Another user has an active CLI session... [y/n]?` prompts until the BMC prompt is reached.
+- **BMC takeover reconnect race handling.** When the takeover socket closes during `y` send, the reconnect path now re-enters takeover-aware prompt handling (instead of waiting only for `>`), preventing false `BMC prompt not received` failures.
 - **System-console probe output leak.** Prompt probes before entering `system console` are now logged quietly and no longer dump boot-menu text to the terminal screen.
 
 ---
