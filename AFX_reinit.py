@@ -1779,8 +1779,12 @@ def _checkpoint_test_secondary_nodes_for_mode(operation_mode: int) -> "list[str]
     _nodes = []
     _cfg = globals().get("_config_data")
     if isinstance(_cfg, dict):
-        __primary, _secondary = _extract_bmc_lists_from_config_dict(_cfg)
-        for _bmc in _secondary:
+        _primary, _secondary = _extract_bmc_lists_from_config_dict(_cfg)
+        _cfg_candidates = list(_secondary)
+        if operation_mode in (42, 43):
+            if _primary:
+                _cfg_candidates = [_primary] + _cfg_candidates
+        for _bmc in _cfg_candidates:
             _b = str(_bmc).strip()
             if _b and _b not in _nodes:
                 _nodes.append(_b)
@@ -1896,7 +1900,7 @@ def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node
     """Offer per-node --test mapping when multi-node scope becomes known later."""
     global _checkpoint_test_enabled, _checkpoint_test_target
     global _checkpoint_test_mode_label, _checkpoint_test_targets_by_node
-    if operation_mode not in (2, 3):
+    if operation_mode not in (2, 3, 42, 43):
         return
     if not _checkpoint_test_enabled:
         return
@@ -1996,7 +2000,7 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
     if _allow_menu_escape:
         print("  M. Return to main menu")
     _per_node_nodes = _checkpoint_test_secondary_nodes_for_mode(operation_mode)
-    _per_node_available = operation_mode in (2, 3) and len(_per_node_nodes) > 1
+    _per_node_available = operation_mode in (2, 3, 42, 43) and len(_per_node_nodes) > 1
     if _per_node_available:
         print("  P. Configure per-node checkpoint failures for secondary_nodes")
     if _resume_cp_available:
@@ -4538,6 +4542,30 @@ def _checkpoint_mode_to_test_key(raw_mode: str):
     if _raw_mode == "1":
         return 1
     return None
+
+
+def _print_checkpoint_list() -> None:
+    """Print all available checkpoint IDs grouped by operation mode."""
+    _mode_rows = [
+        (1, "1", "Initialize first node"),
+        (2, "2", "Add nodes"),
+        (3, "3", "End-to-end auto initialize"),
+        (41, "4.1", "ONTAP rolling upgrade"),
+        (42, "4.2", "Netboot + automated cluster reinit"),
+        (43, "4.3", "Netboot install image only"),
+    ]
+    print("Available checkpoints by mode:\n")
+    for _mode_key, _mode_label, _mode_desc in _mode_rows:
+        _options = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
+        if not _options:
+            continue
+        print(
+            f"  Mode {_mode_label} ({_mode_desc}) — "
+            f"{len(_options)} checkpoint(s)"
+        )
+        for _idx, (_cp_id, _cp_desc) in enumerate(_options, 1):
+            print(f"    {_idx:>2}. {_cp_id:<18} {_cp_desc}")
+        print("")
 
 
 def _checkpoint_phase_recorded_done(cp, phase_id: str) -> bool:
@@ -8293,6 +8321,11 @@ OPTIONS
         role-labeled per-node phase blocks (primary / secondary-0N). Does not
         modify the checkpoint file.
 
+    --checkpoint-list
+        Print all available checkpoint IDs grouped by mode (1, 2, 3, 4.1, 4.2,
+        4.3), then exit. Useful for planning resume tests and targeted
+        --test-checkpoint injection points.
+
     --last-status
         Read and display the summary file from the most recent AFX_reinit
         run, then exit. The summary file is created at run start and
@@ -8694,7 +8727,8 @@ def _maybe_warn_missing_completion_setup(args) -> None:
     if not (sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty()):
         return
     if (args.help or args.version or args.config_example
-            or args.checkpoint_status or args.last_status or args.show_config
+            or args.checkpoint_status or args.checkpoint_list
+            or args.last_status or args.show_config
             or args.install_completion or args.print_completion_hook):
         return
     _script = _script_path_for_completion()
@@ -8754,6 +8788,9 @@ def parse_args():
                              "and next expected phase, where the last run left "
                              "off, and role-labeled per-node progress, then "
                              "exit. Does not modify the checkpoint file.")
+    parser.add_argument("--checkpoint-list", action="store_true", default=False,
+                        help="Print all available checkpoint IDs grouped by mode "
+                             "(1, 2, 3, 4.1, 4.2, 4.3), then exit.")
     parser.add_argument("--last-status", action="store_true", default=False,
                         help="Read and display the summary file from the most recent "
                              "AFX_reinit run, then exit. Useful for checking the "
@@ -17677,6 +17714,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         if log:
             log.log(f"4.2: {len(bmc_ips)} node(s): {bmc_ips}")
     _4b_primary_node_ip = bmc_ips[0] if bmc_ips else None
+    _maybe_offer_per_node_checkpoint_injection_upgrade(
+        43 if install_only else 42,
+        bmc_ips,
+    )
 
     # If any BMC password was left empty, ask for the cluster admin password
     # now so it is available when the cluster setup wizard runs later.
@@ -34499,7 +34540,7 @@ def main():
         print(_CONFIG_FILE_EXAMPLE)
         sys.exit(0)
 
-    _status_mode = args.checkpoint_status or args.last_status
+    _status_mode = args.checkpoint_status or args.checkpoint_list or args.last_status
     if _status_mode:
         _status_rc = 0
         _printed_any = False
@@ -34511,6 +34552,11 @@ def main():
             else:
                 print(_cp.summary())
                 _printed_any = True
+        if args.checkpoint_list:
+            if _printed_any:
+                print()
+            _print_checkpoint_list()
+            _printed_any = True
         if args.last_status:
             if _printed_any:
                 print()
@@ -38783,6 +38829,9 @@ def main():
                               " auto-added in parallel after primary cluster is up:")
                         print(f"     {', '.join(other_sps)}")
                         _session_log.log(f"Mode 3 peer add list: {other_sps}")
+                        _maybe_offer_per_node_checkpoint_injection_upgrade(
+                            _operation_mode, other_sps
+                        )
                         if _netboot_before_reinit:
                             _print_autopilot_banner()
 
