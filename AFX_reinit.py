@@ -1919,6 +1919,7 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
     _print_banner(f"🧪 Test failure injection ({_mode_name})")
     print("\n  Select a checkpoint to fail immediately after it is saved.")
     print("  This is intended to validate resume/checkpoint pickup on the next run.")
+    print("  Press Enter with no value to run without failure injection.")
     print("")
     print("  0. Disable injected checkpoint failure for this run")
     _per_node_nodes = _checkpoint_test_secondary_nodes_for_mode(operation_mode)
@@ -1947,7 +1948,7 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
     while True:
         _sel = _prompt(
             f"\n  Inject failure after checkpoint [0-{len(_options)}"
-            f"{', B' if _resume_cp_available else ''}]: ",
+            f"{', B' if _resume_cp_available else ''}] (Enter=0/no injection): ",
             "0",
         ).strip()
         if _sel == "":
