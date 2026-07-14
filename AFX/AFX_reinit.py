@@ -3706,7 +3706,7 @@ class SessionLogger:
         )
         os.makedirs(self.log_dir, exist_ok=True)
         self.log_file = _build_numbered_log_path(
-            self.log_dir, f"bmc_session_{timestamp}.log", scope_dir=self.log_dir
+            self.log_dir, f"bmc_session_primary_{timestamp}.log", scope_dir=self.log_dir
         )
         self.summary_file = _build_numbered_log_path(
             self.log_dir, f"summary_{timestamp}.log", scope_dir=self.log_dir
@@ -3793,6 +3793,12 @@ class SessionLogger:
         # in the summary tables. phase_name -> list[(label, elapsed_seconds)].
         self._phase_subtimings: "dict[str, list[tuple[str, float]]]" = {}
         self._closed = False
+
+        # Per-peer node log files.  Keyed by BMC IP string.
+        # {ip: {"file": file_handle, "index": int, "path": str}}
+        self._peer_logs: "dict[str, dict]" = {}
+        self._peer_logs_lock = threading.Lock()
+        self._peer_log_counter = 0  # incremented per open_peer_log call
 
         self._write_header()
         self.refresh_summary()
@@ -4343,20 +4349,6 @@ class SessionLogger:
         self.close()
 
 
-    def log(self, message, prefix="INFO"):
-        with self._lock:
-            if self._closed or self._file.closed:
-                return
-            upper = prefix.upper()
-            now_str = datetime.now().strftime("%H:%M:%S")
-            if upper in ("ERROR", "FATAL"):
-                self._error_count += 1
-                self._errors.append((now_str, message))
-            elif upper == "WARN":
-                self._warn_count += 1
-                self._warnings.append((now_str, message))
-            self._file.write(f"[{self._ts_with_elapsed()}] [{prefix}] {message}\n")
-
     def log_console(self, data):
         with self._lock:
             if self._closed or self._file.closed:
@@ -4375,6 +4367,115 @@ class SessionLogger:
                 return
             display = repr(data) if any(ord(c) < 32 and c not in '\r\n' for c in data) else data.strip()
             self._file.write(f"[{self._ts_with_elapsed()}] [SENT] {display}\n")
+
+    def log_choice(self, prompt: str, answer: str):
+        """Record an operator prompt→answer pair to the choices log.
+
+        Answers to prompts whose text contains password-related keywords are
+        masked so credentials are never written to the choices file.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            try:
+                _label = re.sub(r"\x1b\[[0-9;]*m", "", str(prompt or ""))
+                _label = _label.strip().splitlines()[-1] if _label.strip() else ""
+                _is_secret = any(
+                    w in _label.lower()
+                    for w in ("password", "passphrase", "secret", "token", "passwd")
+                )
+                _display = "***" if _is_secret else (answer if answer else "(blank/default)")
+                ts = datetime.now().strftime("%H:%M:%S")
+                self._choices_log.write(f"[{ts}] {_label}\n         → {_display}\n\n")
+            except Exception:
+                pass
+
+    def open_peer_log(self, ip: str, index: "int | None" = None) -> "str | None":
+        """Create (or return path to) a per-peer BMC session log file.
+
+        The file is named ``bmc_session_secondary-{NN}_{ip}_{ts}.log`` where
+        ``NN`` is a zero-padded ordinal so files sort in join order.
+
+        Returns the path to the opened log, or None on failure.  Idempotent —
+        calling twice for the same IP returns the already-opened path.
+        """
+        with self._peer_logs_lock:
+            if ip in self._peer_logs:
+                return self._peer_logs[ip]["path"]
+            if self._closed:
+                return None
+            self._peer_log_counter += 1
+            _idx = index if index is not None else self._peer_log_counter
+            _safe_ip = ip.replace(".", "_").replace(":", "_")
+            _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            _fname = f"bmc_session_secondary-{_idx:02d}_{_safe_ip}_{_ts}.log"
+            try:
+                _path = _build_numbered_log_path(self.log_dir, _fname, scope_dir=self.log_dir)
+                _fh = open(_path, "w", encoding="utf-8", buffering=1)
+                _fh.write(
+                    f"BMC Session Log — secondary node {ip} (index {_idx})\n"
+                    f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    + "=" * 72 + "\n\n"
+                )
+                self._peer_logs[ip] = {"file": _fh, "index": _idx, "path": _path}
+                return _path
+            except Exception:
+                return None
+
+    def log_peer(self, ip: str, message: str, prefix: str = "INFO") -> None:
+        """Write *message* to the per-peer log for *ip* AND to the primary log.
+
+        If no peer log has been opened for *ip*, writes only to the primary log.
+        Error/warn accounting is always done on the primary counters so the
+        session summary remains accurate regardless of which file is used.
+        """
+        with self._lock:
+            if self._closed or self._file.closed:
+                return
+            upper = prefix.upper()
+            now_str = datetime.now().strftime("%H:%M:%S")
+            if upper in ("ERROR", "FATAL"):
+                self._error_count += 1
+                self._errors.append((now_str, message))
+            elif upper == "WARN":
+                self._warn_count += 1
+                self._warnings.append((now_str, message))
+            _line = f"[{self._ts_with_elapsed()}] [{prefix}] {message}\n"
+            self._file.write(_line)
+        # Write to peer-specific log outside the primary lock to avoid deadlock.
+        with self._peer_logs_lock:
+            _entry = self._peer_logs.get(ip)
+        if _entry:
+            with suppress(Exception):
+                _entry["file"].write(_line)
+
+    def log(self, message, prefix="INFO"):
+        """Write to the primary log and also fan-out to any registered peer log
+        whose IP appears in a ``[peer/IP]`` or ``[node_peer:IP]`` tag at the
+        start of *message*.
+        """
+        with self._lock:
+            if self._closed or self._file.closed:
+                return
+            upper = prefix.upper()
+            now_str = datetime.now().strftime("%H:%M:%S")
+            if upper in ("ERROR", "FATAL"):
+                self._error_count += 1
+                self._errors.append((now_str, message))
+            elif upper == "WARN":
+                self._warn_count += 1
+                self._warnings.append((now_str, message))
+            _line = f"[{self._ts_with_elapsed()}] [{prefix}] {message}\n"
+            self._file.write(_line)
+        # Fan-out: if message is tagged with a peer IP, also write to its log.
+        _m = re.match(r"^\[(?:peer|node_peer)[/:]([^\]]+)\]", str(message or ""))
+        if _m:
+            _peer_ip = _m.group(1).strip()
+            with self._peer_logs_lock:
+                _entry = self._peer_logs.get(_peer_ip)
+            if _entry:
+                with suppress(Exception):
+                    _entry["file"].write(_line)
 
     def close(self):
         # Stop the heartbeat thread BEFORE taking the lock so it can drain
@@ -4562,6 +4663,12 @@ class SessionLogger:
                 self._screen_log.close()
         except Exception:
             pass
+        # Close any open peer log files.
+        with self._peer_logs_lock:
+            for _entry in self._peer_logs.values():
+                with suppress(Exception):
+                    if not _entry["file"].closed:
+                        _entry["file"].close()
 
     def _write_summary_file(self, now, total_elapsed, outcome_status, outcome_note,
                             failure_stage: str = "", final: bool = False):
@@ -27491,6 +27598,14 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
     print(f"\n🧵 [{label}] Starting peer auto-add thread...")
     if _session_log:
         _session_log.log(f"[{label}] thread starting")
+
+    # Register a per-peer BMC session log so all _session_log.log() calls
+    # tagged [peer/IP] are automatically fanned out to this node's own file.
+    if _session_log and hasattr(_session_log, "open_peer_log"):
+        _peer_log_path = _session_log.open_peer_log(peer_bmc)
+        if _peer_log_path:
+            print(f"   📝 [{label}] BMC session log: {_peer_log_path}")
+            _slog(f"[{label}] peer session log: {_peer_log_path}")
 
     # Per-thread timing anchor and per-milestone timestamps.
     _t_thread_start   = time.monotonic()
