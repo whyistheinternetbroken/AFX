@@ -2041,6 +2041,17 @@ def _checkpoint_injection_min_allowed_index(options, resume_cp=None) -> "tuple[i
     return 1, ""
 
 
+def _primary_checkpoint_options(operation_mode: int) -> list:
+    """Return only cp_1_x (primary-node) checkpoint options for the given mode.
+
+    Falls back to the full list when the mode has no cp_1_x entries (e.g. mode 2
+    which is entirely cp_2_x peer phases) so the list is never empty.
+    """
+    all_opts = list(_CHECKPOINT_TEST_OPTIONS.get(operation_mode) or [])
+    primary_only = [(cp_id, cp_desc) for cp_id, cp_desc in all_opts if cp_id.startswith("cp_1_")]
+    return primary_only if primary_only else all_opts
+
+
 def _peer_checkpoint_options(operation_mode: int) -> list:
     """Return only cp_2_x (peer-applicable) checkpoint options for the given mode."""
     return [
@@ -2238,6 +2249,12 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
         return
 
     _options = list(_CHECKPOINT_TEST_OPTIONS.get(operation_mode) or [])
+    # For modes that include both primary and secondary phases (e.g. mode 3),
+    # restrict this global prompt to primary (cp_1_x) checkpoints only.
+    # Secondary node checkpoints (cp_2_x) are configured per-node after config loads.
+    _primary_opts = _primary_checkpoint_options(operation_mode)
+    _has_peer_phases = len(_primary_opts) < len(_options)
+    _options = _primary_opts
     _mode_name = _checkpoint_test_mode_name(operation_mode)
     if not _options:
         print(f"\n🧪 --test: no checkpoint failure injection points are available for mode {_mode_name}.")
@@ -2258,6 +2275,9 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
     print("\n  Select a checkpoint to fail immediately after it is saved.")
     print("  This is intended to validate resume/checkpoint pickup on the next run.")
     print("  Press Enter with no value to run without failure injection.")
+    if _has_peer_phases:
+        print("\n  ℹ️  This list covers the primary node only.")
+        print("  Secondary node checkpoints (cp_2_x) are configured per-node after config loads.")
     print("")
     print("  0. Disable injected checkpoint failure for this run")
     if _allow_menu_escape:
