@@ -263,6 +263,7 @@ class CheckpointManager:
     CHECKPOINT_DIR = "checkpoints"
     CHECKPOINT_FILE = "afx_checkpoint.json"
     MAX_AGE_HOURS = 72  # checkpoints older than this are ignored
+    MAX_ARCHIVE_KEEP = 5  # how many archived checkpoints to retain
 
     def __init__(self, path: "str | None" = None):
         try:
@@ -277,11 +278,69 @@ class CheckpointManager:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
+    @classmethod
+    def list_all(cls) -> "list[CheckpointManager]":
+        """Return all valid, non-expired checkpoints in the checkpoint dir,
+        sorted newest-first by their ``created`` timestamp.
+
+        Both the active checkpoint (``afx_checkpoint.json``) and any archived
+        checkpoints (``afx_checkpoint_YYYYMMDDTHHMMSS.json``) are included.
+        """
+        try:
+            _script_dir = os.path.dirname(os.path.abspath(__file__))
+        except NameError:
+            _script_dir = os.getcwd()
+        _cp_dir = os.path.join(_script_dir, cls.CHECKPOINT_DIR)
+        _results: "list[CheckpointManager]" = []
+        if not os.path.isdir(_cp_dir):
+            return _results
+        for _fname in os.listdir(_cp_dir):
+            if not (_fname.startswith("afx_checkpoint") and _fname.endswith(".json")):
+                continue
+            _cm = cls(path=os.path.join(_cp_dir, _fname))
+            if _cm.load():
+                _results.append(_cm)
+        _results.sort(key=lambda c: c.created or "", reverse=True)
+        return _results
+
+    def _prune_archives(self) -> None:
+        """Remove archived checkpoint files beyond ``MAX_ARCHIVE_KEEP``."""
+        _cp_dir = os.path.dirname(self._path)
+        try:
+            _archives = sorted(
+                [
+                    _f for _f in os.listdir(_cp_dir)
+                    if _f.startswith("afx_checkpoint_") and _f.endswith(".json")
+                ],
+                reverse=True,  # newest filename-timestamp first
+            )
+            for _old in _archives[self.MAX_ARCHIVE_KEEP:]:
+                with suppress(Exception):
+                    os.remove(os.path.join(_cp_dir, _old))
+        except Exception:
+            pass
+
     def init_run(self, mode: str, bmc_ips: "list[str]",
                  log_dir: str = "", config_path: str = "") -> None:
-        """Initialise a fresh checkpoint for a new run. Overwrites any
-        existing checkpoint file.
+        """Initialise a fresh checkpoint for a new run.
+
+        The existing active checkpoint (if any) is archived to a timestamped
+        file before the new one is written so that the operator can resume a
+        previous run even after a new run has been started.
         """
+        # Archive the current active checkpoint before overwriting it so the
+        # operator can still resume the previous run from the menu.
+        with _checkpoint_io_lock:
+            if os.path.isfile(self._path):
+                with suppress(Exception):
+                    _ts_str = datetime.now().strftime("%Y%m%dT%H%M%S")
+                    _archive = os.path.join(
+                        os.path.dirname(self._path),
+                        f"afx_checkpoint_{_ts_str}.json",
+                    )
+                    os.rename(self._path, _archive)
+        self._prune_archives()
+
         now = datetime.now().isoformat()
         with self._data_lock:
             self._data = {
@@ -5953,19 +6012,27 @@ def select_operation_mode():
             return 2, False, True
         if _cp_mode == "3":
             _mode3_peer_opt4 = bool(_cp_obj.nodes_done_for("peer_option4_done"))
-            _mode3_replay_risk = bool(
+            # Only route to 2.3 (add-node continuation) when the cluster
+            # actually exists. primary_bootmenu_done and primary_node_mgmt_done
+            # are pre-cluster stages — the cluster management LIF is not
+            # available yet at those points.  peer_option4_done alone is also
+            # insufficient: in mode 3 peers run option 4 in parallel with the
+            # primary cluster-setup wizard, so the cluster may not be formed
+            # when peers finish option 4.
+            _cluster_exists = bool(
                 _cp_obj.is_done("cluster_formed")
                 or _cp_obj.is_done("primary_setup_done")
-                or _cp_obj.is_done("primary_bootmenu_done")
-                or _cp_obj.is_done("primary_node_mgmt_done")
-                or _mode3_peer_opt4
             )
-            if _mode3_replay_risk:
+            if _cluster_exists:
                 print(
                     "\n  ✅ Resuming checkpoint via menu option 2.3 "
                     "(safe add-node continuation)."
                 )
                 return 26, False, False
+            # Primary is not yet done with cluster setup — resume mode 3 from
+            # the first incomplete primary checkpoint.  Per-node phases
+            # (peer_option4_done etc.) are already tracked and will be skipped
+            # when the parallel peer flow re-evaluates each node.
             print("\n  ✅ Resuming checkpoint via menu option 3.")
             return 3, True, True
         if _cp_mode == "1":
@@ -6022,78 +6089,156 @@ def select_operation_mode():
         print("")
         if not _startup_checkpoint_prompt_done:
             _startup_checkpoint_prompt_done = True
-            _cp_start = CheckpointManager()
-            if _cp_start.load():
+            _all_checkpoints = CheckpointManager.list_all()
+            if _all_checkpoints:
                 _menu_checkpoint_available = True
-                _cp_mode = str(_cp_start.mode or "").strip()
-                _cp_age = ""
-                try:
-                    _cp_dt = datetime.fromisoformat(_cp_start.created)
-                    _cp_mins = int((datetime.now() - _cp_dt).total_seconds() // 60)
-                    _cp_age = f" from {_cp_mins} minute(s) ago"
-                except Exception:
-                    pass
-                _menu_opt = _checkpoint_menu_option_label(_cp_mode)
-                _stage = _checkpoint_resume_stage_label(_cp_start)
-                _completed = _list_completed_checkpoints(_cp_start)
-                print("=" * 60)
-                print(f"  🔖 Existing checkpoint found{_cp_age}")
-                print(f"     Last menu option : {_menu_opt}")
-                print(f"     Checkpoint mode  : {_format_checkpoint_mode(_cp_mode)}")
-                if _completed:
-                    print(_completed)
-                print(f"     Resume stage     : {_stage}")
-                print("=" * 60)
-                _is_fully_completed = (
-                    str(_checkpoint_resume_phase_id(_cp_start) or "").strip() == ""
-                    and not str(_cp_mode or "").strip().lower().startswith("4.2")
-                )
-                if _is_fully_completed:
-                    print("  ℹ️  All checkpoints are complete; there is nothing to resume.")
-                    _clear_q = _prompt_with_timeout(
-                        "  Clear this completed checkpoint? [Y/n]: ",
-                        default="y",
-                        timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
-                    ).strip().lower()
-                    if _clear_q in ("", "y", "yes"):
-                        _cp_start.clear()
-                        _menu_checkpoint_available = False
-                        print("  ✅ Completed checkpoint cleared.\n")
-                    else:
-                        print("  ℹ️  Completed checkpoint retained.\n")
-                else:
-                    while True:
-                        _resume_now = _prompt_with_timeout(
-                            "  Resume from this checkpoint now? [y/n]: ",
-                            default="n",
-                            timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
-                        ).strip().lower()
-                        if _resume_now in ("yes", "y"):
-                            _resume_now = "y"
-                            break
-                        if _resume_now in ("no", "n"):
-                            _resume_now = "n"
-                            break
-                        print("  Please enter y, n, yes, or no.")
-                    print("")
-                    if _resume_now == "y":
-                        _prompt_checkpoint_resume_target_override(_cp_start)
-                        _resume_choice = _dispatch_checkpoint_resume(_cp_start)
-                        if _resume_choice is not None:
-                            return _resume_choice
-                    else:
-                        # User declined resume — offer to clear the stale checkpoint
+                if len(_all_checkpoints) == 1:
+                    # Single checkpoint — same UX as before
+                    _cp_start = _all_checkpoints[0]
+                    _cp_mode = str(_cp_start.mode or "").strip()
+                    _cp_age = ""
+                    try:
+                        _cp_dt = datetime.fromisoformat(_cp_start.created)
+                        _cp_mins = int((datetime.now() - _cp_dt).total_seconds() // 60)
+                        _cp_age = f" from {_cp_mins} minute(s) ago"
+                    except Exception:
+                        pass
+                    _menu_opt = _checkpoint_menu_option_label(_cp_mode)
+                    _stage = _checkpoint_resume_stage_label(_cp_start)
+                    _completed = _list_completed_checkpoints(_cp_start)
+                    print("=" * 60)
+                    print(f"  🔖 Existing checkpoint found{_cp_age}")
+                    print(f"     Last menu option : {_menu_opt}")
+                    print(f"     Checkpoint mode  : {_format_checkpoint_mode(_cp_mode)}")
+                    if _completed:
+                        print(_completed)
+                    print(f"     Resume stage     : {_stage}")
+                    print("=" * 60)
+                    _is_fully_completed = (
+                        str(_checkpoint_resume_phase_id(_cp_start) or "").strip() == ""
+                        and not str(_cp_mode or "").strip().lower().startswith("4.2")
+                    )
+                    if _is_fully_completed:
+                        print("  ℹ️  All checkpoints are complete; there is nothing to resume.")
                         _clear_q = _prompt_with_timeout(
-                            "  Clear this checkpoint? [y/N]: ",
-                            default="n",
+                            "  Clear this completed checkpoint? [Y/n]: ",
+                            default="y",
                             timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
                         ).strip().lower()
-                        if _clear_q in ("y", "yes"):
+                        if _clear_q in ("", "y", "yes"):
                             _cp_start.clear()
                             _menu_checkpoint_available = False
-                            print("  ✅ Checkpoint cleared.\n")
+                            print("  ✅ Completed checkpoint cleared.\n")
                         else:
-                            print("  ℹ️  Checkpoint retained.\n")
+                            print("  ℹ️  Completed checkpoint retained.\n")
+                    else:
+                        while True:
+                            _resume_now = _prompt_with_timeout(
+                                "  Resume from this checkpoint now? [y/n]: ",
+                                default="n",
+                                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                            ).strip().lower()
+                            if _resume_now in ("yes", "y"):
+                                _resume_now = "y"
+                                break
+                            if _resume_now in ("no", "n"):
+                                _resume_now = "n"
+                                break
+                            print("  Please enter y, n, yes, or no.")
+                        print("")
+                        if _resume_now == "y":
+                            _prompt_checkpoint_resume_target_override(_cp_start)
+                            _resume_choice = _dispatch_checkpoint_resume(_cp_start)
+                            if _resume_choice is not None:
+                                return _resume_choice
+                        else:
+                            # User declined resume — offer to clear the stale checkpoint
+                            _clear_q = _prompt_with_timeout(
+                                "  Clear this checkpoint? [y/N]: ",
+                                default="n",
+                                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                            ).strip().lower()
+                            if _clear_q in ("y", "yes"):
+                                _cp_start.clear()
+                                _menu_checkpoint_available = False
+                                print("  ✅ Checkpoint cleared.\n")
+                            else:
+                                print("  ℹ️  Checkpoint retained.\n")
+                else:
+                    # Multiple checkpoints — show numbered list
+                    print("=" * 60)
+                    print(f"  🔖 {len(_all_checkpoints)} checkpoints available to resume")
+                    print("=" * 60)
+                    for _idx, _cp in enumerate(_all_checkpoints, 1):
+                        _cp_mode_i = str(_cp.mode or "").strip()
+                        _cp_age_i = ""
+                        try:
+                            _cp_dt_i = datetime.fromisoformat(_cp.created)
+                            _cp_mins_i = int((datetime.now() - _cp_dt_i).total_seconds() // 60)
+                            _cp_age_i = f"{_cp_mins_i} min ago"
+                        except Exception:
+                            pass
+                        _menu_opt_i = _checkpoint_menu_option_label(_cp_mode_i)
+                        _stage_i = _checkpoint_resume_stage_label(_cp)
+                        _bmc_i = ", ".join(_cp.bmc_ips[:3])
+                        if len(_cp.bmc_ips) > 3:
+                            _bmc_i += f" (+{len(_cp.bmc_ips) - 3} more)"
+                        print(f"  {_idx}. [{_cp_age_i}] option {_menu_opt_i} | {_format_checkpoint_mode(_cp_mode_i)}")
+                        print(f"       Stage   : {_stage_i}")
+                        if _bmc_i:
+                            print(f"       Nodes   : {_bmc_i}")
+                    print("  0. Skip (do not resume)")
+                    print("=" * 60)
+                    _cp_start = None
+                    while True:
+                        _cp_sel = _prompt_with_timeout(
+                            f"  Select checkpoint to resume [1-{len(_all_checkpoints)}] (Enter=1, 0=skip): ",
+                            default="1",
+                            timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                        ).strip()
+                        if _cp_sel in ("", "1") or _cp_sel == "0":
+                            if _cp_sel == "0":
+                                _cp_start = None
+                            else:
+                                _cp_start = _all_checkpoints[0]
+                            break
+                        try:
+                            _cp_sel_i = int(_cp_sel)
+                            if 1 <= _cp_sel_i <= len(_all_checkpoints):
+                                _cp_start = _all_checkpoints[_cp_sel_i - 1]
+                                break
+                        except ValueError:
+                            pass
+                        print(f"  Please enter a number between 0 and {len(_all_checkpoints)}.")
+                    print("")
+                    if _cp_start is not None:
+                        _cp_mode = str(_cp_start.mode or "").strip()
+                        _is_fully_completed = (
+                            str(_checkpoint_resume_phase_id(_cp_start) or "").strip() == ""
+                            and not str(_cp_mode or "").strip().lower().startswith("4.2")
+                        )
+                        if _is_fully_completed:
+                            print("  ℹ️  Selected checkpoint is fully complete; nothing to resume.")
+                            _clear_q = _prompt_with_timeout(
+                                "  Clear this completed checkpoint? [Y/n]: ",
+                                default="y",
+                                timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+                            ).strip().lower()
+                            if _clear_q in ("", "y", "yes"):
+                                _cp_start.clear()
+                                print("  ✅ Checkpoint cleared.\n")
+                            else:
+                                print("  ℹ️  Checkpoint retained.\n")
+                            _cp_start = None
+                        if _cp_start is not None:
+                            _prompt_checkpoint_resume_target_override(_cp_start)
+                            _resume_choice = _dispatch_checkpoint_resume(_cp_start)
+                            if _resume_choice is not None:
+                                return _resume_choice
+                    else:
+                        print("  ℹ️  Checkpoint resume skipped.\n")
+                    if _cp_start is None:
+                        _menu_checkpoint_available = False
         if _menu_checkpoint_available:
             choice = input(
                 '❯❯  Enter your choice from the menu above (ie, 1, 2.1, 3, etc.) or type "checkpoint" to resume the last checkpoint: '
