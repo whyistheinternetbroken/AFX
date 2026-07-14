@@ -2041,8 +2041,18 @@ def _checkpoint_injection_min_allowed_index(options, resume_cp=None) -> "tuple[i
     return 1, ""
 
 
+def _peer_checkpoint_options(operation_mode: int) -> list:
+    """Return only cp_2_x (peer-applicable) checkpoint options for the given mode."""
+    return [
+        (cp_id, cp_desc)
+        for cp_id, cp_desc in (_CHECKPOINT_TEST_OPTIONS.get(operation_mode) or [])
+        if cp_id.startswith("cp_2_")
+    ]
+
+
 def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
-                                             min_allowed_index: int = 1) -> bool:
+                                             min_allowed_index: int = 1,
+                                             peer_only: bool = False) -> bool:
     """Interactive helper for per-node --test checkpoint injection selection."""
     global _checkpoint_test_enabled, _checkpoint_test_target, _checkpoint_test_mode_label
     global _checkpoint_test_targets_by_node
@@ -2051,9 +2061,11 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
     if len(_nodes) <= 1:
         return False
 
-    print("\n  P-mode: choose checkpoint injection strategy for individual nodes.")
-    print("  1. Select a checkpoint per node")
-    print("  2. Select one checkpoint and apply it to all listed nodes")
+    _node_label = "secondary node" if peer_only else "node"
+    _nodes_label = "secondary nodes" if peer_only else "listed nodes"
+    print(f"\n  P-mode: choose checkpoint injection strategy for individual {_node_label}s.")
+    print(f"  1. Select a checkpoint per {_node_label}")
+    print(f"  2. Select one checkpoint and apply it to all {_nodes_label}")
     _mode_sel = _prompt("  Strategy [1/2]: ", "1").strip()
     if _mode_sel not in ("1", "2"):
         print("  ⚠️  Invalid strategy.")
@@ -2169,6 +2181,15 @@ def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node
         return
     _mode_name = _checkpoint_test_mode_name(operation_mode)
 
+    # For secondary-node-only contexts (modes 3/2 where these are peer BMCs),
+    # filter the checkpoint list to only cp_2_x entries — primary cp_1_x phases
+    # don't apply to secondary nodes.
+    _peer_only = operation_mode in (2, 3)
+    _peer_opts = _peer_checkpoint_options(operation_mode) if _peer_only else _options
+    if not _peer_opts:
+        _peer_opts = _options
+        _peer_only = False
+
     _resume_cp_for_override = None
     _min_allowed_idx = 1
     try:
@@ -2177,20 +2198,23 @@ def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node
             _resume_mode_key = _checkpoint_mode_to_test_key(_resume_cp_for_override.mode)
             if _resume_mode_key == operation_mode:
                 _min_allowed_idx, _ = _checkpoint_injection_min_allowed_index(
-                    _options, _resume_cp_for_override
+                    _peer_opts, _resume_cp_for_override
                 )
     except Exception:
         _resume_cp_for_override = None
 
-    print(f"\n  🧪 {len(_nodes)} nodes detected — configuring per-node checkpoint injection.")
+    print(f"\n  🧪 {len(_nodes)} secondary nodes detected — configuring per-node checkpoint injection.")
     print(f"  Global checkpoint '{_global_target}' will be replaced by per-node config below.")
+    if _peer_only:
+        print("  (Only peer checkpoints (cp_2_x) are shown — cp_1_x applies to the primary node only.)")
     print("  (Press Enter at a node prompt to keep the global target for that node, 0 to skip it.)")
 
     if _configure_per_node_checkpoint_injection(
         _mode_name,
-        _options,
+        _peer_opts,
         _nodes,
         min_allowed_index=_min_allowed_idx,
+        peer_only=_peer_only,
     ):
         return
 
