@@ -38621,6 +38621,20 @@ def main():
                         if _extra_num > 1:
                             print(f"\n  ✅ {_extra_num - 1} additional node(s) added.")
 
+                    # ── Modes 1 and 3: offer per-node injection right after config loads ──
+                    elif _operation_mode in (1, 3) and isinstance(_config_data, dict):
+                        _sn_bmcs_13 = []
+                        for _sn in (_config_data.get("secondary_nodes") or []):
+                            if not isinstance(_sn, dict):
+                                continue
+                            _bmc = str(_sn.get("bmc") or "").strip()
+                            if _bmc and _bmc not in _sn_bmcs_13:
+                                _sn_bmcs_13.append(_bmc)
+                        if _sn_bmcs_13:
+                            _maybe_offer_per_node_checkpoint_injection_upgrade(
+                                _operation_mode, _sn_bmcs_13
+                            )
+
                 except ValueError as e:
                     print(f"⚠️  {e}")
                     print("   Continuing without a config file (manual prompts).")
