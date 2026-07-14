@@ -2669,8 +2669,6 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
         _node_identity = _checkpoint_test_node_identity(_node_id) or _node_id
         _target_desc = _node_target or _phase
         if _node_id and _parallel_expected and _per_node_targets:
-            _checkpoint_test_parallel_seen_nodes.add(_node_identity)
-            _remaining = sorted(_parallel_expected - _checkpoint_test_parallel_seen_nodes)
             def _target_for_expected(_nid: str) -> str:
                 _t = _checkpoint_test_target_for_node(_nid, _per_node_targets)
                 if _t:
@@ -2678,29 +2676,51 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
                 if _nid == _MODE3_PRIMARY_CHECKPOINT_NODE and _checkpoint_test_target:
                     return str(_checkpoint_test_target)
                 return "?"
-            if _remaining:
-                _rem = ", ".join(
-                    f"{_nid}:{_target_for_expected(_nid)}"
-                    for _nid in _remaining
-                )
-                _wait_msg = (
-                    f"--test checkpoint '{_target_desc}' hit for {_node_id}; "
-                    f"waiting for remaining node targets: {_rem}"
-                )
-            else:
+            # When each node has a different target the parallel barrier is
+            # meaningless — by the time the last node reaches its target the
+            # others have already advanced well past theirs.  Fire immediately
+            # for each node that hits its own target; the first to fire will set
+            # _shutdown_event, stopping the rest.
+            # The wait-for-all logic only applies when every node shares the
+            # same target checkpoint.
+            _all_target_phases = set(_per_node_targets.values())
+            if len(_all_target_phases) > 1:
+                # Heterogeneous targets — fire independently for this node.
                 _checkpoint_test_consumed = True
-                _all = ", ".join(
-                    f"{_nid}:{_target_for_expected(_nid)}"
-                    for _nid in sorted(_parallel_expected)
-                )
                 _fire_msg = (
                     f"Injected --test failure after checkpoint '{_target_desc}' "
-                    f"was saved for {_node_id} "
-                    f"(all targeted per-node checkpoints reached: {_all})"
+                    f"was saved for {_node_id} (independent per-node target)"
                 )
                 _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
                 _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
                 _pending_err = _pending_checkpoint_test_failure
+            else:
+                # All nodes share the same target — wait for all to reach it.
+                _checkpoint_test_parallel_seen_nodes.add(_node_identity)
+                _remaining = sorted(_parallel_expected - _checkpoint_test_parallel_seen_nodes)
+                if _remaining:
+                    _rem = ", ".join(
+                        f"{_nid}:{_target_for_expected(_nid)}"
+                        for _nid in _remaining
+                    )
+                    _wait_msg = (
+                        f"--test checkpoint '{_target_desc}' hit for {_node_id}; "
+                        f"waiting for remaining node targets: {_rem}"
+                    )
+                else:
+                    _checkpoint_test_consumed = True
+                    _all = ", ".join(
+                        f"{_nid}:{_target_for_expected(_nid)}"
+                        for _nid in sorted(_parallel_expected)
+                    )
+                    _fire_msg = (
+                        f"Injected --test failure after checkpoint '{_target_desc}' "
+                        f"was saved for {_node_id} "
+                        f"(all targeted per-node checkpoints reached: {_all})"
+                    )
+                    _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
+                    _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
+                    _pending_err = _pending_checkpoint_test_failure
         elif _node_id and _parallel_expected:
             _checkpoint_test_parallel_seen_nodes.add(_node_identity)
             _remaining = sorted(_parallel_expected - _checkpoint_test_parallel_seen_nodes)
@@ -18520,6 +18540,7 @@ def _peer_reinit_worker(ip, ctx):
     _node_reinit_logs = ctx.get("node_reinit_logs") or {}
     cluster_ips_out   = ctx.get("cluster_ips_out")
     _primary_ready_event = ctx.get("primary_option9_done_event")
+    _primary_cp_1_7_9_event = ctx.get("primary_cp_1_7_9_event")
     _primary_node_ip = ctx.get("primary_node_ip")
     _run_loader_prep = bool(ctx.get("run_loader_prep"))
     _timings_record = ctx.get("timings_record")
@@ -18720,6 +18741,23 @@ def _peer_reinit_worker(ip, ctx):
         _auto_answer_node_mgmt(peer_ch, cfg, node_log=_pnf)
         _t_node_mgmt_done = time.monotonic() - _t_thread_start
         _checkpoint_mark_phase("cp_2_5", node_id=_peer_cp_node)
+
+        # Gate cluster IP capture until the primary reaches cp_1_7_9
+        # (cluster management gateway applied). Attempting the capture
+        # before that causes the peer to land at a node with no active
+        # cluster, triggering spurious "cluster setup recovery" attempts.
+        if _primary_cp_1_7_9_event is not None and ip != _primary_node_ip:
+            _status(
+                f"  ⏳ {_format_status_line(ip, 'Node mgmt complete (cp_2_5); waiting for primary cluster setup to reach cp_1_7_9.', 'INFO')}"
+            )
+            if not _primary_cp_1_7_9_event.wait(timeout=3600):
+                _status(
+                    f"  ⚠️  {_format_status_line(ip, 'Timed out waiting for primary cp_1_7_9; proceeding with cluster IP capture.', 'WARN')}"
+                )
+            else:
+                _status(
+                    f"  ✅ {_format_status_line(ip, 'Primary cp_1_7_9 signalled; proceeding with cluster IP capture.', 'SUCCESS')}"
+                )
 
         # Abort the cluster wizard with Ctrl+C, log in as admin, and
         # capture the node's cluster interface IP.
@@ -25424,7 +25462,7 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
 
 
 def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
-                              node_log=None):
+                              node_log=None, on_cp_1_7_9_done=None):
     """Drive the post-node-mgmt cluster setup wizard non-interactively using
     values gathered in `_cluster_config`.
 
@@ -25953,8 +25991,14 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             break  # value accepted — move on
         if _gw_completed:
             _cp_mark("cp_1_7_9")
+            if on_cp_1_7_9_done is not None and not on_cp_1_7_9_done.is_set():
+                on_cp_1_7_9_done.set()
+                _slog("primary cp_1_7_9 reached; signalling peer workers for cluster IP capture")
     else:
         _slog("cp_1_7_9 already complete; skipping cluster management gateway prompt")
+        if on_cp_1_7_9_done is not None and not on_cp_1_7_9_done.is_set():
+            on_cp_1_7_9_done.set()
+            _slog("cp_1_7_9 already done; signalling peer workers immediately")
     # The 4-second gateway-validation drain may have already consumed the DNS /
     # name-server / location prompts when ONTAP accepts the gateway quickly.
     # For each step, if the trigger was already seen in _gw_recheck, send the
@@ -31540,6 +31584,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 "timings_record": _mode3_peer_timings,
                 "timings_lock": _mode3_timings_lock,
                 "primary_option9_done_event": threading.Event(),
+                "primary_cp_1_7_9_event": threading.Event(),
                 "primary_node_ip": bmc_host,
                 "run_loader_prep": True,
             }
@@ -31563,6 +31608,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 "peer_timings": _mode3_peer_timings,
                 "timings_lock": _mode3_timings_lock,
                 "primary_option9_done_event": _mode3_peer_ctx.get("primary_option9_done_event"),
+                "primary_cp_1_7_9_event": _mode3_peer_ctx.get("primary_cp_1_7_9_event"),
                 "pending_fallback_peers": _fallback_peers,
                 "loader_channels": _mode3_staged_loader_channels,
                 "loader_clients": _mode3_staged_loader_clients,
@@ -31956,6 +32002,10 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
         primary_bmc=bmc_host,
         initial_buf=_mgmt_residual,
         node_log=_boot_log,
+        on_cp_1_7_9_done=(
+            _mode3_pipeline_state.get("primary_cp_1_7_9_event")
+            if isinstance(_mode3_pipeline_state, dict) else None
+        ),
     )
     if wizard_ok is False:
         print("\n❌ Cluster setup wizard failed – cannot proceed. Exiting.")
