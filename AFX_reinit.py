@@ -2235,6 +2235,39 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
         print("  ⚠️  Invalid strategy.")
         return False
 
+    def _phase_done_for_node(_phase_id: str, _node_id: str) -> bool:
+        if not _checkpoint:
+            return False
+        for _alias in _checkpoint_test_node_aliases(_node_id):
+            with suppress(Exception):
+                if _checkpoint.is_node_done(_phase_id, _alias):
+                    return True
+        with suppress(Exception):
+            if _checkpoint.is_done(_phase_id):
+                return True
+        return False
+
+    def _node_checkpoint_context(_node_id: str) -> str:
+        if not options:
+            return "(no checkpoints available)"
+        _done = [(_cp_id, _cp_desc) for _cp_id, _cp_desc in options if _phase_done_for_node(_cp_id, _node_id)]
+        _pending = [(_cp_id, _cp_desc) for _cp_id, _cp_desc in options if not _phase_done_for_node(_cp_id, _node_id)]
+        if _done and _pending:
+            _cur_id, _cur_desc = _done[-1]
+            _next_id, _next_desc = _pending[0]
+            return (
+                f"{_cur_id} ({_cur_desc}) | next {_next_id} ({_next_desc})"
+            )
+        if _done:
+            _cur_id, _cur_desc = _done[-1]
+            return f"{_cur_id} ({_cur_desc}) | all listed checkpoints complete"
+        _next_id, _next_desc = _pending[0]
+        return f"(not started) | next {_next_id} ({_next_desc})"
+
+    print("  Current per-node checkpoint state:")
+    for _nid in _nodes:
+        print(f"    - {_nid}: {_node_checkpoint_context(_nid)}")
+
     _target_map = {}
     _min_idx = max(1, int(min_allowed_index or 1))
 
@@ -2272,6 +2305,7 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
         print(f"  Enter checkpoint index per node ({_enter_hint}, 0=skip).")
         for _nid in _nodes:
             print("")
+            print(f"    {_nid} currently at: {_node_checkpoint_context(_nid)}")
             for _idx, (_phase, _label) in enumerate(options, 1):
                 print(f"  {_idx}. {_phase:<22} {_label}")
             _idx_raw = _prompt(
@@ -11940,18 +11974,24 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
 
         # Check if already at LOADER before issuing system reset.
         try:
+            _probe_state = {}
             if _already_at_loader(
-                ch, label=host, node_log=node_log,
+                ch, label=host, node_log=node_log, out_state=_probe_state,
             ):
                 if session_store is not None:
                     session_store["client"] = client
                     session_store["channel"] = ch
                     session_store["user"] = username
                     session_store["password"] = password
+                    session_store["at_boot_menu"] = bool(_probe_state.get("at_boot_menu"))
                     client = None
                     ch = None
-                _tprint(f"   ✅ [{host}] Already at LOADER prompt.")
-                _slog(f"Peer {host} already at LOADER; skipping reset")
+                if _probe_state.get("at_boot_menu"):
+                    _tprint(f"   ✅ [{host}] Already at boot menu prompt.")
+                    _slog(f"Peer {host} already at boot menu; skipping reset")
+                else:
+                    _tprint(f"   ✅ [{host}] Already at LOADER prompt.")
+                    _slog(f"Peer {host} already at LOADER; skipping reset")
                 return True
         except RuntimeError as _probe_err:
             # Don't fail the peer immediately when console-exit probing is noisy.
@@ -18555,6 +18595,35 @@ def _peer_reinit_worker(ip, ctx):
         # is reached (not before loader prep). This lets peers boot to the menu in
         # parallel with the primary's option-9 phase, reducing total wait time.
 
+        # Nudge the channel so the current prompt repaints before probing.
+        # Without this, a static/silent boot menu (e.g. when the node auto-booted
+        # from LOADER to boot menu while the channel was stored between the peer-reset
+        # phase and the mode3 worker launch) would be invisible to the passive read
+        # and LOADER commands would be incorrectly sent to the boot menu.
+        with suppress(Exception):
+            peer_ch.send("\r")
+        time.sleep(0.3)
+
+        _boot_menu_probe_out, _boot_menu_probe_match = direct_read_until_any(
+            peer_ch,
+            ["selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu"],
+            timeout=2,
+            node_log=_pnf,
+            quiet=True,
+            check_bmc_drop=True,
+            reconnect_ctx=_peer_rc_ctx,
+        )
+        _boot_menu_visible = bool(_boot_menu_probe_match) or any(
+            _sig in str(_boot_menu_probe_out or "").lower()
+            for _sig in ("selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu")
+        )
+        if _boot_menu_visible:
+            _status(
+                f"  ℹ️  {_format_status_line(ip, 'Boot menu already visible; skipping LOADER prep commands.', 'INFO')}"
+            )
+            _checkpoint_mark_phase("cp_2_2", node_id=_peer_cp_node)
+            _run_loader_prep = False
+
         if _run_loader_prep:
             _status(
                 f"  ⏳ {_format_status_line(ip, 'Applying LOADER environment and boot_ontap menu sequence...', 'INFO')}"
@@ -18602,7 +18671,8 @@ def _peer_reinit_worker(ip, ctx):
         _status(f"  ⏳ {_format_status_line(ip, 'Waiting for boot menu (peer)...', 'INFO')}")
         _buf_lower = ""
         _start = time.monotonic()
-        _found = False
+        # Skip the wait when boot menu was already confirmed by the initial probe.
+        _found = _boot_menu_visible
         _last_progress = _start
         while time.monotonic() - _start < 900:
             if _shutdown_event.is_set():
