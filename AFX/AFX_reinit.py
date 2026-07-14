@@ -2435,6 +2435,19 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
         print("  M. Return to main menu")
     if _resume_cp_available:
         print("  B. Back to checkpoint resume-stage override")
+    _detected_next_id = ""
+    _previous_cp_id = ""
+    if _resume_cp_available:
+        _detected_next_id = str(_checkpoint_resume_phase_id(_resume_cp_for_override) or "").strip()
+        if _detected_next_id:
+            for _i, (_cp_id, __) in enumerate(_options):
+                if _cp_id == _detected_next_id:
+                    if _i > 0:
+                        _previous_cp_id = _options[_i - 1][0]
+                    break
+        elif _options:
+            _previous_cp_id = _options[-1][0]
+
     _min_allowed_idx, _min_reason = _checkpoint_injection_min_allowed_index(
         _options, _resume_cp_for_override if _resume_cp_available else None
     )
@@ -2450,7 +2463,13 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
             f"({_min_reason})."
         )
     for _idx, (_phase, _label) in enumerate(_options, 1):
-        print(f"  {_idx}. {_phase:<22} {_label}")
+        _markers = []
+        if _phase == _previous_cp_id:
+            _markers.append("previous checkpoint")
+        if _phase == _detected_next_id:
+            _markers.append("detected next")
+        _marker = f"  <- {', '.join(_markers)}" if _markers else ""
+        print(f"  {_idx}. {_phase:<22} {_label}{_marker}")
 
     _prompt_extras = []
     if _resume_cp_available:
@@ -5245,7 +5264,20 @@ def _checkpoint_phase_effectively_done(cp, mode_key, phase_id: str) -> bool:
     if _idx < 0:
         return False
 
+    _family = ""
+    if _phase_id.startswith("cp_1_"):
+        _family = "cp_1_"
+    elif _phase_id.startswith("cp_2_"):
+        _family = "cp_2_"
+
     for _later_id, __ in _checkpoint_seq[_idx + 1:]:
+        if _mode_key == 3 and _family:
+            if _family == "cp_1_" and not _later_id.startswith("cp_1_"):
+                continue
+            if _family == "cp_2_" and not (
+                _later_id.startswith("cp_2_") or _later_id == "option3_complete"
+            ):
+                continue
         if _phase_recorded_done(_later_id):
             return True
     return False
@@ -5965,11 +5997,25 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
         if not _checkpoint_phase_effectively_done(cp, _mode_key, _cp_id):
             _first_pending = _cp_id
             break
+    _previous_cp_id = ""
+    if _first_pending:
+        for _i, (_cp_id, __) in enumerate(_checkpoint_seq):
+            if _cp_id == _first_pending:
+                if _i > 0:
+                    _previous_cp_id = _checkpoint_seq[_i - 1][0]
+                break
+    elif _checkpoint_seq:
+        _previous_cp_id = _checkpoint_seq[-1][0]
 
     for _idx, (_cp_id, _cp_desc) in enumerate(_checkpoint_seq, 1):
         _done = _checkpoint_phase_effectively_done(cp, _mode_key, _cp_id)
         _status = "done" if _done else "pending"
-        _marker = "  <- detected next" if _cp_id == _first_pending else ""
+        _markers = []
+        if _cp_id == _previous_cp_id:
+            _markers.append("previous checkpoint")
+        if _cp_id == _first_pending:
+            _markers.append("detected next")
+        _marker = f"  <- {', '.join(_markers)}" if _markers else ""
         print(f"       {_idx:>2}. {_cp_id:<16} {_cp_desc} [{_status}]{_marker}")
 
     _id_lookup = {_cp_id.lower(): _cp_id for _cp_id, __ in _checkpoint_seq}
@@ -6048,12 +6094,38 @@ def _checkpoint_per_node_stage_lines(cp) -> "list[str]":
     if not cp:
         return []
     _mode_raw = str(getattr(cp, "mode", "") or "").strip().lower()
+    _is_mode3 = _mode_raw == "3"
     _bmc_ips = [str(_ip).strip() for _ip in (getattr(cp, "bmc_ips", []) or []) if str(_ip).strip()]
+
+    _derived_peer_ips = []
+    if _is_mode3:
+        _node_phases = {}
+        with suppress(Exception):
+            _node_phases = dict((getattr(cp, "_data", {}) or {}).get("node_phases") or {})
+        _peer_ips = set()
+        for _per_node in _node_phases.values():
+            if not isinstance(_per_node, dict):
+                continue
+            for _node_id in _per_node.keys():
+                _raw = str(_node_id or "").strip()
+                if not _raw:
+                    continue
+                if _raw.startswith("node_peer:"):
+                    _raw = str(_raw.split(":", 1)[1] or "").strip()
+                if _is_valid_ipv4(_raw):
+                    _peer_ips.add(_raw)
+        _derived_peer_ips = sorted(_peer_ips)
+        if not _bmc_ips and _derived_peer_ips:
+            _bmc_ips = ["(primary ip unavailable)"] + _derived_peer_ips
+        elif _bmc_ips:
+            for _peer_ip in _derived_peer_ips:
+                if _peer_ip not in _bmc_ips:
+                    _bmc_ips.append(_peer_ip)
+
     if not _bmc_ips:
         return []
 
     _lines = []
-    _is_mode3 = _mode_raw == "3"
 
     if _is_mode3:
         _primary_ip = _bmc_ips[0]
