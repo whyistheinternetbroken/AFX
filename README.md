@@ -621,13 +621,22 @@ Format: `NODE_IP:CHECKPOINT_ID`
 
 ### Multi-node failure injection behavior
 
-When mode 2/3 has multiple `secondary_nodes`, test injection supports:
+When mode 2/3 or parallel mode 4.2/4.3 runs have multiple target nodes, test injection supports:
 
 - one checkpoint applied to **all selected nodes**, or
 - **per-node checkpoint targets** so each node can fail at a different stage
 
 This mirrors real-world failures where nodes can diverge across add phases and
 validates per-node resume correctness.
+
+If you only need the valid checkpoint IDs before starting a run, use:
+
+```bash
+python AFX_reinit.py --checkpoint-list
+```
+
+This prints the available checkpoints grouped by mode and exits without changing
+checkpoint state.
 
 ### Manual checkpoint snapshots
 
@@ -902,6 +911,7 @@ python3 AFX_reinit.py [OPTIONS]
 | `--screen` | | Re-launch the script inside a detached GNU screen session. Keeps the run alive if your SSH connection drops or times out. Implies `--bg`. Use `screen -r afx-reinit` to reattach. No-op if already running inside screen. |
 | `--resume` | | Shortcut resume entry for the previous 4.2 run using `checkpoints/afx_checkpoint.json`. For other modes, resume is driven from the normal mode-entry prompts when a valid checkpoint is found. |
 | `--checkpoint-status` | | Print a summary of the saved checkpoint (`afx_checkpoint.json`) — file path, run mode, current phase, next expected phase, age, BMC IPs, completed global phases, and role-labeled per-node phases — then exit. Does not modify the checkpoint file. |
+| `--checkpoint-list` | | Print all available checkpoint IDs grouped by mode (1, 2, 3, 4.1, 4.2, 4.3), then exit. Useful for planning resume tests and targeted `--test-checkpoint` injection points. |
 | `--last-status` | | Read and display the summary file from the most recent AFX_reinit run, then exit. The summary file is created at run start and updated as phases progress, so this flag can show live in-progress status (including phases not yet completed) and classified non-phase timing such as prompt waits, explicit pause waits, and startup/inter-phase gaps. |
 | `--install-completion` | | Install startup option tab-completion support: installs Python `argcomplete` (if missing) and writes hook entries to `~/.bashrc` and `~/.zshrc`. |
 | `--print-completion-hook` | | Print the shell hook command used to enable startup option completion, then exit. |
@@ -1654,6 +1664,8 @@ current `[Unreleased]` working set.
 | Feature | Description |
 |---|---|
 | **Per-node node-add checkpoint resume hardening** | Multi-node node-add flows now persist and evaluate checkpoint state per node, including independent `cp_2_4`-`cp_2_7` progression, `cp_2_8` finalization without redundant re-add when nodes are already joined, and per-node `--test` checkpoint-failure injection for divergence validation. |
+| **Parallel checkpoint parity for modes 3 / 4.2 / 4.3** | Mode 3 and parallel 4.2/4.3 workflows now keep per-node checkpoint/test-injection behavior aligned even when nodes diverge by stage. Resume logic honors per-node progress instead of collapsing mixed-stage parallel work into one global checkpoint state. |
+| **Checkpoint list CLI** | Added `--checkpoint-list` so operators can print the valid checkpoint IDs by mode before configuring `--test` or resume exercises. |
 | **Cluster-create progress milestones** | New-cluster workflows now print explicit progress lines when cluster setup begins, when option 4 node initialization starts/completes, and as ONTAP advances through VIF manager startup, storage-pod ownership, volume-location updates, zeroing, aggregate creation, and final cluster creation. |
 | **Mode 3 join-status visibility** | During bulk `cluster add-node`, the primary console now prints per-node join status transitions (for example, pending/in-progress/success rows from `cluster add-node-status`) instead of only periodic "waiting" heartbeats. |
 | **LOADER boot-menu recovery hardening** | Boot-menu recovery no longer depends on AUTOBOOT override state; if a node sits at LOADER too long, the script now runs the LOADER recovery path consistently and retries `boot_ontap menu`. |

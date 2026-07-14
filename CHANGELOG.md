@@ -11,12 +11,14 @@ revision labels rather than strict [SemVer](https://semver.org/).
 ### Added
 - **Cluster-create milestone reporting.** New-cluster workflows now print live progress updates when cluster setup begins, when option 4 node initialization starts/completes, and as ONTAP advances through VIF manager startup, storage-pod ownership, volume-location updates, zeroing, aggregate creation, and final cluster creation.
 - **Per-node checkpoint test injection for multi-node add flows.** `--test` in modes 2/3 now supports either one checkpoint target applied across nodes or per-node checkpoint targets so checkpoint-failure simulation can mirror node divergence.
+- **Checkpoint list output.** Added `--checkpoint-list` to print the valid checkpoint IDs grouped by mode (`1`, `2`, `3`, `4.1`, `4.2`, `4.3`) before running resume drills or targeted `--test-checkpoint` injections.
 
 ### Changed
 - **README timing documentation.** Added an observed option 1 sample timeline, plus physical-zeroing notes derived from the uploaded session log so operators can estimate where long waits normally occur.
 - **Node-add resume status-stage UX.** Mode 2 resume now suppresses the already-joined confirmation at `cp_2_7`/`cp_2_8` status-only stages and prints a resume-specific banner (`Resuming node add process for N nodes...`).
 - **Checkpoint docs refreshed for actual runtime model.** README checkpoint documentation now reflects the live `checkpoints/afx_checkpoint.json` structure (global + per-node phase maps), `cp_2_8` semantics, and per-node multi-node resume behavior.
 - **Checkpoint test prompt clarity.** `--test` checkpoint injection menus now explicitly document that pressing Enter with no value runs with injection disabled (`0`), matching existing runtime behavior.
+- **Parallel checkpoint coverage extended beyond mode 2.** Multi-node checkpoint targeting and mixed-stage resume handling now stay aligned across mode 3 peer adds and parallel mode 4.2/4.3 runs instead of assuming one shared stage for every node.
 
 ### Fixed
 - **Long option 4 wait visibility.** Primary-node option 4 automation now surfaces a clear "started" state, periodic progress heartbeat, and explicit completion message before AutoSupport handling instead of leaving the console silent during the longest reinit wait.
@@ -25,6 +27,9 @@ revision labels rather than strict [SemVer](https://semver.org/).
 - **BMC takeover prompt loops on resume.** Resume connect paths now handle repeated stacked `Another user has an active CLI session... [y/n]?` prompts until the BMC prompt is reached.
 - **BMC takeover reconnect race handling.** When the takeover socket closes during `y` send, the reconnect path now re-enters takeover-aware prompt handling (instead of waiting only for `>`), preventing false `BMC prompt not received` failures.
 - **System-console probe output leak.** Prompt probes before entering `system console` are now logged quietly and no longer dump boot-menu text to the terminal screen.
+- **Mode 3 injected-failure checkpoint drift.** A `cp_1_5` test abort in option 3 now blocks later peer checkpoint advancement atomically, so resume state cannot drift forward after the configured failure boundary.
+- **Option 2.3 no-SSH resume classification.** When cluster management SSH is unavailable after `cp_2_6`, resume now uses positive checkpoint/manifest evidence to separate already-joined peers, safe pending peers, and ambiguous peers instead of retrying blindly or exiting with a false success path.
+- **Parallel mode 4.x mixed-stage resume semantics.** Modes 4.2 and 4.3 now treat legacy global checkpoints as compatibility hints and require all targeted nodes to satisfy a stage before advancing effective completion or manual resume targets.
 
 ---
 

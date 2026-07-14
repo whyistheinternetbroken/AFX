@@ -361,11 +361,21 @@ class CheckpointManager:
 
     def mark_done(self, phase: str) -> None:
         """Mark a global (non-per-node) phase as complete."""
-        with self._data_lock:
-            self._data.setdefault("phases", {})[phase] = {
+        _marked = False
+
+        def _mutate(data) -> bool:
+            nonlocal _marked
+            if bool(data.get("phases", {}).get(phase, {}).get("done")):
+                return False
+            data.setdefault("phases", {})[phase] = {
                 "done": True, "ts": datetime.now().isoformat(),
             }
-        self._save()
+            _marked = True
+            return True
+
+        self._save(mutator=_mutate)
+        if not _marked:
+            return
         _log_pending_checkpoint_test_target(phase)
         _maybe_inject_checkpoint_failure(phase)
 
@@ -375,12 +385,34 @@ class CheckpointManager:
 
     def mark_node_done(self, phase: str, ip: str) -> None:
         """Mark a per-node phase as complete for *ip*."""
-        with self._data_lock:
-            np = self._data.setdefault("node_phases", {})
+        _marked = False
+        _blocked = False
+
+        def _mutate(data) -> bool:
+            nonlocal _marked, _blocked
+            if _checkpoint_test_should_block_mode3_peer_checkpoint(phase, ip):
+                _blocked = True
+                return False
+            _existing = data.get("node_phases", {}).get(phase, {}).get(ip, {})
+            if bool(_existing.get("done")):
+                return False
+            np = data.setdefault("node_phases", {})
             np.setdefault(phase, {})[ip] = {
                 "done": True, "ts": datetime.now().isoformat(),
             }
-        self._save()
+            _checkpoint_test_prepare_mode3_abort_barrier(phase, ip)
+            _marked = True
+            return True
+
+        self._save(mutator=_mutate)
+        if _blocked:
+            _slog(
+                f"mode 3 checkpoint abort barrier active; skipping {phase} for {ip}",
+                prefix="WARN",
+            )
+            return
+        if not _marked:
+            return
         _log_pending_checkpoint_test_target(phase, ip)
         _maybe_inject_checkpoint_failure(phase, ip)
 
@@ -726,16 +758,18 @@ class CheckpointManager:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _save(self) -> None:
-        with self._data_lock:
-            self._data["updated"] = datetime.now().isoformat()
-            _payload = copy.deepcopy(self._data)
+    def _save(self, mutator=None) -> bool:
         tmp = (
             f"{self._path}.{os.getpid()}."
             f"{threading.get_ident()}.{time.time_ns()}.tmp"
         )
         try:
             with _checkpoint_io_lock:
+                with self._data_lock:
+                    if callable(mutator) and not bool(mutator(self._data)):
+                        return False
+                    self._data["updated"] = datetime.now().isoformat()
+                    _payload = copy.deepcopy(self._data)
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(_payload, f, indent=2)
                     f.write("\n")
@@ -747,6 +781,7 @@ class CheckpointManager:
             raise RuntimeError(
                 f"Checkpoint save failed for {self._path}: {exc}"
             ) from exc
+        return True
 
 
 def _handle_checkpoint_confirmation_with_selective_mod(checkpoint, diag_mode=False, operation_mode=None):
@@ -1042,6 +1077,7 @@ _pending_checkpoint_test_failure: "Exception | None" = None
 _checkpoint_test_parallel_expected_nodes: "set[str]" = set()
 _checkpoint_test_parallel_seen_nodes: "set[str]" = set()
 _checkpoint_test_targets_by_node: "dict[str, str]" = {}
+_checkpoint_test_mode3_abort_phase = ""
 _checkpoint_test_lock = threading.Lock()
 _checkpoint_io_lock = threading.RLock()
 
@@ -1511,7 +1547,7 @@ def _clear_checkpoint_test_config() -> None:
     global _checkpoint_test_mode_label, _checkpoint_test_consumed
     global _pending_checkpoint_test_failure
     global _checkpoint_test_parallel_expected_nodes, _checkpoint_test_parallel_seen_nodes
-    global _checkpoint_test_targets_by_node
+    global _checkpoint_test_targets_by_node, _checkpoint_test_mode3_abort_phase
     _checkpoint_test_enabled = False
     _checkpoint_test_target = ""
     _checkpoint_test_mode_label = ""
@@ -1520,16 +1556,19 @@ def _clear_checkpoint_test_config() -> None:
     _checkpoint_test_parallel_expected_nodes = set()
     _checkpoint_test_parallel_seen_nodes = set()
     _checkpoint_test_targets_by_node = {}
+    _checkpoint_test_mode3_abort_phase = ""
 
 
 def _set_checkpoint_test_parallel_scope(node_ids) -> None:
     """Configure node IDs that must hit the injected checkpoint in parallel runs."""
     global _checkpoint_test_parallel_expected_nodes, _checkpoint_test_parallel_seen_nodes
-    _nodes = {
-        str(_nid).strip()
-        for _nid in (node_ids or [])
-        if str(_nid).strip()
-    }
+    _nodes = set()
+    for _nid in (node_ids or []):
+        _clean = str(_nid).strip()
+        if not _clean:
+            continue
+        _identity = _checkpoint_test_node_identity(_clean) or _clean
+        _nodes.add(_identity)
     with _checkpoint_test_lock:
         _per_node_targets = dict(_checkpoint_test_targets_by_node)
         if not _checkpoint_test_enabled or _checkpoint_test_consumed:
@@ -1537,7 +1576,11 @@ def _set_checkpoint_test_parallel_scope(node_ids) -> None:
             _checkpoint_test_parallel_seen_nodes = set()
             return
         if _per_node_targets:
-            _targeted_nodes = {nid for nid in _nodes if nid in _per_node_targets}
+            _targeted_nodes = {
+                _checkpoint_test_node_identity(_nid) or _nid
+                for _nid in _nodes
+                if _checkpoint_test_target_for_node(_nid, _per_node_targets)
+            }
             if len(_targeted_nodes) > 1:
                 _checkpoint_test_parallel_expected_nodes = set(_targeted_nodes)
                 _checkpoint_test_parallel_seen_nodes = set()
@@ -1554,7 +1597,7 @@ def _set_checkpoint_test_parallel_scope(node_ids) -> None:
             _checkpoint_test_parallel_seen_nodes = set()
     if _checkpoint_test_targets_by_node:
         _mapping = ", ".join(
-            f"{_nid}:{_checkpoint_test_targets_by_node.get(_nid)}"
+            f"{_nid}:{_checkpoint_test_target_for_node(_nid, _checkpoint_test_targets_by_node)}"
             for _nid in sorted(_checkpoint_test_parallel_expected_nodes)
         )
         _slog(
@@ -1603,10 +1646,10 @@ def _describe_4b_resume_stage(cp) -> str:
         return "Start of 4.2 workflow (no checkpoint context)."
 
     _bmc_ips = list(getattr(cp, "bmc_ips", []) or [])
-    _install_done = set(cp.nodes_done_for("install_done"))
-    _opt6_done = set(cp.nodes_done_for("option6_done"))
+    _install_done = set(_checkpoint_4x_nodes_done_for_runtime_phase(cp, "install_done"))
+    _opt6_done = set(_checkpoint_4x_nodes_done_for_runtime_phase(cp, "option6_done"))
     _install_equiv = _install_done | _opt6_done
-    _reinit_loader = set(cp.nodes_done_for("reinit_loader"))
+    _reinit_loader = set(_checkpoint_4x_nodes_done_for_runtime_phase(cp, "reinit_loader"))
     _peer_opt4_done = set(cp.nodes_done_for("peer_option4_done"))
     _peer_joined = set(cp.nodes_done_for("peer_joined"))
     _remaining_install = [ip for ip in _bmc_ips if ip not in _install_equiv]
@@ -1646,6 +1689,99 @@ def _mode3_peer_checkpoint_node(ip: str) -> str:
     return f"node_peer:{ip}"
 
 
+def _checkpoint_test_node_aliases(node_id: str) -> "list[str]":
+    _node = str(node_id or "").strip()
+    if not _node:
+        return []
+    if _node == _MODE3_PRIMARY_CHECKPOINT_NODE:
+        return [_node]
+    if _node.startswith("node_peer:"):
+        _raw = str(_node.split(":", 1)[1] or "").strip()
+        if not _raw:
+            return [_node]
+        return [_raw, _mode3_peer_checkpoint_node(_raw)]
+    return [_node, _mode3_peer_checkpoint_node(_node)]
+
+
+def _checkpoint_test_node_identity(node_id: str) -> str:
+    for _alias in _checkpoint_test_node_aliases(node_id):
+        if _alias and _alias != _MODE3_PRIMARY_CHECKPOINT_NODE and not _alias.startswith("node_peer:"):
+            return _alias
+    _aliases = _checkpoint_test_node_aliases(node_id)
+    return _aliases[0] if _aliases else ""
+
+
+def _checkpoint_test_target_for_node(node_id: str, targets=None) -> str:
+    _targets = targets if isinstance(targets, dict) else _checkpoint_test_targets_by_node
+    if not isinstance(_targets, dict):
+        return ""
+    for _alias in _checkpoint_test_node_aliases(node_id):
+        _target = str(_targets.get(_alias) or "").strip()
+        if _target:
+            return _target
+    return ""
+
+
+def _checkpoint_test_arm_mode3_abort_barrier(phase: str, node_id: str = "") -> None:
+    global _checkpoint_test_mode3_abort_phase
+    _phase = str(phase or "").strip()
+    _node = str(node_id or "").strip()
+    if _operation_mode == 3 and _phase == "cp_1_5" and _node == _MODE3_PRIMARY_CHECKPOINT_NODE:
+        if _checkpoint_test_mode3_abort_phase == _phase:
+            return
+        _checkpoint_test_mode3_abort_phase = _phase
+        _slog(
+            "mode 3 checkpoint abort barrier armed at cp_1_5; later peer cp_2_* markers will be skipped",
+            prefix="WARN",
+        )
+
+
+def _checkpoint_test_should_arm_mode3_abort_barrier_for_commit(phase: str, node_id: str = "") -> bool:
+    _phase = str(phase or "").strip()
+    _node_id = str(node_id or "").strip()
+    if _operation_mode != 3 or _phase != "cp_1_5" or _node_id != _MODE3_PRIMARY_CHECKPOINT_NODE:
+        return False
+    if not _checkpoint_test_enabled or _checkpoint_test_consumed:
+        return False
+
+    _node_target = ""
+    if _checkpoint_test_targets_by_node and _node_id:
+        _node_target = _checkpoint_test_target_for_node(_node_id, _checkpoint_test_targets_by_node)
+    _active_target = _node_target or str(_checkpoint_test_target or "").strip()
+    if not _active_target or _phase != _active_target:
+        return False
+
+    with _checkpoint_test_lock:
+        if (not _checkpoint_test_enabled
+                or _checkpoint_test_consumed
+                or _phase != (_node_target or _checkpoint_test_target)):
+            return False
+        _parallel_expected = set(_checkpoint_test_parallel_expected_nodes)
+        if not _parallel_expected:
+            return True
+        _node_identity = _checkpoint_test_node_identity(_node_id) or _node_id
+        _seen_after_commit = set(_checkpoint_test_parallel_seen_nodes)
+        _seen_after_commit.add(_node_identity)
+        return not (_parallel_expected - _seen_after_commit)
+
+
+def _checkpoint_test_prepare_mode3_abort_barrier(phase: str, node_id: str = "") -> None:
+    if _checkpoint_test_should_arm_mode3_abort_barrier_for_commit(phase, node_id):
+        _checkpoint_test_arm_mode3_abort_barrier(phase, node_id)
+
+
+def _checkpoint_test_should_block_mode3_peer_checkpoint(phase: str, node_id: str = "",
+                                                        alias_phase: str = "", alias_node_id: str = "") -> bool:
+    if _operation_mode != 3 or _checkpoint_test_mode3_abort_phase != "cp_1_5":
+        return False
+    _phase = str(phase or "").strip()
+    _alias_phase = str(alias_phase or "").strip()
+    if not (_phase.startswith("cp_2_") or _alias_phase in ("peer_option4_done", "peer_joined")):
+        return False
+    _aliases = _checkpoint_test_node_aliases(node_id) + _checkpoint_test_node_aliases(alias_node_id)
+    return any(_alias and _alias != _MODE3_PRIMARY_CHECKPOINT_NODE for _alias in _aliases)
+
+
 def _checkpoint_phase_done(phase: str, node_id: str = "") -> bool:
     if not _checkpoint:
         return False
@@ -1655,14 +1791,14 @@ def _checkpoint_phase_done(phase: str, node_id: str = "") -> bool:
         return False
 
 
-def _checkpoint_phase_done_for_peer_resume(phase: str, bmc_ip: str) -> bool:
-    """Checkpoint done check tolerant of legacy/global mode-2 resume markers."""
-    if not _checkpoint:
-        return False
+def _checkpoint_phase_resume_evidence_for_peer(checkpoint, phase: str, bmc_ip: str) -> str:
+    """Return concrete persisted evidence for a peer-resume compatibility match."""
+    if not checkpoint:
+        return ""
     _phase = str(phase or "").strip()
     _bmc = str(bmc_ip or "").strip()
     if not _phase:
-        return False
+        return ""
 
     _node_ids = []
     if _bmc:
@@ -1671,18 +1807,26 @@ def _checkpoint_phase_done_for_peer_resume(phase: str, bmc_ip: str) -> bool:
         if _mode3_peer_id not in _node_ids:
             _node_ids.append(_mode3_peer_id)
 
-    for _nid in _node_ids:
+    def _match_phase(_phase_name: str) -> str:
+        _phase_name = str(_phase_name or "").strip()
+        if not _phase_name:
+            return ""
+        for _nid in _node_ids:
+            try:
+                if checkpoint.is_node_done(_phase_name, _nid):
+                    return f"checkpoint:{_phase_name}"
+            except Exception:
+                pass
         try:
-            if _checkpoint.is_node_done(_phase, _nid):
-                return True
+            if checkpoint.is_done(_phase_name):
+                return f"checkpoint:{_phase_name}"
         except Exception:
             pass
+        return ""
 
-    try:
-        if _checkpoint.is_done(_phase):
-            return True
-    except Exception:
-        pass
+    _phase_evidence = _match_phase(_phase)
+    if _phase_evidence:
+        return _phase_evidence
 
     _aliases = {
         "cp_2_4": "peer_option4_done",
@@ -1690,19 +1834,15 @@ def _checkpoint_phase_done_for_peer_resume(phase: str, bmc_ip: str) -> bool:
     }
     _alias = _aliases.get(_phase, "")
     if _alias:
-        for _nid in _node_ids:
-            try:
-                if _checkpoint.is_node_done(_alias, _nid):
-                    return True
-            except Exception:
-                pass
-        try:
-            if _checkpoint.is_done(_alias):
-                return True
-        except Exception:
-            pass
+        return _match_phase(_alias)
+    return ""
 
-    return False
+
+def _checkpoint_phase_done_for_peer_resume(phase: str, bmc_ip: str) -> bool:
+    """Checkpoint done check tolerant of legacy/global mode-2 resume markers."""
+    if not _checkpoint:
+        return False
+    return bool(_checkpoint_phase_resume_evidence_for_peer(_checkpoint, phase, bmc_ip))
 
 
 def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = "",
@@ -1711,34 +1851,86 @@ def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = 
     if not _checkpoint:
         return False
     marked = False
+    blocked = False
+    _block_mode3_peer_checkpoint = globals().get("_checkpoint_test_should_block_mode3_peer_checkpoint")
+    _prepare_mode3_abort_barrier = globals().get("_checkpoint_test_prepare_mode3_abort_barrier")
+
+    def _node_phase_done_in_data(data, phase_name: str, phase_node_id: str) -> bool:
+        return bool(
+            data.get("node_phases", {})
+                .get(phase_name, {})
+                .get(phase_node_id, {})
+                .get("done")
+        )
+
+    def _global_phase_done_in_data(data, phase_name: str) -> bool:
+        return bool(data.get("phases", {}).get(phase_name, {}).get("done"))
+
+    def _mark_phase_in_data(data, phase_name: str, phase_node_id: str, ts_value: str) -> bool:
+        if phase_node_id:
+            if _node_phase_done_in_data(data, phase_name, phase_node_id):
+                return False
+            data.setdefault("node_phases", {}).setdefault(phase_name, {})[phase_node_id] = {
+                "done": True,
+                "ts": ts_value,
+            }
+            return True
+        if _global_phase_done_in_data(data, phase_name):
+            return False
+        data.setdefault("phases", {})[phase_name] = {
+            "done": True,
+            "ts": ts_value,
+        }
+        return True
+
+    def _should_block_phase_commit() -> bool:
+        if not callable(_block_mode3_peer_checkpoint):
+            return False
+        return bool(_block_mode3_peer_checkpoint(
+            phase,
+            node_id,
+            alias_phase=alias_phase,
+            alias_node_id=alias_node_id,
+        ))
+
     try:
-        if node_id:
-            if not _checkpoint.is_node_done(phase, node_id):
-                _checkpoint.mark_node_done(phase, node_id)
-                marked = True
-        elif not _checkpoint.is_done(phase):
-            _checkpoint.mark_done(phase)
-            marked = True
+        def _mutate(data) -> bool:
+            nonlocal marked, blocked
+            if _should_block_phase_commit():
+                blocked = True
+                return False
 
-        if alias_phase:
-            if alias_node_id:
-                if not _checkpoint.is_node_done(alias_phase, alias_node_id):
-                    _checkpoint.mark_node_done(alias_phase, alias_node_id)
-            elif not _checkpoint.is_done(alias_phase):
-                _checkpoint.mark_done(alias_phase)
+            _ts = datetime.now().isoformat()
+            _phase_marked = _mark_phase_in_data(data, phase, node_id, _ts)
+            if _phase_marked and callable(_prepare_mode3_abort_barrier):
+                _prepare_mode3_abort_barrier(phase, node_id)
 
-        if promote_global:
-            _targets = [
-                str(_tid).strip() for _tid in (
-                    target_node_ids or getattr(_checkpoint, "bmc_ips", []) or []
-                )
-                if str(_tid).strip()
-            ]
-            if _targets and all(_checkpoint.is_node_done(phase, _tid) for _tid in _targets):
-                if not _checkpoint.is_done(phase):
-                    _checkpoint.mark_done(phase)
-                    marked = True
+            _alias_marked = False
+            if alias_phase:
+                _alias_marked = _mark_phase_in_data(data, alias_phase, alias_node_id, _ts)
 
+            _promoted_marked = False
+            if promote_global:
+                _targets = [
+                    str(_tid).strip() for _tid in (
+                        target_node_ids or getattr(_checkpoint, "bmc_ips", []) or []
+                    )
+                    if str(_tid).strip(                    )
+                ]
+                if _targets and all(_node_phase_done_in_data(data, phase, _tid) for _tid in _targets):
+                    _promoted_marked = _mark_phase_in_data(data, phase, "", _ts)
+
+            marked = _phase_marked or _promoted_marked
+            return bool(_phase_marked or _alias_marked or _promoted_marked)
+
+        _checkpoint._save(mutator=_mutate)
+        if blocked:
+            _cp_label = f" [{node_id}]" if node_id else ""
+            _slog(
+                f"mode 3 checkpoint abort barrier active; skipping {phase}{_cp_label}",
+                prefix="WARN",
+            )
+            return False
         if marked:
             _cp_label = f" [{node_id}]" if node_id else ""
             _cp_desc = _checkpoint_phase_description(phase)
@@ -2128,7 +2320,7 @@ def _log_pending_checkpoint_test_target(phase: str, node_id: str = "") -> None:
     _node_id = str(node_id or "").strip()
     _target_phase = ""
     if _checkpoint_test_targets_by_node and _node_id:
-        _target_phase = str(_checkpoint_test_targets_by_node.get(_node_id) or "").strip()
+        _target_phase = _checkpoint_test_target_for_node(_node_id, _checkpoint_test_targets_by_node)
     if not _target_phase:
         _target_phase = str(_checkpoint_test_target or "").strip()
     if not _target_phase or _phase == _target_phase:
@@ -2153,13 +2345,13 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
     _node_id = str(node_id or "").strip()
     _node_target = ""
     if _checkpoint_test_targets_by_node and _node_id:
-        _node_target = str(_checkpoint_test_targets_by_node.get(_node_id) or "").strip()
+        _node_target = _checkpoint_test_target_for_node(_node_id, _checkpoint_test_targets_by_node)
     _active_target = _node_target or str(_checkpoint_test_target or "").strip()
     if not _active_target or _phase != _active_target:
         return
 
     _pending_err = None
-    _msg = ""
+    _fire_msg = ""
     _wait_msg = ""
     with _checkpoint_test_lock:
         if (not _checkpoint_test_enabled
@@ -2169,17 +2361,14 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
 
         _per_node_targets = dict(_checkpoint_test_targets_by_node)
         _parallel_expected = set(_checkpoint_test_parallel_expected_nodes)
+        _node_identity = _checkpoint_test_node_identity(_node_id) or _node_id
+        _target_desc = _node_target or _phase
         if _node_id and _parallel_expected and _per_node_targets:
-            _checkpoint_test_parallel_seen_nodes.add(_node_id)
-            _target_desc = _per_node_targets.get(_node_id) or _phase
-            _msg = (
-                f"Injected --test failure after checkpoint '{_target_desc}' "
-                f"was saved for {_node_id}"
-            )
+            _checkpoint_test_parallel_seen_nodes.add(_node_identity)
             _remaining = sorted(_parallel_expected - _checkpoint_test_parallel_seen_nodes)
             if _remaining:
                 _rem = ", ".join(
-                    f"{_nid}:{_per_node_targets.get(_nid, '?')}"
+                    f"{_nid}:{_checkpoint_test_target_for_node(_nid, _per_node_targets) or '?'}"
                     for _nid in _remaining
                 )
                 _wait_msg = (
@@ -2189,18 +2378,19 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
             else:
                 _checkpoint_test_consumed = True
                 _all = ", ".join(
-                    f"{_nid}:{_per_node_targets.get(_nid, '?')}"
+                    f"{_nid}:{_checkpoint_test_target_for_node(_nid, _per_node_targets) or '?'}"
                     for _nid in sorted(_parallel_expected)
                 )
-                _msg += f" (all targeted per-node checkpoints reached: {_all})"
-                _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_msg)
+                _fire_msg = (
+                    f"Injected --test failure after checkpoint '{_target_desc}' "
+                    f"was saved for {_node_id} "
+                    f"(all targeted per-node checkpoints reached: {_all})"
+                )
+                _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
+                _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
                 _pending_err = _pending_checkpoint_test_failure
         elif _node_id and _parallel_expected:
-            _checkpoint_test_parallel_seen_nodes.add(_node_id)
-            _msg = (
-                f"Injected --test failure after checkpoint '{_phase}' "
-                f"was saved for {_node_id}"
-            )
+            _checkpoint_test_parallel_seen_nodes.add(_node_identity)
             _remaining = sorted(_parallel_expected - _checkpoint_test_parallel_seen_nodes)
             if _remaining:
                 _wait_msg = (
@@ -2209,32 +2399,33 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
                 )
             else:
                 _checkpoint_test_consumed = True
-                _msg += (
-                    f" (all targeted nodes reached: "
-                    f"{', '.join(sorted(_parallel_expected))})"
+                _fire_msg = (
+                    f"Injected --test failure after checkpoint '{_phase}' "
+                    f"was saved for {_node_id} "
+                    f"(all targeted nodes reached: {', '.join(sorted(_parallel_expected))})"
                 )
-                _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_msg)
+                _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
+                _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
                 _pending_err = _pending_checkpoint_test_failure
         else:
             _checkpoint_test_consumed = True
-            _msg = f"Injected --test failure after checkpoint '{_phase}' was saved"
+            _fire_msg = f"Injected --test failure after checkpoint '{_phase}' was saved"
             if _node_id:
-                _msg += f" for {_node_id}"
-            _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_msg)
+                _fire_msg += f" for {_node_id}"
+            _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
+            _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
             _pending_err = _pending_checkpoint_test_failure
 
     if _wait_msg:
         _slog(_wait_msg, prefix="INFO")
-    if _msg:
-        print(f"\n🧪 {_msg}")
-        _slog(_msg, prefix="FATAL")
+    if _fire_msg:
+        print(f"\n🧪 {_fire_msg}")
+        _slog(_fire_msg, prefix="FATAL")
         if _session_log:
             with suppress(Exception):
-                _session_log.log(_msg, prefix="FATAL")
+                _session_log.log(_fire_msg, prefix="FATAL")
     if _pending_err is not None:
         raise _pending_err
-    if _msg:
-        raise _InjectedCheckpointFailure(_msg)
 
 
 def _prompt(prompt: str, default: str = "") -> str:
@@ -4585,6 +4776,121 @@ def _checkpoint_phase_recorded_done(cp, phase_id: str) -> bool:
         return False
 
 
+def _checkpoint_4x_target_node_ids(cp) -> "list[str]":
+    _targets = []
+    if not cp:
+        return _targets
+    for _ip in (getattr(cp, "bmc_ips", []) or []):
+        _node_id = str(_ip or "").strip()
+        if _node_id and _node_id not in _targets:
+            _targets.append(_node_id)
+    return _targets
+
+
+def _checkpoint_4x_nodes_done_for_runtime_phase(cp, phase_id: str) -> "list[str]":
+    _done_nodes = []
+    if not cp:
+        return _done_nodes
+    try:
+        for _nid in (cp.nodes_done_for(phase_id) or []):
+            _node_id = str(_nid or "").strip()
+            if _node_id and _node_id not in _done_nodes:
+                _done_nodes.append(_node_id)
+    except Exception:
+        pass
+    return _done_nodes
+
+
+def _checkpoint_4x_parallel_phase_state(cp, mode_key, phase_id: str) -> dict:
+    """Return all-target runtime state for 4.2/4.3 parallel checkpoint phases."""
+    _state = {
+        "requires_all_targets": False,
+        "target_node_ids": [],
+        "done_node_ids": [],
+        "all_targets_done": False,
+        "legacy_global_hint": False,
+        "requires_transition_evidence": False,
+        "transition_node_ids": [],
+        "has_transition_evidence": False,
+    }
+    if not cp or mode_key not in (42, 43):
+        return _state
+
+    _phase_id = str(phase_id or "").strip()
+    _seq = [str(_cp_id).strip() for _cp_id, __ in (_CHECKPOINT_TEST_OPTIONS.get(mode_key) or [])]
+    if _phase_id not in _seq:
+        return _state
+
+    _state["requires_all_targets"] = True
+    _targets = _checkpoint_4x_target_node_ids(cp)
+    _state["target_node_ids"] = _targets
+
+    _done_nodes = []
+    def _add_done_nodes(_phase_name: str, *, legacy_global_targets: bool = False) -> None:
+        nonlocal _done_nodes
+        _source_nodes = (
+            _checkpoint_4x_nodes_done_for_runtime_phase(cp, _phase_name)
+            if legacy_global_targets else
+            list(cp.nodes_done_for(_phase_name) or [])
+        )
+        for _nid in _source_nodes:
+            _node_id = str(_nid or "").strip()
+            if _node_id and _node_id not in _done_nodes:
+                _done_nodes.append(_node_id)
+
+    _add_done_nodes(_phase_id)
+    _phase_idx = _checkpoint_phase_index(mode_key, _phase_id)
+    for _later_id, __ in (_CHECKPOINT_TEST_OPTIONS.get(mode_key) or []):
+        if _checkpoint_phase_index(mode_key, _later_id) > _phase_idx:
+            _add_done_nodes(_later_id)
+    for _runtime_phase in (
+        ["install_done", "reinit_loader"]
+        + (["option6_done"] if mode_key == 43 else [])
+    ):
+        _add_done_nodes(_runtime_phase, legacy_global_targets=True)
+    _state["done_node_ids"] = _done_nodes
+
+    if mode_key == 42 and _phase_id == "cp_42_6":
+        _transition_nodes = _checkpoint_4x_nodes_done_for_runtime_phase(cp, "reinit_loader")
+        _state["requires_transition_evidence"] = True
+        _state["transition_node_ids"] = _transition_nodes
+        _target_node_set = set(_targets)
+        _state["has_transition_evidence"] = bool(
+            set(_transition_nodes) & (_target_node_set or set(_done_nodes))
+        )
+
+    _global_done = False
+    try:
+        _global_done = bool(cp.is_done(_phase_id))
+    except Exception:
+        _global_done = False
+
+    _done_node_set = set(_done_nodes)
+    if _targets:
+        _state["all_targets_done"] = all(_nid in _done_node_set for _nid in _targets)
+        if (not _state["all_targets_done"]
+                and _global_done
+                and len(_targets) == 1
+                and not _done_nodes):
+            _state["all_targets_done"] = True
+
+    _state["legacy_global_hint"] = bool(
+        _targets and _global_done and not _state["all_targets_done"]
+    )
+    return _state
+
+
+def _checkpoint_4x_highest_legacy_global_hint(cp, mode_key) -> str:
+    if not cp or mode_key not in (42, 43):
+        return ""
+    _hint = ""
+    for _cp_id, __ in (_CHECKPOINT_TEST_OPTIONS.get(mode_key) or []):
+        _state = _checkpoint_4x_parallel_phase_state(cp, mode_key, _cp_id)
+        if _state.get("legacy_global_hint"):
+            _hint = _cp_id
+    return _hint
+
+
 def _checkpoint_phase_effectively_done(cp, mode_key, phase_id: str) -> bool:
     """Treat later checkpoints as implying earlier ones for resume/status UX."""
     _phase_id = str(phase_id or "").strip()
@@ -4606,6 +4912,15 @@ def _checkpoint_phase_effectively_done(cp, mode_key, phase_id: str) -> bool:
                 except Exception:
                     pass
                 return all(_checkpoint_phase_done_for_peer_resume(_id, _nid) for _nid in _targets)
+        if _mode_key in (42, 43):
+            _state = _checkpoint_4x_parallel_phase_state(cp, _mode_key, _id)
+            if _state.get("requires_all_targets"):
+                if (_state.get("all_targets_done")
+                        and (not _state.get("requires_transition_evidence")
+                             or _state.get("has_transition_evidence"))):
+                    return True
+                if _state.get("target_node_ids"):
+                    return False
         return _checkpoint_phase_recorded_done(cp, _id)
 
     if _phase_recorded_done(_phase_id):
@@ -4633,13 +4948,22 @@ def _checkpoint_resume_stage_label(cp) -> str:
     _mode = str(getattr(cp, "mode", "") or "").strip().lower()
     _mode_key = _checkpoint_mode_to_test_key(_mode)
     _checkpoint_seq = list(_CHECKPOINT_TEST_OPTIONS.get(_mode_key) or [])
+    _legacy_4x_hint = _checkpoint_4x_highest_legacy_global_hint(cp, _mode_key)
     for _cp_id, _cp_desc in _checkpoint_seq:
         if not _checkpoint_phase_effectively_done(cp, _mode_key, _cp_id):
+            if _legacy_4x_hint and _mode_key in (42, 43):
+                _hint_idx = _checkpoint_phase_index(_mode_key, _legacy_4x_hint)
+                _next_idx = _checkpoint_phase_index(_mode_key, _cp_id)
+                if _hint_idx > _next_idx:
+                    return (
+                        f"Legacy {_legacy_4x_hint} global hint detected; "
+                        f"earliest safe all-node resume is {_cp_desc}."
+                    )
             return _cp_desc
 
     # If all known checkpoints for this mode are done, keep mode-specific
     # context for clarity in the menu prompt.
-    if _mode.startswith("4.2"):
+    if _mode.startswith("4.2") or _mode.startswith("4.3"):
         return _describe_4b_resume_stage(cp)
     return "All checkpoints completed."
 
@@ -4818,6 +5142,10 @@ def _checkpoint_apply_manual_resume_target(cp, target_phase_id: str) -> bool:
     _peer_bmcs = _all_bmcs[1:] if _mode_key == 3 else list(_all_bmcs)
 
     def _phase_node_ids(_cp_id: str) -> "list[str]":
+        if _mode_key in (42, 43):
+            return list(
+                _checkpoint_4x_parallel_phase_state(cp, _mode_key, _cp_id).get("target_node_ids") or []
+            )
         if _mode_key == 2:
             return list(_all_bmcs)
         if _mode_key == 3:
@@ -4836,17 +5164,26 @@ def _checkpoint_apply_manual_resume_target(cp, target_phase_id: str) -> bool:
 
     for _idx, (_cp_id, __) in enumerate(_checkpoint_seq):
         _cp_node_ids = _phase_node_ids(_cp_id)
+        _rewrite_4x_nodes = (_mode_key in (42, 43) and bool(_cp_node_ids))
         if _idx < _target_idx:
             _meta = _phases.get(_cp_id) or {}
             if not _meta.get("done"):
                 _phases[_cp_id] = {"done": True, "ts": _now}
             if _cp_node_ids:
-                _per = _node_phases.setdefault(_cp_id, {})
-                for _nid in _cp_node_ids:
-                    _per[_nid] = {"done": True, "ts": _now}
+                if _rewrite_4x_nodes:
+                    _node_phases[_cp_id] = {
+                        _nid: {"done": True, "ts": _now}
+                        for _nid in _cp_node_ids
+                    }
+                else:
+                    _per = _node_phases.setdefault(_cp_id, {})
+                    for _nid in _cp_node_ids:
+                        _per[_nid] = {"done": True, "ts": _now}
         else:
             _phases.pop(_cp_id, None)
-            if _cp_node_ids:
+            if _mode_key in (42, 43):
+                _node_phases.pop(_cp_id, None)
+            elif _cp_node_ids:
                 if _cp_id in _node_phases:
                     for _nid in _cp_node_ids:
                         _node_phases[_cp_id].pop(_nid, None)
@@ -4854,6 +5191,56 @@ def _checkpoint_apply_manual_resume_target(cp, target_phase_id: str) -> bool:
                         _node_phases.pop(_cp_id, None)
             else:
                 _node_phases.pop(_cp_id, None)
+
+    def _set_exact_node_phase(_phase_name: str, _node_ids) -> None:
+        _targets = []
+        for _nid in (_node_ids or []):
+            _node_id = str(_nid or "").strip()
+            if _node_id and _node_id not in _targets:
+                _targets.append(_node_id)
+        if not _targets:
+            _node_phases.pop(_phase_name, None)
+            return
+        _node_phases[_phase_name] = {
+            _nid: {"done": True, "ts": _now}
+            for _nid in _targets
+        }
+
+    if _mode_key in (42, 43):
+        for _phase_name in (
+            "primary_bootmenu_done",
+            "primary_node_mgmt_done",
+            "primary_setup_done",
+            "cluster_formed",
+            "option3_complete",
+            "node_joined",
+        ):
+            _phases.pop(_phase_name, None)
+        for _phase_name in list(_phases.keys()):
+            if _phase_name.startswith("cp_1_") or _phase_name.startswith("cp_2_"):
+                _phases.pop(_phase_name, None)
+        for _phase_name in list(_node_phases.keys()):
+            if (_phase_name.startswith("cp_1_")
+                        or _phase_name.startswith("cp_2_")
+                        or _phase_name in (
+                            "peer_option4_done",
+                            "peer_joined",
+                            "install_done",
+                            "option6_done",
+                            "reinit_loader",
+                        )):
+                _node_phases.pop(_phase_name, None)
+        _last_4x_idx = len(_checkpoint_seq) - 1
+        if _target_idx >= _last_4x_idx and _all_bmcs:
+            if _mode_key == 42:
+                _set_exact_node_phase("install_done", _all_bmcs)
+            else:
+                _set_exact_node_phase("install_done", [])
+                _set_exact_node_phase("option6_done", [])
+        else:
+            _set_exact_node_phase("install_done", [])
+            _set_exact_node_phase("option6_done", [])
+        _set_exact_node_phase("reinit_loader", [])
 
     _global_aliases = {
         "cp_1_5": "primary_bootmenu_done",
@@ -18049,10 +18436,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     # know roughly where the prior run left off. (Phase-level skip is a
     # future improvement — the operator can re-confirm progress visually.)
     if resuming and _checkpoint:
-        _install_done_ips = _checkpoint.nodes_done_for("install_done")
+        _install_done_ips = _checkpoint_4x_nodes_done_for_runtime_phase(_checkpoint, "install_done")
         # Only load option6_done for mode 4.3 (install_only); mode 4.2 never uses it.
-        _opt6_done_ips    = _checkpoint.nodes_done_for("option6_done") if install_only else set()
-        _reinit_done_ips  = _checkpoint.nodes_done_for("reinit_loader")
+        _opt6_done_ips    = (
+            _checkpoint_4x_nodes_done_for_runtime_phase(_checkpoint, "option6_done")
+            if install_only else set()
+        )
+        _reinit_done_ips  = _checkpoint_4x_nodes_done_for_runtime_phase(_checkpoint, "reinit_loader")
         _opt4_done_ips    = _checkpoint.nodes_done_for("peer_option4_done")
         _joined_ips       = _checkpoint.nodes_done_for("peer_joined")
         print("\n  🔖 Resume status from checkpoint:")
@@ -18123,10 +18513,11 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     # For mode 4.3 (install_only), option6_done is also accepted because
     # option 6 completion marks successful post-install transition.
     _install_done_ips_set = (
-        set(_checkpoint.nodes_done_for("install_done")) if _checkpoint else set()
+        set(_checkpoint_4x_nodes_done_for_runtime_phase(_checkpoint, "install_done"))
+        if _checkpoint else set()
     )
     _opt6_done_ips_set = (
-        set(_checkpoint.nodes_done_for("option6_done"))
+        set(_checkpoint_4x_nodes_done_for_runtime_phase(_checkpoint, "option6_done"))
         if (install_only and _checkpoint) else set()
     )
     _install_equiv_ips = _install_done_ips_set | _opt6_done_ips_set
@@ -33865,6 +34256,99 @@ def _run_show_config_mode(config_path=None):
         pass
 
 
+def _classify_option23_cluster_shell_unavailable(
+    manifest_nodes,
+    checkpoint,
+    *,
+    saved_cluster_entries=None,
+    recover_cluster_ip_fn=None,
+):
+    """Classify option 2.3 peers using only persisted evidence.
+
+    This helper is used only when option 2.3 cannot reach the cluster shell.
+    It intentionally avoids synthesizing join completion: peers are treated as
+    already joined only when a positive persisted join marker exists. Saved
+    cluster-role IP evidence is kept separate so the caller can fail safe
+    instead of retrying blindly once peers are parked near ``cp_2_6``.
+    """
+    _recover_cluster_ip = recover_cluster_ip_fn or _recover_cluster_ip_from_checkpoint_log
+    _saved_entries = (
+        list(saved_cluster_entries)
+        if saved_cluster_entries is not None
+        else _load_cluster_ip_manifest_entries()
+    )
+    _saved_cluster_by_bmc = {
+        str(_entry.get("bmc") or "").strip(): _entry
+        for _entry in _saved_entries
+        if isinstance(_entry, dict) and str(_entry.get("bmc") or "").strip()
+    }
+
+    _normalized_nodes = [dict(_node) for _node in (manifest_nodes or []) if isinstance(_node, dict)]
+    _summary = {
+        "already_joined": [],
+        "pending_cluster_add": [],
+        "staged_without_cluster_ip": [],
+        "pre_stage_or_unknown": [],
+        "ambiguous": [],
+        "all_joined_confirmed": False,
+        "has_non_destructive_stage": False,
+    }
+
+    for _node in _normalized_nodes:
+        _bmc = str(_node.get("bmc") or "").strip()
+        _joined_evidence = _checkpoint_phase_resume_evidence_for_peer(checkpoint, "cp_2_7", _bmc)
+        if _joined_evidence:
+            _node["resume_evidence"] = _joined_evidence
+            _summary["already_joined"].append(_node)
+            continue
+
+        _saved = _saved_cluster_by_bmc.get(_bmc) or {}
+        _saved_ip = str(_node.get("cluster_ip") or _saved.get("cluster_ip") or "").strip()
+        _saved_node_name = str(_node.get("node_name") or _saved.get("node_name") or "").strip()
+        _saved_source = str(_saved.get("source") or "").strip()
+        _staged_evidence = ""
+        if _bmc:
+            _staged_evidence = _checkpoint_phase_resume_evidence_for_peer(checkpoint, "cp_2_6", _bmc)
+            if not _staged_evidence:
+                _staged_evidence = _checkpoint_phase_resume_evidence_for_peer(checkpoint, "cp_2_4", _bmc)
+        _staged = bool(_staged_evidence)
+
+        if not _is_valid_ipv4(_saved_ip) and _staged and checkpoint and _bmc:
+            try:
+                _saved_ip = str(_recover_cluster_ip(checkpoint, _bmc) or "").strip()
+            except Exception:
+                _saved_ip = ""
+            if _is_valid_ipv4(_saved_ip) and not _saved_source:
+                _saved_source = "checkpoint_log"
+
+        if _is_valid_ipv4(_saved_ip):
+            _node["cluster_ip"] = _saved_ip
+            if _saved_node_name and not str(_node.get("node_name") or "").strip():
+                _node["node_name"] = _saved_node_name
+            _node["resume_evidence"] = _saved_source or "manifest:cluster_ip"
+            _summary["pending_cluster_add"].append(_node)
+            continue
+
+        if _staged:
+            _node["resume_evidence"] = _staged_evidence
+            _summary["staged_without_cluster_ip"].append(_node)
+        else:
+            _node["resume_evidence"] = "none"
+            _summary["pre_stage_or_unknown"].append(_node)
+
+    _summary["ambiguous"] = (
+        list(_summary["staged_without_cluster_ip"])
+        + list(_summary["pre_stage_or_unknown"])
+    )
+    _summary["all_joined_confirmed"] = bool(_normalized_nodes) and (
+        len(_summary["already_joined"]) == len(_normalized_nodes)
+    )
+    _summary["has_non_destructive_stage"] = bool(
+        _summary["pending_cluster_add"] or _summary["staged_without_cluster_ip"]
+    )
+    return _summary
+
+
 def _run_2c_resume():
     """Drive option 2.3: locate a node-add manifest and retry any nodes that
     have not yet joined the cluster.
@@ -34143,6 +34627,7 @@ def _run_2c_resume():
     primary_client  = None
     primary_channel = None
     cluster_node_ips: dict = {}   # {node_name: mgmt_ip}
+    _cluster_shell_unavailable_reason = ""
 
     while True:
         try:
@@ -34165,11 +34650,7 @@ def _run_2c_resume():
                 primary_client = None
                 print("  ⚠️  Cluster shell login failed.")
                 _session_log.log("2.3: cluster shell login failed", prefix="WARN")
-                _ask_skip = _prompt(
-                    "  Continue without cluster comparison (retry all nodes)? [y/N]: "
-                , "n").lower()
-                if _ask_skip != "y":
-                    return False
+                _cluster_shell_unavailable_reason = "cluster shell login failed"
             break
         except paramiko.AuthenticationException:
             print(f"  ❌ Authentication failed for {cluster_admin_user}@{cluster_mgmt_ip}.")
@@ -34198,6 +34679,63 @@ def _run_2c_resume():
             print(f"  ❌ Connection failed: {_ce}")
             _session_log.log(f"2.3: connection to {cluster_mgmt_ip} failed: {_ce}",
                              prefix="ERROR")
+            _cluster_shell_unavailable_reason = f"connection to {cluster_mgmt_ip} failed: {_ce}"
+            break
+
+    _fallback_summary = None
+    if not primary_channel:
+        _fallback_summary = _classify_option23_cluster_shell_unavailable(
+            manifest_nodes,
+            _cp2c if _cp2c_loaded else None,
+        )
+        _fallback_already = list(_fallback_summary.get("already_joined") or [])
+        _fallback_pending = list(_fallback_summary.get("pending_cluster_add") or [])
+        _fallback_staged = list(_fallback_summary.get("staged_without_cluster_ip") or [])
+        _fallback_unknown = list(_fallback_summary.get("pre_stage_or_unknown") or [])
+        if (_fallback_already or _fallback_pending or _fallback_staged or _fallback_unknown):
+            print("\n  ℹ️  Non-destructive option 2.3 fallback engaged.")
+            print("     Cluster management SSH is unavailable, so only persisted")
+            print("     fallback evidence will be used for later decisions.")
+            if _fallback_already:
+                print("\n  Already joined (persisted ONTAP confirmation):")
+                for _nd in _fallback_already:
+                    print(
+                        f"    ✅ BMC {_nd.get('bmc')}  "
+                        f"(evidence: {_nd.get('resume_evidence')})"
+                    )
+            if _fallback_pending:
+                print("\n  Pending peers with saved cluster-IP evidence:")
+                for _nd in _fallback_pending:
+                    _saved_ip = _nd.get("cluster_ip") or "?"
+                    print(
+                        f"    ⏳ BMC {_nd.get('bmc')}  "
+                        f"(cluster-ip {_saved_ip}; evidence: {_nd.get('resume_evidence')})"
+                    )
+            if _fallback_staged:
+                print("\n  Ambiguous staged peers (no positive saved cluster-IP evidence):")
+                for _nd in _fallback_staged:
+                    print(
+                        f"    ⚠️  BMC {_nd.get('bmc')}  "
+                        f"(evidence: {_nd.get('resume_evidence')})"
+                    )
+            if _fallback_unknown:
+                print("\n  Unconfirmed peers left before the saved pre-join boundary:")
+                for _nd in _fallback_unknown:
+                    print(
+                        f"    ⚠️  BMC {_nd.get('bmc')}  "
+                        f"(evidence: {_nd.get('resume_evidence')})"
+                    )
+        if _fallback_staged or _fallback_unknown:
+            print("\n  ❌ Safe fallback stop.")
+            print("     Option 2.3 will not retry blindly and will not synthesize")
+            print("     cp_2_7 / peer_joined without ONTAP confirmation.")
+            print("     Restore cluster management SSH, verify the peers above,")
+            print("     then rerun option 2.3.")
+            _session_log.log(
+                "2.3: cluster shell unavailable with ambiguous fallback state; "
+                "aborting per non-destructive fallback",
+                prefix="WARN",
+            )
             return False
 
     # ── 4. Determine which nodes are already in the cluster ───────────────
@@ -34224,15 +34762,18 @@ def _run_2c_resume():
     already_joined_ips = set(cluster_node_ips.values())
     nodes_to_retry  = []
     nodes_already   = []
-    for _nd in manifest_nodes:
-        _bmc = str(_nd.get("bmc") or "").strip()
-        _nip = (_nd.get("node_mgmt_ip") or "").strip()
-        if _nip and _nip in already_joined_ips:
-            nodes_already.append(_nd)
-        elif not primary_channel and _bmc and _bmc in _cp2c_joined:
-            nodes_already.append(_nd)
-        else:
-            nodes_to_retry.append(_nd)
+    if primary_channel:
+        for _nd in manifest_nodes:
+            _nip = (_nd.get("node_mgmt_ip") or "").strip()
+            if _nip and _nip in already_joined_ips:
+                nodes_already.append(_nd)
+            else:
+                nodes_to_retry.append(_nd)
+    elif _fallback_summary is not None:
+        nodes_already = [dict(_nd) for _nd in (_fallback_summary.get("already_joined") or [])]
+        nodes_to_retry = [dict(_nd) for _nd in (_fallback_summary.get("pending_cluster_add") or [])]
+    else:
+        nodes_to_retry = [dict(_nd) for _nd in manifest_nodes]
 
     print()
     if nodes_already:
@@ -34294,50 +34835,53 @@ def _run_2c_resume():
     }
     _nodes_ready_for_add = []
     _nodes_needing_replay = []
-    for _nd in nodes_to_retry:
-        _bmc = str(_nd.get("bmc") or "").strip()
-        _peer_opt4_done = bool(
-            _cp2c_loaded
-            and _bmc
-            and _cp2c.is_node_done("peer_option4_done", _bmc)
-            and not _cp2c.is_node_done("peer_joined", _bmc)
-        )
-        if not _peer_opt4_done:
-            _nodes_needing_replay.append(_nd)
-            continue
+    if not primary_channel and _fallback_summary is not None:
+        _nodes_ready_for_add = [dict(_nd) for _nd in nodes_to_retry]
+    else:
+        for _nd in nodes_to_retry:
+            _bmc = str(_nd.get("bmc") or "").strip()
+            _peer_opt4_done = bool(
+                _cp2c_loaded
+                and _bmc
+                and _cp2c.is_node_done("peer_option4_done", _bmc)
+                and not _cp2c.is_node_done("peer_joined", _bmc)
+            )
+            if not _peer_opt4_done:
+                _nodes_needing_replay.append(_nd)
+                continue
 
-        _saved_ip = str(_nd.get("cluster_ip") or "").strip()
-        _saved_node = str(_nd.get("node_name") or "").strip()
-        if not _is_valid_ipv4(_saved_ip):
-            _saved = _saved_cluster_by_bmc.get(_bmc) or {}
-            _saved_ip = str(_saved.get("cluster_ip") or "").strip()
-            _saved_node = _saved_node or str(_saved.get("node_name") or "").strip()
-        if not _is_valid_ipv4(_saved_ip):
-            _saved_ip = _recover_cluster_ip_from_checkpoint_log(_cp2c, _bmc)
+            _saved_ip = str(_nd.get("cluster_ip") or "").strip()
+            _saved_node = str(_nd.get("node_name") or "").strip()
+            if not _is_valid_ipv4(_saved_ip):
+                _saved = _saved_cluster_by_bmc.get(_bmc) or {}
+                _saved_ip = str(_saved.get("cluster_ip") or "").strip()
+                _saved_node = _saved_node or str(_saved.get("node_name") or "").strip()
+            if not _is_valid_ipv4(_saved_ip):
+                _saved_ip = _recover_cluster_ip_from_checkpoint_log(_cp2c, _bmc)
+                if _is_valid_ipv4(_saved_ip):
+                    _session_log.log(
+                        f"2.3: recovered cluster IP for {_bmc} from checkpoint log_dir -> {_saved_ip}"
+                    )
+                    _update_node_add_manifest_node(_bmc, cluster_ip=_saved_ip, node_name=_saved_node)
+                    _record_cluster_ip_manifest_entry(
+                        _saved_ip,
+                        node_name=_saved_node,
+                        bmc=_bmc,
+                        source="2.3 checkpoint log recovery",
+                    )
+
             if _is_valid_ipv4(_saved_ip):
+                _nodes_ready_for_add.append(_nd)
                 _session_log.log(
-                    f"2.3: recovered cluster IP for {_bmc} from checkpoint log_dir -> {_saved_ip}"
+                    f"2.3: checkpoint reuse for {_bmc} -> cluster_ip={_saved_ip}"
                 )
-                _update_node_add_manifest_node(_bmc, cluster_ip=_saved_ip, node_name=_saved_node)
-                _record_cluster_ip_manifest_entry(
-                    _saved_ip,
-                    node_name=_saved_node,
-                    bmc=_bmc,
-                    source="2.3 checkpoint log recovery",
+            else:
+                _nodes_needing_replay.append(_nd)
+                _session_log.log(
+                    f"2.3: {_bmc} marked peer_option4_done but no saved cluster IP was found; "
+                    "replaying reinit path",
+                    prefix="WARN",
                 )
-
-        if _is_valid_ipv4(_saved_ip):
-            _nodes_ready_for_add.append(_nd)
-            _session_log.log(
-                f"2.3: checkpoint reuse for {_bmc} -> cluster_ip={_saved_ip}"
-            )
-        else:
-            _nodes_needing_replay.append(_nd)
-            _session_log.log(
-                f"2.3: {_bmc} marked peer_option4_done but no saved cluster IP was found; "
-                "replaying reinit path",
-                prefix="WARN",
-            )
 
     if _nodes_ready_for_add:
         print(f"\n  Checkpoint-ready for cluster add-node only ({len(_nodes_ready_for_add)}):")
@@ -34455,6 +34999,22 @@ def _run_2c_resume():
     _2c_ips = _ordered_cluster_entries_for_add(
         _2c_cluster_ips_out, preferred_bmcs=_2c_preferred_bmcs
     )
+    if (not primary_channel) and _2c_ips:
+        print("\n  ❌ Cluster management SSH is still unavailable.")
+        print("     Saved cluster-IP evidence exists, but option 2.3 cannot")
+        print("     continue to cluster add-node without an active cluster shell.")
+        print("     Restore cluster management SSH, then rerun option 2.3.")
+        _session_log.log(
+            "2.3: saved cluster IPs were available but cluster shell remained unavailable; "
+            "aborting before cluster add-node",
+            prefix="WARN",
+        )
+        if primary_client:
+            try:
+                primary_client.close()
+            except Exception:
+                pass
+        return False
     if primary_channel and _2c_ips:
         _cluster_add_nodes_bulk(primary_channel, _2c_ips, log=_session_log,
                                 node_timings_out=_2c_add_node_timings)
