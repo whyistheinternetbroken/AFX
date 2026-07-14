@@ -2082,14 +2082,25 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
             _target_map[_nid] = _phase
         print(f"  ✅ All nodes mapped to '{_phase}' ({_label}).")
     else:
-        print("  Enter checkpoint index per node (0 = skip node).")
+        _global_fallback = str(_checkpoint_test_target or "").strip()
+        _global_fallback_idx = 0
+        if _global_fallback:
+            for _gi, (_gph, __) in enumerate(options, 1):
+                if _gph == _global_fallback:
+                    _global_fallback_idx = _gi
+                    break
+        _enter_hint = (
+            f"Enter={_global_fallback_idx} (global {_global_fallback})"
+            if _global_fallback_idx else "0=skip"
+        )
+        print(f"  Enter checkpoint index per node ({_enter_hint}, 0=skip).")
         for _nid in _nodes:
             print("")
             for _idx, (_phase, _label) in enumerate(options, 1):
                 print(f"  {_idx}. {_phase:<22} {_label}")
             _idx_raw = _prompt(
-                f"    {_nid} checkpoint [0-{len(options)}]: ",
-                "0",
+                f"    {_nid} checkpoint [0-{len(options)}, Enter={_global_fallback_idx or 0}]: ",
+                str(_global_fallback_idx) if _global_fallback_idx else "0",
             ).strip()
             if not _idx_raw.isdigit():
                 print(f"  ⚠️  Skipping {_nid} (invalid input).")
@@ -2128,7 +2139,12 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
 
 
 def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node_ids) -> None:
-    """Offer per-node --test mapping when multi-node scope becomes known later."""
+    """Configure per-node --test injection once multi-node scope is known.
+
+    Called right after the node list is available (config load / peer detection).
+    Skips the 'keep global or configure per-node?' dialog — goes directly into
+    per-node config so the admin is prompted immediately after the global pick.
+    """
     global _checkpoint_test_enabled, _checkpoint_test_target
     global _checkpoint_test_mode_label, _checkpoint_test_targets_by_node
     if operation_mode not in (2, 3, 42, 43):
@@ -2166,22 +2182,9 @@ def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node
     except Exception:
         _resume_cp_for_override = None
 
-    print("\n  🧪 Multiple nodes detected for this run.")
-    print(
-        f"  Current --test checkpoint '{_global_target}' applies to all "
-        f"{len(_nodes)} nodes."
-    )
-    _choice = _prompt(
-        "  Keep global injection or configure per-node now? [g/P]: ",
-        "g",
-    ).strip().lower()
-    if _choice != "p":
-        _slog(
-            f"--test mode {_mode_name}: keeping global checkpoint "
-            f"'{_global_target}' across {len(_nodes)} nodes",
-            prefix="INFO",
-        )
-        return
+    print(f"\n  🧪 {len(_nodes)} nodes detected — configuring per-node checkpoint injection.")
+    print(f"  Global checkpoint '{_global_target}' will be replaced by per-node config below.")
+    print("  (Press Enter at a node prompt to keep the global target for that node, 0 to skip it.)")
 
     if _configure_per_node_checkpoint_injection(
         _mode_name,
@@ -2191,6 +2194,11 @@ def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node
     ):
         return
 
+    _slog(
+        f"--test mode {_mode_name}: keeping global checkpoint "
+        f"'{_global_target}' across {len(_nodes)} nodes",
+        prefix="INFO",
+    )
     print(
         f"  ℹ️  Keeping global checkpoint '{_global_target}' for all nodes "
         "for this run."
@@ -2223,68 +2231,6 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
 
     _print_banner(f"🧪 Test failure injection ({_mode_name})")
     _allow_menu_escape = operation_mode == 2
-    _per_node_nodes = _checkpoint_test_secondary_nodes_for_mode(operation_mode)
-    _per_node_available = operation_mode in (2, 3, 42, 43) and len(_per_node_nodes) > 1
-
-    # ── Multi-node: go directly into per-node config ──────────────────────
-    if _per_node_available:
-        print("\n  Select a checkpoint to fail immediately after it is saved.")
-        print("  This is intended to validate resume/checkpoint pickup on the next run.")
-        print("")
-        print(f"  ℹ️  {len(_per_node_nodes)} nodes detected — checkpoint injection is configured per-node.")
-        print("  0. Disable injected checkpoint failure for this run")
-        if _allow_menu_escape:
-            print("  M. Return to main menu")
-        if _resume_cp_available:
-            print("  B. Back to checkpoint resume-stage override")
-        _min_allowed_idx, _min_reason = _checkpoint_injection_min_allowed_index(
-            _options, _resume_cp_for_override if _resume_cp_available else None
-        )
-        if _min_allowed_idx > 1 and _min_allowed_idx <= len(_options):
-            _min_cp_id = _options[_min_allowed_idx - 1][0]
-            print(
-                f"  ℹ️  Injection targets before index {_min_allowed_idx} "
-                f"({_min_cp_id}) are blocked ({_min_reason})."
-            )
-        for _idx, (_phase, _label) in enumerate(_options, 1):
-            print(f"  {_idx}. {_phase:<22} {_label}")
-        _pn_extras = []
-        if _allow_menu_escape:
-            _pn_extras.append("M")
-        if _resume_cp_available:
-            _pn_extras.append("B")
-        while True:
-            _sel = _prompt(
-                "\n  Disable or configure per-node injection "
-                f"[0=disable{', ' + ', '.join(_pn_extras) if _pn_extras else ''}, Enter=configure per-node]: ",
-                "",
-            ).strip()
-            if _sel == "0":
-                print("  ✅ Checkpoint failure injection disabled for this run.")
-                return
-            if _allow_menu_escape and _sel.lower() == "m":
-                print("  ↩️  Returning to main menu...")
-                raise _ReturnToMenu
-            if _resume_cp_available and _sel.lower() == "b":
-                _changed = _prompt_checkpoint_resume_target_override(_resume_cp_for_override)
-                if _changed:
-                    _min_allowed_idx, _min_reason = _checkpoint_injection_min_allowed_index(
-                        _options, _resume_cp_for_override
-                    )
-                continue
-            if _sel == "":
-                if _configure_per_node_checkpoint_injection(
-                    _mode_name,
-                    _options,
-                    _per_node_nodes,
-                    min_allowed_index=_min_allowed_idx,
-                ):
-                    return
-                continue
-            print("  ⚠️  Enter 0 to disable, or press Enter to configure per-node.")
-        return
-
-    # ── Single-node (or non-peer mode): global checkpoint prompt ─────────
     print("\n  Select a checkpoint to fail immediately after it is saved.")
     print("  This is intended to validate resume/checkpoint pickup on the next run.")
     print("  Press Enter with no value to run without failure injection.")
