@@ -29866,6 +29866,11 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
     if not peer_bmcs:
         return True
 
+    def _cluster_ip_from_entry(_entry):
+        if isinstance(_entry, dict):
+            return str(_entry.get("cluster_ip") or "").strip()
+        return str(_entry or "").strip()
+
     global _mode3_pipeline_state, _mode3_staged_loader_channels, _mode3_staged_loader_clients
     _pipeline = _mode3_pipeline_state if isinstance(_mode3_pipeline_state, dict) else None
 
