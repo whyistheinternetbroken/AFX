@@ -1712,9 +1712,19 @@ def _set_checkpoint_test_parallel_scope(node_ids) -> None:
             _checkpoint_test_parallel_seen_nodes = set()
             return
         if _per_node_targets:
-            # Per-node injection is a "first target hit wins" trigger. Do not
-            # wait for all targeted nodes when checkpoints differ by node.
-            _checkpoint_test_parallel_expected_nodes = set()
+            _expected = set()
+            for _nid in _nodes:
+                if _checkpoint_test_target_for_node(_nid, _per_node_targets):
+                    _identity = _checkpoint_test_node_identity(_nid) or _nid
+                    if _identity:
+                        _expected.add(_identity)
+            if (
+                _operation_mode == 3
+                and _checkpoint_test_target
+                and _MODE3_PRIMARY_CHECKPOINT_NODE
+            ):
+                _expected.add(_MODE3_PRIMARY_CHECKPOINT_NODE)
+            _checkpoint_test_parallel_expected_nodes = set(_expected)
             _checkpoint_test_parallel_seen_nodes = set()
             return
         else:
@@ -1725,8 +1735,15 @@ def _set_checkpoint_test_parallel_scope(node_ids) -> None:
             _checkpoint_test_parallel_expected_nodes = set(_nodes)
             _checkpoint_test_parallel_seen_nodes = set()
     if _checkpoint_test_targets_by_node:
+        def _target_for_identity(_nid: str) -> str:
+            _t = _checkpoint_test_target_for_node(_nid, _checkpoint_test_targets_by_node)
+            if _t:
+                return _t
+            if _nid == _MODE3_PRIMARY_CHECKPOINT_NODE and _checkpoint_test_target:
+                return _checkpoint_test_target
+            return "?"
         _mapping = ", ".join(
-            f"{_nid}:{_checkpoint_test_target_for_node(_nid, _checkpoint_test_targets_by_node)}"
+            f"{_nid}:{_target_for_identity(_nid)}"
             for _nid in sorted(_checkpoint_test_parallel_expected_nodes)
         )
         _slog(
@@ -2626,9 +2643,16 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
         if _node_id and _parallel_expected and _per_node_targets:
             _checkpoint_test_parallel_seen_nodes.add(_node_identity)
             _remaining = sorted(_parallel_expected - _checkpoint_test_parallel_seen_nodes)
+            def _target_for_expected(_nid: str) -> str:
+                _t = _checkpoint_test_target_for_node(_nid, _per_node_targets)
+                if _t:
+                    return _t
+                if _nid == _MODE3_PRIMARY_CHECKPOINT_NODE and _checkpoint_test_target:
+                    return str(_checkpoint_test_target)
+                return "?"
             if _remaining:
                 _rem = ", ".join(
-                    f"{_nid}:{_checkpoint_test_target_for_node(_nid, _per_node_targets) or '?'}"
+                    f"{_nid}:{_target_for_expected(_nid)}"
                     for _nid in _remaining
                 )
                 _wait_msg = (
@@ -2638,7 +2662,7 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
             else:
                 _checkpoint_test_consumed = True
                 _all = ", ".join(
-                    f"{_nid}:{_checkpoint_test_target_for_node(_nid, _per_node_targets) or '?'}"
+                    f"{_nid}:{_target_for_expected(_nid)}"
                     for _nid in sorted(_parallel_expected)
                 )
                 _fire_msg = (
@@ -6136,6 +6160,21 @@ def _checkpoint_per_node_stage_lines(cp) -> "list[str]":
     _mode_raw = str(getattr(cp, "mode", "") or "").strip().lower()
     _is_mode3 = _mode_raw == "3"
     _bmc_ips = [str(_ip).strip() for _ip in (getattr(cp, "bmc_ips", []) or []) if str(_ip).strip()]
+    if _is_mode3:
+        _cfg_path = str(getattr(cp, "config_path", "") or "").strip()
+        if _cfg_path and os.path.isfile(_cfg_path):
+            with suppress(Exception):
+                _cfg = load_config_file(_cfg_path)
+                _cfg_primary, _cfg_secondary = _extract_bmc_lists_from_config_dict(_cfg)
+                if _cfg_primary:
+                    if _bmc_ips:
+                        if not _is_valid_ipv4(_bmc_ips[0]):
+                            _bmc_ips[0] = _cfg_primary
+                    else:
+                        _bmc_ips = [_cfg_primary]
+                for _peer_ip in _cfg_secondary:
+                    if _peer_ip and _peer_ip not in _bmc_ips:
+                        _bmc_ips.append(_peer_ip)
 
     _derived_peer_ips = []
     if _is_mode3:
