@@ -123,6 +123,66 @@ _BRACKETED_IPV4_RE = re.compile(
 _INLINE_TS_RE = re.compile(r"\|\s\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}")
 _PREFIX_TS_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\]")
 
+# Timeout-warning flood guard for direct_read_until_any().
+_WAIT_TIMEOUT_LOG_SUPPRESS_WINDOW_SEC = 10.0
+_WAIT_TIMEOUT_LOG_SUMMARY_INTERVAL_SEC = 60.0
+_wait_timeout_log_state: "dict[tuple, dict[str, float | int]]" = {}
+_wait_timeout_log_lock = threading.Lock()
+
+
+def _log_wait_timeout_throttled(timeout: int, look_for_list, elapsed: float) -> None:
+    """Throttle repetitive timeout warnings for identical matcher sets.
+
+    Also emits a periodic summary so we still preserve troubleshooting signal
+    without writing millions of duplicate lines under hot-loop conditions.
+    """
+    if not _session_log:
+        return
+    _safe_timeout = int(timeout or 0)
+    _sigs = tuple(str(s or "").strip().lower() for s in (look_for_list or []))
+    _key = (_safe_timeout, _sigs)
+    _now = time.monotonic()
+    _msg = f"Timeout ({_safe_timeout}s) waiting for any of {list(look_for_list or [])}"
+    _fast_return = elapsed < max(1.0, float(_safe_timeout) * 0.8)
+    with _wait_timeout_log_lock:
+        _state = _wait_timeout_log_state.setdefault(
+            _key,
+            {"last_emit": 0.0, "last_summary": 0.0, "suppressed": 0},
+        )
+        _last_emit = float(_state.get("last_emit") or 0.0)
+        _last_summary = float(_state.get("last_summary") or 0.0)
+        _suppressed = int(_state.get("suppressed") or 0)
+
+        if _now - _last_emit >= _WAIT_TIMEOUT_LOG_SUPPRESS_WINDOW_SEC:
+            if _suppressed > 0:
+                _session_log.log(
+                    f"Suppressed {_suppressed} duplicate timeout warning(s) for matcher set {_sigs}",
+                    prefix="WARN",
+                )
+                _suppressed = 0
+            _session_log.log(_msg, prefix="WARN")
+            if _fast_return:
+                _session_log.log(
+                    f"Timeout wait returned early ({elapsed:.2f}s < requested {_safe_timeout}s); "
+                    "this usually indicates rapid reconnect/shutdown churn.",
+                    prefix="WARN",
+                )
+            _state["last_emit"] = _now
+            _state["last_summary"] = _now
+            _state["suppressed"] = _suppressed
+            return
+
+        _suppressed += 1
+        _state["suppressed"] = _suppressed
+        if _now - _last_summary >= _WAIT_TIMEOUT_LOG_SUMMARY_INTERVAL_SEC:
+            _session_log.log(
+                f"Still timing out for matcher set {_sigs}; suppressed {_suppressed} duplicate warning(s) "
+                f"in the last {int(_now - _last_summary)}s",
+                prefix="WARN",
+            )
+            _state["last_summary"] = _now
+            _state["suppressed"] = 0
+
 # ---------------------------------------------------------------------------
 # Per-reinit elapsed-time / node-label tracking
 # ---------------------------------------------------------------------------
@@ -8954,11 +9014,13 @@ def direct_read_until_any(channel, look_for_list, timeout=15, node_log=None,
         _rc = _primary_bmc_reconnect_ctx
     _ch = _rc.get("channel") if (_rc and _rc.get("channel") is not None) else channel
     matchers = [(s.lower(), s) for s in look_for_list]
+    _wait_start = time.monotonic()
     output, matched = _recv_loop(_ch, matchers, timeout, node_log, check_bmc_drop,
                                  quiet=quiet, reconnect_ctx=_rc,
                                  cr_nudge_interval=cr_nudge_interval)
-    if matched is None and _session_log:
-        _session_log.log(f"Timeout ({timeout}s) waiting for any of {look_for_list}", prefix="WARN")
+    _wait_elapsed = max(0.0, time.monotonic() - _wait_start)
+    if matched is None and _session_log and not _shutdown_event.is_set():
+        _log_wait_timeout_throttled(timeout, look_for_list, _wait_elapsed)
     return output, matched
 
 
@@ -18259,6 +18321,7 @@ def _peer_reinit_worker(ip, ctx):
     _run_loader_prep = bool(ctx.get("run_loader_prep"))
     _timings_record = ctx.get("timings_record")
     _timings_lock = ctx.get("timings_lock")
+    _cluster_ip_retry_peers = ctx.get("cluster_ip_retry_peers")
 
     _t_thread_start = time.monotonic()
     _t_loader_seen = 0.0
@@ -18443,10 +18506,16 @@ def _peer_reinit_worker(ip, ctx):
         _checkpoint_mark_phase("cp_2_6", node_id=_peer_cp_node)
 
         if _cluster_ip is None:
-            _status(f"  ⚠️  [{ip}] Could not capture cluster IP; "
-                    "node will not be added via cluster add-node.")
-            with peer_lock:
-                peer_errors.append((ip, "cluster IP capture failed"))
+            _status(
+                f"  ⚠️  [{ip}] Could not capture cluster IP yet; "
+                "will retry after node-config stages before bulk add-node."
+            )
+            if isinstance(_cluster_ip_retry_peers, list):
+                with peer_lock:
+                    if ip not in _cluster_ip_retry_peers:
+                        _cluster_ip_retry_peers.append(ip)
+            # Option-4 + node-mgmt completed; only cluster-IP discovery is deferred.
+            _ok = True
         else:
             _cluster_entry = cluster_ips_out.get(ip) if isinstance(cluster_ips_out, dict) else {}
             if isinstance(_cluster_entry, dict):
@@ -18455,6 +18524,17 @@ def _peer_reinit_worker(ip, ctx):
             _status(
                 f"  ✅ {_format_status_line(ip, f'Ready for cluster add-node (IP: {_cluster_ip}).', 'SUCCESS')}"
             )
+    except _ReturnToMenu:
+        _status(
+            f"  ↩️  [{ip}] Checkpoint test injection requested menu return; "
+            "stopping peer thread without traceback."
+        )
+        if log:
+            log.log(
+                f"[{ip}] peer worker stopped due to _ReturnToMenu from checkpoint injection",
+                prefix="INFO",
+            )
+        return
     finally:
         if _timings_record is not None and _timings_lock is not None:
             with _timings_lock:
@@ -21302,6 +21382,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             "status":           _status,
             "node_reinit_logs": _node_reinit_logs,
             "cluster_ips_out":  _4b_cluster_ips_out,
+            "cluster_ip_retry_peers": [],
             "primary_option9_done_event": _primary_option9_done,
             "primary_node_ip":  _4b_primary_node_ip,
         }
@@ -21561,6 +21642,36 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         for t in _peer_threads:
             t.join()
         _raise_pending_checkpoint_failure()
+
+        _deferred_cluster_ip_peers = list(dict.fromkeys(
+            (_peer_ctx.get("cluster_ip_retry_peers") or []) if isinstance(_peer_ctx, dict) else []
+        ))
+        if _deferred_cluster_ip_peers:
+            _status(
+                "  ⏳ Retrying deferred cluster-IP capture for peers that were not "
+                "CLI-ready during initial option-4 flow..."
+            )
+            for _pip in _deferred_cluster_ip_peers:
+                if _is_valid_ipv4(_cluster_ip_from_entry(_4b_cluster_ips_out.get(_pip))):
+                    continue
+                _ready_entry, _why = _probe_peer_add_node_readiness(_pip)
+                _ready_ip = (
+                    str((_ready_entry or {}).get("cluster_ip") or "").strip()
+                    if isinstance(_ready_entry, dict)
+                    else ""
+                )
+                if _ready_entry and _is_valid_ipv4(_ready_ip):
+                    _4b_cluster_ips_out[_pip] = _ready_entry
+                    _status(f"  ✅ [{_pip}] Deferred cluster-IP capture succeeded: {_ready_ip}")
+                    if log:
+                        log.log(
+                            f"4.2 mode 3: recovered deferred cluster IP for {_pip}: {_ready_ip}"
+                        )
+                    continue
+                _why_txt = _why or "peer not yet add-node ready after deferred probe"
+                _status(f"  ⚠️  [{_pip}] Deferred cluster-IP capture still unavailable: {_why_txt}")
+                with _peer_lock:
+                    peer_errors.append((_pip, f"cluster IP still unavailable: {_why_txt}"))
 
         if _peer_errors:
             print(f"  ⚠️  Peer reinit issues: {_peer_errors}")
@@ -29086,7 +29197,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                         timings_record=_2b_peer_timings,
                         timings_lock=_2b_timings_lock,
                     )
-                except _InjectedCheckpointFailure:
+                except (_InjectedCheckpointFailure, _ReturnToMenu):
                     _batch_results[_ri] = False
             t = threading.Thread(
                 target=_run_with_result,
@@ -29422,7 +29533,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                         timings_record=_2a_peer_timings,
                         timings_lock=_2a_timings_lock,
                     )
-                except _InjectedCheckpointFailure:
+                except (_InjectedCheckpointFailure, _ReturnToMenu):
                     _batch_results[_ri] = False
             t = threading.Thread(
                 target=_run_2a,
@@ -30458,7 +30569,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                         timings_lock=_m3_timings_lock,
                         cluster_ips_out=_m3_cluster_ips_out,
                     )
-                except _InjectedCheckpointFailure:
+                except (_InjectedCheckpointFailure, _ReturnToMenu):
                     _m3_results[_ri] = False
             t = threading.Thread(
                 target=_run_m3,
@@ -35531,7 +35642,7 @@ def _run_2c_resume():
                     timings_record=_2c_peer_timings,
                     timings_lock=_2c_timings_lock,
                 )
-            except _InjectedCheckpointFailure:
+            except (_InjectedCheckpointFailure, _ReturnToMenu):
                 return
         _t = threading.Thread(
             target=_run_2c,
