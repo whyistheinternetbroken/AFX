@@ -15990,13 +15990,14 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                 resp = "yes"
                 print(f"\n⏳ {_pfx}Waiting for {lbl} (auto-answer '{resp}')...{_elapsed_str()}")
             _start_option4_reinit_reporter()
+            _type_yes_sigs = [trigger, "welcome to the cluster setup wizard"] + list(_WIZARD_START_TRIGGERS)
             _deadline = time.monotonic() + 1800
             _answered = False
             while time.monotonic() < _deadline and not _answered:
                 _remaining = max(1, int(_deadline - time.monotonic()))
                 _out, _matched = direct_read_until_any(
                     channel,
-                    [trigger],
+                    _type_yes_sigs,
                     timeout=min(60, _remaining),
                     node_log=node_log,
                     check_bmc_drop=True,
@@ -16016,6 +16017,25 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                         _session_log.log_sent(resp)
                     print(f"\n✅ {_pfx}Detected '{trigger}' – auto-responded with '{resp}'{_elapsed_str()}")
                     if not _node_add:
+                        print(f"\n   ⏳ {_pfx}Configuring node management network...{_elapsed_str()}")
+                    _answered = True
+                    break
+                _wizard_seen = (
+                    (_matched and str(_matched).lower() != trigger.lower())
+                    or ("welcome to the cluster setup wizard" in str(_out or "").lower())
+                    or _output_contains_wizard_start(_out)
+                )
+                if _wizard_seen:
+                    _stop_option4_reinit_reporter()
+                    _slog(
+                        "Type-yes confirmation stage already advanced to cluster setup wizard; "
+                        "continuing without waiting for explicit confirmation prompt"
+                    )
+                    if not _node_add:
+                        print(
+                            f"\n✅ {_pfx}Cluster setup wizard detected before explicit "
+                            f"'type-yes' confirmation prompt; continuing.{_elapsed_str()}"
+                        )
                         print(f"\n   ⏳ {_pfx}Configuring node management network...{_elapsed_str()}")
                     _answered = True
                     break
