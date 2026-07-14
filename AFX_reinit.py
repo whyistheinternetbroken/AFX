@@ -665,9 +665,23 @@ class CheckpointManager:
         node_phases = self._data.get("node_phases") or {}
         lines.append("")
         lines.append("Per-node phases:")
+        def _display_ip(_node_id: str) -> str:
+            _raw = str(_node_id or "").strip()
+            if _raw.startswith("node_peer:"):
+                return str(_raw.split(":", 1)[1] or "").strip()
+            return _raw
+
         _all_ips = sorted({
-            ip for per_ip in node_phases.values() for ip in per_ip.keys()
+            _display_ip(ip) for per_ip in node_phases.values() for ip in per_ip.keys()
+            if _display_ip(ip)
         } | set(bmc_ips))
+
+        def _node_phase_done_for_display(_phase_name: str, _ip: str) -> bool:
+            _per = node_phases.get(_phase_name, {}) or {}
+            if bool(_per.get(_ip, {}).get("done")):
+                return True
+            _peer_key = _mode3_peer_checkpoint_node(_ip)
+            return bool(_per.get(_peer_key, {}).get("done"))
         _synthetic_done_by_ip = {}
         if bmc_ips:
             _primary_done = []
@@ -689,14 +703,14 @@ class CheckpointManager:
             _phase_done_counts = {
                 _phase: sum(
                     1 for _ip in all_ips
-                    if node_phases.get(_phase, {}).get(_ip, {}).get("done")
+                    if _node_phase_done_for_display(_phase, _ip)
                 )
                 for _phase in phase_names
             }
             _phase_done_ips = {
                 _phase: [
                     _ip for _ip in all_ips
-                    if node_phases.get(_phase, {}).get(_ip, {}).get("done")
+                    if _node_phase_done_for_display(_phase, _ip)
                 ]
                 for _phase in phase_names
             }
@@ -715,7 +729,7 @@ class CheckpointManager:
             for ip in all_ips:
                 completed = [
                     p for p in phase_names
-                    if node_phases.get(p, {}).get(ip, {}).get("done")
+                    if _node_phase_done_for_display(p, ip)
                 ]
                 display_done = completed + [
                     _p for _p in _synthetic_done_by_ip.get(ip, [])
@@ -1626,6 +1640,7 @@ _CHECKPOINT_TEST_OPTIONS = {
         ("cp_1_6", "Primary AutoSupport confirmation answered"),
         ("cp_1_7", "Primary cluster setup started"),
         *_CP_1_7_SUBCHECKPOINTS,
+        ("cp_1_8", "Primary cluster creation complete"),
         ("cp_2_1", "Peer at LOADER"),
         ("cp_2_2", "Peer boot_ontap menu issued"),
         ("cp_2_3", "Peer option 4 issued"),
@@ -5576,14 +5591,14 @@ def _checkpoint_apply_manual_resume_target(cp, target_phase_id: str) -> bool:
             _set_exact_node_phase("option6_done", [])
         _set_exact_node_phase("reinit_loader", [])
 
-    _global_aliases = {
-        "cp_1_5": "primary_bootmenu_done",
-        "cp_1_6": "primary_node_mgmt_done",
-        "cp_1_7": "primary_setup_done",
-        "cp_1_8": "cluster_formed",
-        "cp_2_7": "node_joined",
-    }
-    for _src_cp, _alias in _global_aliases.items():
+    _global_aliases = [
+        ("cp_1_5", "primary_bootmenu_done"),
+        ("cp_1_6", "primary_node_mgmt_done"),
+        ("cp_1_8", "cluster_formed"),
+        ("cp_1_8", "primary_setup_done"),
+        ("cp_2_7", "node_joined"),
+    ]
+    for _src_cp, _alias in _global_aliases:
         _done = _checkpoint_phase_effectively_done(cp, _mode_key, _src_cp)
         if _done:
             _meta = _phases.get(_alias) or {}
@@ -5791,14 +5806,15 @@ def _apply_node_overrides_from_config(cp) -> int:
         if _mode_key == 3 and _role == "primary":
             _phases = cp._data.setdefault("phases", {})
             _now = datetime.now().isoformat()
-            _p_alias = {
-                "cp_1_5": "primary_bootmenu_done",
-                "cp_1_6": "primary_node_mgmt_done",
-                "cp_1_7": "primary_setup_done",
-            }
+            _p_alias = [
+                ("cp_1_5", "primary_bootmenu_done"),
+                ("cp_1_6", "primary_node_mgmt_done"),
+                ("cp_1_8", "primary_setup_done"),
+                ("cp_1_8", "cluster_formed"),
+            ]
             _seq1 = [c for c, __ in (_CHECKPOINT_TEST_OPTIONS.get(1) or [])]
             _ti = _seq1.index(_target) if _target in _seq1 else -1
-            for _cp_id, _alias in _p_alias.items():
+            for _cp_id, _alias in _p_alias:
                 _ci = _seq1.index(_cp_id) if _cp_id in _seq1 else -1
                 if _ti >= 0 and _ci >= 0 and _ci < _ti:
                     _phases[_alias] = {"done": True, "ts": _now}
@@ -6067,6 +6083,45 @@ def _latest_primary_checkpoint_done(cp):
     return "", ""
 
 
+def _checkpoint_per_node_stage_lines(cp) -> "list[str]":
+    """Return per-node checkpoint stage lines for resume summary prompts."""
+    if not cp:
+        return []
+    _mode_raw = str(getattr(cp, "mode", "") or "").strip().lower()
+    _bmc_ips = [str(_ip).strip() for _ip in (getattr(cp, "bmc_ips", []) or []) if str(_ip).strip()]
+    if not _bmc_ips:
+        return []
+
+    _lines = []
+    _is_mode3 = _mode_raw == "3"
+
+    if _is_mode3:
+        _primary_ip = _bmc_ips[0]
+        _cp_id, _cp_desc = _latest_primary_checkpoint_done(cp)
+        if _cp_id:
+            _stage = f"{_cp_id} — {_cp_desc}" if _cp_desc else _cp_id
+        else:
+            _stage = "(no primary checkpoint recorded)"
+        _lines.append(f"primary/{_primary_ip}: {_stage}")
+
+    _peer_ips = _bmc_ips[1:] if _is_mode3 else _bmc_ips
+    _peer_phase_ids = ["cp_2_8", "cp_2_7", "cp_2_6", "cp_2_5", "cp_2_4", "cp_2_3", "cp_2_2", "cp_2_1"]
+    for _idx, _peer_ip in enumerate(_peer_ips, 1):
+        _peer_stage_id = ""
+        for _phase_id in _peer_phase_ids:
+            if _checkpoint_phase_resume_evidence_for_peer(cp, _phase_id, _peer_ip):
+                _peer_stage_id = _phase_id
+                break
+        if _peer_stage_id:
+            _peer_desc = _checkpoint_phase_description(_peer_stage_id)
+            _peer_stage = f"{_peer_stage_id} — {_peer_desc}" if _peer_desc else _peer_stage_id
+        else:
+            _peer_stage = "(no peer checkpoint recorded)"
+        _peer_label = f"secondary-{_idx:02d}/{_peer_ip}" if _is_mode3 else _peer_ip
+        _lines.append(f"{_peer_label}: {_peer_stage}")
+    return _lines
+
+
 def _checkpoint_display_number(cp_id: str) -> str:
     """Extract display number from checkpoint id (e.g. cp_1_4 -> 4)."""
     _parts = str(cp_id or "").split("_")
@@ -6178,16 +6233,27 @@ def select_operation_mode():
             # insufficient: in mode 3 peers run option 4 in parallel with the
             # primary cluster-setup wizard, so the cluster may not be formed
             # when peers finish option 4.
-            _cluster_exists = bool(
-                _cp_obj.is_done("cluster_formed")
+            _primary_cluster_ready = bool(
+                _cp_obj.is_done("cp_1_8")
+                or _cp_obj.is_done("cluster_formed")
                 or _cp_obj.is_done("primary_setup_done")
             )
-            if _cluster_exists:
+            _primary_mgmt_ready = bool(
+                _checkpoint_phase_effectively_done(
+                    _cp_obj, _checkpoint_mode_to_test_key("3"), "cp_1_7_9"
+                )
+            )
+            if _primary_cluster_ready and _primary_mgmt_ready:
                 print(
                     "\n  ✅ Resuming checkpoint via menu option 2.3 "
                     "(safe add-node continuation)."
                 )
                 return 26, False, False
+            if _mode3_peer_opt4:
+                print(
+                    "\n  ℹ️  Mode 3 peers are staged, but primary milestones for cluster add-node "
+                    "(cp_1_7_9 + cp_1_8) are not complete yet; resuming option 3."
+                )
             # Primary is not yet done with cluster setup — resume mode 3 from
             # the first incomplete primary checkpoint.  Per-node phases
             # (peer_option4_done etc.) are already tracked and will be skipped
@@ -6272,6 +6338,11 @@ def select_operation_mode():
                     if _completed:
                         print(_completed)
                     print(f"     Resume stage     : {_stage}")
+                    _node_stages = _checkpoint_per_node_stage_lines(_cp_start)
+                    if _node_stages:
+                        print("     Per-node stage  :")
+                        for _node_stage in _node_stages:
+                            print(f"       - {_node_stage}")
                     print("=" * 60)
                     _is_fully_completed = (
                         str(_checkpoint_resume_phase_id(_cp_start) or "").strip() == ""
@@ -25319,7 +25390,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     if _cluster_shell_resume_ready:
         print(f"\n⏭️ {_wizard_pfx}Resume detected active cluster shell; skipping initial cluster-create wizard prompts.{_elapsed_str()}")
         _slog("Mode 1 resume: cluster shell already active; skipping create/join replay")
-        _cp_mark("cp_1_7", _alias="primary_setup_done")
+        _cp_mark("cp_1_7")
         for _cp_seed in ("cp_1_7_6", "cp_1_7_7", "cp_1_7_8", "cp_1_7_9", "cp_1_7_10", "cp_1_7_11"):
             if not _cp_done(_cp_seed):
                 _cp_mark(_cp_seed)
@@ -25376,7 +25447,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     if _skip_create_steps and (not _cluster_shell_resume_ready):
         _slog("Wizard already at cluster management port; marking cp_1_7 and skipping create steps")
         print("\n⏭️ Wizard already at cluster management port; skipping to management interface configuration.")
-        _cp_mark("cp_1_7", _alias="primary_setup_done")
+        _cp_mark("cp_1_7")
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
     if (not _skip_create_steps) and (not _cluster_shell_resume_ready):
@@ -25510,7 +25581,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         # After the cluster name is submitted, ONTAP begins the real cluster-create
         # work immediately. Mark cp_1_7 first so an exit-after-checkpoint run stops
         # before the long "waiting for cluster to form" phase.
-        _cp_mark("cp_1_7", _alias="primary_setup_done")
+        _cp_mark("cp_1_7")
         print(
             f"\n⏳ {_wizard_pfx}Cluster create started. Waiting for ONTAP to form "
             f"the cluster and reach post-create prompts...{_elapsed_str()}"
@@ -25866,6 +25937,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     if _checkpoint:
         try:
             _checkpoint.mark_done("cluster_formed")
+            if _operation_mode == 3:
+                _checkpoint_mark_phase("cp_1_8", node_id=_primary_cp_node, alias_phase="primary_setup_done")
             _slog("checkpoint: cluster_formed saved")
         except _InjectedCheckpointFailure:
             raise
@@ -25873,7 +25946,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             pass
 
     # Checkpoint: For option 1, also mark primary_setup_done
-    if _checkpoint and _operation_mode == 1:
+    if _checkpoint and _operation_mode in (1, 3):
         try:
             _checkpoint.mark_done("primary_setup_done")
             _slog("checkpoint: primary_setup_done saved")
@@ -30392,18 +30465,6 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
             print("  ℹ️  No peer BMCs remain after excluding primary; nothing to do.")
             return True
 
-    # Checkpoint: primary is up and we're about to add peers. Record this
-    # milestone now so a re-run can detect that the cluster already exists
-    # and steer the operator to option 2.3 rather than re-running option 3
-    # (which would system-reset the primary and destroy the cluster).
-    if _checkpoint:
-        try:
-            _checkpoint.mark_done("primary_setup_done")
-        except _InjectedCheckpointFailure:
-            raise
-        except Exception:
-            pass
-
     # Skip peers that are already marked peer_joined from a prior run.
     if _checkpoint:
         _already = set(_checkpoint.nodes_done_for("peer_joined"))
@@ -30611,9 +30672,75 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
             _session_log.log(f"peer add: operator chose to retry: {_m3_failed}")
         _m3_pending = _m3_failed
 
+    def _wait_for_mode3_cp26_all(_peer_targets, timeout_sec: int = 600) -> bool:
+        """Require all mode-3 peers to reach cp_2_6 before bulk add-node."""
+        _targets = [str(_b).strip() for _b in (_peer_targets or []) if str(_b).strip()]
+        if not _targets or not _checkpoint:
+            return True
+        _mode3_key = _checkpoint_mode_to_test_key("3")
+        _first_ready_seen_at = None
+        _first_ready_ts = None
+        _last_report = 0.0
+        while not _shutdown_event.is_set():
+            _ready = []
+            _missing = []
+            for _bmc in _targets:
+                if _checkpoint_phase_effectively_done(_checkpoint, _mode3_key, "cp_2_6", node_id=_bmc):
+                    _ready.append(_bmc)
+                else:
+                    _missing.append(_bmc)
+            if not _missing:
+                return True
+            _now = time.monotonic()
+            if _ready and _first_ready_seen_at is None:
+                _first_ready_seen_at = _now
+                _candidate_ts = []
+                for _bmc in _ready:
+                    _ts = _checkpoint_node_phase_ts(_checkpoint, "cp_2_6", _mode3_peer_checkpoint_node(_bmc))
+                    if _ts:
+                        _candidate_ts.append(_ts)
+                if _candidate_ts:
+                    try:
+                        _first_ready_ts = min(datetime.fromisoformat(_ts) for _ts in _candidate_ts)
+                    except Exception:
+                        _first_ready_ts = None
+                if _first_ready_ts is not None:
+                    _elapsed_wall = max(0, int((datetime.now() - _first_ready_ts).total_seconds()))
+                    _remaining = max(0, timeout_sec - _elapsed_wall)
+                    _first_ready_seen_at = _now - (timeout_sec - _remaining)
+            if _first_ready_seen_at is None:
+                return False
+            _elapsed = _now - _first_ready_seen_at
+            if _elapsed >= timeout_sec:
+                print(
+                    "\n❌ Timed out waiting for all peers to reach cp_2_6 "
+                    f"({timeout_sec}s since first peer milestone)."
+                )
+                print(f"   Missing peers: {', '.join(_missing)}")
+                print("   Resume later from checkpoint once missing peers reach cp_2_6.")
+                if _session_log:
+                    _session_log.log(
+                        f"mode 3 milestone timeout: peers missing cp_2_6 after {int(_elapsed)}s: {_missing}",
+                        prefix="ERROR",
+                    )
+                return False
+            if (_now - _last_report) >= 30.0:
+                _remain = max(0, int(timeout_sec - _elapsed))
+                print(
+                    f"  ⏳ Waiting for peers to reach cp_2_6 before cluster add-node "
+                    f"(missing: {', '.join(_missing)}; { _remain }s remaining)..."
+                )
+                _last_report = _now
+            time.sleep(1.0)
+        return False
+
+    if not _wait_for_mode3_cp26_all(peer_bmcs, timeout_sec=600):
+        _mode3_ok = False
+
     # ── Bulk cluster join via cluster add-node ─────────────────────────────
-    _m3_collected_ips = _ordered_cluster_entries_for_add(
-        _m3_cluster_ips_out, preferred_bmcs=peer_bmcs
+    _m3_collected_ips = (
+        _ordered_cluster_entries_for_add(_m3_cluster_ips_out, preferred_bmcs=peer_bmcs)
+        if _mode3_ok else []
     )
     _m3_add_node_timings: "dict[str, float]" = {}
     if _m3_collected_ips:
