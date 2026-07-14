@@ -10127,6 +10127,26 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
         return True
     if post_option4_found:
         _tprint(f"  ✅ {pfx}Detected post-option-4 prompt — skipping system reset.")
+        if _entered_console:
+            # We entered the console and landed in the cluster setup wizard.
+            # Exit the wizard and console so the channel returns to the BMC prompt
+            # before returning — otherwise the caller will send system reset into
+            # the wizard prompt and receive "invalid for type <Host Ip Address>".
+            _tprint(f"  ℹ️  {pfx}Exiting cluster wizard to restore BMC prompt...")
+            with suppress(Exception):
+                channel.send("exit\r")  # ONTAP wizard accepts 'exit' at any prompt
+            time.sleep(0.5)
+            _wizard_exit_buf = drain_channel(channel, seconds=2.0, node_log=node_log, quiet=True)
+            for _cw_attempt in range(1, 4):
+                with suppress(Exception):
+                    channel.send("\x04")  # Ctrl+D — exit console back to BMC
+                time.sleep(0.8)
+                with suppress(Exception):
+                    channel.send("\r")
+                _wizard_exit_buf += drain_channel(channel, seconds=2.0, node_log=node_log, quiet=True)
+                if _looks_like_bmc_prompt(_wizard_exit_buf):
+                    _tprint(f"  ✅ {pfx}BMC prompt restored after wizard exit.")
+                    break
         return False
 
     # Not at LOADER — exit console and let caller do system reset.
@@ -40327,6 +40347,51 @@ def main():
             else:
                 print("\n🔄 Sending 'system reset' command...")
                 _session_log.log("Sending 'system reset' command")
+                # Probe channel liveness before system reset. The primary BMC SSH
+                # session may have gone stale during a long peer-reset phase (e.g.
+                # when all 3 retries for a stuck peer exhaust 30+ minutes). If the
+                # channel is closed, reconnect before issuing system reset to avoid
+                # OSError: Socket is closed.
+                _channel_alive = False
+                try:
+                    channel.send("\r")
+                    _channel_alive = True
+                except (OSError, EOFError):
+                    pass
+                if not _channel_alive:
+                    _session_log.log(
+                        "Primary BMC channel closed before system reset; reconnecting",
+                        prefix="WARN",
+                    )
+                    print("⚠️  Primary BMC channel stale — reconnecting before system reset...")
+                    _pre_reset_ok = False
+                    for _pre_rc in range(1, 6):
+                        try:
+                            time.sleep(3)
+                            _pre_rc_client, sp_user, sp_pass = _ssh_connect_with_retry(
+                                sp_host, sp_user, sp_pass,
+                                label=sp_host, max_attempts=1, interactive=True,
+                                is_reconnect=True,
+                                fallback_passwords=_bmc_fallback_passwords(
+                                    sp_host, {sp_host: sp_pass}
+                                ),
+                            )
+                            channel = _open_shell(_pre_rc_client)
+                            print(f"✅ Reconnected to primary BMC (attempt {_pre_rc}/5).")
+                            _session_log.log(
+                                f"Primary BMC reconnect OK before system reset (attempt {_pre_rc}/5)"
+                            )
+                            _pre_reset_ok = True
+                            break
+                        except Exception as _pre_rc_e:
+                            _session_log.log(
+                                f"Primary BMC pre-reset reconnect attempt {_pre_rc}/5 failed: {_pre_rc_e}",
+                                prefix="WARN",
+                            )
+                    if not _pre_reset_ok:
+                        raise RuntimeError(
+                            "Primary BMC channel stale and reconnect failed before system reset"
+                        )
                 direct_send_and_wait(channel, "system reset", "y/n", timeout=15, auto_respond="y")
 
                 print("\n⏳ System reset in process. Script may appear hung, but be"
@@ -40491,6 +40556,47 @@ def main():
                 else:
                     print("\n🔄 Sending 'system reset' command...")
                     _session_log.log("Sending 'system reset' command")
+                    # Probe channel liveness before system reset (stale channel guard).
+                    _channel_alive = False
+                    try:
+                        channel.send("\r")
+                        _channel_alive = True
+                    except (OSError, EOFError):
+                        pass
+                    if not _channel_alive:
+                        _session_log.log(
+                            "Primary BMC channel closed before system reset; reconnecting",
+                            prefix="WARN",
+                        )
+                        print("⚠️  Primary BMC channel stale — reconnecting before system reset...")
+                        _pre_reset_ok = False
+                        for _pre_rc in range(1, 6):
+                            try:
+                                time.sleep(3)
+                                _pre_rc_client, sp_user, sp_pass = _ssh_connect_with_retry(
+                                    sp_host, sp_user, sp_pass,
+                                    label=sp_host, max_attempts=1, interactive=True,
+                                    is_reconnect=True,
+                                    fallback_passwords=_bmc_fallback_passwords(
+                                        sp_host, {sp_host: sp_pass}
+                                    ),
+                                )
+                                channel = _open_shell(_pre_rc_client)
+                                print(f"✅ Reconnected to primary BMC (attempt {_pre_rc}/5).")
+                                _session_log.log(
+                                    f"Primary BMC reconnect OK before system reset (attempt {_pre_rc}/5)"
+                                )
+                                _pre_reset_ok = True
+                                break
+                            except Exception as _pre_rc_e:
+                                _session_log.log(
+                                    f"Primary BMC pre-reset reconnect attempt {_pre_rc}/5 failed: {_pre_rc_e}",
+                                    prefix="WARN",
+                                )
+                        if not _pre_reset_ok:
+                            raise RuntimeError(
+                                "Primary BMC channel stale and reconnect failed before system reset"
+                            )
                     direct_send_and_wait(channel, "system reset", "y/n", timeout=15,
                                          auto_respond="y")
                     print("\n⏳ System reset in process. Script may appear hung, but"
