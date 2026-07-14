@@ -1578,18 +1578,11 @@ def _set_checkpoint_test_parallel_scope(node_ids) -> None:
             _checkpoint_test_parallel_seen_nodes = set()
             return
         if _per_node_targets:
-            _targeted_nodes = {
-                _checkpoint_test_node_identity(_nid) or _nid
-                for _nid in _nodes
-                if _checkpoint_test_target_for_node(_nid, _per_node_targets)
-            }
-            if len(_targeted_nodes) > 1:
-                _checkpoint_test_parallel_expected_nodes = set(_targeted_nodes)
-                _checkpoint_test_parallel_seen_nodes = set()
-            else:
-                _checkpoint_test_parallel_expected_nodes = set()
-                _checkpoint_test_parallel_seen_nodes = set()
-                return
+            # Per-node injection is a "first target hit wins" trigger. Do not
+            # wait for all targeted nodes when checkpoints differ by node.
+            _checkpoint_test_parallel_expected_nodes = set()
+            _checkpoint_test_parallel_seen_nodes = set()
+            return
         else:
             if not _checkpoint_test_target or len(_nodes) <= 1:
                 _checkpoint_test_parallel_expected_nodes = set()
@@ -1978,11 +1971,13 @@ def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = 
             _maybe_inject_checkpoint_failure(phase, node_id)
     except _InjectedCheckpointFailure as _e:
         # Test failure injection: exit gracefully to menu instead of crashing.
-        # Clear the global so _raise_pending_checkpoint_failure() in the main
-        # thread doesn't fire a second time after this exception is handled here
-        # (e.g. when a pipeline peer thread catches it and re-raises as ReturnToMenu).
-        global _pending_checkpoint_test_failure
+        # Clear the global pending failure and set the "already handled" flag so
+        # _raise_pending_checkpoint_failure() in the main thread (e.g. after joining
+        # pipeline peer threads) does not double-fire the same message.
+        global _pending_checkpoint_test_failure, _checkpoint_test_failure_handled
         _pending_checkpoint_test_failure = None
+        _checkpoint_test_failure_handled = True
+        _shutdown_event.set()
         _msg = f"  ↩️  Test checkpoint failure reached - returning to main menu.\n    {_e}"
         print(f"\n{_msg}")
         _slog(_msg, prefix="INFO")
@@ -2171,10 +2166,15 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
     )
     print("  ✅ Per-node checkpoint failure injection configured:")
     for _nid in sorted(_target_map):
-        print(f"     - {_nid}: {_target_map[_nid]}")
+        _cp_id = _target_map[_nid]
+        _cp_desc = _checkpoint_phase_description(_cp_id)
+        _cp_label = f"{_cp_id} {_cp_desc}".strip()
+        print(f"     - {_nid}: {_cp_label}")
     if peer_only and _checkpoint_test_target:
-        print(f"  ℹ️  Primary node will still inject at '{_checkpoint_test_target}' (global target preserved).")
-    print("  ℹ️  Failure fires after all targeted nodes reach their configured checkpoints.")
+        _primary_desc = _checkpoint_phase_description(_checkpoint_test_target)
+        _primary_label = f"{_checkpoint_test_target} {_primary_desc}".strip()
+        print(f"  ℹ️  Primary node will still inject at '{_primary_label}' (global target preserved).")
+    print("  ℹ️  Failure fires when the first targeted node reaches its configured checkpoint.")
     return True
 
 
@@ -2396,6 +2396,7 @@ def _raise_pending_checkpoint_failure() -> None:
     if _pending_checkpoint_test_failure is not None:
         _err = _pending_checkpoint_test_failure
         _pending_checkpoint_test_failure = None
+        _shutdown_event.set()
         _msg = f"  Test checkpoint failure reached - returning to main menu.\n    {_err}"
         print(f"\n{_msg}")
         _slog(_msg, prefix="INFO")
@@ -2405,6 +2406,7 @@ def _raise_pending_checkpoint_failure() -> None:
     # thread so the run returns to the menu, but skip re-printing the message.
     if _checkpoint_test_failure_handled:
         _checkpoint_test_failure_handled = False
+        _shutdown_event.set()
         _slog("injection failure already handled in peer thread; aborting main thread", prefix="INFO")
         raise _ReturnToMenu
 
@@ -2519,6 +2521,7 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
         _slog(_wait_msg, prefix="INFO")
     if _fire_msg:
         print(f"\n🧪 {_fire_msg}")
+        _shutdown_event.set()
         _slog(_fire_msg, prefix="FATAL")
         if _session_log:
             with suppress(Exception):
@@ -2564,6 +2567,11 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
         return _prompt(prompt, default=default)
 
     _strict_yn = _prompt_is_yes_no(prompt)
+    _yn_default_to = ""
+    if _strict_yn:
+        _yn_m_to = re.search(r"\[([Yy])/([Nn])\]", str(prompt or ""))
+        if _yn_m_to:
+            _yn_default_to = "y" if _yn_m_to.group(1).isupper() else "n"
     _deadline = time.monotonic() + timeout
     try:
         while True:
@@ -2616,9 +2624,13 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
             if val.lower() == "menu":
                 print("  ↩️  Returning to main menu...")
                 raise _ReturnToMenu
+            if _strict_yn and val == "" and _yn_default_to:
+                _record_choice(prompt, _yn_default_to)
+                return _yn_default_to
             if _strict_yn and not _is_valid_yes_no_input(val):
                 print("  Please enter y, n, yes, or no.")
                 continue
+            _record_choice(prompt, val)
             return val
     except (EOFError, KeyboardInterrupt):
         return default
@@ -2644,6 +2656,23 @@ _PROMPT_WAIT_EXTENDED_THRESHOLD = 60.0
 _prompt_wait_extended = []  # list[(label, seconds)]
 
 _orig_input = _builtins.input
+
+
+def _record_choice(prompt: str, answer: str) -> None:
+    """Log a prompt→answer pair to the choices log.
+
+    If the session log exists, delegates immediately to ``log_choice``.
+    Otherwise the pair is buffered in ``_pre_session_choices`` and will be
+    flushed (in order) once a session log is created by ``_make_session_log``.
+    """
+    if _session_log:
+        with suppress(Exception):
+            _session_log.log_choice(prompt, answer)
+    else:
+        try:
+            _pre_session_choices.append((str(prompt or ""), str(answer or "")))
+        except Exception:
+            pass
 
 
 def _prompt_is_yes_no(prompt="") -> bool:
@@ -2675,13 +2704,25 @@ def _tracked_input(prompt=""):
             )
     try:
         if not _prompt_is_yes_no(prompt):
-            return _orig_input(prompt)
+            _answer = _orig_input(prompt)
+            _record_choice(prompt, _answer)
+            return _answer
+        # Determine the default answer from the prompt bracket, e.g. [y/N] → "n", [Y/n] → "y".
+        _yn_default = ""
+        _yn_m = re.search(r"\[([Yy])/([Nn])\]", str(prompt or ""))
+        if _yn_m:
+            _yn_default = "y" if _yn_m.group(1).isupper() else "n"
         while True:
             _val = _orig_input(prompt)
             _vl = str(_val or "").strip().lower()
             if _vl == "menu":
                 return _val
+            # Blank Enter accepts the capitalised default when one is present.
+            if _vl == "" and _yn_default:
+                _record_choice(prompt, _yn_default)
+                return _yn_default
             if _is_valid_yes_no_input(_val):
+                _record_choice(prompt, _val)
                 return _val
             print("  Please enter y, n, yes, or no.")
     finally:
@@ -3636,6 +3677,7 @@ class SessionLogger:
         self._phase_times = {}
         self._current_phase = None
         self._current_phase_start = None
+        self._failure_stage_hint = ""
         # Runtime spent outside any explicit start_phase/end_phase window.
         self._non_phase_seconds = 0.0
         self._non_phase_buckets = {}
@@ -3980,6 +4022,11 @@ class SessionLogger:
         with self._lock:
             self._final_outcome = (status, note)
 
+    def set_failure_stage_hint(self, stage: str = ""):
+        """Set an explicit failure stage label for summary attribution."""
+        with self._lock:
+            self._failure_stage_hint = str(stage or "").strip()
+
     def set_ontap_versions(self, before: str = "", after: str = "",
                            source: str = "",
                            before_by_node: "dict[str, str] | None" = None,
@@ -4117,6 +4164,8 @@ class SessionLogger:
 
     def _infer_failure_stage(self) -> str:
         """Best-effort phase label for where a failed run stopped."""
+        if self._failure_stage_hint:
+            return self._failure_stage_hint
         # 1) Explicitly failed phase outcome, preferring the latest phase order.
         _failed = {
             _p for _p, (_st, _note) in self._phase_outcomes.items()
@@ -4647,6 +4696,9 @@ class SessionLogger:
 
 
 _session_log = None
+# Choices logged before _session_log exists are buffered here and flushed
+# into the choices log once a session log is created.
+_pre_session_choices: list = []
 
 
 def _write_crash_trace(exc_type, exc_value, exc_tb, context="Unhandled exception"):
@@ -7779,11 +7831,13 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
             return client, username, password
         except paramiko.AuthenticationException as e:
             last_exc = e
-            print(f"   ❌ [{label}] authentication failed for {username}@{host}.")
+            _can_retry = (_queue_idx < len(_attempt_queue)) or (interactive and attempt < max_attempts)
+            _icon = "⚠️" if _can_retry else "❌"
+            print(f"   {_icon} [{label}] authentication failed for {username}@{host}.")
             if _session_log:
                 _session_log.log(
                     f"[{label}] auth failed for {username}@{host}",
-                    prefix="ERROR",
+                    prefix="WARN" if _can_retry else "ERROR",
                 )
             _ssh_event(
                 "auth_failure",
@@ -24734,8 +24788,8 @@ def _setup_ssh_publickey(channel, mgmt_ip, ssh_user="admin"):
                 f"     Retest manually with: ssh {ssh_user}@{mgmt_ip}"
             )
             _slog(
-                f"SSH test exception (local key parse issue): {_te_msg}",
-                prefix="WARN",
+                f"SSH test skipped due to local key parse incompatibility: {_te_msg}",
+                prefix="INFO",
             )
         else:
             print(
@@ -25825,8 +25879,9 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
         # Resume hardening: don't sit at create/join for minutes. We only need to
         # stabilize briefly, then force exit and continue primary-side bulk add-node.
         _wait_start = time.monotonic()
-        _wait_limit = 30
+        _wait_limit = 90
         _prompt_seen = _is_create_join
+        _terminal_seen = False
         while (not _prompt_seen) and (time.monotonic() - _wait_start < _wait_limit):
             _out_w, _m_w = direct_read_until_any(
                 channel,
@@ -25867,6 +25922,7 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
                 ) or ""
                 continue
             if ("::>" in _scan) or ("::*>" in _scan) or ("login:" in _scan):
+                _terminal_seen = True
                 break
             with suppress(Exception):
                 channel.send("\r")
@@ -25874,8 +25930,15 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
 
         if _prompt_seen:
             _slog(f"[{label}] create/join prompt observed; exiting setup wizard immediately for bulk add-node flow")
+        elif _terminal_seen:
+            _slog(f"[{label}] terminal prompt already present during recovery; continuing bulk add-node flow")
+            return True
         else:
-            _slog(f"[{label}] create/join prompt not observed quickly; forcing setup exit to avoid long wait", prefix="WARN")
+            _slog(
+                f"[{label}] create/join prompt not observed and terminal prompt not reached; recovery failed",
+                prefix="WARN",
+            )
+            return False
 
         print(f"\n🛑 [{label}] Exiting cluster setup wizard (Ctrl+C) for bulk add-node flow...")
         _slog(f"[{label}] sending Ctrl+C to exit setup wizard before bulk add-node")
@@ -32187,11 +32250,28 @@ def _make_session_log(label: str) -> "SessionLogger":
     appeared inline in each mode section of ``main()``.
     """
     global _session_log
+    # Reset per-run prompt-wait counters so each run's summary reflects only
+    # prompts answered in that run, not the accumulated total for the session.
+    global _prompt_wait_seconds, _prompt_wait_count
+    global _prompt_wait_max, _prompt_wait_max_label, _prompt_wait_extended
+    global _pre_session_choices
+    _prompt_wait_seconds = 0.0
+    _prompt_wait_count = 0
+    _prompt_wait_max = 0.0
+    _prompt_wait_max_label = ""
+    _prompt_wait_extended = []
     _session_log = SessionLogger(
         bg_mode=_bg_mode,
         label=label,
         resume_suffix=_consume_resume_log_suffix(),
     )
+    # Flush any choices that were buffered before this session log existed
+    # (e.g. main menu selection, pre-run confirmations, checkpoint options).
+    if _pre_session_choices:
+        for _pc_prompt, _pc_answer in _pre_session_choices:
+            with suppress(Exception):
+                _session_log.log_choice(_pc_prompt, _pc_answer)
+        _pre_session_choices.clear()
     _banner = _version_banner_line()
     print(f"\n🚀 {_banner}")
 
@@ -38434,8 +38514,8 @@ def main():
                             f"     Retest manually with: ssh {ssh_user}@{mgmt_ip}"
                         )
                         _slog(
-                            f"SSH test exception (local key parse issue): {_te_45_msg}",
-                            prefix="WARN",
+                            f"SSH test skipped due to local key parse incompatibility: {_te_45_msg}",
+                            prefix="INFO",
                         )
                     else:
                         print(
@@ -40688,6 +40768,26 @@ def main():
             _resume_autodispatch = False
             continue
 
+def _failure_stage_from_traceback(tb) -> str:
+    """Map known traceback functions to operator-facing failure stage labels."""
+    try:
+        _frames = traceback.extract_tb(tb) if tb else []
+    except Exception:
+        _frames = []
+    _funcs = {str(getattr(_f, "name", "") or "").strip() for _f in _frames}
+    if _funcs.intersection({
+        "add_peer_nodes_parallel",
+        "_abort_wizard_get_cluster_ip",
+        "_run_join_wizard",
+    }):
+        return "Mode 3 Peer Add (parallel)"
+    if "_run_cluster_setup_wizard" in _funcs:
+        return "Cluster Setup Wizard (mode 1)"
+    if "_setup_ssh_publickey" in _funcs:
+        return "Passwordless SSH setup"
+    return ""
+
+
 if __name__ == "__main__":
     try:
         main()
@@ -40698,6 +40798,9 @@ if __name__ == "__main__":
         )
         with suppress(Exception):
             if _session_log:
+                _failure_stage = _failure_stage_from_traceback(_etb)
+                if _failure_stage:
+                    _session_log.set_failure_stage_hint(_failure_stage)
                 _session_log.log(
                     f"Unhandled exception: {_etype.__name__ if _etype else 'Exception'}: {_eval}",
                     prefix="FATAL",
