@@ -1791,6 +1791,22 @@ def _checkpoint_phase_done(phase: str, node_id: str = "") -> bool:
         return False
 
 
+def _checkpoint_node_phase_ts(checkpoint, phase: str, node_id: str) -> str:
+    """Return the ISO timestamp string stored with a node phase, or '' if absent."""
+    if not checkpoint:
+        return ""
+    try:
+        return str(
+            checkpoint._data
+            .get("node_phases", {})
+            .get(str(phase or ""), {})
+            .get(str(node_id or ""), {})
+            .get("ts") or ""
+        )
+    except Exception:
+        return ""
+
+
 def _checkpoint_phase_resume_evidence_for_peer(checkpoint, phase: str, bmc_ip: str) -> str:
     """Return concrete persisted evidence for a peer-resume compatibility match."""
     if not checkpoint:
@@ -1807,6 +1823,10 @@ def _checkpoint_phase_resume_evidence_for_peer(checkpoint, phase: str, bmc_ip: s
         if _mode3_peer_id not in _node_ids:
             _node_ids.append(_mode3_peer_id)
 
+    # Timestamp of the most recent option-4 reinit for this BMC (if any).
+    # Used below to detect stale post-reinit marks on the node_peer key.
+    _opt4_ts = _checkpoint_node_phase_ts(checkpoint, "peer_option4_done", _bmc) if _bmc else ""
+
     def _match_phase(_phase_name: str) -> str:
         _phase_name = str(_phase_name or "").strip()
         if not _phase_name:
@@ -1814,6 +1834,19 @@ def _checkpoint_phase_resume_evidence_for_peer(checkpoint, phase: str, bmc_ip: s
         for _nid in _node_ids:
             try:
                 if checkpoint.is_node_done(_phase_name, _nid):
+                    # cp_2_5/cp_2_6 on the node_peer key may be stale: they
+                    # could have been written by a previous run before the node
+                    # was re-wiped by option 4.  Discard if peer_option4_done
+                    # on the BMC key is newer, meaning a more recent wipe event
+                    # happened after those marks were written.
+                    if (
+                        _opt4_ts
+                        and _nid != _bmc
+                        and _phase_name in ("cp_2_5", "cp_2_6")
+                    ):
+                        _phase_ts = _checkpoint_node_phase_ts(checkpoint, _phase_name, _nid)
+                        if _phase_ts and _opt4_ts > _phase_ts:
+                            continue  # stale pre-wipe evidence — skip
                     return f"checkpoint:{_phase_name}"
             except Exception:
                 pass
@@ -5434,8 +5467,57 @@ def _create_checkpoint_for_manual_override() -> "CheckpointManager | None":
     return _cp
 
 
+def _per_node_next_checkpoint_groups(cp, mode_key):
+    """Group peer BMCs by their individual next pending cp_2_x checkpoint.
+
+    Used to detect when nodes in a multi-node run are at different stages.
+    Returns [] when there is only one peer, or all peers share the same next
+    checkpoint (no per-group prompting needed).
+
+    Otherwise returns a list of (next_cp_id, next_cp_desc, [bmc, ...])
+    sorted by checkpoint sequence order (most behind first).
+    """
+    _all_bmcs = [str(_ip).strip() for _ip in (getattr(cp, "bmc_ips", []) or []) if str(_ip).strip()]
+    _peer_bmcs = _all_bmcs[1:] if mode_key == 3 else list(_all_bmcs)
+    if len(_peer_bmcs) < 2:
+        return []
+
+    _peer_seq = list(_CHECKPOINT_TEST_OPTIONS.get(2) or [])
+
+    _node_next: dict = {}
+    for _bmc in _peer_bmcs:
+        _next_id = ""
+        _next_desc = "All completed"
+        for _cp_id, _cp_desc in _peer_seq:
+            if not _checkpoint_phase_resume_evidence_for_peer(cp, _cp_id, _bmc):
+                _next_id = _cp_id
+                _next_desc = _cp_desc
+                break
+        _node_next[_bmc] = (_next_id, _next_desc)
+
+    if len({v[0] for v in _node_next.values()}) <= 1:
+        return []
+
+    _cp_order = {_cp_id: _idx for _idx, (_cp_id, __) in enumerate(_peer_seq)}
+    _groups_map: dict = {}
+    for _bmc in _peer_bmcs:
+        _next_id, _next_desc = _node_next[_bmc]
+        if _next_id not in _groups_map:
+            _groups_map[_next_id] = (_next_desc, [])
+        _groups_map[_next_id][1].append(_bmc)
+
+    _sorted_ids = sorted(_groups_map, key=lambda cid: _cp_order.get(cid, 9999))
+    return [(_cp_id, _groups_map[_cp_id][0], _groups_map[_cp_id][1]) for _cp_id in _sorted_ids]
+
+
 def _prompt_checkpoint_resume_target_override(cp) -> bool:
-    """Let operator optionally override resume start checkpoint."""
+    """Let operator optionally override resume start checkpoint.
+
+    For multi-node modes (2/3) where nodes are at different stages, groups
+    nodes by their individual next checkpoint and prompts once per group
+    instead of asking about every node separately.  When all nodes share the
+    same next checkpoint a single prompt is shown (existing behaviour).
+    """
     if not cp:
         return False
     _mode_key = _checkpoint_mode_to_test_key(getattr(cp, "mode", ""))
@@ -5448,6 +5530,73 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
 
     _detected_next = _checkpoint_resume_phase_id(cp)
     _display_default = _detected_next or "(first checkpoint)"
+
+    # ── Multi-node path: nodes at different stages ────────────────────────
+    _groups = _per_node_next_checkpoint_groups(cp, _mode_key)
+    if _groups:
+        _peer_seq = list(_CHECKPOINT_TEST_OPTIONS.get(2) or [])
+        _id_lookup = {_cp_id.lower(): _cp_id for _cp_id, __ in _peer_seq}
+        print(f"     Detected next (overall): {_display_default}")
+        print("     Nodes are at different checkpoint stages — review each group below.")
+        print()
+        for _idx, (_cp_id, _cp_desc) in enumerate(_peer_seq, 1):
+            print(f"       {_idx:>2}. {_cp_id:<14} {_cp_desc}")
+        print()
+        _any_overridden = False
+        for _grp_cp_id, _grp_cp_desc, _grp_bmcs in _groups:
+            _n = len(_grp_bmcs)
+            _node_str = ", ".join(_grp_bmcs)
+            print(f"     Group: {_grp_cp_id}  —  {_grp_cp_desc}  [{_n} node{'s' if _n != 1 else ''}]")
+            print(f"       Nodes: {_node_str}")
+            while True:
+                _sel = _prompt(
+                    f"     Override [Enter=keep {_grp_cp_id}, number 1-{len(_peer_seq)}, or cp_id]: ",
+                    "",
+                ).strip().lower()
+                if not _sel:
+                    break
+                _target = ""
+                if _sel.isdigit():
+                    _pick = int(_sel)
+                    if 1 <= _pick <= len(_peer_seq):
+                        _target = _peer_seq[_pick - 1][0]
+                else:
+                    _target = _id_lookup.get(_sel, "")
+                if not _target:
+                    print("     ⚠️  Invalid selection. Use Enter, a list number, or a cp_id.")
+                    continue
+                if _target == _grp_cp_id:
+                    print("     ℹ️  Selected checkpoint is already this group's detected stage.")
+                    break
+                _target_desc = next((d for c, d in _peer_seq if c == _target), "")
+                _confirm = _prompt(
+                    f"     Confirm override to {_target}"
+                    f"{f' ({_target_desc})' if _target_desc else ''}"
+                    f" for {_n} node(s)? [y/N]: ",
+                    "n",
+                ).strip().lower()
+                if _confirm not in ("y", "yes"):
+                    print("     Override not applied. Choose another or press Enter to keep.")
+                    continue
+                for _bmc in _grp_bmcs:
+                    _set_node_phase_target(cp, _bmc, 2, _target)
+                    if _mode_key == 3:
+                        _set_node_phase_target(cp, _mode3_peer_checkpoint_node(_bmc), 2, _target)
+                cp._save()
+                _any_overridden = True
+                _slog(
+                    f"Per-node checkpoint override: {_grp_bmcs} -> {_target}, mode={cp.mode}",
+                    prefix="INFO",
+                )
+                print(f"     ✅ Override applied: {_n} node(s) will resume from {_target}.")
+                break
+            print()
+        if _any_overridden:
+            _new_stage = _checkpoint_resume_stage_label(cp)
+            print(f"     Updated overall next stage: {_new_stage}")
+        return _any_overridden
+
+    # ── Single-group path: all nodes at same stage (or single-node mode) ──
     print("     Resume controls : Press Enter to use detected stage, or pick a checkpoint below.")
     print(f"     Detected next   : {_display_default}")
 
@@ -5460,9 +5609,7 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
     for _idx, (_cp_id, _cp_desc) in enumerate(_checkpoint_seq, 1):
         _done = _checkpoint_phase_effectively_done(cp, _mode_key, _cp_id)
         _status = "done" if _done else "pending"
-        _marker = ""
-        if _cp_id == _first_pending:
-            _marker = "  <- detected next"
+        _marker = "  <- detected next" if _cp_id == _first_pending else ""
         print(f"       {_idx:>2}. {_cp_id:<16} {_cp_desc} [{_status}]{_marker}")
 
     _id_lookup = {_cp_id.lower(): _cp_id for _cp_id, __ in _checkpoint_seq}
@@ -5486,11 +5633,7 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
         if _target == _detected_next:
             print("     ℹ️  Selected checkpoint is already the detected next stage.")
             return False
-        _target_desc = ""
-        for _cp_id, _cp_desc in _checkpoint_seq:
-            if _cp_id == _target:
-                _target_desc = _cp_desc
-                break
+        _target_desc = next((d for c, d in _checkpoint_seq if c == _target), "")
         _confirm = _prompt(
             f"     Confirm resume override to {_target}"
             f"{f' ({_target_desc})' if _target_desc else ''}? [y/N]: ",
@@ -34205,9 +34348,22 @@ def _classify_option23_cluster_shell_unavailable(
             continue
 
         _saved = _saved_cluster_by_bmc.get(_bmc) or {}
-        _saved_ip = str(_node.get("cluster_ip") or _saved.get("cluster_ip") or "").strip()
-        _saved_node_name = str(_node.get("node_name") or _saved.get("node_name") or "").strip()
-        _saved_source = str(_saved.get("source") or "").strip()
+        # When peer_option4_done is set on the BMC key the node was reinit'd
+        # (disk wiped) in the current run.  Entries in the global cluster_IP.json
+        # manifest may predate that wipe and are therefore stale.  Only trust the
+        # cluster_ip embedded in the manifest node entry itself (written during
+        # option 4 completion in the current run) and log-file recovery.
+        _peer_reinit_done = bool(
+            checkpoint and _bmc and checkpoint.is_node_done("peer_option4_done", _bmc)
+        )
+        if _peer_reinit_done:
+            _saved_ip = str(_node.get("cluster_ip") or "").strip()
+            _saved_node_name = str(_node.get("node_name") or _saved.get("node_name") or "").strip()
+            _saved_source = ""
+        else:
+            _saved_ip = str(_node.get("cluster_ip") or _saved.get("cluster_ip") or "").strip()
+            _saved_node_name = str(_node.get("node_name") or _saved.get("node_name") or "").strip()
+            _saved_source = str(_saved.get("source") or "").strip()
         _staged_evidence = ""
         if _bmc:
             _staged_evidence = _checkpoint_phase_resume_evidence_for_peer(checkpoint, "cp_2_6", _bmc)
@@ -34530,7 +34686,9 @@ def _run_2c_resume():
     primary_channel = None
     cluster_node_ips: dict = {}   # {node_name: mgmt_ip}
     _cluster_shell_unavailable_reason = ""
+    _MAX_CONN_ATTEMPTS = 3
 
+    _conn_attempt = 0
     while True:
         try:
             _cu = cluster_admin_user
@@ -34578,10 +34736,18 @@ def _run_2c_resume():
                 print("  Aborting — no credentials provided.")
                 return False
         except Exception as _ce:
-            print(f"  ❌ Connection failed: {_ce}")
-            _session_log.log(f"2.3: connection to {cluster_mgmt_ip} failed: {_ce}",
-                             prefix="ERROR")
+            _conn_attempt += 1
+            print(f"  ❌ Connection failed (attempt {_conn_attempt}/{_MAX_CONN_ATTEMPTS}): {_ce}")
+            _session_log.log(
+                f"2.3: connection to {cluster_mgmt_ip} failed (attempt {_conn_attempt}): {_ce}",
+                prefix="ERROR",
+            )
+            if _conn_attempt < _MAX_CONN_ATTEMPTS:
+                print(f"  ↩️   Retrying ({_conn_attempt + 1}/{_MAX_CONN_ATTEMPTS})...")
+                continue
             _cluster_shell_unavailable_reason = f"connection to {cluster_mgmt_ip} failed: {_ce}"
+            _offer_bmc_ssh_diagnostic([cluster_mgmt_ip], cluster_admin_user,
+                                      {cluster_mgmt_ip: cluster_admin_password})
             break
 
     _fallback_summary = None
@@ -34712,6 +34878,25 @@ def _run_2c_resume():
         except (EOFError, KeyboardInterrupt):
             pass
         raise _ReturnToMenu
+
+    # ── 5b. Early-exit if cluster shell is unavailable ────────────────────
+    # cluster add-node requires an active SSH shell regardless of checkpoint
+    # state.  Abort before the confirm prompt so the operator is not misled
+    # into confirming work that will immediately fail at the add-node step.
+    if not primary_channel and nodes_to_retry:
+        print("\n  ❌ Cluster management SSH is unavailable.")
+        print("     Option 2.3 requires a live cluster shell to run cluster add-node.")
+        print("     Restore cluster management SSH, then rerun option 2.3.")
+        _session_log.log(
+            "2.3: cluster shell unavailable with pending nodes; aborting before confirm",
+            prefix="WARN",
+        )
+        if primary_client:
+            try:
+                primary_client.close()
+            except Exception:
+                pass
+        return False
 
     # ── 6. Confirm ────────────────────────────────────────────────────────
     _ans_retry = _prompt(
