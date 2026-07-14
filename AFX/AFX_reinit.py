@@ -1173,6 +1173,7 @@ _peer_bmc_creds = {}
 _peer_bmc_list = []
 _mode3_staged_loader_channels = {}
 _mode3_staged_loader_clients = {}
+_mode3_already_initialized_peers: set = set()   # peers already running ONTAP (cp_2_5 done)
 _mode3_pipeline_state = None
 
 # Peer node log paths: {ip: log_file_path} for nodes being added during
@@ -2441,7 +2442,13 @@ def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node
 
 
 def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> None:
-    """When ``--test`` is enabled, let the operator choose a checkpoint to fail at."""
+    """When ``--test`` is enabled, let the operator choose a checkpoint to fail at.
+
+    Node lists are typically not yet known when this runs (config is loaded
+    afterwards), so this always shows the global single-checkpoint prompt.
+    Per-node overrides are handled later by
+    _maybe_offer_per_node_checkpoint_injection_upgrade() once nodes are known.
+    """
     global _checkpoint_test_enabled, _checkpoint_test_target, _checkpoint_test_mode_label
     global _checkpoint_test_targets_by_node
     _clear_checkpoint_test_config()
@@ -3904,6 +3911,20 @@ class SessionLogger:
         self._screen_log = open(
             self.screen_log_file, "w", encoding="utf-8", buffering=1
         )
+        # Operator choices log: records every interactive prompt + answer so
+        # decisions made during a run can be audited without reading the full
+        # BMC session log.
+        self.choices_log_file = _build_numbered_log_path(
+            self.log_dir, f"operator_choices_{timestamp}.log", scope_dir=self.log_dir
+        )
+        self._choices_log = open(
+            self.choices_log_file, "w", encoding="utf-8", buffering=1
+        )
+        self._choices_log.write("Operator Choices Log\n")
+        self._choices_log.write(
+            f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+        self._choices_log.write("=" * 70 + "\n\n")
         self._orig_stdout = sys.stdout
         self._stdout_restored = False
         sys.stdout = _TeeStdout(self._orig_stdout, self._screen_log)
@@ -4530,6 +4551,20 @@ class SessionLogger:
         self.close()
 
 
+    def log(self, message, prefix="INFO"):
+        with self._lock:
+            if self._closed or self._file.closed:
+                return
+            upper = prefix.upper()
+            now_str = datetime.now().strftime("%H:%M:%S")
+            if upper in ("ERROR", "FATAL"):
+                self._error_count += 1
+                self._errors.append((now_str, message))
+            elif upper == "WARN":
+                self._warn_count += 1
+                self._warnings.append((now_str, message))
+            self._file.write(f"[{self._ts_with_elapsed()}] [{prefix}] {message}\n")
+
     def log_console(self, data):
         with self._lock:
             if self._closed or self._file.closed:
@@ -4548,28 +4583,6 @@ class SessionLogger:
                 return
             display = repr(data) if any(ord(c) < 32 and c not in '\r\n' for c in data) else data.strip()
             self._file.write(f"[{self._ts_with_elapsed()}] [SENT] {display}\n")
-
-    def log_choice(self, prompt: str, answer: str):
-        """Record an operator prompt→answer pair to the choices log.
-
-        Answers to prompts whose text contains password-related keywords are
-        masked so credentials are never written to the choices file.
-        """
-        with self._lock:
-            if self._closed:
-                return
-            try:
-                _label = re.sub(r"\x1b\[[0-9;]*m", "", str(prompt or ""))
-                _label = _label.strip().splitlines()[-1] if _label.strip() else ""
-                _is_secret = any(
-                    w in _label.lower()
-                    for w in ("password", "passphrase", "secret", "token", "passwd")
-                )
-                _display = "***" if _is_secret else (answer if answer else "(blank/default)")
-                ts = datetime.now().strftime("%H:%M:%S")
-                self._choices_log.write(f"[{ts}] {_label}\n         → {_display}\n\n")
-            except Exception:
-                pass
 
     def open_peer_log(self, ip: str, index: "int | None" = None) -> "str | None":
         """Create (or return path to) a per-peer BMC session log file.
@@ -4657,6 +4670,28 @@ class SessionLogger:
             if _entry:
                 with suppress(Exception):
                     _entry["file"].write(_line)
+
+    def log_choice(self, prompt: str, answer: str):
+        """Record an operator prompt→answer pair to the choices log.
+
+        Answers to prompts whose text contains password-related keywords are
+        masked so credentials are never written to the choices file.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            try:
+                _label = re.sub(r"\x1b\[[0-9;]*m", "", str(prompt or ""))
+                _label = _label.strip().splitlines()[-1] if _label.strip() else ""
+                _is_secret = any(
+                    w in _label.lower()
+                    for w in ("password", "passphrase", "secret", "token", "passwd")
+                )
+                _display = "***" if _is_secret else (answer if answer else "(blank/default)")
+                ts = datetime.now().strftime("%H:%M:%S")
+                self._choices_log.write(f"[{ts}] {_label}\n         → {_display}\n\n")
+            except Exception:
+                pass
 
     def close(self):
         # Stop the heartbeat thread BEFORE taking the lock so it can drain
@@ -4842,6 +4877,11 @@ class SessionLogger:
         try:
             if not self._screen_log.closed:
                 self._screen_log.close()
+        except Exception:
+            pass
+        try:
+            if not self._choices_log.closed:
+                self._choices_log.close()
         except Exception:
             pass
         # Close any open peer log files.
@@ -5977,6 +6017,7 @@ def _per_node_next_checkpoint_groups(cp, mode_key):
     if len({v[0] for v in _node_next.values()}) <= 1:
         return []
 
+    # Build groups preserving cp_2_x sequence order (most behind first)
     _cp_order = {_cp_id: _idx for _idx, (_cp_id, __) in enumerate(_peer_seq)}
     _groups_map: dict = {}
     for _bmc in _peer_bmcs:
@@ -6359,6 +6400,7 @@ def select_operation_mode():
             print("\n  ✅ Resuming checkpoint via menu option 2.2.")
             return 2, False, True
         if _cp_mode == "3":
+            _mode3_peer_opt4 = bool(_cp_obj.nodes_done_for("peer_option4_done"))
             # Only route to 2.3 (add-node continuation) when the cluster
             # actually exists. primary_bootmenu_done and primary_node_mgmt_done
             # are pre-cluster stages — the cluster management LIF is not
@@ -8751,18 +8793,16 @@ def connect_to_sp(host, username, password):
     print(f"Connecting to SP at {host} with username {username}...")
     _slog(f"Connecting to SP at {host} with username {username}")
     
-    # During checkpoint resume, don't prompt for credentials; rely on fallback
-    # blank password instead (original password was wiped during init).
-    _in_checkpoint_resume = _checkpoint_resume_active()
-    _is_interactive = not _in_checkpoint_resume
-    
     # Prepare fallback passwords including blank password for post-reset recovery.
+    # Fallbacks are always tried silently first; if all fail the operator is
+    # re-prompted (up to max_attempts) regardless of whether this is a fresh
+    # run or a checkpoint resume.
     _fallback_pw = _bmc_fallback_passwords(host, {host: password})
     
     try:
         client, username, password = _ssh_connect_with_retry(
-            host, username, password, label="primary BMC", max_attempts=5,
-            interactive=_is_interactive,
+            host, username, password, label="primary BMC", max_attempts=8,
+            interactive=True,
             fallback_passwords=_fallback_pw,
         )
     except Exception as e:
@@ -11933,7 +11973,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
             _fb_peer = _bmc_fallback_passwords(host, {host: password})
             client, username, password = _ssh_connect_with_retry(
                 host, username, password, label=f"peer/{host}",
-                max_attempts=5, interactive=True,
+                max_attempts=8, interactive=True,
                 fallback_passwords=_fb_peer,
             )
         except Exception as e:
@@ -12019,6 +12059,39 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
                 _slog(f"Peer {host} probe recovery reconnect failed: {_reconnect_err}",
                       prefix="ERROR")
                 return False
+
+        # Skip system reset when the peer already completed initialization in a
+        # prior run (cp_2_5 = node management configured). Re-entering the console
+        # gives the worker a live ONTAP channel so it can proceed to cluster-IP
+        # capture without wiping or re-configuring the node.
+        if _checkpoint_phase_done_for_peer_resume("cp_2_5", host):
+            _tprint(
+                f"   ✅ [{host}] Peer has cp_2_5 done; skipping system reset (already initialized)."
+            )
+            _slog(f"Peer {host} already initialized (cp_2_5 done); skipping system reset")
+            ch.send("system console\r")
+            _sc_out, _sc_matched = direct_read_until_any(
+                ch,
+                ["y/n", "ctrl-d", "type exit", "serial console", "login:", "::>", "loader-"],
+                timeout=15,
+                node_log=node_log,
+            )
+            if _sc_matched and "y/n" in (_sc_matched or "").lower():
+                _slog(f"[{host}] taking over existing console session (already-init skip)")
+                ch.send("y\r")
+                time.sleep(2)
+            with suppress(Exception):
+                ch.send("\r")
+            if session_store is not None:
+                session_store["client"] = client
+                session_store["channel"] = ch
+                session_store["user"] = username
+                session_store["password"] = password
+                session_store["at_boot_menu"] = False
+                session_store["already_initialized"] = True
+                client = None
+                ch = None
+            return True
 
         def _reset_and_enter_console(reason: str = "initial"):
             _tprint(f"\n🔁 [{host}] Resetting to LOADER prompt...")
@@ -15129,6 +15202,13 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
 
             if not _prompted_manual_pw:
                 _prompted_manual_pw = True
+                # Use the cluster config admin password automatically before
+                # falling back to an interactive prompt (avoids blocking in
+                # fully-automated runs).
+                _auto_pw = str((_cluster_config or {}).get("admin_password") or "").strip()
+                if _auto_pw and _auto_pw not in _pw_candidates:
+                    _pw_candidates = [_auto_pw]
+                    continue
                 with _stdin_lock:
                     _manual_pw = getpass.getpass(
                         "  Enter cluster admin password for wizard recovery: "
@@ -15332,12 +15412,24 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 if _loader_recovered:
                     return _loader_recovered
             if (
-                ("login:" in chunk.lower() and _has_real_cluster_login_prompt(output))
-                or '(username "admin") password:' in chunk.lower()
+                "login:" in chunk.lower() and _has_real_cluster_login_prompt(output)
             ):
                 _recovered = _try_recover_from_login_prompt()
                 if _recovered:
                     return _recovered
+            # Handle the wizard admin-password step directly: ONTAP asks to SET
+            # the admin password mid-wizard (not a CLI login). Send it directly
+            # and continue waiting for a real wizard trigger — do NOT invoke the
+            # full login recovery flow here.
+            if '(username "admin") password:' in chunk.lower():
+                _wizard_admin_pw = str((_cluster_config or {}).get("admin_password") or "").strip()
+                with suppress(Exception):
+                    channel.send((_wizard_admin_pw or "") + "\r")
+                if _session_log:
+                    _session_log.log_sent("<wizard admin password (set step)>")
+                output = ""
+                output_lower = ""
+                last_data = time.monotonic()
             for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
                 if trigger_lower in output_lower:
                     return trigger
@@ -15350,10 +15442,20 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                     _loader_recovered = _try_recover_from_loader_prompt()
                     if _loader_recovered:
                         return _loader_recovered
-                elif _has_real_cluster_login_prompt(output) or '(username "admin") password:' in output_lower:
+                elif _has_real_cluster_login_prompt(output):
                     _recovered = _try_recover_from_login_prompt()
                     if _recovered:
                         return _recovered
+                elif '(username "admin") password:' in output_lower:
+                    # Wizard is asking to SET the admin password; send it directly.
+                    _wizard_admin_pw = str((_cluster_config or {}).get("admin_password") or "").strip()
+                    with suppress(Exception):
+                        channel.send((_wizard_admin_pw or "") + "\r")
+                    if _session_log:
+                        _session_log.log_sent("<wizard admin password (set step)>")
+                    output = ""
+                    output_lower = ""
+                    last_data = now
                 else:
                     channel.send("\r")
                     _slog("No wizard prompt seen for 15s; sending CR to nudge")
@@ -18589,6 +18691,32 @@ def _peer_reinit_worker(ip, ctx):
         # is reached (not before loader prep). This lets peers boot to the menu in
         # parallel with the primary's option-9 phase, reducing total wait time.
 
+        # If the peer completed initialization in a prior run (cp_2_5 done), skip
+        # the full LOADER → boot-menu → option-4 → disk-erase → node-mgmt flow.
+        # The channel is already at the ONTAP console; jump straight to cluster-IP.
+        _already_initialized = ip in (ctx.get("already_initialized_peers") or set())
+        if _already_initialized:
+            _status(
+                f"  ⏭️  {_format_status_line(ip, 'Peer already initialized (cp_2_5 done); skipping LOADER/init flow.', 'INFO')}"
+            )
+            _t_option4_sent = _t_disk_erase_done = _t_node_mgmt_done = (
+                time.monotonic() - _t_thread_start
+            )
+            _checkpoint_mark_phase("cp_2_2", node_id=_peer_cp_node)
+            _checkpoint_mark_phase("cp_2_3", node_id=_peer_cp_node)
+            _checkpoint_mark_phase("cp_2_4", node_id=_peer_cp_node,
+                                   alias_phase="peer_option4_done", alias_node_id=ip)
+            _checkpoint_mark_phase("cp_2_5", node_id=_peer_cp_node)
+
+        # Nudge the channel so the current prompt repaints before probing.
+        # Without this, a static/silent boot menu (e.g. when the node auto-booted
+        # from LOADER to boot menu while the channel was stored between the peer-reset
+        # phase and the mode3 worker launch) would be invisible to the passive read
+        # and LOADER commands would be incorrectly sent to the boot menu.
+        with suppress(Exception):
+            peer_ch.send("\r")
+        time.sleep(0.3)
+
         _boot_menu_probe_out, _boot_menu_probe_match = direct_read_until_any(
             peer_ch,
             ["selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu"],
@@ -18598,7 +18726,7 @@ def _peer_reinit_worker(ip, ctx):
             check_bmc_drop=True,
             reconnect_ctx=_peer_rc_ctx,
         )
-        _boot_menu_visible = bool(_boot_menu_probe_match) or any(
+        _boot_menu_visible = _already_initialized or bool(_boot_menu_probe_match) or any(
             _sig in str(_boot_menu_probe_out or "").lower()
             for _sig in ("selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu")
         )
@@ -18656,9 +18784,10 @@ def _peer_reinit_worker(ip, ctx):
         _status(f"  ⏳ {_format_status_line(ip, 'Waiting for boot menu (peer)...', 'INFO')}")
         _buf_lower = ""
         _start = time.monotonic()
-        _found = False
+        # Skip the wait when boot menu was already confirmed by the initial probe.
+        _found = _boot_menu_visible
         _last_progress = _start
-        while time.monotonic() - _start < 900:
+        while not _found and time.monotonic() - _start < 900:
             if _shutdown_event.is_set():
                 break
             _elapsed = time.monotonic() - _start
@@ -18706,53 +18835,56 @@ def _peer_reinit_worker(ip, ctx):
                 peer_errors.append((ip, "boot menu timeout"))
             return
 
-        time.sleep(1)
-        _status(
-            f"  ✅ {_format_status_line(ip, 'Boot menu reached – waiting for primary to reach option 4 stage...', 'SUCCESS')}"
-        )
-        # Peers reached the boot menu early (in parallel with primary option 9).
-        # Now wait for the primary to signal it has reached the second boot menu
-        # before we send option 4.
-        if _primary_ready_event is not None and ip != _primary_node_ip:
+        # For already-initialized peers the option-4/disk-erase/node-mgmt phases
+        # were already completed in a prior run; skip them here.
+        if not _already_initialized:
+            time.sleep(1)
             _status(
-                f"  ⏳ {_format_status_line(ip, 'Boot menu ready; waiting for primary option 9 completion before sending option 4.', 'INFO')}"
+                f"  ✅ {_format_status_line(ip, 'Boot menu reached – waiting for primary to reach option 4 stage...', 'SUCCESS')}"
             )
-            if not _primary_ready_event.wait(timeout=3600):
+            # Peers reached the boot menu early (in parallel with primary option 9).
+            # Now wait for the primary to signal it has reached the second boot menu
+            # before we send option 4.
+            if _primary_ready_event is not None and ip != _primary_node_ip:
                 _status(
-                    f"  ⚠️  {_format_status_line(ip, 'Timed out waiting for primary option 9 completion.', 'WARN')}"
+                    f"  ⏳ {_format_status_line(ip, 'Boot menu ready; waiting for primary option 9 completion before sending option 4.', 'INFO')}"
                 )
-                with peer_lock:
-                    peer_errors.append((ip, "primary option 9 wait timeout"))
-                return
-            _status(
-                f"  ✅ {_format_status_line(ip, 'Primary option 9 complete; sending option 4.', 'SUCCESS')}"
-            )
-        else:
-            _status(
-                f"  ✅ {_format_status_line(ip, 'Boot menu detected – selecting option 4...', 'SUCCESS')}"
-            )
-        if log:
-            log.log(f"[{ip}] boot menu detected – sending option 4")
-        if _pnf:
-            _par_write(_pnf, "\n>>> sending option 4\n")
-        peer_ch.send("4\r")
-        _t_option4_sent = time.monotonic() - _t_thread_start
-        _checkpoint_mark_phase("cp_2_3", node_id=_peer_cp_node)
-        _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
-        time.sleep(2)
+                if not _primary_ready_event.wait(timeout=3600):
+                    _status(
+                        f"  ⚠️  {_format_status_line(ip, 'Timed out waiting for primary option 9 completion.', 'WARN')}"
+                    )
+                    with peer_lock:
+                        peer_errors.append((ip, "primary option 9 wait timeout"))
+                    return
+                _status(
+                    f"  ✅ {_format_status_line(ip, 'Primary option 9 complete; sending option 4.', 'SUCCESS')}"
+                )
+            else:
+                _status(
+                    f"  ✅ {_format_status_line(ip, 'Boot menu detected – selecting option 4...', 'SUCCESS')}"
+                )
+            if log:
+                log.log(f"[{ip}] boot menu detected – sending option 4")
+            if _pnf:
+                _par_write(_pnf, "\n>>> sending option 4\n")
+            peer_ch.send("4\r")
+            _t_option4_sent = time.monotonic() - _t_thread_start
+            _checkpoint_mark_phase("cp_2_3", node_id=_peer_cp_node)
+            _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
+            time.sleep(2)
 
-        # Auto-answer disk-erase and node-mgmt prompts (same as mode 2.2).
-        _auto_answer_disk_erase_prompts(
-            peer_ch, node_log=_pnf, label=ip, is_node_add=True,
-            reconnect_ctx=_peer_rc_ctx,
-        )
-        _t_disk_erase_done = time.monotonic() - _t_thread_start
-        _checkpoint_mark_phase("cp_2_4", node_id=_peer_cp_node, alias_phase="peer_option4_done", alias_node_id=ip)
-        _run_optional_checkpoint_status_checks()
-        cfg = _resolve_node_mgmt_config(ip)
-        _auto_answer_node_mgmt(peer_ch, cfg, node_log=_pnf)
-        _t_node_mgmt_done = time.monotonic() - _t_thread_start
-        _checkpoint_mark_phase("cp_2_5", node_id=_peer_cp_node)
+            # Auto-answer disk-erase and node-mgmt prompts (same as mode 2.2).
+            _auto_answer_disk_erase_prompts(
+                peer_ch, node_log=_pnf, label=ip, is_node_add=True,
+                reconnect_ctx=_peer_rc_ctx,
+            )
+            _t_disk_erase_done = time.monotonic() - _t_thread_start
+            _checkpoint_mark_phase("cp_2_4", node_id=_peer_cp_node, alias_phase="peer_option4_done", alias_node_id=ip)
+            _run_optional_checkpoint_status_checks()
+            cfg = _resolve_node_mgmt_config(ip)
+            _auto_answer_node_mgmt(peer_ch, cfg, node_log=_pnf)
+            _t_node_mgmt_done = time.monotonic() - _t_thread_start
+            _checkpoint_mark_phase("cp_2_5", node_id=_peer_cp_node)
 
         # Gate cluster IP capture until the primary reaches cp_1_7_9
         # (cluster management gateway applied). Attempting the capture
@@ -23523,7 +23655,8 @@ def _run_ontap_upgrade(log):
                 log.end_phase()
 
             # ── Step 4: BMC prompt + system console ──────────────────────────
-            if not wait_for_bmc_prompt(channel_41, auto_takeover=True):
+            channel_41 = wait_for_bmc_prompt(channel_41, auto_takeover=True)
+            if not channel_41:
                 print("  \u274c BMC prompt not received. Exiting.")
                 if log:
                     log.log("BMC prompt not received", prefix="ERROR")
@@ -31599,6 +31732,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 "primary_cp_1_7_9_event": threading.Event(),
                 "primary_node_ip": bmc_host,
                 "run_loader_prep": True,
+                "already_initialized_peers": _mode3_already_initialized_peers,
             }
             _mode3_peer_threads = [
                 threading.Thread(
@@ -36086,6 +36220,7 @@ def main():
     global _diag_mode, _diag_bootargs, _physical_zeroing, _prevent_bios_fw_update
     global _loader_env_stage_enabled
     global _resume_from_start_menu
+    global _setup_passwordless_ssh
 
     args = parse_args()
 
@@ -36463,7 +36598,8 @@ def main():
                 keepalive_thread_44.start()
                 _session_log.end_phase()
 
-                if not wait_for_bmc_prompt(channel_44, auto_takeover=True):
+                channel_44 = wait_for_bmc_prompt(channel_44, auto_takeover=True)
+                if not channel_44:
                     print("\n  \u274c BMC prompt not received. Exiting.")
                     _session_log.set_outcome("FAIL", "BMC prompt not received")
                     _session_log.close()
@@ -36702,11 +36838,13 @@ def main():
                             _session_log.log(
                                 "5.3: BMC prompt already consumed by probe; skipping wait"
                             )
-                        elif not wait_for_bmc_prompt(_ch46, auto_takeover=True):
-                            print("  \u274c BMC prompt not received. Exiting.")
-                            _session_log.set_outcome("FAIL", "BMC prompt not received")
-                            _session_log.close()
-                            sys.exit(1)
+                        else:
+                            _ch46 = wait_for_bmc_prompt(_ch46, auto_takeover=True)
+                            if not _ch46:
+                                print("  \u274c BMC prompt not received. Exiting.")
+                                _session_log.set_outcome("FAIL", "BMC prompt not received")
+                                _session_log.close()
+                                sys.exit(1)
 
                     # Run the full retain capture (name + network + peer SPs).
                     _cname46r, _net46, _peers46 = collect_retain_data(
@@ -36962,7 +37100,8 @@ def main():
                         _bkt46.start()
                         _session_log.end_phase()
 
-                        if not wait_for_bmc_prompt(_bch46, auto_takeover=True):
+                        _bch46 = wait_for_bmc_prompt(_bch46, auto_takeover=True)
+                        if not _bch46:
                             print("  \u274c BMC prompt not received. Exiting.")
                             _session_log.set_outcome("FAIL", "BMC prompt not received")
                             _session_log.close()
@@ -39654,6 +39793,16 @@ def main():
                     _loader_env_stage_enabled = (_env_q in ("n", "no"))
                     if _checkpoint:
                         _checkpoint.set_selection("loader_env_stage_enabled", _loader_env_stage_enabled)
+                    # Backfill values collected in select_operation_mode() before the
+                    # checkpoint existed so they appear in the saved-selections summary
+                    # and are restored without re-prompting on resume.
+                    if _checkpoint:
+                        # setup_passwordless_ssh is only asked for modes 1 and 3.
+                        _ssh_asked = _operation_mode in (1, 3)
+                        if _ssh_asked and _checkpoint.get_selection("setup_passwordless_ssh") is None:
+                            _checkpoint.set_selection("setup_passwordless_ssh", bool(_setup_passwordless_ssh))
+                        if _operation_mode == 1 and _checkpoint.get_selection("netboot_before_reinit") is None:
+                            _checkpoint.set_selection("netboot_before_reinit", bool(_netboot_before_reinit))
             elif _operation_mode == 4 and not _mode3_skip_presets:
                 # Modes 4.1, 4.2, 4.3 - check for checkpoint with fewer options
                 _print_banner("Node pre-config")
@@ -39821,7 +39970,8 @@ def main():
 
             # Phase: BMC Prompt & Validation
             _session_log.start_phase("BMC Prompt & Validation")
-            if not wait_for_bmc_prompt(channel, auto_takeover=True):
+            channel = wait_for_bmc_prompt(channel, auto_takeover=True)
+            if not channel:
                 _session_log.set_outcome("FAIL", "BMC prompt not received")
                 _session_log.close()
                 sys.exit(1)
@@ -40525,8 +40675,10 @@ def main():
                 # Mode 3 at peer-add finalization: peers were already reset in prior run.
                 if other_sps and _operation_mode == 3 and not _mode3_skip_presets:
                     global _mode3_staged_loader_channels, _mode3_staged_loader_clients, _mode3_pipeline_state
+                    global _mode3_already_initialized_peers
                     _mode3_staged_loader_channels = {}
                     _mode3_staged_loader_clients = {}
+                    _mode3_already_initialized_peers = set()
                     _mode3_pipeline_state = None
                     _print_banner(f"🔁 Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
                     print(f"  Peer BMCs: {', '.join(other_sps)}")
@@ -40567,6 +40719,8 @@ def main():
                                     "user": _session_store.get("user") or creds["user"],
                                     "password": _session_store.get("password") or creds["password"],
                                 }
+                                if _session_store.get("already_initialized"):
+                                    _mode3_already_initialized_peers.add(addr)
 
                     # Run peer resets and primary LOADER check simultaneously.
                     # The primary's SSH channel is independent from peer channels.
@@ -41369,7 +41523,8 @@ def main():
                 _session_log.end_phase()
 
                 _session_log.start_phase(f"BMC Prompt ({sp_host})")
-                if not wait_for_bmc_prompt(channel):
+                channel = wait_for_bmc_prompt(channel)
+                if not channel:
                     print(f"⚠️  Could not reach BMC prompt on {sp_host}; aborting.")
                     _session_log.log(f"BMC prompt timeout on {sp_host}; aborting next-node",
                                      prefix="ERROR")

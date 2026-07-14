@@ -1173,6 +1173,7 @@ _peer_bmc_creds = {}
 _peer_bmc_list = []
 _mode3_staged_loader_channels = {}
 _mode3_staged_loader_clients = {}
+_mode3_already_initialized_peers: set = set()   # peers already running ONTAP (cp_2_5 done)
 _mode3_pipeline_state = None
 
 # Peer node log paths: {ip: log_file_path} for nodes being added during
@@ -12059,6 +12060,39 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
                       prefix="ERROR")
                 return False
 
+        # Skip system reset when the peer already completed initialization in a
+        # prior run (cp_2_5 = node management configured). Re-entering the console
+        # gives the worker a live ONTAP channel so it can proceed to cluster-IP
+        # capture without wiping or re-configuring the node.
+        if _checkpoint_phase_done_for_peer_resume("cp_2_5", host):
+            _tprint(
+                f"   ✅ [{host}] Peer has cp_2_5 done; skipping system reset (already initialized)."
+            )
+            _slog(f"Peer {host} already initialized (cp_2_5 done); skipping system reset")
+            ch.send("system console\r")
+            _sc_out, _sc_matched = direct_read_until_any(
+                ch,
+                ["y/n", "ctrl-d", "type exit", "serial console", "login:", "::>", "loader-"],
+                timeout=15,
+                node_log=node_log,
+            )
+            if _sc_matched and "y/n" in (_sc_matched or "").lower():
+                _slog(f"[{host}] taking over existing console session (already-init skip)")
+                ch.send("y\r")
+                time.sleep(2)
+            with suppress(Exception):
+                ch.send("\r")
+            if session_store is not None:
+                session_store["client"] = client
+                session_store["channel"] = ch
+                session_store["user"] = username
+                session_store["password"] = password
+                session_store["at_boot_menu"] = False
+                session_store["already_initialized"] = True
+                client = None
+                ch = None
+            return True
+
         def _reset_and_enter_console(reason: str = "initial"):
             _tprint(f"\n🔁 [{host}] Resetting to LOADER prompt...")
             # system reset (auto-confirm).
@@ -15168,6 +15202,13 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
 
             if not _prompted_manual_pw:
                 _prompted_manual_pw = True
+                # Use the cluster config admin password automatically before
+                # falling back to an interactive prompt (avoids blocking in
+                # fully-automated runs).
+                _auto_pw = str((_cluster_config or {}).get("admin_password") or "").strip()
+                if _auto_pw and _auto_pw not in _pw_candidates:
+                    _pw_candidates = [_auto_pw]
+                    continue
                 with _stdin_lock:
                     _manual_pw = getpass.getpass(
                         "  Enter cluster admin password for wizard recovery: "
@@ -15371,12 +15412,24 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 if _loader_recovered:
                     return _loader_recovered
             if (
-                ("login:" in chunk.lower() and _has_real_cluster_login_prompt(output))
-                or '(username "admin") password:' in chunk.lower()
+                "login:" in chunk.lower() and _has_real_cluster_login_prompt(output)
             ):
                 _recovered = _try_recover_from_login_prompt()
                 if _recovered:
                     return _recovered
+            # Handle the wizard admin-password step directly: ONTAP asks to SET
+            # the admin password mid-wizard (not a CLI login). Send it directly
+            # and continue waiting for a real wizard trigger — do NOT invoke the
+            # full login recovery flow here.
+            if '(username "admin") password:' in chunk.lower():
+                _wizard_admin_pw = str((_cluster_config or {}).get("admin_password") or "").strip()
+                with suppress(Exception):
+                    channel.send((_wizard_admin_pw or "") + "\r")
+                if _session_log:
+                    _session_log.log_sent("<wizard admin password (set step)>")
+                output = ""
+                output_lower = ""
+                last_data = time.monotonic()
             for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
                 if trigger_lower in output_lower:
                     return trigger
@@ -15389,10 +15442,20 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                     _loader_recovered = _try_recover_from_loader_prompt()
                     if _loader_recovered:
                         return _loader_recovered
-                elif _has_real_cluster_login_prompt(output) or '(username "admin") password:' in output_lower:
+                elif _has_real_cluster_login_prompt(output):
                     _recovered = _try_recover_from_login_prompt()
                     if _recovered:
                         return _recovered
+                elif '(username "admin") password:' in output_lower:
+                    # Wizard is asking to SET the admin password; send it directly.
+                    _wizard_admin_pw = str((_cluster_config or {}).get("admin_password") or "").strip()
+                    with suppress(Exception):
+                        channel.send((_wizard_admin_pw or "") + "\r")
+                    if _session_log:
+                        _session_log.log_sent("<wizard admin password (set step)>")
+                    output = ""
+                    output_lower = ""
+                    last_data = now
                 else:
                     channel.send("\r")
                     _slog("No wizard prompt seen for 15s; sending CR to nudge")
@@ -18628,6 +18691,23 @@ def _peer_reinit_worker(ip, ctx):
         # is reached (not before loader prep). This lets peers boot to the menu in
         # parallel with the primary's option-9 phase, reducing total wait time.
 
+        # If the peer completed initialization in a prior run (cp_2_5 done), skip
+        # the full LOADER → boot-menu → option-4 → disk-erase → node-mgmt flow.
+        # The channel is already at the ONTAP console; jump straight to cluster-IP.
+        _already_initialized = ip in (ctx.get("already_initialized_peers") or set())
+        if _already_initialized:
+            _status(
+                f"  ⏭️  {_format_status_line(ip, 'Peer already initialized (cp_2_5 done); skipping LOADER/init flow.', 'INFO')}"
+            )
+            _t_option4_sent = _t_disk_erase_done = _t_node_mgmt_done = (
+                time.monotonic() - _t_thread_start
+            )
+            _checkpoint_mark_phase("cp_2_2", node_id=_peer_cp_node)
+            _checkpoint_mark_phase("cp_2_3", node_id=_peer_cp_node)
+            _checkpoint_mark_phase("cp_2_4", node_id=_peer_cp_node,
+                                   alias_phase="peer_option4_done", alias_node_id=ip)
+            _checkpoint_mark_phase("cp_2_5", node_id=_peer_cp_node)
+
         # Nudge the channel so the current prompt repaints before probing.
         # Without this, a static/silent boot menu (e.g. when the node auto-booted
         # from LOADER to boot menu while the channel was stored between the peer-reset
@@ -18646,7 +18726,7 @@ def _peer_reinit_worker(ip, ctx):
             check_bmc_drop=True,
             reconnect_ctx=_peer_rc_ctx,
         )
-        _boot_menu_visible = bool(_boot_menu_probe_match) or any(
+        _boot_menu_visible = _already_initialized or bool(_boot_menu_probe_match) or any(
             _sig in str(_boot_menu_probe_out or "").lower()
             for _sig in ("selection (1-", "selection (1-9)?", "selection (1-11)?", "selection (1-12)?", "boot menu")
         )
@@ -18707,7 +18787,7 @@ def _peer_reinit_worker(ip, ctx):
         # Skip the wait when boot menu was already confirmed by the initial probe.
         _found = _boot_menu_visible
         _last_progress = _start
-        while time.monotonic() - _start < 900:
+        while not _found and time.monotonic() - _start < 900:
             if _shutdown_event.is_set():
                 break
             _elapsed = time.monotonic() - _start
@@ -18755,53 +18835,56 @@ def _peer_reinit_worker(ip, ctx):
                 peer_errors.append((ip, "boot menu timeout"))
             return
 
-        time.sleep(1)
-        _status(
-            f"  ✅ {_format_status_line(ip, 'Boot menu reached – waiting for primary to reach option 4 stage...', 'SUCCESS')}"
-        )
-        # Peers reached the boot menu early (in parallel with primary option 9).
-        # Now wait for the primary to signal it has reached the second boot menu
-        # before we send option 4.
-        if _primary_ready_event is not None and ip != _primary_node_ip:
+        # For already-initialized peers the option-4/disk-erase/node-mgmt phases
+        # were already completed in a prior run; skip them here.
+        if not _already_initialized:
+            time.sleep(1)
             _status(
-                f"  ⏳ {_format_status_line(ip, 'Boot menu ready; waiting for primary option 9 completion before sending option 4.', 'INFO')}"
+                f"  ✅ {_format_status_line(ip, 'Boot menu reached – waiting for primary to reach option 4 stage...', 'SUCCESS')}"
             )
-            if not _primary_ready_event.wait(timeout=3600):
+            # Peers reached the boot menu early (in parallel with primary option 9).
+            # Now wait for the primary to signal it has reached the second boot menu
+            # before we send option 4.
+            if _primary_ready_event is not None and ip != _primary_node_ip:
                 _status(
-                    f"  ⚠️  {_format_status_line(ip, 'Timed out waiting for primary option 9 completion.', 'WARN')}"
+                    f"  ⏳ {_format_status_line(ip, 'Boot menu ready; waiting for primary option 9 completion before sending option 4.', 'INFO')}"
                 )
-                with peer_lock:
-                    peer_errors.append((ip, "primary option 9 wait timeout"))
-                return
-            _status(
-                f"  ✅ {_format_status_line(ip, 'Primary option 9 complete; sending option 4.', 'SUCCESS')}"
-            )
-        else:
-            _status(
-                f"  ✅ {_format_status_line(ip, 'Boot menu detected – selecting option 4...', 'SUCCESS')}"
-            )
-        if log:
-            log.log(f"[{ip}] boot menu detected – sending option 4")
-        if _pnf:
-            _par_write(_pnf, "\n>>> sending option 4\n")
-        peer_ch.send("4\r")
-        _t_option4_sent = time.monotonic() - _t_thread_start
-        _checkpoint_mark_phase("cp_2_3", node_id=_peer_cp_node)
-        _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
-        time.sleep(2)
+                if not _primary_ready_event.wait(timeout=3600):
+                    _status(
+                        f"  ⚠️  {_format_status_line(ip, 'Timed out waiting for primary option 9 completion.', 'WARN')}"
+                    )
+                    with peer_lock:
+                        peer_errors.append((ip, "primary option 9 wait timeout"))
+                    return
+                _status(
+                    f"  ✅ {_format_status_line(ip, 'Primary option 9 complete; sending option 4.', 'SUCCESS')}"
+                )
+            else:
+                _status(
+                    f"  ✅ {_format_status_line(ip, 'Boot menu detected – selecting option 4...', 'SUCCESS')}"
+                )
+            if log:
+                log.log(f"[{ip}] boot menu detected – sending option 4")
+            if _pnf:
+                _par_write(_pnf, "\n>>> sending option 4\n")
+            peer_ch.send("4\r")
+            _t_option4_sent = time.monotonic() - _t_thread_start
+            _checkpoint_mark_phase("cp_2_3", node_id=_peer_cp_node)
+            _cleanup_known_hosts_after_boot_option(ip, "4", log=log)
+            time.sleep(2)
 
-        # Auto-answer disk-erase and node-mgmt prompts (same as mode 2.2).
-        _auto_answer_disk_erase_prompts(
-            peer_ch, node_log=_pnf, label=ip, is_node_add=True,
-            reconnect_ctx=_peer_rc_ctx,
-        )
-        _t_disk_erase_done = time.monotonic() - _t_thread_start
-        _checkpoint_mark_phase("cp_2_4", node_id=_peer_cp_node, alias_phase="peer_option4_done", alias_node_id=ip)
-        _run_optional_checkpoint_status_checks()
-        cfg = _resolve_node_mgmt_config(ip)
-        _auto_answer_node_mgmt(peer_ch, cfg, node_log=_pnf)
-        _t_node_mgmt_done = time.monotonic() - _t_thread_start
-        _checkpoint_mark_phase("cp_2_5", node_id=_peer_cp_node)
+            # Auto-answer disk-erase and node-mgmt prompts (same as mode 2.2).
+            _auto_answer_disk_erase_prompts(
+                peer_ch, node_log=_pnf, label=ip, is_node_add=True,
+                reconnect_ctx=_peer_rc_ctx,
+            )
+            _t_disk_erase_done = time.monotonic() - _t_thread_start
+            _checkpoint_mark_phase("cp_2_4", node_id=_peer_cp_node, alias_phase="peer_option4_done", alias_node_id=ip)
+            _run_optional_checkpoint_status_checks()
+            cfg = _resolve_node_mgmt_config(ip)
+            _auto_answer_node_mgmt(peer_ch, cfg, node_log=_pnf)
+            _t_node_mgmt_done = time.monotonic() - _t_thread_start
+            _checkpoint_mark_phase("cp_2_5", node_id=_peer_cp_node)
 
         # Gate cluster IP capture until the primary reaches cp_1_7_9
         # (cluster management gateway applied). Attempting the capture
@@ -31649,6 +31732,7 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 "primary_cp_1_7_9_event": threading.Event(),
                 "primary_node_ip": bmc_host,
                 "run_loader_prep": True,
+                "already_initialized_peers": _mode3_already_initialized_peers,
             }
             _mode3_peer_threads = [
                 threading.Thread(
@@ -40591,8 +40675,10 @@ def main():
                 # Mode 3 at peer-add finalization: peers were already reset in prior run.
                 if other_sps and _operation_mode == 3 and not _mode3_skip_presets:
                     global _mode3_staged_loader_channels, _mode3_staged_loader_clients, _mode3_pipeline_state
+                    global _mode3_already_initialized_peers
                     _mode3_staged_loader_channels = {}
                     _mode3_staged_loader_clients = {}
+                    _mode3_already_initialized_peers = set()
                     _mode3_pipeline_state = None
                     _print_banner(f"🔁 Resetting {len(other_sps)} peer node(s) to LOADER (parallel)")
                     print(f"  Peer BMCs: {', '.join(other_sps)}")
@@ -40633,6 +40719,8 @@ def main():
                                     "user": _session_store.get("user") or creds["user"],
                                     "password": _session_store.get("password") or creds["password"],
                                 }
+                                if _session_store.get("already_initialized"):
+                                    _mode3_already_initialized_peers.add(addr)
 
                     # Run peer resets and primary LOADER check simultaneously.
                     # The primary's SSH channel is independent from peer channels.
