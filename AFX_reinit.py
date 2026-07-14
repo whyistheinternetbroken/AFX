@@ -15056,6 +15056,12 @@ _WIZARD_START_TRIGGERS = [
     "node management interface ip address",
     "node management interface netmask",
     "node management interface default gateway",
+    # Mid-wizard prompts: wizard already started and is partway through the
+    # create flow. Detect these so the caller can Ctrl+C back to the beginning.
+    "enter the cluster name",
+    "enter a license key",
+    "autosupport is enabled",
+    "would you like to enable autosupport",
 ]
 
 _FATAL_BOOT_INTEGRITY_SIGS = [
@@ -25732,6 +25738,45 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         print(f"\n⏳ {_wizard_pfx}Cluster setup has begun...{_elapsed_str()}")
         _slog("Cluster setup wizard started")
     _which_l = str(_which or "").lower()
+
+    # Detect mid-wizard prompts (wizard started but is partway through the
+    # cluster-create flow, e.g. "Enter the cluster name:"). Ctrl+C back to
+    # the beginning so the wizard can be driven from the start.
+    _mid_wizard_sigs = (
+        "enter the cluster name",
+        "enter a license key",
+        "autosupport is enabled",
+        "would you like to enable autosupport",
+    )
+    _mid_wizard_detected = any(sig in _which_l for sig in _mid_wizard_sigs)
+    if _mid_wizard_detected and not _cluster_shell_resume_ready:
+        _slog(
+            f"Mid-wizard prompt detected ('{_which_l[:60]}'); sending Ctrl+C to restart wizard from beginning",
+            prefix="WARN",
+        )
+        print(
+            f"\n⚠️  {_wizard_pfx}Wizard is already in progress (mid-create prompt detected); "
+            f"restarting from beginning with Ctrl+C...{_elapsed_str()}"
+        )
+        for _ in range(3):
+            channel.send("\x03")
+            time.sleep(0.3)
+        channel.send("\r")
+        time.sleep(1)
+        # Re-enter cluster setup and wait for the beginning prompts.
+        with suppress(Exception):
+            channel.send("cluster setup\r")
+        if _session_log:
+            _session_log.log_sent("cluster setup (restart after mid-wizard detection)")
+        _which = _wait_for_wizard_start(channel, timeout=300, node_log=node_log)
+        if _which is None:
+            print(f"\n❌ Timed out waiting for wizard restart after Ctrl+C.")
+            if _session_log:
+                _session_log.log("Timeout waiting for wizard restart after Ctrl+C", prefix="ERROR")
+                _session_log.set_outcome("FAIL", "wizard restart timeout after mid-wizard Ctrl+C")
+            return False
+        _which_l = str(_which or "").lower()
+
     _skip_create_steps = bool(
         _which_l and (
             "cluster management interface" in _which_l
