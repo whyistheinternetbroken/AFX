@@ -2063,6 +2063,9 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
     _min_idx = max(1, int(min_allowed_index or 1))
 
     if _mode_sel == "2":
+        print("")
+        for _idx, (_phase, _label) in enumerate(options, 1):
+            print(f"  {_idx}. {_phase:<22} {_label}")
         _idx_raw = _prompt(
             f"  Checkpoint index for all nodes [{_min_idx}-{len(options)}]: ",
             str(_min_idx),
@@ -2081,6 +2084,9 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
     else:
         print("  Enter checkpoint index per node (0 = skip node).")
         for _nid in _nodes:
+            print("")
+            for _idx, (_phase, _label) in enumerate(options, 1):
+                print(f"  {_idx}. {_phase:<22} {_label}")
             _idx_raw = _prompt(
                 f"    {_nid} checkpoint [0-{len(options)}]: ",
                 "0",
@@ -2216,18 +2222,73 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
         _resume_cp_available = False
 
     _print_banner(f"🧪 Test failure injection ({_mode_name})")
+    _allow_menu_escape = operation_mode == 2
+    _per_node_nodes = _checkpoint_test_secondary_nodes_for_mode(operation_mode)
+    _per_node_available = operation_mode in (2, 3, 42, 43) and len(_per_node_nodes) > 1
+
+    # ── Multi-node: go directly into per-node config ──────────────────────
+    if _per_node_available:
+        print("\n  Select a checkpoint to fail immediately after it is saved.")
+        print("  This is intended to validate resume/checkpoint pickup on the next run.")
+        print("")
+        print(f"  ℹ️  {len(_per_node_nodes)} nodes detected — checkpoint injection is configured per-node.")
+        print("  0. Disable injected checkpoint failure for this run")
+        if _allow_menu_escape:
+            print("  M. Return to main menu")
+        if _resume_cp_available:
+            print("  B. Back to checkpoint resume-stage override")
+        if _min_allowed_idx > 1 and _min_allowed_idx <= len(_options):
+            _min_cp_id = _options[_min_allowed_idx - 1][0]
+            print(
+                f"  ℹ️  Injection targets before index {_min_allowed_idx} "
+                f"({_min_cp_id}) are blocked ({_min_reason})."
+            )
+        for _idx, (_phase, _label) in enumerate(_options, 1):
+            print(f"  {_idx}. {_phase:<22} {_label}")
+        _pn_extras = []
+        if _allow_menu_escape:
+            _pn_extras.append("M")
+        if _resume_cp_available:
+            _pn_extras.append("B")
+        while True:
+            _sel = _prompt(
+                "\n  Disable or configure per-node injection "
+                f"[0=disable{', ' + ', '.join(_pn_extras) if _pn_extras else ''}, Enter=configure per-node]: ",
+                "",
+            ).strip()
+            if _sel == "0":
+                print("  ✅ Checkpoint failure injection disabled for this run.")
+                return
+            if _allow_menu_escape and _sel.lower() == "m":
+                print("  ↩️  Returning to main menu...")
+                raise _ReturnToMenu
+            if _resume_cp_available and _sel.lower() == "b":
+                _changed = _prompt_checkpoint_resume_target_override(_resume_cp_for_override)
+                if _changed:
+                    _min_allowed_idx, _min_reason = _checkpoint_injection_min_allowed_index(
+                        _options, _resume_cp_for_override
+                    )
+                continue
+            if _sel == "":
+                if _configure_per_node_checkpoint_injection(
+                    _mode_name,
+                    _options,
+                    _per_node_nodes,
+                    min_allowed_index=_min_allowed_idx,
+                ):
+                    return
+                continue
+            print("  ⚠️  Enter 0 to disable, or press Enter to configure per-node.")
+        return
+
+    # ── Single-node (or non-peer mode): global checkpoint prompt ─────────
     print("\n  Select a checkpoint to fail immediately after it is saved.")
     print("  This is intended to validate resume/checkpoint pickup on the next run.")
     print("  Press Enter with no value to run without failure injection.")
     print("")
     print("  0. Disable injected checkpoint failure for this run")
-    _allow_menu_escape = operation_mode == 2
     if _allow_menu_escape:
         print("  M. Return to main menu")
-    _per_node_nodes = _checkpoint_test_secondary_nodes_for_mode(operation_mode)
-    _per_node_available = operation_mode in (2, 3, 42, 43) and len(_per_node_nodes) > 1
-    if _per_node_available:
-        print("  P. Configure per-node checkpoint failures for secondary_nodes")
     if _resume_cp_available:
         print("  B. Back to checkpoint resume-stage override")
     _min_allowed_idx, _min_reason = _checkpoint_injection_min_allowed_index(
@@ -2248,8 +2309,6 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
         print(f"  {_idx}. {_phase:<22} {_label}")
 
     _prompt_extras = []
-    if _per_node_available:
-        _prompt_extras.append("P")
     if _resume_cp_available:
         _prompt_extras.append("B")
     if _allow_menu_escape:
@@ -2267,15 +2326,6 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
         if _allow_menu_escape and _sel.lower() == "m":
             print("  ↩️  Returning to main menu...")
             raise _ReturnToMenu
-        if _per_node_available and _sel.lower() == "p":
-            if _configure_per_node_checkpoint_injection(
-                _mode_name,
-                _options,
-                _per_node_nodes,
-                min_allowed_index=_min_allowed_idx,
-            ):
-                return
-            continue
         if _resume_cp_available and _sel.lower() == "b":
             _changed = _prompt_checkpoint_resume_target_override(_resume_cp_for_override)
             if _changed:
@@ -2299,8 +2349,8 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
                     )
             continue
         if not _sel.isdigit():
-            print("  ⚠️  Enter a number from the list or one of: "
-                  + ", ".join(_prompt_extras) + ".")
+            print("  ⚠️  Enter a number from the list"
+                  + ((" or one of: " + ", ".join(_prompt_extras)) if _prompt_extras else "") + ".")
             continue
         _idx = int(_sel)
         if _idx == 0:
