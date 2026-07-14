@@ -1074,6 +1074,7 @@ _checkpoint_test_target = ""
 _checkpoint_test_mode_label = ""
 _checkpoint_test_consumed = False
 _pending_checkpoint_test_failure: "Exception | None" = None
+_checkpoint_test_failure_handled = False   # set when 1977 handler already printed/raised
 _checkpoint_test_parallel_expected_nodes: "set[str]" = set()
 _checkpoint_test_parallel_seen_nodes: "set[str]" = set()
 _checkpoint_test_targets_by_node: "dict[str, str]" = {}
@@ -1545,7 +1546,7 @@ _CHECKPOINT_TEST_OPTIONS = {
 def _clear_checkpoint_test_config() -> None:
     global _checkpoint_test_enabled, _checkpoint_test_target
     global _checkpoint_test_mode_label, _checkpoint_test_consumed
-    global _pending_checkpoint_test_failure
+    global _pending_checkpoint_test_failure, _checkpoint_test_failure_handled
     global _checkpoint_test_parallel_expected_nodes, _checkpoint_test_parallel_seen_nodes
     global _checkpoint_test_targets_by_node, _checkpoint_test_mode3_abort_phase
     _checkpoint_test_enabled = False
@@ -1553,6 +1554,7 @@ def _clear_checkpoint_test_config() -> None:
     _checkpoint_test_mode_label = ""
     _checkpoint_test_consumed = False
     _pending_checkpoint_test_failure = None
+    _checkpoint_test_failure_handled = False
     _checkpoint_test_parallel_expected_nodes = set()
     _checkpoint_test_parallel_seen_nodes = set()
     _checkpoint_test_targets_by_node = {}
@@ -1975,7 +1977,13 @@ def _checkpoint_mark_phase(phase: str, node_id: str = "", *, alias_phase: str = 
             _slog(f"Checkpoint marked: {phase}{_cp_label}{_cp_suffix}{_tag_suffix}", prefix="INFO")
             _maybe_inject_checkpoint_failure(phase, node_id)
     except _InjectedCheckpointFailure as _e:
-        # Test failure injection: exit gracefully to menu instead of crashing
+        # Test failure injection: exit gracefully to menu instead of crashing.
+        # Clear the global pending failure and set the "already handled" flag so
+        # _raise_pending_checkpoint_failure() in the main thread (e.g. after joining
+        # pipeline peer threads) does not double-fire the same message.
+        global _pending_checkpoint_test_failure, _checkpoint_test_failure_handled
+        _pending_checkpoint_test_failure = None
+        _checkpoint_test_failure_handled = True
         _msg = f"  ↩️  Test checkpoint failure reached - returning to main menu.\n    {_e}"
         print(f"\n{_msg}")
         _slog(_msg, prefix="INFO")
@@ -2147,16 +2155,26 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
         return False
 
     _checkpoint_test_enabled = True
-    _checkpoint_test_target = ""
+    # When peer_only=True, this configures secondary nodes only. Preserve the
+    # global _checkpoint_test_target so the primary node (which is not in the
+    # per-node map) can still fire its own injection via the global fallback.
+    if not peer_only:
+        _checkpoint_test_target = ""
     _checkpoint_test_mode_label = mode_name
     _checkpoint_test_targets_by_node = dict(_target_map)
+    _global_note = (
+        f"; primary global target '{_checkpoint_test_target}' preserved"
+        if peer_only and _checkpoint_test_target else ""
+    )
     _slog(
         f"--test armed for mode {mode_name}: per-node checkpoints "
-        f"{dict(sorted(_target_map.items()))}"
+        f"{dict(sorted(_target_map.items()))}{_global_note}"
     )
     print("  ✅ Per-node checkpoint failure injection configured:")
     for _nid in sorted(_target_map):
         print(f"     - {_nid}: {_target_map[_nid]}")
+    if peer_only and _checkpoint_test_target:
+        print(f"  ℹ️  Primary node will still inject at '{_checkpoint_test_target}' (global target preserved).")
     print("  ℹ️  Failure fires after all targeted nodes reach their configured checkpoints.")
     return True
 
@@ -2381,15 +2399,21 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
 
 
 def _raise_pending_checkpoint_failure() -> None:
-    global _pending_checkpoint_test_failure
-    if _pending_checkpoint_test_failure is None:
-        return
-    _err = _pending_checkpoint_test_failure
-    _pending_checkpoint_test_failure = None
-    _msg = f"  Test checkpoint failure reached - returning to main menu.\n    {_err}"
-    print(f"\n{_msg}")
-    _slog(_msg, prefix="INFO")
-    raise _ReturnToMenu
+    global _pending_checkpoint_test_failure, _checkpoint_test_failure_handled
+    if _pending_checkpoint_test_failure is not None:
+        _err = _pending_checkpoint_test_failure
+        _pending_checkpoint_test_failure = None
+        _msg = f"  Test checkpoint failure reached - returning to main menu.\n    {_err}"
+        print(f"\n{_msg}")
+        _slog(_msg, prefix="INFO")
+        raise _ReturnToMenu
+    # The failure was already handled (printed and raised) by the 1977 exception
+    # handler in a parallel thread (e.g. a pipeline peer).  Still abort the main
+    # thread so the run returns to the menu, but skip re-printing the message.
+    if _checkpoint_test_failure_handled:
+        _checkpoint_test_failure_handled = False
+        _slog("injection failure already handled in peer thread; aborting main thread", prefix="INFO")
+        raise _ReturnToMenu
 
 
 def _log_pending_checkpoint_test_target(phase: str, node_id: str = "") -> None:
@@ -30838,6 +30862,10 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 )
                 for _ip in _pipeline_peers
             ]
+            # Arm parallel checkpoint scope before threads start so that
+            # per-node injection waits for all pipeline peers, not just the
+            # first one to reach its target.
+            _set_checkpoint_test_parallel_scope(_pipeline_peers)
             for _t in _mode3_peer_threads:
                 _t.start()
             _mode3_pipeline_state = {
