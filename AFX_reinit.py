@@ -1718,12 +1718,10 @@ def _set_checkpoint_test_parallel_scope(node_ids) -> None:
                     _identity = _checkpoint_test_node_identity(_nid) or _nid
                     if _identity:
                         _expected.add(_identity)
-            if (
-                _operation_mode == 3
-                and _checkpoint_test_target
-                and _MODE3_PRIMARY_CHECKPOINT_NODE
-            ):
-                _expected.add(_MODE3_PRIMARY_CHECKPOINT_NODE)
+            # NOTE: Do NOT add _MODE3_PRIMARY_CHECKPOINT_NODE to _expected here.
+            # The primary fires its injection independently (see _maybe_inject_checkpoint_failure).
+            # Adding it to the peer parallel-barrier causes peers to wait for the primary,
+            # producing a deadlock when the primary target is different from peer targets.
             _checkpoint_test_parallel_expected_nodes = set(_expected)
             _checkpoint_test_parallel_seen_nodes = set()
             return
@@ -2682,6 +2680,18 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
                 if _nid == _MODE3_PRIMARY_CHECKPOINT_NODE and _checkpoint_test_target:
                     return str(_checkpoint_test_target)
                 return "?"
+            if not _node_target:
+                # This node's target comes from _checkpoint_test_target (the primary),
+                # not from _per_node_targets. The primary never joins the peer parallel
+                # barrier — it always fires independently so it doesn't deadlock with peers.
+                _checkpoint_test_consumed = True
+                _fire_msg = (
+                    f"Injected --test failure after checkpoint '{_target_desc}' "
+                    f"was saved for {_node_id}"
+                )
+                _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
+                _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
+                _pending_err = _pending_checkpoint_test_failure
             # When each node has a different target the parallel barrier is
             # meaningless — by the time the last node reaches its target the
             # others have already advanced well past theirs.  Fire immediately
@@ -2689,8 +2699,7 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
             # _shutdown_event, stopping the rest.
             # The wait-for-all logic only applies when every node shares the
             # same target checkpoint.
-            _all_target_phases = set(_per_node_targets.values())
-            if len(_all_target_phases) > 1:
+            elif len(set(_per_node_targets.values())) > 1:
                 # Heterogeneous targets — fire independently for this node.
                 _checkpoint_test_consumed = True
                 _fire_msg = (
@@ -15361,7 +15370,10 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 _loader_recovered = _try_recover_from_loader_prompt()
                 if _loader_recovered:
                     return _loader_recovered
-            if "login:" in chunk.lower() and _has_real_cluster_login_prompt(output):
+            if (
+                ("login:" in chunk.lower() and _has_real_cluster_login_prompt(output))
+                or '(username "admin") password:' in chunk.lower()
+            ):
                 _recovered = _try_recover_from_login_prompt()
                 if _recovered:
                     return _recovered
@@ -15377,7 +15389,7 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                     _loader_recovered = _try_recover_from_loader_prompt()
                     if _loader_recovered:
                         return _loader_recovered
-                elif _has_real_cluster_login_prompt(output):
+                elif _has_real_cluster_login_prompt(output) or '(username "admin") password:' in output_lower:
                     _recovered = _try_recover_from_login_prompt()
                     if _recovered:
                         return _recovered
