@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # PYTHON_ARGCOMPLETE_OK
 
 # OPT (phase 2): PEP 563 deferred evaluation of annotations. Lets us add
@@ -16888,149 +16888,129 @@ def _apply_license(channel):
                 )
 
         # 2. Set diag password.
-        # ONTAP's CLI treats '!' as a history/shell-escape character even at
-        # interactive password prompts, so a password like "PassWd1!AFX" sent
-        # via channel.send() over a PTY arrives as "PassWd1" (7 chars) and is
-        # rejected for minimum-length.  This does NOT affect paramiko's
-        # connect(password=...) which sends raw bytes via the SSH auth layer —
-        # only interactive PTY input is affected.
+        # channel.send() delivers bytes to the remote PTY line discipline.
+        # Even at ONTAP password prompts the CLI may interpret certain characters
+        # (e.g. '!' for history expansion) before the application sees them,
+        # silently truncating the password.  paramiko connect(password=...) is
+        # NOT affected -- it sends raw bytes through the SSH auth layer.
         #
-        # Strategy:
-        #   • If the password is PTY-safe (only printable ASCII excluding the
-        #     chars ONTAP's CLI interprets specially) → send it directly.
-        #   • Otherwise → skip the doomed attempt and immediately set a
-        #     randomly-generated alphanumeric-only password for SFTP use.
-        #   • Either way, diag_password is kept in sync with whatever password
-        #     was actually committed so that the SFTP connect() succeeds.
+        # To avoid any PTY escaping issues we ALWAYS set the diag account to a
+        # randomly-generated alphanumeric-only password for this SFTP step, then
+        # keep diag_password in sync so connect() uses the correct credential.
+        #
+        # The admin may also skip this step entirely if the diag password has
+        # already been configured in a previous run.
         _diag_pw_label = "custom" if _license_diag_password is not None else "matching admin"
-        print(f"  🔑 Setting diag account password ({_diag_pw_label})...")
+        print(f"  {chr(0x1f511)} Setting diag account password ({_diag_pw_label})...")
         _slog(f"Setting diag account password ({_diag_pw_label})")
 
-        # Characters that ONTAP's CLI interprets specially in PTY/interactive
-        # input and will mangle if present in a sent password.
-        _ONTAP_CLI_SPECIAL = frozenset('!"&|;`$(){}[]<>?\\')
-
-        # Safe fallback: hex + suffix guarantees mixed-case and a digit,
-        # no symbols that could be misinterpreted by the CLI.
-        _safe_diag_pw = _secrets_mod.token_hex(6) + "Ax1"  # 15 chars total
-
-        _has_cli_special = any(c in _ONTAP_CLI_SPECIAL for c in diag_password)
-        if _has_cli_special:
-            _pw_to_set = _safe_diag_pw
-            _special_found = [c for c in diag_password if c in _ONTAP_CLI_SPECIAL]
-            print(
-                f"  ℹ️  Password contains characters that ONTAP's CLI interprets "
-                f"specially over a PTY ({', '.join(repr(c) for c in _special_found)}). "
-                "Using an auto-generated safe password for the diag account / SFTP."
-            )
-            if _session_log:
-                _session_log.log(
-                    f"Diag password contains PTY-unsafe chars "
-                    f"({', '.join(repr(c) for c in _special_found)}); "
-                    "using auto-generated safe password",
-                    prefix="WARN",
-                )
-        else:
-            _pw_to_set = diag_password
-
-        def _attempt_set_diag_pw(pw_to_set):
-            """Send 'security login password -username diag' and feed pw_to_set.
-            Returns ('ok', None), ('already_correct', None), or ('failed', reason).
-            Leaves the channel at a cluster prompt on all paths."""
-            drain_channel(channel, seconds=0.3)
-            channel.send("security login password -username diag\r")
-            if _session_log:
-                _session_log.log_sent("security login password -username diag")
-            for _r in range(8):
-                _o, _m = direct_read_until_any(
-                    channel,
-                    ["enter a new password", "enter it again",
-                     "must be different", "successfully changed",
-                     "command failed", "error:", "::>", "::*>"],
-                    timeout=20,
-                )
-                if not _m:
-                    break
-                _full = (_o + _m).lower()
-                # ── ONTAP policy / error responses ──────────────────────────
-                if "command failed" in _full or (
-                    "error:" in _full and
-                    "enter" not in _full  # "Enter a new password" is not an error
-                ):
-                    direct_read_until_any(channel, ["::>", "::*>"], timeout=15)
-                    _reason = _full.strip().splitlines()[-1] if _full.strip() else "unknown error"
-                    return "failed", _reason
-                # ── "must be different" / "successfully changed" ─────────────
-                if "must be different" in _full or "successfully changed" in _full:
-                    direct_read_until_any(channel, ["::>", "::*>"], timeout=15)
-                    return "already_correct", None
-                # ── cluster prompt ───────────────────────────────────────────
-                if "::>" in _m or "::*>" in _m:
-                    return "ok", None
-                # ── password prompts ─────────────────────────────────────────
-                if "enter a new password" in _full or "enter it again" in _full:
-                    channel.send(pw_to_set + "\r")
-                    if _session_log:
-                        _session_log.log_sent("<hidden>")
-            return "ok", None
-
+        _skip_diag_pw_set = False
         try:
-            _pw_already_correct = False
-            _pw_outcome, _pw_reason = _attempt_set_diag_pw(_pw_to_set)
+            _diag_already_ans = input(
+                "  Is the diag account password already configured"
+                " (e.g. from a previous run)? [y/N]: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            _diag_already_ans = "n"
+        if _diag_already_ans == "y":
+            _skip_diag_pw_set = True
+            print("  {0}  Skipping diag password set -- using existing credential for SFTP.".format(chr(0x2139)+chr(0xfe0f)))
+            if _session_log:
+                _session_log.log("Diag password set skipped (admin confirmed already configured)")
 
-            if _pw_outcome == "already_correct":
-                _pw_already_correct = True
-            elif _pw_outcome == "failed":
-                # Unexpected failure even with a safe password; try once more
-                # with a fresh generated password as a last resort.
-                print(
-                    f"  ⚠️  Diag password set failed ({_pw_reason}). "
-                    "Retrying with a fresh auto-generated safe password..."
-                )
+        if not _skip_diag_pw_set:
+            # Always use a PTY-safe auto-generated password to avoid any
+            # character-escaping issues with the original admin password.
+            _safe_diag_pw = _secrets_mod.token_hex(6) + "Ax1"  # 15 chars, alphanum only
+
+            def _attempt_set_diag_pw(pw_to_set):
+                """Send 'security login password -username diag' and feed pw_to_set.
+                Returns ('ok', None), ('already_correct', None), or ('failed', reason).
+                Leaves the channel at a cluster prompt on all paths."""
+                drain_channel(channel, seconds=0.3)
+                channel.send("security login password -username diag\r")
                 if _session_log:
-                    _session_log.log(
-                        f"Diag password set failed ({_pw_reason}); retrying",
-                        prefix="WARN",
+                    _session_log.log_sent("security login password -username diag")
+                for _r in range(8):
+                    _o, _m = direct_read_until_any(
+                        channel,
+                        ["enter a new password", "enter it again",
+                         "must be different", "successfully changed",
+                         "command failed", "error:", "::>", "::*>"],
+                        timeout=20,
                     )
-                _safe_diag_pw2 = _secrets_mod.token_hex(6) + "Bz2"
-                _pw_outcome2, _pw_reason2 = _attempt_set_diag_pw(_safe_diag_pw2)
-                if _pw_outcome2 in ("ok", "already_correct"):
-                    _pw_to_set = _safe_diag_pw2
-                    _pw_outcome = "ok"
-                    print("  ✅ Diag account password set (auto-generated).")
+                    if not _m:
+                        break
+                    _full = (_o + _m).lower()
+                    # -- ONTAP policy / error responses ----------------------
+                    if "command failed" in _full or (
+                        "error:" in _full and
+                        "enter" not in _full  # "Enter a new password" is not an error
+                    ):
+                        direct_read_until_any(channel, ["::>", "::*>"], timeout=15)
+                        _reason = (
+                            _full.strip().splitlines()[-1]
+                            if _full.strip() else "unknown error"
+                        )
+                        return "failed", _reason
+                    # -- "must be different" / "successfully changed" ---------
+                    if "must be different" in _full or "successfully changed" in _full:
+                        direct_read_until_any(channel, ["::>", "::*>"], timeout=15)
+                        return "already_correct", None
+                    # -- cluster prompt ---------------------------------------
+                    if "::>" in _m or "::*>" in _m:
+                        return "ok", None
+                    # -- password prompts -------------------------------------
+                    if "enter a new password" in _full or "enter it again" in _full:
+                        channel.send(pw_to_set + "\r")
+                        if _session_log:
+                            _session_log.log_sent("<hidden>")
+                return "ok", None
+
+            try:
+                _pw_outcome, _pw_reason = _attempt_set_diag_pw(_safe_diag_pw)
+
+                if _pw_outcome == "already_correct":
+                    diag_password = _safe_diag_pw
+                    print("  \u2705 Diag account password set (auto-generated, PTY-safe).")
                     if _session_log:
-                        _session_log.log("Diag password set to auto-generated password")
-                else:
+                        _session_log.log("Diag password set to auto-generated PTY-safe password")
+                elif _pw_outcome == "failed":
                     print(
-                        f"  ⚠️  Diag password set failed ({_pw_reason2}). SFTP may fail."
+                        f"  \u26a0\ufe0f  Diag password set failed ({_pw_reason}). "
+                        "Retrying with a fresh auto-generated password..."
                     )
                     if _session_log:
                         _session_log.log(
-                            f"Diag password set failed ({_pw_reason2})",
+                            f"Diag password set failed ({_pw_reason}); retrying",
                             prefix="WARN",
                         )
-
-            # Keep diag_password in sync with whatever was actually committed
-            # so that SFTP connect() uses the right credential.
-            if _pw_outcome in ("ok",):
-                diag_password = _pw_to_set
-
-            if _pw_already_correct:
-                print("  ℹ️  Diag password already set correctly; no change needed.")
+                    _safe_diag_pw2 = _secrets_mod.token_hex(6) + "Bz2"
+                    _pw_outcome2, _pw_reason2 = _attempt_set_diag_pw(_safe_diag_pw2)
+                    if _pw_outcome2 in ("ok", "already_correct"):
+                        diag_password = _safe_diag_pw2
+                        print("  \u2705 Diag account password set (auto-generated).")
+                        if _session_log:
+                            _session_log.log("Diag password set to auto-generated password (retry)")
+                    else:
+                        print(
+                            f"  \u26a0\ufe0f  Diag password set failed ({_pw_reason2}). SFTP may fail."
+                        )
+                        if _session_log:
+                            _session_log.log(
+                                f"Diag password set failed ({_pw_reason2})",
+                                prefix="WARN",
+                            )
+                else:
+                    diag_password = _safe_diag_pw
+                    print("  \u2705 Diag account password set (auto-generated, PTY-safe).")
+                    if _session_log:
+                        _session_log.log("Diag password set to auto-generated PTY-safe password")
+            except Exception as exc:
                 if _session_log:
                     _session_log.log(
-                        "Diag password unchanged "
-                        "(ONTAP: new password must differ from old — already correct)"
+                        f"security login password failed: {exc}", prefix="WARN"
                     )
-            elif _pw_outcome == "ok":
-                if not _has_cli_special:
-                    print("  ✅ Diag account password set.")
-        except Exception as exc:
-            if _session_log:
-                _session_log.log(
-                    f"security login password failed: {exc}", prefix="WARN"
-                )
-
         # 3. Enable systemshell diag login on all nodes.
         print("  \U0001f527 Enabling systemshell diag login on all nodes...")
         if _session_log:
