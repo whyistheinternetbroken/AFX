@@ -38005,49 +38005,75 @@ def _run_2c_resume():
                                 _bmc_ch.settimeout(30)
                                 time.sleep(1)
                                 drain_channel(_bmc_ch, seconds=0.5)
-                                # Log in as admin on the node console
-                                _bmc_ch.send("admin\r")
+                                # Step 1: enter node console from BMC prompt
+                                _bmc_ch.send("system console\r")
                                 _bout = ""
+                                _at_ontap = False
                                 _t0 = time.monotonic()
-                                while time.monotonic() - _t0 < 30:
+                                while time.monotonic() - _t0 < 60:
                                     if _bmc_ch.recv_ready():
                                         _bout += _bmc_ch.recv(4096).decode(
                                             "utf-8", errors="replace"
                                         )
-                                        if "password:" in _bout.lower():
+                                        _tail = _bout[-400:]
+                                        # Existing console session preemption
+                                        if re.search(r'\[y/n\]', _tail, re.IGNORECASE):
+                                            _bmc_ch.send("y\r")
+                                            _bout = ""
+                                            continue
+                                        # ONTAP login prompt
+                                        if re.search(r'\blogin:\s*$', _tail,
+                                                     re.IGNORECASE):
+                                            _bmc_ch.send("admin\r")
+                                            _bout = ""
+                                            continue
+                                        # ONTAP password prompt
+                                        if "password:" in _tail.lower():
                                             _bmc_ch.send(
                                                 (cluster_admin_password or "") + "\r"
                                             )
                                             _bout = ""
                                             continue
-                                        if _CLUSTER_PROMPT_RE.search(_bout[-300:]):
+                                        # ONTAP shell prompt
+                                        if _CLUSTER_PROMPT_RE.search(_tail):
+                                            _at_ontap = True
+                                            break
+                                        # Node not yet at ONTAP (LOADER / boot menu)
+                                        if re.search(
+                                            r'LOADER[->]|boot_menu\.py|Boot Menu',
+                                            _tail
+                                        ):
                                             break
                                     else:
                                         time.sleep(0.15)
-                                # Query cluster interface IPs
-                                for _cmd in (
-                                    "set -rows 0; net int show -role cluster -fields address",
-                                    "net int show -role cluster -fields address",
-                                ):
-                                    _bmc_ch.send(_cmd + "\r")
-                                    time.sleep(0.3)
-                                    _braw = ""
-                                    _t0 = time.monotonic()
-                                    while time.monotonic() - _t0 < 20:
-                                        if _bmc_ch.recv_ready():
-                                            _braw += _bmc_ch.recv(4096).decode(
-                                                "utf-8", errors="replace"
-                                            )
-                                            if _CLUSTER_PROMPT_RE.search(_braw[-200:]):
-                                                break
-                                        else:
-                                            time.sleep(0.1)
-                                    _ips_found = re.findall(
-                                        r'\b(169\.254\.\d+\.\d+)\b', _braw
-                                    )
-                                    if _ips_found:
-                                        _fresh_ip = _ips_found[0]
-                                        break
+                                # Step 2: query cluster interface IPs if in ONTAP
+                                if _at_ontap:
+                                    for _cmd in (
+                                        "set -rows 0; net int show -role cluster"
+                                        " -fields address",
+                                        "net int show -role cluster -fields address",
+                                    ):
+                                        _bmc_ch.send(_cmd + "\r")
+                                        time.sleep(0.3)
+                                        _braw = ""
+                                        _t0 = time.monotonic()
+                                        while time.monotonic() - _t0 < 20:
+                                            if _bmc_ch.recv_ready():
+                                                _braw += _bmc_ch.recv(4096).decode(
+                                                    "utf-8", errors="replace"
+                                                )
+                                                if _CLUSTER_PROMPT_RE.search(
+                                                    _braw[-200:]
+                                                ):
+                                                    break
+                                            else:
+                                                time.sleep(0.1)
+                                        _ips_found = re.findall(
+                                            r'\b(169\.254\.\d+\.\d+)\b', _braw
+                                        )
+                                        if _ips_found:
+                                            _fresh_ip = _ips_found[0]
+                                            break
                             except Exception as _be:
                                 _session_log.log(
                                     f"2.3: BMC console SSH to {_bmc} failed: {_be}",
