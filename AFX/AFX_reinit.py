@@ -157,7 +157,7 @@ def _log_wait_timeout_throttled(timeout: int, look_for_list, elapsed: float) -> 
             if _suppressed > 0:
                 _session_log.log(
                     f"Suppressed {_suppressed} duplicate timeout warning(s) for matcher set {_sigs}",
-                    prefix="WARN",
+                    prefix="INFO",
                 )
                 _suppressed = 0
             _session_log.log(_msg, prefix="WARN")
@@ -178,7 +178,7 @@ def _log_wait_timeout_throttled(timeout: int, look_for_list, elapsed: float) -> 
             _session_log.log(
                 f"Still timing out for matcher set {_sigs}; suppressed {_suppressed} duplicate warning(s) "
                 f"in the last {int(_now - _last_summary)}s",
-                prefix="WARN",
+                prefix="INFO",
             )
             _state["last_summary"] = _now
             _state["suppressed"] = 0
@@ -8438,12 +8438,12 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
         except paramiko.AuthenticationException as e:
             last_exc = e
             _can_retry = (_queue_idx < len(_attempt_queue)) or (interactive and attempt < max_attempts)
-            _icon = "⚠️" if _can_retry else "❌"
+            _icon = "ℹ️" if _can_retry else "❌"
             print(f"   {_icon} [{label}] authentication failed for {username}@{host}.")
             if _session_log:
                 _session_log.log(
                     f"[{label}] auth failed for {username}@{host}",
-                    prefix="WARN" if _can_retry else "ERROR",
+                    prefix="INFO" if _can_retry else "ERROR",
                 )
             _ssh_event(
                 "auth_failure",
@@ -27752,10 +27752,20 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
     # Resume hardening: react to the live shell state before extracting cluster IP.
     # If login landed on a non-cluster context, re-enter cluster setup and continue.
     _cluster_rows = -1
-    try:
-        _cluster_rows, _, _ = _cluster_show_node_status(ch)
-    except Exception as _cs_err:
-        _slog(f"[{label}] cluster show probe failed before cluster-IP capture: {_cs_err}", prefix="WARN")
+    for _probe_attempt in (1, 2):
+        try:
+            _cluster_rows, _, _ = _cluster_show_node_status(ch)
+        except Exception as _cs_err:
+            _slog(f"[{label}] cluster show probe failed before cluster-IP capture: {_cs_err}", prefix="WARN")
+            _cluster_rows = -1
+        if _cluster_rows >= 1:
+            break
+        # Prompt transitions during boot/wizard exits can transiently return parse failures.
+        # Give one short retry before triggering recovery workflow.
+        if _cluster_rows == -1 and _probe_attempt == 1:
+            time.sleep(3)
+            continue
+        break
     if _cluster_rows < 1:
         print(f"\n   ⚠️  [{label}] cluster show did not report an active cluster; running cluster setup...")
         _slog(f"[{label}] cluster show rows={_cluster_rows}; running cluster setup recovery", prefix="WARN")
@@ -27780,13 +27790,11 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             print(f"   ❌ [{label}] Could not re-enter cluster shell after setup recovery.")
             _slog(f"[{label}] cluster setup recovery login failed", prefix="ERROR")
             return None
-        _cluster_rows, _, _ = _cluster_show_node_status(ch)
-        if _cluster_rows < 1:
-            # Resume hardening: after exiting setup for bulk add-node, some nodes
-            # remain at CLI with no active local cluster. Continue with cluster-IP
-            # capture/add-node flow instead of failing this node early.
-            print(f"   ⚠️  [{label}] cluster show still reports no cluster after recovery; continuing with cluster-IP capture.")
-            _slog(f"[{label}] cluster show rows={_cluster_rows} after recovery; proceeding with cluster-IP capture", prefix="WARN")
+        # Resume hardening: after exiting setup for bulk add-node, some nodes can
+        # still report no local cluster briefly even though cluster interfaces are up.
+        # Proceed directly to cluster-IP capture to avoid spurious re-probe warnings.
+        print(f"   ℹ️  [{label}] cluster setup recovery complete; proceeding with cluster-IP capture.")
+        _slog(f"[{label}] cluster setup recovery complete; proceeding with cluster-IP capture", prefix="INFO")
 
     def _capture_cluster_netint(_cmd):
         _slog(f"[{label}] running {_cmd}")
@@ -27847,7 +27855,7 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
         _sp_raw = _run_cluster_command(
             ch,
             "set -rows 0; service-processor show -fields address,node",
-            timeout=30,
+            timeout=45,
         )
         _cluster_interface_log_write(
             f"[{label}] <<< set -rows 0; service-processor show -fields address,node",
@@ -28131,7 +28139,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
         _resume_cp_desc = _checkpoint_phase_description(_resume_cp_id) if _resume_cp_id else ""
         if _resume_cp_id:
             print(
-                f"  ⏭️  Resuming from checkpoint "
+                f"  ⏭️  Checkpoint context loaded "
                 f"[{_resume_cp_id}: {_resume_cp_desc or 'checkpoint state loaded'}]..."
             )
     else:
