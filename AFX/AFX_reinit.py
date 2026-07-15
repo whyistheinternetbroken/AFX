@@ -15937,12 +15937,22 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
             if any(_sig in _scan for _sig in _signals):
                 _emit_step(_idx)
 
-        if _matched and str(_matched).lower() in (
-                _license_trigger, _cluster_mgmt_port_trigger, _cluster_mgmt_ip_trigger):
+        if _license_trigger in _scan:
+            # Additional-license prompt can be accepted with Enter and then hand
+            # control back to the main wizard driver for management prompts.
             time.sleep(0.2)
             channel.send("\r")
             if _session_log:
                 _session_log.log_sent("<Enter>")
+            return True
+        if _cluster_mgmt_port_trigger in _scan or _cluster_mgmt_ip_trigger in _scan:
+            # Do not auto-send Enter here; the caller immediately drives the
+            # management-interface wizard steps and must consume this prompt.
+            _slog(
+                "Cluster-create monitor reached management-interface prompts; "
+                "returning control without auto-advancing prompt",
+                prefix="INFO",
+            )
             return True
         if _matched and str(_matched) in _cluster_prompt_triggers:
             _rows, _all_true, _has_warn = _cluster_show_node_status(channel)
