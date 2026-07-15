@@ -25793,11 +25793,11 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _slog("Cluster setup wizard started")
     _which_l = str(_which or "").lower()
 
-    # Detect mid-wizard prompts (wizard started but is partway through the
-    # cluster-create flow, e.g. "Enter the cluster name:"). Ctrl+C back to
-    # the beginning so the wizard can be driven from the start.
+    # Detect mid-wizard prompts further in the wizard flow (license key, autosupport,
+    # etc.). Ctrl+C back to the beginning so the wizard can be driven from the start.
+    # NOTE: "enter the cluster name" is handled separately via _skip_to_cluster_name
+    # below — Ctrl+C is unreliable when ONTAP is mid-create at the cluster-name step.
     _mid_wizard_sigs = (
-        "enter the cluster name",
         "enter a license key",
         "autosupport is enabled",
         "would you like to enable autosupport",
@@ -25840,6 +25840,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             or "where is the controller located" in _which_l
         )
     )
+    # If the wizard is already at "Enter the cluster name:" (mid-create, Step 1),
+    # skip the entire create/join flow and answer the remaining create prompts directly.
+    _skip_to_cluster_name = bool(
+        not _cluster_shell_resume_ready
+        and not _skip_create_steps
+        and "enter the cluster name" in _which_l
+    )
     # If node management prompts are still pending (session resumed past them or they
     # were missed), drive them before attempting the wizard create/join flow.
     while (not _cluster_shell_resume_ready) and _which and "node management interface" in str(_which).lower():
@@ -25876,6 +25883,11 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 or "where is the controller located" in _which_l
             )
         )
+        _skip_to_cluster_name = bool(
+            not _cluster_shell_resume_ready
+            and not _skip_create_steps
+            and "enter the cluster name" in _which_l
+        )
         break
     if _skip_create_steps and (not _cluster_shell_resume_ready):
         _slog("Wizard already at cluster management port; marking cp_1_7 and skipping create steps")
@@ -25883,7 +25895,78 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _cp_mark("cp_1_7")
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
-    if (not _skip_create_steps) and (not _cluster_shell_resume_ready):
+    if _skip_to_cluster_name and not _cluster_shell_resume_ready:
+        _slog(
+            "Wizard already at 'Enter the cluster name'; skipping create/join and answering remaining create steps",
+            prefix="WARN",
+        )
+        print(
+            f"\n⏭️  {_wizard_pfx}Wizard is already at cluster name step; answering remaining "
+            f"cluster-create prompts directly...{_elapsed_str()}"
+        )
+        # Send the cluster name immediately — the prompt is already on screen from _which.
+        channel.send((cc.get("name") or "") + "\r")
+        if _session_log:
+            _session_log.log_sent(cc.get("name") or "")
+        time.sleep(0.5)
+        # Now wait for admin password and retype (order varies by ONTAP version;
+        # they may also have already been answered in a previous run).
+        _sc_remain = {
+            "enter the cluster administrator": cc.get("admin_password") or "",
+            "retype the password": cc.get("admin_password") or "",
+        }
+        _sc_deadline = time.monotonic() + 120
+        while _sc_remain and not _shutdown_event.is_set() and time.monotonic() < _sc_deadline:
+            _sc_r_out, _sc_r_m = direct_read_until_any(
+                channel,
+                list(_sc_remain.keys()),
+                timeout=min(20, max(1, int(_sc_deadline - time.monotonic()))),
+                node_log=node_log, quiet=bool(node_log),
+            )
+            _sc_r_scan = (str(_sc_r_out or "") + "\n" + str(_sc_r_m or "")).lower()
+            _sc_r_key = next((k for k in list(_sc_remain.keys()) if k in _sc_r_scan), None)
+            if _sc_r_key:
+                _sc_r_val = _sc_remain.pop(_sc_r_key)
+                channel.send(_sc_r_val + "\r")
+                if _session_log:
+                    _session_log.log_sent("<hidden>")
+                time.sleep(0.5)
+        if _sc_remain:
+            _slog(
+                f"skip-to-cluster-name: prompts not seen (may already be answered): {list(_sc_remain.keys())}",
+                prefix="INFO",
+            )
+        _cp_mark("cp_1_7")
+        _log_path = _session_log.log_file if _session_log else "the log file"
+        print(
+            f"\n⏳ {_wizard_pfx}Cluster create started. Waiting for ONTAP to form "
+            f"the cluster and reach post-create prompts...{_elapsed_str()}"
+        )
+        print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
+        _slog("Cluster create started (skip-to-cluster-name path) - monitoring ONTAP progress milestones")
+        _post_prompt_ok_scn = _wait_for_cluster_create_post_prompts(
+            channel,
+            timeout=1800,
+            node_log=node_log,
+            cluster_name=cc.get("name", ""),
+            node_label=primary_bmc or "",
+        )
+        if not _post_prompt_ok_scn:
+            print("\n❌ Cluster create did not recover to post-create prompts.")
+            if _session_log:
+                _session_log.log(
+                    "Cluster create monitor failed (skip-to-cluster-name path)",
+                    prefix="ERROR",
+                )
+                _session_log.set_outcome("FAIL", "cluster create monitor recovery failed (skip-to-cluster-name)")
+            return False
+        _cp_mark("cp_1_7_5")
+        print(
+            f"\n✅ {_wizard_pfx}Cluster create reached post-create wizard prompts. "
+            f"Continuing management network configuration...{_elapsed_str()}"
+        )
+        print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
+    if (not _skip_create_steps) and (not _cluster_shell_resume_ready) and (not _skip_to_cluster_name):
         # Always send one Enter after wizard-start detection. In fast paths, the
         # create/join text can be present in residual output while ONTAP still
         # requires Enter to continue from the "Otherwise, press Enter..." gate.
@@ -25938,6 +26021,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     "do you want to create a new cluster or join",
                     "{create, join}",
                     "{yes, no}",
+                    "enter the cluster administrator",
+                    "enter the cluster name",
                 ],
                 timeout=min(30, _remaining),
                 node_log=node_log,
@@ -25954,6 +26039,21 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             if "{yes, no}" in _scan_cj:
                 _create_ok = True
                 _yes_prompt_seen = True
+                break
+            # Wizard already past create/join and yes/no — at admin password or
+            # cluster name step. Break out and let the post-loop steps handle it.
+            if ("enter the cluster administrator" in _scan_cj
+                    or "enter the cluster name" in _scan_cj):
+                _slog(
+                    "Wizard has already advanced past create/join to admin-pw/cluster-name; "
+                    "skipping create/join wait",
+                    prefix="WARN",
+                )
+                print(
+                    f"\n⏭️  {_wizard_pfx}Wizard already past create/join prompt; continuing from admin password step..."
+                )
+                _create_ok = True
+                _yes_prompt_seen = True  # yes was already sent before; skip sending it again
                 break
             if (("create or join" in _scan_cj)
                     or ("create a new cluster or join" in _scan_cj)
@@ -25992,24 +26092,57 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 )
                 _session_log.set_outcome("FAIL", "wizard create/join transition timeout")
             return False
-        if _yes_prompt_seen:
+        # Determine how far the wizard has advanced based on what we saw in the loop.
+        _wizard_at_cluster_name = "enter the cluster name" in _create_history
+        _wizard_at_admin_pw = "enter the cluster administrator" in _create_history
+        _wizard_past_yes = _wizard_at_cluster_name or _wizard_at_admin_pw
+        if _yes_prompt_seen and not _wizard_past_yes:
             channel.send("yes\r")
             if _session_log:
                 _session_log.log_sent("yes")
             time.sleep(0.5)
-        else:
+        elif not _yes_prompt_seen:
             _wait_and_send(channel, "{yes, no}", "yes",
                            "Yes/no confirmation after create -> yes",
                            timeout=600, node_log=node_log, quiet=bool(node_log))
-        _wait_and_send(channel, "enter the cluster administrator", cc["admin_password"],
-                       "Cluster administrator password", timeout=600,
-                       hide_in_log=True, node_log=node_log, quiet=bool(node_log))
-        _wait_and_send(channel, "retype the password", cc["admin_password"],
-                       "Retype cluster administrator password", timeout=600,
-                       hide_in_log=True, node_log=node_log, quiet=bool(node_log))
-        _wait_and_send(channel, "enter the cluster name", cc["name"],
-                       f"Cluster name -> {cc['name']}", timeout=600,
-                       node_log=node_log, quiet=bool(node_log))
+        # Answer cluster name, admin password, and retype using a combined dispatch loop
+        # so they are handled in whatever order ONTAP presents them.
+        _cw_remain = {}
+        if not _wizard_at_cluster_name:
+            _cw_remain["enter the cluster name"] = cc.get("name") or ""
+        if not _wizard_at_admin_pw:
+            _cw_remain["enter the cluster administrator"] = cc.get("admin_password") or ""
+            _cw_remain["retype the password"] = cc.get("admin_password") or ""
+        else:
+            _cw_remain["retype the password"] = cc.get("admin_password") or ""
+        # If wizard is already at cluster name (seen in loop), send it immediately.
+        if _wizard_at_cluster_name:
+            channel.send((cc.get("name") or "") + "\r")
+            if _session_log:
+                _session_log.log_sent(cc.get("name") or "")
+            time.sleep(0.5)
+        _cw_deadline = time.monotonic() + 600
+        while _cw_remain and not _shutdown_event.is_set() and time.monotonic() < _cw_deadline:
+            _cw_out, _cw_m = direct_read_until_any(
+                channel,
+                list(_cw_remain.keys()),
+                timeout=min(30, max(1, int(_cw_deadline - time.monotonic()))),
+                node_log=node_log, quiet=bool(node_log),
+            )
+            _cw_scan = (str(_cw_out or "") + "\n" + str(_cw_m or "")).lower()
+            _cw_key = next((k for k in list(_cw_remain.keys()) if k in _cw_scan), None)
+            if _cw_key:
+                _cw_val = _cw_remain.pop(_cw_key)
+                _is_hide = "cluster name" not in _cw_key
+                channel.send(_cw_val + "\r")
+                if _session_log:
+                    _session_log.log_sent("<hidden>" if _is_hide else _cw_val)
+                time.sleep(0.5)
+        if _cw_remain:
+            _slog(
+                f"Create wizard: prompts not seen within timeout (may already be answered): {list(_cw_remain.keys())}",
+                prefix="WARN",
+            )
 
         # After the cluster name is submitted, ONTAP begins the real cluster-create
         # work immediately. Mark cp_1_7 first so an exit-after-checkpoint run stops
