@@ -15889,6 +15889,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
             quiet=True,
             check_bmc_drop=True,
             reconnect_ctx=reconnect_ctx,
+            cr_nudge_interval=10,
         )
         _scan = (str(_out or "") + "\n" + str(_matched or "")).lower()
         _now = time.monotonic()
