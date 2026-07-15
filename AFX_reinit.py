@@ -37892,84 +37892,182 @@ def _run_2c_resume():
                     _refresh_fail_bmcs = []
                     for _cip, _bmc in _stale_bmc_by_ip.items():
                         _mip = _mgmt_ip_by_bmc.get(_bmc, "")
-                        if not _mip:
-                            print(f"  ⚠️  BMC {_bmc}: no node-mgmt IP in manifest; cannot refresh.")
+                        _fresh_ip = ""
+
+                        # ── Attempt 1: node-mgmt SSH ─────────────────────────
+                        if _mip:
+                            # Silently clear any stale known_hosts entry first
+                            with suppress(Exception):
+                                _remove_bmc_from_known_hosts(_mip)
                             _session_log.log(
-                                f"2.3: no node-mgmt IP for {_bmc}; cannot refresh cluster IP",
+                                f"2.3: cleared known_hosts for node-mgmt {_mip} before refresh"
+                            )
+                            print(
+                                f"  🔌 [{_bmc}] Connecting to node-mgmt {_mip} "
+                                "to re-query cluster IP..."
+                            )
+                            _session_log.log(
+                                f"2.3: connecting to {_mip} for cluster IP refresh"
+                            )
+                            _refresh_client = None
+                            _refresh_ch = None
+                            try:
+                                _refresh_client = paramiko.SSHClient()
+                                _refresh_client.set_missing_host_key_policy(
+                                    paramiko.AutoAddPolicy()
+                                )
+                                _refresh_client.connect(
+                                    hostname=_mip,
+                                    username=cluster_admin_user or "admin",
+                                    password=cluster_admin_password,
+                                    timeout=30,
+                                    banner_timeout=45,
+                                    auth_timeout=30,
+                                    disabled_algorithms={"pubkeys": ["ssh-dss"]},
+                                )
+                                _refresh_ch = _refresh_client.invoke_shell(
+                                    width=220, height=50
+                                )
+                                _refresh_ch.settimeout(30)
+                                time.sleep(1)
+                                drain_channel(_refresh_ch, seconds=0.5)
+                                for _cmd in (
+                                    "set -rows 0; net int show -role cluster -fields address",
+                                    "net int show -role cluster -fields address",
+                                ):
+                                    _refresh_ch.send(_cmd + "\r")
+                                    time.sleep(0.3)
+                                    _raw = ""
+                                    _t0 = time.monotonic()
+                                    while time.monotonic() - _t0 < 20:
+                                        if _refresh_ch.recv_ready():
+                                            _raw += _refresh_ch.recv(4096).decode(
+                                                "utf-8", errors="replace"
+                                            )
+                                            if _CLUSTER_PROMPT_RE.search(_raw[-200:]):
+                                                break
+                                        else:
+                                            time.sleep(0.1)
+                                    _ips_found = re.findall(
+                                        r'\b(169\.254\.\d+\.\d+)\b', _raw
+                                    )
+                                    if _ips_found:
+                                        _fresh_ip = _ips_found[0]
+                                        break
+                            except Exception as _re:
+                                _session_log.log(
+                                    f"2.3: node-mgmt SSH to {_mip} failed: {_re}",
+                                    prefix="WARN",
+                                )
+                            finally:
+                                if _refresh_ch:
+                                    with suppress(Exception):
+                                        _refresh_ch.close()
+                                if _refresh_client:
+                                    with suppress(Exception):
+                                        _refresh_client.close()
+                        else:
+                            _session_log.log(
+                                f"2.3: no node-mgmt IP for {_bmc}; skipping node-mgmt refresh",
                                 prefix="WARN",
                             )
-                            _refresh_fail_bmcs.append(_bmc)
-                            continue
-                        print(f"  🔌 [{_bmc}] Connecting to node-mgmt {_mip} to re-query cluster IP...")
-                        _session_log.log(f"2.3: connecting to {_mip} for cluster IP refresh")
-                        _refresh_client = None
-                        _refresh_ch = None
-                        _fresh_ip = ""
-                        try:
-                            _refresh_client = paramiko.SSHClient()
-                            _refresh_client.set_missing_host_key_policy(
-                                paramiko.AutoAddPolicy()
+
+                        # ── Attempt 2: BMC console SSH ────────────────────────
+                        # If node-mgmt failed, connect to the BMC, log in as
+                        # admin on the node console, and query cluster IPs there.
+                        if not (_fresh_ip and _is_valid_ipv4(_fresh_ip)):
+                            _bmc_creds = _peer_bmc_creds.get(_bmc) or {}
+                            _bmc_user  = _bmc_creds.get("user") or "admin"
+                            _bmc_pass  = _bmc_creds.get("password") or ""
+                            print(
+                                f"  🔌 [{_bmc}] node-mgmt unreachable; "
+                                "falling back to BMC console for cluster IP..."
                             )
-                            _refresh_client.connect(
-                                hostname=_mip,
-                                username=cluster_admin_user or "admin",
-                                password=cluster_admin_password,
-                                timeout=30,
-                                banner_timeout=45,
-                                auth_timeout=30,
-                                disabled_algorithms={"pubkeys": ["ssh-dss"]},
+                            _session_log.log(
+                                f"2.3: falling back to BMC {_bmc} for cluster IP refresh"
                             )
-                            _refresh_ch = _refresh_client.invoke_shell(
-                                width=220, height=50
-                            )
-                            _refresh_ch.settimeout(30)
-                            time.sleep(1)
-                            drain_channel(_refresh_ch, seconds=0.5)
-                            # Run net int show to get fresh cluster IPs
-                            for _cmd in (
-                                "set -rows 0; net int show -role cluster -fields address",
-                                "net int show -role cluster -fields address",
-                            ):
-                                _refresh_ch.send(_cmd + "\r")
-                                time.sleep(0.3)
-                                _raw = ""
+                            with suppress(Exception):
+                                _remove_bmc_from_known_hosts(_bmc)
+                            _bmc_client = None
+                            _bmc_ch = None
+                            try:
+                                _bmc_client, _bmc_user, _bmc_pass = (
+                                    _ssh_connect_with_retry(
+                                        _bmc, _bmc_user, _bmc_pass,
+                                        label=f"refresh/{_bmc}",
+                                        max_attempts=2,
+                                        interactive=False,
+                                    )
+                                )
+                                _bmc_ch = _bmc_client.invoke_shell(
+                                    width=220, height=50
+                                )
+                                _bmc_ch.settimeout(30)
+                                time.sleep(1)
+                                drain_channel(_bmc_ch, seconds=0.5)
+                                # Log in as admin on the node console
+                                _bmc_ch.send("admin\r")
+                                _bout = ""
                                 _t0 = time.monotonic()
-                                while time.monotonic() - _t0 < 20:
-                                    if _refresh_ch.recv_ready():
-                                        _raw += _refresh_ch.recv(4096).decode(
+                                while time.monotonic() - _t0 < 30:
+                                    if _bmc_ch.recv_ready():
+                                        _bout += _bmc_ch.recv(4096).decode(
                                             "utf-8", errors="replace"
                                         )
-                                        if _CLUSTER_PROMPT_RE.search(_raw[-200:]):
+                                        if "password:" in _bout.lower():
+                                            _bmc_ch.send(
+                                                (cluster_admin_password or "") + "\r"
+                                            )
+                                            _bout = ""
+                                            continue
+                                        if _CLUSTER_PROMPT_RE.search(_bout[-300:]):
                                             break
                                     else:
-                                        time.sleep(0.1)
-                                # Parse any 169.254.x.x IP from the output
-                                _ips_found = re.findall(
-                                    r'\b(169\.254\.\d+\.\d+)\b', _raw
+                                        time.sleep(0.15)
+                                # Query cluster interface IPs
+                                for _cmd in (
+                                    "set -rows 0; net int show -role cluster -fields address",
+                                    "net int show -role cluster -fields address",
+                                ):
+                                    _bmc_ch.send(_cmd + "\r")
+                                    time.sleep(0.3)
+                                    _braw = ""
+                                    _t0 = time.monotonic()
+                                    while time.monotonic() - _t0 < 20:
+                                        if _bmc_ch.recv_ready():
+                                            _braw += _bmc_ch.recv(4096).decode(
+                                                "utf-8", errors="replace"
+                                            )
+                                            if _CLUSTER_PROMPT_RE.search(_braw[-200:]):
+                                                break
+                                        else:
+                                            time.sleep(0.1)
+                                    _ips_found = re.findall(
+                                        r'\b(169\.254\.\d+\.\d+)\b', _braw
+                                    )
+                                    if _ips_found:
+                                        _fresh_ip = _ips_found[0]
+                                        break
+                            except Exception as _be:
+                                _session_log.log(
+                                    f"2.3: BMC console SSH to {_bmc} failed: {_be}",
+                                    prefix="WARN",
                                 )
-                                if _ips_found:
-                                    _fresh_ip = _ips_found[0]
-                                    break
-                        except Exception as _re:
-                            _session_log.log(
-                                f"2.3: node-mgmt SSH to {_mip} failed: {_re}",
-                                prefix="WARN",
-                            )
-                        finally:
-                            if _refresh_ch:
-                                with suppress(Exception):
-                                    _refresh_ch.close()
-                            if _refresh_client:
-                                with suppress(Exception):
-                                    _refresh_client.close()
+                            finally:
+                                if _bmc_ch:
+                                    with suppress(Exception):
+                                        _bmc_ch.close()
+                                if _bmc_client:
+                                    with suppress(Exception):
+                                        _bmc_client.close()
 
+                        # ── Record result ─────────────────────────────────────
                         if _fresh_ip and _is_valid_ipv4(_fresh_ip):
                             print(f"  ✅ [{_bmc}] Fresh cluster IP: {_fresh_ip}")
                             _session_log.log(
                                 f"2.3: refreshed cluster IP for {_bmc}: "
                                 f"{_cip} → {_fresh_ip}"
                             )
-                            # Update in-memory cluster IPs map
                             _existing_info = _2c_cluster_ips_out.get(_bmc) or {}
                             _2c_cluster_ips_out[_bmc] = {
                                 "cluster_ip": _fresh_ip,
@@ -37981,10 +38079,11 @@ def _run_2c_resume():
                         else:
                             print(
                                 f"  ❌ [{_bmc}] Could not retrieve fresh cluster IP "
-                                f"from node-mgmt {_mip}."
+                                f"via node-mgmt or BMC console."
                             )
                             _session_log.log(
-                                f"2.3: cluster IP refresh failed for {_bmc} via {_mip}",
+                                f"2.3: cluster IP refresh failed for {_bmc} "
+                                f"via node-mgmt and BMC",
                                 prefix="WARN",
                             )
                             _refresh_fail_bmcs.append(_bmc)
