@@ -5352,18 +5352,21 @@ def _checkpoint_4x_highest_legacy_global_hint(cp, mode_key) -> str:
     return _hint
 
 
-def _checkpoint_phase_effectively_done(cp, mode_key, phase_id: str) -> bool:
+def _checkpoint_phase_effectively_done(cp, mode_key, phase_id: str, node_id: str = "") -> bool:
     """Treat later checkpoints as implying earlier ones for resume/status UX."""
     _phase_id = str(phase_id or "").strip()
     if not _phase_id:
         return False
     _mode_key = mode_key
+    _node_id = str(node_id or "").strip()
 
     def _phase_recorded_done(_cp_id: str) -> bool:
         _id = str(_cp_id or "").strip()
         if not _id:
             return False
         if _mode_key in (2, 3) and _id.startswith("cp_2_"):
+            if _node_id:
+                return _checkpoint_phase_done_for_peer_resume(_id, _node_id)
             _bmc_ips = [str(_ip).strip() for _ip in (getattr(cp, "bmc_ips", []) or []) if str(_ip).strip()]
             _targets = _bmc_ips[1:] if _mode_key == 3 else _bmc_ips
             if _targets:
@@ -40917,7 +40920,7 @@ def main():
                     else:
                         print("  Nodes to add after cluster init  : (none)")
                     print(f"  Total nodes                      : {1 + len(other_sps)}")
-                    ans = _prompt("\n  Is this the correct number of nodes? [Y/N]: ", "y").lower()
+                    ans = _prompt("\n  Is this the correct number of nodes? [Y/n]: ", "y").lower()
                     _session_log.log_user_input(f"Confirm node count ({1 + len(other_sps)}): {ans}")
                     if ans in ("", "y", "yes"):
                         _initial_node_count = 1 + len(other_sps)
