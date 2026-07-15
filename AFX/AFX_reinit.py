@@ -2358,7 +2358,7 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
         _primary_desc = _checkpoint_phase_description(_checkpoint_test_target)
         _primary_label = f"{_checkpoint_test_target} {_primary_desc}".strip()
         print(f"  ℹ️  Primary node will still inject at '{_primary_label}' (global target preserved).")
-    print("  ℹ️  Failure fires when the first targeted node reaches its configured checkpoint.")
+    print("  ℹ️  Failure fires after all targeted nodes reach their configured checkpoints.")
     return True
 
 
@@ -2693,23 +2693,45 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
                 _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
                 _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
                 _pending_err = _pending_checkpoint_test_failure
-            # When each node has a different target the parallel barrier is
-            # meaningless — by the time the last node reaches its target the
-            # others have already advanced well past theirs.  Fire immediately
-            # for each node that hits its own target; the first to fire will set
-            # _shutdown_event, stopping the rest.
-            # The wait-for-all logic only applies when every node shares the
-            # same target checkpoint.
+            # When nodes have different targets, keep waiting until every
+            # targeted node reaches its own configured checkpoint. This keeps
+            # injected mixed-stage runs aligned with operator-selected targets.
             elif len(set(_per_node_targets.values())) > 1:
-                # Heterogeneous targets — fire independently for this node.
-                _checkpoint_test_consumed = True
-                _fire_msg = (
-                    f"Injected --test failure after checkpoint '{_target_desc}' "
-                    f"was saved for {_node_id} (independent per-node target)"
-                )
-                _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
-                _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
-                _pending_err = _pending_checkpoint_test_failure
+                _checkpoint_test_parallel_seen_nodes.add(_node_identity)
+                _targeted_expected = {
+                    _checkpoint_test_node_identity(_nid) or _nid
+                    for _nid in _parallel_expected
+                    if _target_for_expected(_nid) != "?"
+                }
+                if _targeted_expected:
+                    _remaining_ids = sorted(_targeted_expected - _checkpoint_test_parallel_seen_nodes)
+                else:
+                    _remaining_ids = []
+                if _remaining_ids:
+                    _rem = ", ".join(
+                        f"{_nid}:{_target_for_expected(_nid)}"
+                        for _nid in sorted(_parallel_expected)
+                        if (_checkpoint_test_node_identity(_nid) or _nid) in _remaining_ids
+                    )
+                    _wait_msg = (
+                        f"--test checkpoint '{_target_desc}' hit for {_node_id}; "
+                        f"waiting for remaining node targets: {_rem}"
+                    )
+                else:
+                    _checkpoint_test_consumed = True
+                    _all = ", ".join(
+                        f"{_nid}:{_target_for_expected(_nid)}"
+                        for _nid in sorted(_parallel_expected)
+                        if _target_for_expected(_nid) != "?"
+                    )
+                    _fire_msg = (
+                        f"Injected --test failure after checkpoint '{_target_desc}' "
+                        f"was saved for {_node_id} "
+                        f"(all targeted per-node checkpoints reached: {_all})"
+                    )
+                    _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
+                    _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
+                    _pending_err = _pending_checkpoint_test_failure
             else:
                 # All nodes share the same target — wait for all to reach it.
                 _checkpoint_test_parallel_seen_nodes.add(_node_identity)
@@ -13173,9 +13195,34 @@ def _verify_boot_dna(channel, node_log=None, node_label=""):
     print("\n🧬 Boot DNA check: verifying bootarg.init.dna...")
     _slog("Verifying boot DNA via 'printenv'")
 
-    output = direct_send_and_wait(
-        channel, "printenv", "LOADER-", timeout=15, node_log=node_log
-    )
+    output = ""
+    records = []
+    for _dna_probe_attempt in (1, 2):
+        output = direct_send_and_wait(
+            channel, "printenv", "LOADER-", timeout=15, node_log=node_log
+        )
+        records = _extract_boot_dna_records(output)
+        if not records:
+            _dna_only_out = direct_send_and_wait(
+                channel,
+                "printenv bootarg.init.dna",
+                "LOADER-",
+                timeout=15,
+                node_log=node_log,
+            )
+            if _dna_only_out:
+                output = f"{output}\n{_dna_only_out}" if output else _dna_only_out
+            records = _extract_boot_dna_records(output)
+        if records:
+            break
+        if _dna_probe_attempt == 1:
+            _slog(
+                "Boot DNA parse returned no value; refreshing LOADER prompt and retrying once",
+                prefix="WARN",
+            )
+            with suppress(Exception):
+                channel.send("\r")
+            direct_read_until(channel, "LOADER-", timeout=5, node_log=node_log)
 
     # Save raw printenv output for operator review/troubleshooting.
     try:
@@ -13192,7 +13239,6 @@ def _verify_boot_dna(channel, node_log=None, node_label=""):
     except Exception as _env_exc:
         _slog(f"Could not save LOADER printenv output: {_env_exc}", prefix="WARN")
 
-    records = _extract_boot_dna_records(output)
     dna_value = records[-1][1] if records else None
 
     # Also validate AUTOBOOT posture while we are reviewing boot DNA.
