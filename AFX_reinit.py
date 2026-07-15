@@ -37374,16 +37374,24 @@ def _run_2c_resume():
                         f"(evidence: {_nd.get('resume_evidence')})"
                     )
         if _fallback_staged or _fallback_unknown:
+            _ambig_bmcs = ", ".join(
+                _nd.get("bmc") or "?"
+                for _nd in (_fallback_staged + _fallback_unknown)
+            )
+            _fail_reason = (
+                f"cluster SSH unavailable ({_cluster_shell_unavailable_reason or 'no channel'}); "
+                f"ambiguous peers cannot be safely resumed without ONTAP confirmation: {_ambig_bmcs}"
+            )
             print("\n  ❌ Safe fallback stop.")
             print("     Option 2.3 will not retry blindly and will not synthesize")
             print("     cp_2_7 / peer_joined without ONTAP confirmation.")
             print("     Restore cluster management SSH, verify the peers above,")
             print("     then rerun option 2.3.")
             _session_log.log(
-                "2.3: cluster shell unavailable with ambiguous fallback state; "
-                "aborting per non-destructive fallback",
-                prefix="WARN",
+                f"2.3: {_fail_reason}",
+                prefix="ERROR",
             )
+            _session_log.set_outcome("FAIL", _fail_reason)
             return False
 
     # ── 4. Determine which nodes are already in the cluster ───────────────
