@@ -2959,6 +2959,7 @@ def _tracked_input(prompt=""):
     """
     global _prompt_wait_seconds, _prompt_wait_count
     global _prompt_wait_max, _prompt_wait_max_label
+    global _operator_prompt_active
     _start = time.monotonic()
     _non_phase_token = None
     if _session_log:
@@ -2966,6 +2967,8 @@ def _tracked_input(prompt=""):
             _non_phase_token = _session_log.push_non_phase_reason(
                 "operator prompt wait"
             )
+    with _operator_prompt_active_lock:
+        _operator_prompt_active += 1
     try:
         if not _prompt_is_yes_no(prompt):
             _answer = _orig_input(prompt)
@@ -2990,6 +2993,8 @@ def _tracked_input(prompt=""):
                 return _val
             print("  Please enter y, n, yes, or no.")
     finally:
+        with _operator_prompt_active_lock:
+            _operator_prompt_active = max(0, _operator_prompt_active - 1)
         _elapsed = time.monotonic() - _start
         if _session_log:
             with suppress(Exception):
@@ -7467,6 +7472,12 @@ _active_client  = None
 _ctrl_c_count   = 0
 _bg_mode        = False  # True when --bg flag is passed
 
+# Counter incremented while the main thread is blocked at an operator input()
+# prompt.  Background reporter threads check this to suppress console spam
+# that would visually corrupt the current prompt line.
+_operator_prompt_active_lock = threading.Lock()
+_operator_prompt_active = 0
+
 # Runtime pause control: when this sentinel file exists, automation loops pause
 # and auto-reconnect behavior is suppressed until the file is removed.
 _PAUSE_SENTINEL_FILE = ".afx_pause"
@@ -9317,35 +9328,51 @@ def drain_channel(channel, seconds=2, node_log=None, quiet=False):
 
 
 # ---------------------------------------------------------------------------
-# Signal handler – force exit on second Ctrl+C
+# Signal handler – immediate exit on Ctrl+C / SIGTERM
 # ---------------------------------------------------------------------------
+# The handler must NOT perform blocking I/O (log writes, subprocess calls,
+# lock acquisition) before calling os._exit(), because blocking inside a
+# signal handler prevents subsequent signals from being delivered and can
+# make the process appear stuck.  Best-effort cleanup is offloaded to a
+# short-lived daemon thread so it never blocks the exit path.
 
 def signal_handler(sig, frame):
     global _ctrl_c_count
     _ctrl_c_count += 1
+    _is_first = _ctrl_c_count == 1
 
-    if _ctrl_c_count == 1:
-        print("\n👋 Received termination signal. Exiting now...")
-        _slog("Received termination signal (Ctrl+C or SIGTERM); exiting immediately")
-        _shutdown_event.set()
-        _restore_terminal()
-        if _session_log:
-            with suppress(Exception):
-                _session_log.log("Terminated by signal (first Ctrl+C / SIGTERM)")
-                _session_log.set_outcome("FAIL", "terminated by signal")
-                _session_log.close()
-        raise SystemExit(130)
+    if _is_first:
+        print("\n👋 Received termination signal. Exiting now...", flush=True)
     else:
-        print("\n⚡ Force exit!")
-        _restore_terminal()
-        if _session_log:
-            try:
-                _session_log.log("Force exit (second Ctrl+C)")
-                _session_log.set_outcome("FAIL", "force exit (second Ctrl+C / signal)")
-                _session_log.close()
-            except Exception:
-                pass
-        os._exit(1)
+        print("\n⚡ Force exit!", flush=True)
+
+    _shutdown_event.set()
+
+    # Non-blocking terminal restore (no subprocess, no I/O wait).
+    try:
+        if _saved_term_attrs is not None and _term_fd is not None:
+            import termios as _t
+            _t.tcsetattr(_term_fd, _t.TCSANOW, _saved_term_attrs)
+    except Exception:
+        pass
+
+    # Kick off a daemon thread to flush the session log.  It will be killed
+    # automatically when os._exit() terminates the process – this is purely
+    # a best-effort attempt to capture the final log entry.
+    _sl = _session_log
+    if _sl:
+        def _flush_log(_sl=_sl, _first=_is_first):
+            with suppress(Exception):
+                if _first:
+                    _sl.log("Terminated by signal (Ctrl+C / SIGTERM)")
+                    _sl.set_outcome("FAIL", "terminated by signal")
+                else:
+                    _sl.log("Force exit (repeated Ctrl+C)")
+                    _sl.set_outcome("FAIL", "force exit (repeated Ctrl+C / signal)")
+                _sl.close()
+        threading.Thread(target=_flush_log, daemon=True).start()
+
+    os._exit(130 if _is_first else 1)
 
 
 def pause_toggle_signal_handler(sig, frame):
@@ -16015,14 +16042,17 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
         if _active_idx >= 0 and (_now - _last_tick) >= _heartbeat_seconds:
             _label = _milestones[_active_idx][0].rstrip(".")
             _stage_elapsed = int(_now - _active_t0)
-            print(
-                f"   ⏳ {_pfx}{_label} still in progress... "
-                f"({_stage_elapsed}s in this phase{_elapsed_str()})"
-            )
             _slog(
                 f"Cluster-create progress heartbeat: {_label} "
                 f"({_stage_elapsed}s in this phase)"
             )
+            with _operator_prompt_active_lock:
+                _at_prompt = _operator_prompt_active > 0
+            if not _at_prompt:
+                print(
+                    f"   ⏳ {_pfx}{_label} still in progress... "
+                    f"({_stage_elapsed}s in this phase{_elapsed_str()})"
+                )
             _last_tick = _now
 
     print(
@@ -16213,10 +16243,15 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                 _stage_label = (_reinit_stage_label or "Node initialization (option 4)").rstrip(".")
                 _stage_t0 = _reinit_stage_t0 or _t0
                 _elapsed = int(time.monotonic() - _stage_t0)
-                print(
+                _msg = (
                     f"   ⏳ {_pfx}{_stage_label} still in progress... "
                     f"({_elapsed}s in this phase{_elapsed_str()})"
                 )
+                _slog(f"{_stage_label} still in progress ({_elapsed}s in this phase)")
+                with _operator_prompt_active_lock:
+                    _at_prompt = _operator_prompt_active > 0
+                if not _at_prompt:
+                    print(_msg)
 
         threading.Thread(target=_reinit_reporter, daemon=True).start()
 
@@ -32600,11 +32635,14 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                     _emit_opt9_progress("Removing disk ownership...", "remove_ownership")
                 _opt9_last_status = time.monotonic()
             elif time.monotonic() - _opt9_last_status >= 60:
-                print(
-                    f"   ⏳ {_node_pfx(bmc_host)}Option-9 initialization still in progress..."
-                    f"{_elapsed_str()}"
-                )
                 _slog("Option-9 initialization still in progress")
+                with _operator_prompt_active_lock:
+                    _at_prompt = _operator_prompt_active > 0
+                if not _at_prompt:
+                    print(
+                        f"   ⏳ {_node_pfx(bmc_host)}Option-9 initialization still in progress..."
+                        f"{_elapsed_str()}"
+                    )
                 _opt9_last_status = time.monotonic()
 
             # "not supported" can appear anywhere in the output buffer

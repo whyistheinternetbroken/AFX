@@ -1344,6 +1344,7 @@ def _prompt_or_cached_bmc_pass(user: str, prompt: str = "  BMC password: ",
 _license_mode      = None   # "key", "file", or None (skip)
 _license_keys      = []     # list of key strings (mode "key")
 _license_file_path = None   # path to .nlf bundle (mode "file")
+_license_diag_password = None  # diag user password for file-mode install (None = use admin pw)
 
 # Mode 2.2: when set after a successful node join, signals main() to drive a
 # fresh BMC through the same join pipeline. Tuple of (bmc_host, user, pass).
@@ -1460,6 +1461,7 @@ _RUN_CONTEXT_FIELD_TO_GLOBAL = {
     "license_mode":             "_license_mode",
     "license_keys":             "_license_keys",
     "license_file_path":        "_license_file_path",
+    "license_diag_password":    "_license_diag_password",
     # Behavior flags
     "netboot_static_ip":        "_netboot_static_ip",
     "setup_passwordless_ssh":   "_setup_passwordless_ssh",
@@ -1516,6 +1518,7 @@ class RunContext:
     license_mode: "str | None" = None
     license_keys: list = field(default_factory=list)
     license_file_path: "str | None" = None
+    license_diag_password: "str | None" = None
 
     # Behavior flags
     netboot_static_ip: bool = False
@@ -2959,6 +2962,7 @@ def _tracked_input(prompt=""):
     """
     global _prompt_wait_seconds, _prompt_wait_count
     global _prompt_wait_max, _prompt_wait_max_label
+    global _operator_prompt_active
     _start = time.monotonic()
     _non_phase_token = None
     if _session_log:
@@ -2966,6 +2970,8 @@ def _tracked_input(prompt=""):
             _non_phase_token = _session_log.push_non_phase_reason(
                 "operator prompt wait"
             )
+    with _operator_prompt_active_lock:
+        _operator_prompt_active += 1
     try:
         if not _prompt_is_yes_no(prompt):
             _answer = _orig_input(prompt)
@@ -2990,6 +2996,8 @@ def _tracked_input(prompt=""):
                 return _val
             print("  Please enter y, n, yes, or no.")
     finally:
+        with _operator_prompt_active_lock:
+            _operator_prompt_active = max(0, _operator_prompt_active - 1)
         _elapsed = time.monotonic() - _start
         if _session_log:
             with suppress(Exception):
@@ -7467,6 +7475,12 @@ _active_client  = None
 _ctrl_c_count   = 0
 _bg_mode        = False  # True when --bg flag is passed
 
+# Counter incremented while the main thread is blocked at an operator input()
+# prompt.  Background reporter threads check this to suppress console spam
+# that would visually corrupt the current prompt line.
+_operator_prompt_active_lock = threading.Lock()
+_operator_prompt_active = 0
+
 # Runtime pause control: when this sentinel file exists, automation loops pause
 # and auto-reconnect behavior is suppressed until the file is removed.
 _PAUSE_SENTINEL_FILE = ".afx_pause"
@@ -9317,35 +9331,51 @@ def drain_channel(channel, seconds=2, node_log=None, quiet=False):
 
 
 # ---------------------------------------------------------------------------
-# Signal handler – force exit on second Ctrl+C
+# Signal handler – immediate exit on Ctrl+C / SIGTERM
 # ---------------------------------------------------------------------------
+# The handler must NOT perform blocking I/O (log writes, subprocess calls,
+# lock acquisition) before calling os._exit(), because blocking inside a
+# signal handler prevents subsequent signals from being delivered and can
+# make the process appear stuck.  Best-effort cleanup is offloaded to a
+# short-lived daemon thread so it never blocks the exit path.
 
 def signal_handler(sig, frame):
     global _ctrl_c_count
     _ctrl_c_count += 1
+    _is_first = _ctrl_c_count == 1
 
-    if _ctrl_c_count == 1:
-        print("\n👋 Received termination signal. Exiting now...")
-        _slog("Received termination signal (Ctrl+C or SIGTERM); exiting immediately")
-        _shutdown_event.set()
-        _restore_terminal()
-        if _session_log:
-            with suppress(Exception):
-                _session_log.log("Terminated by signal (first Ctrl+C / SIGTERM)")
-                _session_log.set_outcome("FAIL", "terminated by signal")
-                _session_log.close()
-        raise SystemExit(130)
+    if _is_first:
+        print("\n👋 Received termination signal. Exiting now...", flush=True)
     else:
-        print("\n⚡ Force exit!")
-        _restore_terminal()
-        if _session_log:
-            try:
-                _session_log.log("Force exit (second Ctrl+C)")
-                _session_log.set_outcome("FAIL", "force exit (second Ctrl+C / signal)")
-                _session_log.close()
-            except Exception:
-                pass
-        os._exit(1)
+        print("\n⚡ Force exit!", flush=True)
+
+    _shutdown_event.set()
+
+    # Non-blocking terminal restore (no subprocess, no I/O wait).
+    try:
+        if _saved_term_attrs is not None and _term_fd is not None:
+            import termios as _t
+            _t.tcsetattr(_term_fd, _t.TCSANOW, _saved_term_attrs)
+    except Exception:
+        pass
+
+    # Kick off a daemon thread to flush the session log.  It will be killed
+    # automatically when os._exit() terminates the process – this is purely
+    # a best-effort attempt to capture the final log entry.
+    _sl = _session_log
+    if _sl:
+        def _flush_log(_sl=_sl, _first=_is_first):
+            with suppress(Exception):
+                if _first:
+                    _sl.log("Terminated by signal (Ctrl+C / SIGTERM)")
+                    _sl.set_outcome("FAIL", "terminated by signal")
+                else:
+                    _sl.log("Force exit (repeated Ctrl+C)")
+                    _sl.set_outcome("FAIL", "force exit (repeated Ctrl+C / signal)")
+                _sl.close()
+        threading.Thread(target=_flush_log, daemon=True).start()
+
+    os._exit(130 if _is_first else 1)
 
 
 def pause_toggle_signal_handler(sig, frame):
@@ -16015,14 +16045,17 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
         if _active_idx >= 0 and (_now - _last_tick) >= _heartbeat_seconds:
             _label = _milestones[_active_idx][0].rstrip(".")
             _stage_elapsed = int(_now - _active_t0)
-            print(
-                f"   ⏳ {_pfx}{_label} still in progress... "
-                f"({_stage_elapsed}s in this phase{_elapsed_str()})"
-            )
             _slog(
                 f"Cluster-create progress heartbeat: {_label} "
                 f"({_stage_elapsed}s in this phase)"
             )
+            with _operator_prompt_active_lock:
+                _at_prompt = _operator_prompt_active > 0
+            if not _at_prompt:
+                print(
+                    f"   ⏳ {_pfx}{_label} still in progress... "
+                    f"({_stage_elapsed}s in this phase{_elapsed_str()})"
+                )
             _last_tick = _now
 
     print(
@@ -16213,10 +16246,15 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                 _stage_label = (_reinit_stage_label or "Node initialization (option 4)").rstrip(".")
                 _stage_t0 = _reinit_stage_t0 or _t0
                 _elapsed = int(time.monotonic() - _stage_t0)
-                print(
+                _msg = (
                     f"   ⏳ {_pfx}{_stage_label} still in progress... "
                     f"({_elapsed}s in this phase{_elapsed_str()})"
                 )
+                _slog(f"{_stage_label} still in progress ({_elapsed}s in this phase)")
+                with _operator_prompt_active_lock:
+                    _at_prompt = _operator_prompt_active > 0
+                if not _at_prompt:
+                    print(_msg)
 
         threading.Thread(target=_reinit_reporter, daemon=True).start()
 
@@ -16561,6 +16599,7 @@ def _collect_license_config(ctx):
         ctx.license_mode = None
         ctx.license_keys = []
         ctx.license_file_path = None
+        ctx.license_diag_password = None
         print("  ℹ️  Skipping ONTAP license setup and returning.")
 
     while True:
@@ -16641,30 +16680,63 @@ def _collect_license_config(ctx):
             return _candidates
 
         def _prompt_custom_path():
-            """Ask the operator for a manual file path; Enter skips this step."""
+            """Ask the operator for a file path or directory; Enter skips."""
             while True:
                 custom = _prompt(
-                    "  Enter the path to a valid license file or hit enter to skip license setup: "
+                    "  Enter a license file path, directory to search for .nlf files, "
+                    "or hit Enter to skip license setup: "
                 )
                 if not custom:
                     _skip_license_setup()
                     return False
+                # If the input is a directory, look for .nlf files inside it.
+                if os.path.isdir(custom):
+                    try:
+                        _dir_nlf = sorted(
+                            os.path.join(custom, fn)
+                            for fn in os.listdir(custom)
+                            if os.path.isfile(os.path.join(custom, fn))
+                            and os.path.splitext(fn)[1].lower() == ".nlf"
+                        )
+                    except Exception:
+                        _dir_nlf = []
+                    if not _dir_nlf:
+                        print(
+                            f"  ❌ No .nlf files found in directory: {custom}\n"
+                            "     Please check the path and try again."
+                        )
+                        continue
+                    if len(_dir_nlf) == 1:
+                        ctx.license_file_path = _dir_nlf[0]
+                        print(f"  ✅ Found and selected: {ctx.license_file_path}")
+                        return True
+                    print(f"\n  Found {len(_dir_nlf)} .nlf file(s) in {custom}:")
+                    for _i, _fp in enumerate(_dir_nlf, 1):
+                        print(f"    {_i}. {os.path.basename(_fp)}")
+                    while True:
+                        _pick = _prompt("  Select file number: ").strip()
+                        if _pick.isdigit() and 1 <= int(_pick) <= len(_dir_nlf):
+                            ctx.license_file_path = _dir_nlf[int(_pick) - 1]
+                            print(f"  ✅ Using license file: {ctx.license_file_path}")
+                            return True
+                        print("  Invalid selection; please enter a valid number.")
+                    return True  # unreachable but keeps mypy happy
                 if not os.path.isfile(custom):
                     print(
-                        f"  \u274c File not found: {custom}\n"
+                        f"  ❌ File not found: {custom}\n"
                         "     Please check the path and try again."
                     )
                     continue
                 ext = os.path.splitext(custom)[1].lower()
                 if ext not in {".txt", ".nlf"}:
                     print(
-                        f"  \u274c '{os.path.basename(custom)}' does not have a "
+                        f"  ❌ '{os.path.basename(custom)}' does not have a "
                         "recognised license extension (.txt or .nlf).\n"
                         "     Please provide a .txt or .nlf file."
                     )
                     continue
                 ctx.license_file_path = custom
-                print(f"  \u2705 Using license file: {ctx.license_file_path}")
+                print(f"  ✅ Using license file: {ctx.license_file_path}")
                 return True
 
         lic_candidates = _discover_nlf_candidates()
@@ -16722,10 +16794,26 @@ def _collect_license_config(ctx):
                             "recognised license extension (.txt or .nlf)."
                         )
                         continue
-                    print("  \u274c File not found. Enter a valid number or full file path.")
+                    print("  ❌ File not found. Enter a valid number or full file path.")
         else:
-            print("\n  \u274c No .nlf license file found in ONTAP/script/current folders.")
+            print("\n  ❌ No .nlf license file found in ONTAP/script/current folders.")
             _prompt_custom_path()
+
+    # ── Diag password prompt (file mode only) ─────────────────────────────
+    # Only ask if we actually have a file staged; key mode does not need diag.
+    if ctx.license_mode == "file" and ctx.license_file_path:
+        _admin_pw = ctx.cluster_config.get("admin_password") or ""
+        _diag_choice = _prompt(
+            "\n  Use the same password for the diag user as the cluster admin? [Y/n]: ",
+            "y",
+        ).strip().lower()
+        if _diag_choice in ("", "y", "yes"):
+            ctx.license_diag_password = None  # signals _apply_license to use admin pw
+            print("  ℹ️  Diag user password will match the cluster admin password.")
+        else:
+            _diag_pw = getpass.getpass("  Enter desired diag user password: ")
+            ctx.license_diag_password = _diag_pw
+            print("  ✅ Custom diag user password stored.")
 
     # Sync ctx writes back to the legacy globals so _apply_license and
     # _run_cluster_setup_wizard (which still read the globals) see them.
@@ -16742,6 +16830,9 @@ def _apply_license(channel):
         return
 
     admin_password = _cluster_config.get("admin_password") or ""
+    # For file-mode: use a custom diag password when the operator specified one,
+    # otherwise fall back to the admin password (None signals "use admin pw").
+    diag_password = _license_diag_password if _license_diag_password is not None else admin_password
 
     _print_banner("\U0001f4dc Applying ONTAP License")
     if _session_log:
@@ -16796,9 +16887,10 @@ def _apply_license(channel):
                     f"security login unlock failed: {exc}", prefix="WARN"
                 )
 
-        # 2. Set diag password = admin password.
-        print("  \U0001f511 Setting diag account password...")
-        _slog("Setting diag account password to match admin")
+        # 2. Set diag password.
+        _diag_pw_label = "custom" if _license_diag_password is not None else "matching admin"
+        print(f"  🔑 Setting diag account password ({_diag_pw_label})...")
+        _slog(f"Setting diag account password ({_diag_pw_label})")
         try:
             drain_channel(channel, seconds=0.3)
             channel.send("security login password -username diag\r")
@@ -16819,9 +16911,8 @@ def _apply_license(channel):
                 # needle alone is not a reliable discriminator.
                 _full_pw = (_out_pw + _match_pw).lower()
                 if "must be different" in _full_pw or "successfully changed" in _full_pw:
-                    # Diag password already matches admin; ONTAP rejected the
-                    # change as identical.  This is the desired state — do not
-                    # re-enter the password.
+                    # Diag password already set to the desired value; ONTAP
+                    # rejected the change as identical.
                     _pw_already_correct = True
                     direct_read_until_any(channel, ["::>", "::*>"], timeout=15)
                     break
@@ -16829,18 +16920,18 @@ def _apply_license(channel):
                 if "::>" in _match_pw or "::*>" in _match_pw:
                     break
                 if "new password" in _ml or "enter it again" in _ml:
-                    channel.send(admin_password + "\r")
+                    channel.send(diag_password + "\r")
                     if _session_log:
                         _session_log.log_sent("<hidden>")
             if _pw_already_correct:
-                print("  \u2139\ufe0f  Diag password already matches admin; no change needed.")
+                print("  ℹ️  Diag password already set correctly; no change needed.")
                 if _session_log:
                     _session_log.log(
                         "Diag password unchanged "
                         "(ONTAP: new password must differ from old — already correct)"
                     )
             else:
-                print("  \u2705 Diag account password set.")
+                print("  ✅ Diag account password set.")
         except Exception as exc:
             if _session_log:
                 _session_log.log(
@@ -16881,7 +16972,7 @@ def _apply_license(channel):
                     if _session_log:
                         _session_log.log_sent("yes  (SSH host key confirmation)")
                 elif "password:" in _kml:
-                    channel.send(admin_password + "\r")
+                    channel.send(diag_password + "\r")
                     if _session_log:
                         _session_log.log_sent("<hidden>  (diag systemshell password)")
                 else:
@@ -16946,6 +17037,7 @@ def _apply_license(channel):
         #    Target: /droot/etc/lic_file  (writable from diag systemshell).
         #    After upload we cp it to /mroot/etc/lic_file from the cluster shell.
         _nodes_with_file = []   # node IPs where the upload + cp succeeded
+        _sftp_auth_failed_ips = []  # IPs where SFTP failed with auth error (stale known_hosts)
         if node_ips and _license_file_path:
             lic_name = os.path.basename(_license_file_path)
             for node_ip in node_ips:
@@ -17017,6 +17109,8 @@ def _apply_license(channel):
                             f"License SFTP to {node_ip} failed: {exc}",
                             prefix="ERROR",
                         )
+                    if "authentication failed" in str(exc).lower():
+                        _sftp_auth_failed_ips.append(node_ip)
 
                 # 5b. If upload succeeded, cp from /droot to /mroot via cluster shell.
                 if _sftp_ok:
@@ -17062,6 +17156,161 @@ def _apply_license(channel):
                                 f"cp /droot -> /mroot failed on {node_ip}: {exc}",
                                 prefix="ERROR",
                             )
+
+            # ── Auth-failure retry: stale known_hosts cleanup ────────────────
+            # SFTP auth failures on node-mgmt IPs are commonly caused by stale
+            # known_hosts entries left over from a previous cluster incarnation.
+            # Offer a one-shot cleanup + retry before moving on.
+            if _sftp_auth_failed_ips:
+                _failed_str = ", ".join(_sftp_auth_failed_ips)
+                print(
+                    f"\n  ⚠️  SFTP authentication failed for: {_failed_str}"
+                    "\n  This is often caused by stale known_hosts entries for"
+                    " the node-mgmt IPs."
+                )
+                try:
+                    _kh_retry_ans = input(
+                        "  Clean up known_hosts entries and retry SFTP"
+                        " for those nodes? [y/N]: "
+                    ).strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    _kh_retry_ans = "n"
+                if _kh_retry_ans == "y":
+                    for _retry_ip in _sftp_auth_failed_ips:
+                        _remove_bmc_from_known_hosts(_retry_ip, log=_session_log)
+                    print("\n  🔄 Retrying SFTP for nodes with auth failures...")
+                    for _retry_ip in _sftp_auth_failed_ips:
+                        print(
+                            f"\n  \U0001f4e6 Copying {lic_name}"
+                            f" \u2192 diag@{_retry_ip}:/droot/etc/lic_file"
+                        )
+                        if _session_log:
+                            _session_log.log(
+                                f"SFTP retry {_license_file_path} ->"
+                                f" {_retry_ip}:/droot/etc/lic_file"
+                            )
+                        _sftp_ok = False
+                        try:
+                            lic_client = paramiko.SSHClient()
+                            lic_client.set_missing_host_key_policy(
+                                paramiko.AutoAddPolicy()
+                            )
+                            lic_client.connect(
+                                _retry_ip,
+                                username="diag",
+                                password=diag_password,
+                                timeout=30,
+                                allow_agent=False,
+                                look_for_keys=False,
+                                disabled_algorithms={"pubkeys": ["ssh-dss"]},
+                            )
+                            configure_transport(lic_client)
+                            sftp = lic_client.open_sftp()
+                            _sftp_transferred = [0]
+                            _sftp_total = [0]
+                            def _sftp_progress_retry(xfer, total):
+                                _sftp_transferred[0] = xfer
+                                _sftp_total[0] = total
+                            sftp.put(
+                                _license_file_path,
+                                "/droot/etc/lic_file",
+                                callback=_sftp_progress_retry,
+                            )
+                            sftp.close()
+                            lic_client.close()
+                            if (_sftp_total[0] > 0 and
+                                    _sftp_transferred[0] >= _sftp_total[0]):
+                                _sftp_ok = True
+                                print(
+                                    f"  \u2705 Uploaded to {_retry_ip} "
+                                    f"({_sftp_transferred[0]} / {_sftp_total[0]}"
+                                    f" bytes, 100%)"
+                                )
+                                if _session_log:
+                                    _session_log.log(
+                                        f"License file uploaded to {_retry_ip} via SFTP retry "
+                                        f"({_sftp_transferred[0]}/{_sftp_total[0]} bytes)"
+                                    )
+                            else:
+                                print(
+                                    f"  \u26a0\ufe0f  SFTP to {_retry_ip} completed but "
+                                    f"transfer looks incomplete "
+                                    f"({_sftp_transferred[0]}/{_sftp_total[0]} bytes)."
+                                )
+                                if _session_log:
+                                    _session_log.log(
+                                        f"SFTP retry to {_retry_ip}: incomplete transfer "
+                                        f"({_sftp_transferred[0]}/{_sftp_total[0]})",
+                                        prefix="WARN",
+                                    )
+                        except Exception as exc:
+                            print(f"  \u274c SFTP retry to {_retry_ip} failed: {exc}")
+                            if _session_log:
+                                _session_log.log(
+                                    f"License SFTP retry to {_retry_ip} failed: {exc}",
+                                    prefix="ERROR",
+                                )
+
+                        if _sftp_ok:
+                            _cp_cmd = (
+                                'set diag -c off; system node systemshell -node * '
+                                '-command "sudo cp /droot/etc/lic_file /mroot/etc/lic_file"'
+                            )
+                            print(
+                                f"  \U0001f4c2 Copying /droot/etc/lic_file"
+                                f" \u2192 /mroot/etc/lic_file on {_retry_ip}..."
+                            )
+                            _slog(_cp_cmd)
+                            try:
+                                drain_channel(channel, seconds=0.3)
+                                channel.send(_cp_cmd + "\r")
+                                if _session_log:
+                                    _session_log.log_sent(_cp_cmd)
+                                _cp_deadline = time.monotonic() + 60
+                                while time.monotonic() < _cp_deadline:
+                                    _cp_o, _cp_m = direct_read_until_any(
+                                        channel,
+                                        ["are you sure you want to continue",
+                                         "password:", "::>", "::*>"],
+                                        timeout=min(
+                                            15,
+                                            max(1, _cp_deadline - time.monotonic()),
+                                        ),
+                                    )
+                                    if not _cp_m:
+                                        break
+                                    _cml = _cp_m.lower()
+                                    if "are you sure you want to continue" in _cml:
+                                        channel.send("yes\r")
+                                        if _session_log:
+                                            _session_log.log_sent(
+                                                "yes  (SSH host key confirmation)"
+                                            )
+                                    elif "password:" in _cml:
+                                        channel.send(admin_password + "\r")
+                                        if _session_log:
+                                            _session_log.log_sent(
+                                                "<hidden>  (diag systemshell password)"
+                                            )
+                                    else:
+                                        break
+                                print(
+                                    f"  \u2705 /mroot/etc/lic_file in place"
+                                    f" on {_retry_ip}."
+                                )
+                                _slog(
+                                    f"cp /droot -> /mroot done on {_retry_ip} (retry)"
+                                )
+                                if _retry_ip not in _nodes_with_file:
+                                    _nodes_with_file.append(_retry_ip)
+                            except Exception as exc:
+                                print(f"  \u274c cp failed on {_retry_ip}: {exc}")
+                                if _session_log:
+                                    _session_log.log(
+                                        f"cp /droot -> /mroot failed on {_retry_ip}"
+                                        f" (retry): {exc}",
+                                        prefix="ERROR",
+                                    )
 
         # 6. Apply license from the uploaded file (only if at least one node has it).
         if _nodes_with_file:
@@ -32600,11 +32849,14 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                     _emit_opt9_progress("Removing disk ownership...", "remove_ownership")
                 _opt9_last_status = time.monotonic()
             elif time.monotonic() - _opt9_last_status >= 60:
-                print(
-                    f"   ⏳ {_node_pfx(bmc_host)}Option-9 initialization still in progress..."
-                    f"{_elapsed_str()}"
-                )
                 _slog("Option-9 initialization still in progress")
+                with _operator_prompt_active_lock:
+                    _at_prompt = _operator_prompt_active > 0
+                if not _at_prompt:
+                    print(
+                        f"   ⏳ {_node_pfx(bmc_host)}Option-9 initialization still in progress..."
+                        f"{_elapsed_str()}"
+                    )
                 _opt9_last_status = time.monotonic()
 
             # "not supported" can appear anywhere in the output buffer
