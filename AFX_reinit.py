@@ -2333,17 +2333,14 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
         return False
 
     _checkpoint_test_enabled = True
-    # When peer_only=True, this configures secondary nodes only. Preserve the
-    # global _checkpoint_test_target so the primary node (which is not in the
-    # per-node map) can still fire its own injection via the global fallback.
-    if not peer_only:
-        _checkpoint_test_target = ""
+    # When peer_only=True (mode 2/3 cp_2_x prompts), do not keep the global
+    # target active. Keeping it armed can unexpectedly fire on primary cp_1_x
+    # checkpoints while peers are still progressing through their mapped cp_2_x
+    # targets, which defeats per-node injection intent.
+    _checkpoint_test_target = ""
     _checkpoint_test_mode_label = mode_name
     _checkpoint_test_targets_by_node = dict(_target_map)
-    _global_note = (
-        f"; primary global target '{_checkpoint_test_target}' preserved"
-        if peer_only and _checkpoint_test_target else ""
-    )
+    _global_note = ""
     _slog(
         f"--test armed for mode {mode_name}: per-node checkpoints "
         f"{dict(sorted(_target_map.items()))}{_global_note}"
@@ -2354,10 +2351,8 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
         _cp_desc = _checkpoint_phase_description(_cp_id)
         _cp_label = f"{_cp_id} {_cp_desc}".strip()
         print(f"     - {_nid}: {_cp_label}")
-    if peer_only and _checkpoint_test_target:
-        _primary_desc = _checkpoint_phase_description(_checkpoint_test_target)
-        _primary_label = f"{_checkpoint_test_target} {_primary_desc}".strip()
-        print(f"  ℹ️  Primary node will still inject at '{_primary_label}' (global target preserved).")
+    if peer_only:
+        print("  ℹ️  Primary global checkpoint injection is disabled for this per-node run.")
     print("  ℹ️  Failure fires after all targeted nodes reach their configured checkpoints.")
     return True
 
