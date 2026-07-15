@@ -3893,8 +3893,12 @@ class SessionLogger:
             _script_dir, "logs", timestamp + self._dir_suffix_from_label(label) + _resume_suffix
         )
         os.makedirs(self.log_dir, exist_ok=True)
+        # Per-node BMC session logs live in a dedicated subfolder so they are
+        # easy to find and don't clutter the main run directory.
+        self.bmc_log_dir = os.path.join(self.log_dir, "BMC_logs")
+        os.makedirs(self.bmc_log_dir, exist_ok=True)
         self.log_file = _build_numbered_log_path(
-            self.log_dir, f"bmc_session_primary_{timestamp}.log", scope_dir=self.log_dir
+            self.bmc_log_dir, f"bmc_session_primary_{timestamp}.log", scope_dir=self.bmc_log_dir
         )
         self.summary_file = _build_numbered_log_path(
             self.log_dir, f"summary_{timestamp}.log", scope_dir=self.log_dir
@@ -4602,12 +4606,13 @@ class SessionLogger:
             _idx = index if index is not None else self._peer_log_counter
             _safe_ip = ip.replace(".", "_").replace(":", "_")
             _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            _fname = f"bmc_session_secondary-{_idx:02d}_{_safe_ip}_{_ts}.log"
+            _fname = f"bmc_session_peer_{_safe_ip}_{_ts}.log"
             try:
-                _path = _build_numbered_log_path(self.log_dir, _fname, scope_dir=self.log_dir)
+                _bmc_dir = getattr(self, "bmc_log_dir", self.log_dir)
+                _path = _build_numbered_log_path(_bmc_dir, _fname, scope_dir=_bmc_dir)
                 _fh = open(_path, "w", encoding="utf-8", buffering=1)
                 _fh.write(
-                    f"BMC Session Log — secondary node {ip} (index {_idx})\n"
+                    f"BMC Session Log — peer node {ip}\n"
                     f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                     + "=" * 72 + "\n\n"
                 )
@@ -18736,6 +18741,12 @@ def _peer_reinit_worker(ip, ctx):
         with peer_lock:
             peer_errors.append((ip, "no channel"))
         return
+    # Ensure a per-peer BMC session log exists (idempotent if already opened
+    # during the peer-reset phase).
+    if log and hasattr(log, "open_peer_log"):
+        _pl_path = log.open_peer_log(ip)
+        if _pl_path:
+            log.log(f"[peer/{ip}] BMC session log: {_pl_path}")
     # Reuse the unified log already opened for this peer node.
     _pnf = _node_reinit_logs.get(ip)
     _peer_rc_ctx = _make_reconnect_ctx(
@@ -19094,8 +19105,10 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
             log.log(stripped, prefix=prefix)
 
     # Determine log directory from the session logger when available.
-    if log and hasattr(log, "log_file"):
-        _log_dir = os.path.dirname(log.log_file)
+    if log and hasattr(log, "log_dir"):
+        _log_dir = log.log_dir
+    elif log and hasattr(log, "log_file"):
+        _log_dir = os.path.dirname(os.path.dirname(log.log_file))  # parent of BMC_logs/
     else:
         try:
             _log_base = os.path.dirname(os.path.abspath(__file__))
@@ -19538,9 +19551,13 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 )
 
     # Open per-BMC session logs for the install flow.
+    _bmc_node_log_dir = (
+        log.bmc_log_dir if log and hasattr(log, "bmc_log_dir")
+        else _log_dir
+    )
     for ip in bmc_ips:
         try:
-            _node_files[ip] = _node_log_open(ip, _log_dir, prefix="bmc_session")
+            _node_files[ip] = _node_log_open(ip, _bmc_node_log_dir, prefix="bmc_session")
             print(f"  📝 [{ip}] BMC session log: {_node_files[ip].name}")
         except Exception as exc:
             print(f"  ⚠️  [{ip}] Could not open node log: {exc}")
@@ -21490,10 +21507,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
     #   Primary node → bmc_session_reinit_primary_<ip>_<ts>.log
     #   Peer nodes   → bmc_session_add_<ip>_<ts>.log
     _node_reinit_logs = {}  # {ip: file_handle}
+    _bmc_reinit_log_dir = (
+        log.bmc_log_dir if log and hasattr(log, "bmc_log_dir")
+        else _log_dir
+    )
     for _ip in bmc_ips:
         _pfx = "bmc_session_reinit_primary" if _ip == first_ip else "bmc_session_add"
         try:
-            _nf = _node_log_open(_ip, _log_dir, prefix=_pfx,
+            _nf = _node_log_open(_ip, _bmc_reinit_log_dir, prefix=_pfx,
                                  previous_log=_node_files.get(_ip))
             _node_reinit_logs[_ip] = _nf
             _status(f"  📝 [{_ip}] Reinit log → {_nf.name}")
@@ -28412,9 +28433,11 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
     _t_cluster_ip_done = None  # after cluster IP captured
 
     # Open per-node log file.
-    _nf_log_dir = (_session_log.log_dir
-                   if _session_log and hasattr(_session_log, 'log_dir')
-                   else os.getcwd())
+    _nf_log_dir = (
+        _session_log.bmc_log_dir
+        if _session_log and hasattr(_session_log, "bmc_log_dir")
+        else (_session_log.log_dir if _session_log and hasattr(_session_log, "log_dir") else os.getcwd())
+    )
     node_file = None
     try:
         node_file = _node_log_open(peer_bmc, _nf_log_dir, prefix="2b_node")
@@ -31495,7 +31518,11 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
     if _session_log:
         _session_log.start_phase("Auto Cluster Init (mode 1)")
     _boot_log = None
-    _boot_log_dir = _session_log.log_dir if _session_log and hasattr(_session_log, "log_dir") else os.getcwd()
+    _boot_log_dir = (
+        _session_log.bmc_log_dir
+        if _session_log and hasattr(_session_log, "bmc_log_dir")
+        else (_session_log.log_dir if _session_log and hasattr(_session_log, "log_dir") else os.getcwd())
+    )
     try:
         _boot_log = _node_log_open(bmc_host or "mode1b", _boot_log_dir, prefix="1b_boot")
     except Exception:
@@ -31925,7 +31952,11 @@ def auto_complete_initialization(channel, bmc_host=None, reconnect_ctx=None,
                 "use option (6) to restore the system configuration",
                 "normal boot is prohibited",
             ]
-            _mode3_log_dir = _session_log.log_dir if _session_log else os.getcwd()
+            _mode3_log_dir = (
+                _session_log.bmc_log_dir
+                if _session_log and hasattr(_session_log, "bmc_log_dir")
+                else (_session_log.log_dir if _session_log else os.getcwd())
+            )
             for _peer_ip in _pipeline_peers:
                 try:
                     _mode3_peer_node_logs[_peer_ip] = _node_log_open(
@@ -40919,9 +40950,15 @@ def main():
 
                     # Open a dedicated log file per peer so parallel console streams
                     # don't interleave on the terminal.
-                    _pr_log_dir = _session_log.log_dir if _session_log else os.getcwd()
+                    _pr_log_dir = (
+                        _session_log.bmc_log_dir
+                        if _session_log and hasattr(_session_log, "bmc_log_dir")
+                        else (_session_log.log_dir if _session_log else os.getcwd())
+                    )
                     _pr_node_logs: dict = {}
                     for addr in other_sps:
+                        if _session_log and hasattr(_session_log, "open_peer_log"):
+                            _session_log.open_peer_log(addr)
                         try:
                             _pr_nf = _node_log_open(addr, _pr_log_dir, prefix="peer_reset")
                             _pr_node_logs[addr] = _pr_nf
