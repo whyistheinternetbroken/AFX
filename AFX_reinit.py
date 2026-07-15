@@ -1214,6 +1214,10 @@ _checkpoint_test_parallel_seen_nodes: "set[str]" = set()
 _checkpoint_test_targets_by_node: "dict[str, str]" = {}
 _checkpoint_test_mode3_abort_phase = ""
 _checkpoint_test_lock = threading.Lock()
+# Barrier event for per-node mixed-target injection: nodes that reach their
+# target early block here until the last targeted node fires, so all threads
+# stop at their configured checkpoint rather than racing ahead.
+_checkpoint_test_barrier_event = threading.Event()
 _checkpoint_io_lock = threading.RLock()
 
 # Set to True by _run_4b_standalone when the operator selected a reinit
@@ -1697,6 +1701,7 @@ def _clear_checkpoint_test_config() -> None:
     _checkpoint_test_parallel_seen_nodes = set()
     _checkpoint_test_targets_by_node = {}
     _checkpoint_test_mode3_abort_phase = ""
+    _checkpoint_test_barrier_event.clear()
 
 
 def _set_checkpoint_test_parallel_scope(node_ids) -> None:
@@ -1710,6 +1715,7 @@ def _set_checkpoint_test_parallel_scope(node_ids) -> None:
         _identity = _checkpoint_test_node_identity(_clean) or _clean
         _nodes.add(_identity)
     with _checkpoint_test_lock:
+        _checkpoint_test_barrier_event.clear()
         _per_node_targets = dict(_checkpoint_test_targets_by_node)
         if not _checkpoint_test_enabled or _checkpoint_test_consumed:
             _checkpoint_test_parallel_expected_nodes = set()
@@ -2661,6 +2667,7 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
     _pending_err = None
     _fire_msg = ""
     _wait_msg = ""
+    _should_block = False  # set when this thread must wait for other nodes
     with _checkpoint_test_lock:
         if (not _checkpoint_test_enabled
                 or _checkpoint_test_consumed
@@ -2691,9 +2698,11 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
                 _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
                 _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
                 _pending_err = _pending_checkpoint_test_failure
-            # When nodes have different targets, keep waiting until every
-            # targeted node reaches its own configured checkpoint. This keeps
-            # injected mixed-stage runs aligned with operator-selected targets.
+            # When nodes have different targets, block each thread at its own
+            # configured checkpoint until the last targeted node arrives.  This
+            # ensures the checkpoint state at injection time matches the
+            # operator-configured per-node layout (e.g. .190 stays at LOADER
+            # while .191/.192 advance to their later targets).
             elif len(set(_per_node_targets.values())) > 1:
                 _checkpoint_test_parallel_seen_nodes.add(_node_identity)
                 _targeted_expected = {
@@ -2713,8 +2722,9 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
                     )
                     _wait_msg = (
                         f"--test checkpoint '{_target_desc}' hit for {_node_id}; "
-                        f"waiting for remaining node targets: {_rem}"
+                        f"blocking until remaining node targets reached: {_rem}"
                     )
+                    _should_block = True  # hold this thread at its checkpoint
                 else:
                     _checkpoint_test_consumed = True
                     _all = ", ".join(
@@ -2728,6 +2738,7 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
                         f"(all targeted per-node checkpoints reached: {_all})"
                     )
                     _checkpoint_test_arm_mode3_abort_barrier(_phase, _node_id)
+                    _checkpoint_test_barrier_event.set()   # release waiting peer threads
                     _pending_checkpoint_test_failure = _InjectedCheckpointFailure(_fire_msg)
                     _pending_err = _pending_checkpoint_test_failure
             else:
@@ -2786,6 +2797,19 @@ def _maybe_inject_checkpoint_failure(phase: str, node_id: str = "") -> None:
 
     if _wait_msg:
         _slog(_wait_msg, prefix="INFO")
+    if _should_block:
+        # Hold this peer thread at its configured target checkpoint until all
+        # other targeted nodes reach theirs.  Poll on short timeouts so we
+        # also wake on _shutdown_event (e.g. Ctrl-C or another failure).
+        print(f"\n🧪 {_wait_msg}")
+        while not _checkpoint_test_barrier_event.wait(timeout=10):
+            if _shutdown_event.is_set():
+                return
+        # Barrier released — all per-node targets have been reached.  Stop now.
+        raise _InjectedCheckpointFailure(
+            f"--test per-node barrier released for {_node_id} "
+            f"(checkpoint '{_phase}' was the configured target)"
+        )
     if _fire_msg:
         print(f"\n🧪 {_fire_msg}")
         _shutdown_event.set()
