@@ -15254,22 +15254,52 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
         if _session_log:
             _session_log.log_sent("cluster setup")
 
-        _ws_out, _ws_match = direct_read_until_any(
-            channel,
-            _WIZARD_START_TRIGGERS + ["login:"],
-            timeout=45,
-            node_log=node_log,
-            quiet=True,
-            check_bmc_drop=True,
+        # Wait for wizard start after sending 'cluster setup'. ONTAP may display
+        # the AutoSupport information page (pager) and a 'type yes to confirm'
+        # prompt before any wizard trigger appears. Handle both inline so we
+        # don't time out in 45s and loop back into login recovery.
+        _ws_deadline = time.monotonic() + 120
+        _ws_asup_answered = False
+        _ws_pager_re = re.compile(
+            r"press <space> to page|<return> for next line|'q' to quit",
+            re.IGNORECASE,
         )
-        _ws_scan = (str(_ws_out or "") + "\n" + str(_ws_match or "")).lower()
-        for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
-            if trigger_lower in _ws_scan:
-                output = ""
-                output_lower = ""
-                last_data = time.monotonic()
-                last_nudge = last_data
-                return trigger
+        while time.monotonic() < _ws_deadline:
+            _ws_out, _ws_match = direct_read_until_any(
+                channel,
+                _WIZARD_START_TRIGGERS + ["login:", "type yes to confirm and continue",
+                                          "press <space>", "page down", "'q' to quit"],
+                timeout=30,
+                node_log=node_log,
+                quiet=True,
+                check_bmc_drop=True,
+            )
+            _ws_scan = (str(_ws_out or "") + "\n" + str(_ws_match or "")).lower()
+            # Dismiss ONTAP pager with 'q'.
+            if _ws_pager_re.search(_ws_scan):
+                with suppress(Exception):
+                    channel.send("q")
+                if _session_log:
+                    _session_log.log_sent("q (dismiss pager)")
+                continue
+            # Answer AutoSupport type-yes confirmation.
+            if not _ws_asup_answered and "type yes to confirm and continue" in _ws_scan:
+                with suppress(Exception):
+                    channel.send("yes\r")
+                if _session_log:
+                    _session_log.log_sent("yes (type-yes confirm)")
+                _ws_asup_answered = True
+                continue
+            for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
+                if trigger_lower in _ws_scan:
+                    output = ""
+                    output_lower = ""
+                    last_data = time.monotonic()
+                    last_nudge = last_data
+                    return trigger
+            # 'login:' without a wizard trigger means setup isn't running yet.
+            if "login:" in _ws_scan:
+                break
         return False
 
     def _can_offer_mode1_loader_resume() -> bool:
@@ -15402,6 +15432,20 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 last_nudge = time.monotonic()
                 continue
             last_data = time.monotonic()
+            # Dismiss ONTAP pager (AutoSupport info display) with 'q' so the
+            # wizard can continue. Without this, the console stalls waiting for
+            # a keypress and no wizard triggers ever appear.
+            if re.search(r"press <space> to page|<return> for next line|'q' to quit",
+                         chunk, re.IGNORECASE):
+                _slog("Pager detected in wizard-start wait; sending 'q' to dismiss")
+                with suppress(Exception):
+                    channel.send("q")
+                if _session_log:
+                    _session_log.log_sent("q (dismiss pager)")
+                output = ""
+                output_lower = ""
+                last_data = time.monotonic()
+                continue
             if not _asup_wizard_answered and "type yes to confirm and continue" in chunk.lower():
                 _slog("AutoSupport confirmation in wizard start wait; answering 'yes'")
                 with suppress(Exception):
@@ -15448,6 +15492,16 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                     _loader_recovered = _try_recover_from_loader_prompt()
                     if _loader_recovered:
                         return _loader_recovered
+                elif re.search(r"press <space> to page|<return> for next line|'q' to quit",
+                               output, re.IGNORECASE):
+                    _slog("Pager detected in wizard-start nudge; sending 'q' to dismiss")
+                    with suppress(Exception):
+                        channel.send("q")
+                    if _session_log:
+                        _session_log.log_sent("q (dismiss pager)")
+                    output = ""
+                    output_lower = ""
+                    last_data = now
                 elif _has_real_cluster_login_prompt(output):
                     _recovered = _try_recover_from_login_prompt()
                     if _recovered:
