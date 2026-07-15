@@ -25922,7 +25922,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             prefix="WARN",
         )
         print(
-            f"\n⏭️  {_wizard_pfx}Wizard is already at cluster name step; answering remaining "
+            f"\n⏭️  {_wizard_pfx}Wizard Step 1: already at cluster name — answering remaining "
             f"cluster-create prompts directly...{_elapsed_str()}"
         )
         # Send the cluster name immediately — the prompt is already on screen from _which.
@@ -25930,6 +25930,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         if _session_log:
             _session_log.log_sent(cc.get("name") or "")
         time.sleep(0.5)
+        print(f"   ✅ {_wizard_pfx}Cluster name sent — waiting for admin-password prompt...{_elapsed_str()}")
         # Now wait for admin password and retype (order varies by ONTAP version;
         # they may also have already been answered in a previous run).
         _sc_remain = {
@@ -25947,6 +25948,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _sc_r_scan = (str(_sc_r_out or "") + "\n" + str(_sc_r_m or "")).lower()
             _sc_r_key = next((k for k in list(_sc_remain.keys()) if k in _sc_r_scan), None)
             if _sc_r_key:
+                _lbl_sc = "Admin password" if "administrator" in _sc_r_key else "Retype password"
+                print(f"   ✅ {_wizard_pfx}{_lbl_sc} prompt detected — sending value...{_elapsed_str()}")
+                _slog(f"skip-to-cluster-name: answering '{_sc_r_key}'")
                 _sc_r_val = _sc_remain.pop(_sc_r_key)
                 channel.send(_sc_r_val + "\r")
                 if _session_log:
@@ -25960,10 +25964,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _cp_mark("cp_1_7")
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(
-            f"\n⏳ {_wizard_pfx}Cluster create started. Waiting for ONTAP to form "
-            f"the cluster and reach post-create prompts...{_elapsed_str()}"
+            f"\n⏳ {_wizard_pfx}Cluster create in progress — monitoring ONTAP milestones...{_elapsed_str()}"
         )
-        print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
+        print(f"   (Full console output: {_log_path})")
         _slog("Cluster create started (skip-to-cluster-name path) - monitoring ONTAP progress milestones")
         _post_prompt_ok_scn = _wait_for_cluster_create_post_prompts(
             channel,
@@ -25983,10 +25986,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             return False
         _cp_mark("cp_1_7_5")
         print(
-            f"\n✅ {_wizard_pfx}Cluster create reached post-create wizard prompts. "
-            f"Continuing management network configuration...{_elapsed_str()}"
+            f"\n✅ {_wizard_pfx}Cluster create complete — continuing management network configuration...{_elapsed_str()}"
         )
-        print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
+        print(f"   (Full console output: {_log_path})")
     if (not _skip_create_steps) and (not _cluster_shell_resume_ready) and (not _skip_to_cluster_name):
         # Always send one Enter after wizard-start detection. In fast paths, the
         # create/join text can be present in residual output while ONTAP still
@@ -26002,12 +26004,20 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         # ONTAP can occasionally echo/repaint the create/join prompt and ignore the
         # first answer due to console timing. Keep sending "create" until the
         # wizard advances to the yes/no confirmation.
-        print("\n⏳ Waiting for create/join prompt and selecting 'create'...")
+        # Track progress with milestone messages and periodic heartbeats, similar
+        # to _wait_for_cluster_create_post_prompts, so the operator can follow
+        # what is happening rather than seeing a static waiting banner.
+        print(f"\n⏳ {_wizard_pfx}Wizard Step 1: waiting for create/join prompt...{_elapsed_str()}")
         _slog("Waiting for create/join prompt and confirming transition to yes/no")
         _create_deadline = time.monotonic() + 600
         _create_sent_attempts = 1
         _create_ok = False
         _yes_prompt_seen = False
+        _cj_t0 = time.monotonic()
+        _cj_last_tick = _cj_t0
+        _cj_heartbeat_s = 20
+        _cj_prompt_printed = False
+        _yes_no_printed = False
         _create_prompt_tokens = (
             "do you want to create a new cluster or join",
             "{create, join}",
@@ -26045,19 +26055,30 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     "enter the cluster administrator",
                     "enter the cluster name",
                 ],
-                timeout=min(30, _remaining),
+                timeout=min(20, _remaining),
                 node_log=node_log,
                 quiet=bool(node_log),
                 check_bmc_drop=True,
             )
             if _shutdown_event.is_set():
                 break
+            _now_cj = time.monotonic()
             _scan_cj = (str(_out_cj or "") + "\n" + str(_m_cj or "")).lower()
             if _scan_cj.strip():
                 _create_history += "\n" + _scan_cj
-            if any(_tok in _scan_cj for _tok in _create_prompt_tokens):
+            _cj_prompt_now = any(_tok in _scan_cj for _tok in _create_prompt_tokens)
+            if _cj_prompt_now:
                 _create_prompt_seen_history = True
+                if not _cj_prompt_printed:
+                    _cj_prompt_printed = True
+                    print(f"   ✅ {_wizard_pfx}Create/join prompt detected — selecting 'create'...{_elapsed_str()}")
+                    _slog("Create/join prompt detected; sending 'create'")
+                    _cj_last_tick = _now_cj
             if "{yes, no}" in _scan_cj:
+                if not _yes_no_printed:
+                    _yes_no_printed = True
+                    print(f"   ✅ {_wizard_pfx}Confirmation prompt detected — sending 'yes'...{_elapsed_str()}")
+                    _slog("Yes/no confirmation prompt detected; sending 'yes'")
                 _create_ok = True
                 _yes_prompt_seen = True
                 break
@@ -26071,12 +26092,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     prefix="WARN",
                 )
                 print(
-                    f"\n⏭️  {_wizard_pfx}Wizard already past create/join prompt; continuing from admin password step..."
+                    f"\n⏭️  {_wizard_pfx}Wizard already past create/join — continuing from "
+                    f"cluster-name/admin-password step...{_elapsed_str()}"
                 )
                 _create_ok = True
                 _yes_prompt_seen = True  # yes was already sent before; skip sending it again
                 break
-            if (("create or join" in _scan_cj)
+            if _cj_prompt_now or (("create or join" in _scan_cj)
                     or ("create a new cluster or join" in _scan_cj)
                     or ("{create, join}" in _scan_cj)):
                 _create_sent_attempts += 1
@@ -26098,6 +26120,19 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             if _session_log:
                 _session_log.log_sent("create")
             time.sleep(0.5)
+            # Heartbeat: print status every _cj_heartbeat_s seconds of silence.
+            if (_now_cj - _cj_last_tick) >= _cj_heartbeat_s:
+                _cj_stage_elapsed = int(_now_cj - _cj_t0)
+                if _cj_prompt_printed:
+                    _label = "Waiting for yes/no confirmation"
+                else:
+                    _label = "Waiting for create/join prompt"
+                print(
+                    f"   ⏳ {_wizard_pfx}{_label} still in progress... "
+                    f"({_cj_stage_elapsed}s elapsed{_elapsed_str()})"
+                )
+                _slog(f"Wizard create/join heartbeat: {_label} ({_cj_stage_elapsed}s elapsed)")
+                _cj_last_tick = _now_cj
         if _shutdown_event.is_set():
             print("\n👋 Interrupted while waiting for create/join; exiting wizard.")
             if _session_log:
@@ -26138,10 +26173,14 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _cw_remain["retype the password"] = cc.get("admin_password") or ""
         # If wizard is already at cluster name (seen in loop), send it immediately.
         if _wizard_at_cluster_name:
+            print(f"   ✅ {_wizard_pfx}Cluster name step — sending cluster name...{_elapsed_str()}")
+            _slog("Wizard at cluster name (seen in history); sending cluster name")
             channel.send((cc.get("name") or "") + "\r")
             if _session_log:
                 _session_log.log_sent(cc.get("name") or "")
             time.sleep(0.5)
+        elif not _wizard_at_admin_pw:
+            print(f"   ⏳ {_wizard_pfx}Waiting for cluster name / admin-password prompts...{_elapsed_str()}")
         _cw_deadline = time.monotonic() + 600
         while _cw_remain and not _shutdown_event.is_set() and time.monotonic() < _cw_deadline:
             _cw_out, _cw_m = direct_read_until_any(
@@ -26153,6 +26192,15 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _cw_scan = (str(_cw_out or "") + "\n" + str(_cw_m or "")).lower()
             _cw_key = next((k for k in list(_cw_remain.keys()) if k in _cw_scan), None)
             if _cw_key:
+                if "cluster name" in _cw_key:
+                    print(f"   ✅ {_wizard_pfx}Cluster name prompt — sending name...{_elapsed_str()}")
+                    _slog("Create wizard: answering cluster name")
+                elif "administrator" in _cw_key:
+                    print(f"   ✅ {_wizard_pfx}Admin-password prompt — sending password...{_elapsed_str()}")
+                    _slog("Create wizard: answering admin password")
+                elif "retype" in _cw_key:
+                    print(f"   ✅ {_wizard_pfx}Retype-password prompt — confirming...{_elapsed_str()}")
+                    _slog("Create wizard: answering retype password")
                 _cw_val = _cw_remain.pop(_cw_key)
                 _is_hide = "cluster name" not in _cw_key
                 channel.send(_cw_val + "\r")
@@ -26169,10 +26217,11 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         # work immediately. Mark cp_1_7 first so an exit-after-checkpoint run stops
         # before the long "waiting for cluster to form" phase.
         _cp_mark("cp_1_7")
+        _log_path = _session_log.log_file if _session_log else "the log file"
         print(
-            f"\n⏳ {_wizard_pfx}Cluster create started. Waiting for ONTAP to form "
-            f"the cluster and reach post-create prompts...{_elapsed_str()}"
+            f"\n⏳ {_wizard_pfx}Cluster create in progress — monitoring ONTAP milestones...{_elapsed_str()}"
         )
+        print(f"   (Full console output: {_log_path})")
         _slog("Cluster create started - monitoring ONTAP progress milestones")
         _post_prompt_ok = _wait_for_cluster_create_post_prompts(
             channel,
@@ -26193,10 +26242,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _cp_mark("cp_1_7_5")
         _log_path = _session_log.log_file if _session_log else "the log file"
         print(
-            f"\n✅ {_wizard_pfx}Cluster create reached post-create wizard prompts. "
-            f"Continuing management network configuration...{_elapsed_str()}"
+            f"\n✅ {_wizard_pfx}Cluster create complete — continuing management network configuration...{_elapsed_str()}"
         )
-        print(f"   For detailed console output see log in a separate SSH session:\n   {_log_path}")
+        print(f"   (Full console output: {_log_path})")
     def _wizard_send_value_with_default(trigger, response, label, prompt_text=""):
         _resp = "" if response is None else str(response)
         _prompt_lower = str(prompt_text or "").lower()
