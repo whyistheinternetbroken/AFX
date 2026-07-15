@@ -28168,6 +28168,22 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     finally:
         _console_quiet = _prev_quiet
 
+    _add_out_l = str(_add_out or "").lower()
+    _add_cmd_failed = (
+        "error: command failed" in _add_out_l
+        or "failed to contact node using cluster ip address" in _add_out_l
+        or "rpc: couldn't make connection" in _add_out_l
+    )
+    if _add_cmd_failed:
+        print("\n  ❌ cluster add-node command failed before status polling.")
+        if log:
+            log.log(
+                "cluster add-node command failed before status polling; "
+                "aborting this add-node attempt",
+                prefix="ERROR",
+            )
+        return False
+
     print("  ⏳ ONTAP accepted cluster add-node. Waiting for node join stages to progress...")
     if log:
         log.log("cluster add-node command accepted; waiting for add-node-status milestones")
@@ -28417,7 +28433,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     print(f"\n  ⚠️  cluster add-node did not complete for all "
           f"{len(cluster_ips)} node(s) within 15 minutes.")
     if log:
-        log.log("cluster add-node: timeout waiting for success status", prefix="WARN")
+        log.log("cluster add-node: timeout waiting for success status", prefix="ERROR")
     return False
 
 
@@ -30594,13 +30610,23 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
     # ── 5. Bulk cluster join via cluster add-node ────────────────────────────
     _2b_add_node_timings: "dict[str, float]" = {}
+    _2b_add_nodes_ok = True
     if primary_channel and _cluster_ips_out:
         _collected_ips = _ordered_cluster_entries_for_add(
             _cluster_ips_out, preferred_bmcs=peer_bmcs
         )
         if _collected_ips:
-            _cluster_add_nodes_bulk(primary_channel, _collected_ips, log=log,
-                                    node_timings_out=_2b_add_node_timings)
+            _2b_add_nodes_ok = _cluster_add_nodes_bulk(
+                primary_channel, _collected_ips, log=log,
+                node_timings_out=_2b_add_node_timings,
+            )
+            if not _2b_add_nodes_ok:
+                print("\n  ❌ Cluster add-node did not complete for requested node(s).")
+                if log:
+                    log.log(
+                        "2.2: cluster add-node did not complete for requested node(s)",
+                        prefix="ERROR",
+                    )
         else:
             print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
             if log:
@@ -30636,7 +30662,15 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                                         key=lambda x: x[1]):
                 log.add_phase_subtiming(
                     _2B_PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
-        log.end_phase()
+        log.end_phase(outcome=("PASS" if _2b_add_nodes_ok else "FAIL"))
+
+    if not _2b_add_nodes_ok:
+        if primary_client:
+            try:
+                primary_client.close()
+            except Exception:
+                pass
+        return False
 
     # Node name/LIF repair
     if primary_channel and isinstance(_config_data, dict):
@@ -30963,6 +30997,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
 
     # ── 5. Interactive node selection + cluster add-node ─────────────────────
     _2a_add_node_timings: "dict[str, float]" = {}
+    _2a_add_nodes_ok = True
     if _cluster_ips_out:
         _collected_ips = _ordered_cluster_entries_for_add(
             _cluster_ips_out, preferred_bmcs=peer_bmcs
@@ -31001,10 +31036,17 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                     ]
                 if _selected:
                     if primary_channel:
-                        _cluster_add_nodes_bulk(
+                        _2a_add_nodes_ok = _cluster_add_nodes_bulk(
                             primary_channel, _selected, log=log,
                             node_timings_out=_2a_add_node_timings,
                         )
+                        if not _2a_add_nodes_ok:
+                            print("\n  ❌ Cluster add-node did not complete for selected node(s).")
+                            if log:
+                                log.log(
+                                    "2.1: cluster add-node did not complete for selected node(s)",
+                                    prefix="ERROR",
+                                )
                     else:
                         print("\n  ℹ️  No primary cluster channel. Add nodes manually:")
                         for _e in _selected:
@@ -31051,7 +31093,15 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                                         key=lambda x: x[1]):
                 log.add_phase_subtiming(
                     _2A_PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
-        log.end_phase()
+        log.end_phase(outcome=("PASS" if _2a_add_nodes_ok else "FAIL"))
+
+    if not _2a_add_nodes_ok:
+        if primary_client:
+            try:
+                primary_client.close()
+            except Exception:
+                pass
+        return False
 
     # Node name/LIF repair
     if primary_channel and isinstance(_config_data, dict):
@@ -37230,6 +37280,7 @@ def _run_2c_resume():
     _2c_ips = _ordered_cluster_entries_for_add(
         _2c_cluster_ips_out, preferred_bmcs=_2c_preferred_bmcs
     )
+    _2c_add_ok = True
     if (not primary_channel) and _2c_ips:
         print("\n  ❌ Cluster management SSH is still unavailable.")
         print("     Saved cluster-IP evidence exists, but option 2.3 cannot")
@@ -37247,8 +37298,16 @@ def _run_2c_resume():
                 pass
         return False
     if primary_channel and _2c_ips:
-        _cluster_add_nodes_bulk(primary_channel, _2c_ips, log=_session_log,
-                                node_timings_out=_2c_add_node_timings)
+        _2c_add_ok = _cluster_add_nodes_bulk(
+            primary_channel, _2c_ips, log=_session_log,
+            node_timings_out=_2c_add_node_timings,
+        )
+        if not _2c_add_ok:
+            print("\n  ❌ cluster add-node did not complete for all requested nodes.")
+            _session_log.log(
+                "2.3: cluster add-node did not complete for requested nodes",
+                prefix="ERROR",
+            )
     elif not _2c_ips:
         print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
         _session_log.log("2.3: no cluster IPs collected; skipping cluster add-node",
@@ -37278,17 +37337,22 @@ def _run_2c_resume():
             _session_log.add_phase_subtiming(
                 _2C_PHASE, f"  cluster add-node [{_ip}] → success", _elapsed)
 
-    _session_log.end_phase()
-    print("\n  ✅ 2.3 resume complete.")
-    _session_log.log("2.3 resume: all threads finished")
-    _session_log.set_outcome("PASS", "2.3 resume complete")
+    _session_log.end_phase(outcome=("PASS" if _2c_add_ok else "FAIL"))
+    if _2c_add_ok:
+        print("\n  ✅ 2.3 resume complete.")
+        _session_log.log("2.3 resume: all threads finished")
+        _session_log.set_outcome("PASS", "2.3 resume complete")
+    else:
+        print("\n  ❌ 2.3 resume incomplete: cluster add-node did not complete.")
+        _session_log.log("2.3 resume incomplete due to cluster add-node timeout/failure", prefix="ERROR")
+        _session_log.set_outcome("FAIL", "2.3 resume incomplete (cluster add-node not complete)")
 
     if primary_client:
         try:
             primary_client.close()
         except Exception:
             pass
-    return True
+    return bool(_2c_add_ok)
 
 
 # ---------------------------------------------------------------------------
