@@ -2272,17 +2272,44 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
         _next_id, _next_desc = _pending[0]
         return f"(not started) | next {_next_id} ({_next_desc})"
 
+    def _node_min_injection_index(_node_id: str) -> int:
+        """1-based index of the first option not yet done for this node.
+        Returns len(options)+1 when all options are already done."""
+        for _i, (_cp_id, _) in enumerate(options, 1):
+            if not _phase_done_for_node(_cp_id, _node_id):
+                return _i
+        return len(options) + 1
+
     print("  Current per-node checkpoint state:")
     for _nid in _nodes:
         print(f"    - {_nid}: {_node_checkpoint_context(_nid)}")
+
+    # Per-node floor: the later of the global resume floor and each node's own
+    # first-not-yet-done checkpoint.  Selecting anything below this floor would
+    # silently never fire because _checkpoint_mark_phase skips already-done phases.
+    _node_min: "dict[str, int]" = {}
+    for _nid in _nodes:
+        _node_min[_nid] = max(max(1, int(min_allowed_index or 1)),
+                              _node_min_injection_index(_nid))
 
     _target_map = {}
     _min_idx = max(1, int(min_allowed_index or 1))
 
     if _mode_sel == "2":
         print("")
+        # Annotate each option with nodes that have already passed it.
         for _idx, (_phase, _label) in enumerate(options, 1):
-            print(f"  {_idx}. {_phase:<22} {_label}")
+            _done_nodes = [_nid for _nid in _nodes if _phase_done_for_node(_phase, _nid)]
+            if _done_nodes == _nodes:
+                _ann = "  ✗ already done for ALL nodes — cannot inject here"
+            elif _done_nodes:
+                _short = ", ".join(_done_nodes)
+                _ann = f"  ⚠ already done for: {_short}"
+            elif _idx < _min_idx:
+                _ann = "  ✗ before resume floor — blocked"
+            else:
+                _ann = ""
+            print(f"  {_idx}. {_phase:<22} {_label}{_ann}")
         _idx_raw = _prompt(
             f"  Checkpoint index for all nodes [{_min_idx}-{len(options)}]: ",
             str(_min_idx),
@@ -2295,9 +2322,24 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
             print("  ⚠️  Out of range.")
             return False
         _phase, _label = options[_idx - 1]
+        # Reject if every node has already passed this checkpoint.
+        _all_done = [_nid for _nid in _nodes if _phase_done_for_node(_phase, _nid)]
+        if set(_all_done) == set(_nodes):
+            print(
+                f"  ❌ '{_phase}' is already done for all nodes — "
+                "injection would never fire. Choose a later checkpoint."
+            )
+            return False
+        # Warn (but allow) for nodes where it's already done — they'll be skipped.
+        if _all_done:
+            print(
+                f"  ⚠️  '{_phase}' is already done for {', '.join(_all_done)}; "
+                "injection will only fire for remaining nodes."
+            )
         for _nid in _nodes:
-            _target_map[_nid] = _phase
-        print(f"  ✅ All nodes mapped to '{_phase}' ({_label}).")
+            if not _phase_done_for_node(_phase, _nid):
+                _target_map[_nid] = _phase
+        print(f"  ✅ Eligible nodes mapped to '{_phase}' ({_label}).")
     else:
         _global_fallback = str(_checkpoint_test_target or "").strip()
         _global_fallback_idx = 0
@@ -2312,13 +2354,28 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
         )
         print(f"  Enter checkpoint index per node ({_enter_hint}, 0=skip).")
         for _nid in _nodes:
+            _this_min = _node_min[_nid]
             print("")
             print(f"    {_nid} currently at: {_node_checkpoint_context(_nid)}")
+            if _this_min > len(options):
+                print(f"    ⚠️  All listed checkpoints already done for {_nid} — skipping.")
+                continue
             for _idx, (_phase, _label) in enumerate(options, 1):
-                print(f"  {_idx}. {_phase:<22} {_label}")
+                _done_marker = "  ✗ already done" if _phase_done_for_node(_phase, _nid) else ""
+                _blocked_marker = (
+                    "  ✗ before resume floor" if _idx < _min_idx and not _done_marker else ""
+                )
+                _ann = _done_marker or _blocked_marker
+                print(f"  {_idx}. {_phase:<22} {_label}{_ann}")
+            if _this_min > 1:
+                print(
+                    f"    ℹ️  Indices 1–{_this_min - 1} are blocked for {_nid} "
+                    f"(already done or before resume floor)."
+                )
             _idx_raw = _prompt(
-                f"    {_nid} checkpoint [0-{len(options)}, Enter={_global_fallback_idx or 0}]: ",
-                str(_global_fallback_idx) if _global_fallback_idx else "0",
+                f"    {_nid} checkpoint [{_this_min}-{len(options)}, Enter={_global_fallback_idx or _this_min}]: ",
+                str(_global_fallback_idx) if _global_fallback_idx and _global_fallback_idx >= _this_min
+                else str(_this_min),
             ).strip()
             if not _idx_raw.isdigit():
                 print(f"  ⚠️  Skipping {_nid} (invalid input).")
@@ -2326,10 +2383,10 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
             _idx = int(_idx_raw)
             if _idx == 0:
                 continue
-            if _idx < _min_idx:
+            if _idx < _this_min:
                 print(
-                    f"  ⚠️  Skipping {_nid} (checkpoint {_idx} is before "
-                    f"resume start index {_min_idx})."
+                    f"  ⚠️  Skipping {_nid} — checkpoint {_idx} is already done "
+                    f"or before the resume floor (min: {_this_min})."
                 )
                 continue
             if 1 <= _idx <= len(options):
