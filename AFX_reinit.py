@@ -28715,7 +28715,8 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                           join_index=0, final_cluster_count=0,
                           timings_record=None, barrier_release_box=None,
                           timings_lock=None, first_join_sent_box=None,
-                          broker=None, cluster_ips_out=None):
+                          broker=None, cluster_ips_out=None,
+                          resume_bootmenu_option1_nodes=None):
     """Run a full add-node automation against a single peer BMC.
 
     Each thread runs LOADER → option 4 → disk erase → node-mgmt in parallel.
@@ -29397,11 +29398,94 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         if not seen_menu:
             print(f"   ⚠️  [{label}] boot menu not detected; aborting.")
             return False
+        _use_boot_option1 = bool(
+            resume_bootmenu_option1_nodes
+            and peer_bmc in set(resume_bootmenu_option1_nodes)
+        )
+
+        def _wait_for_boot_option1_resume_evidence(timeout_sec: int = 1200) -> bool:
+            _safe_resume_markers = [
+                "d-blade boot: bootarg.ontapx.rootvol.created is not set or set to false",
+                "ontapx_fa_boot_trigger - checking existence of /var/rdb/_sitelist",
+                "ontapx_fa_boot_trigger - file /var/rdb/_sitelist does not exist, moving to first time boot",
+                "skipping boot_from_disk2 - moving to first time boot",
+            ]
+            _known_resume_stages = [
+                "enabling autosupport can significantly speed problem determination",
+                "would you like to enable autosupport",
+                "type yes to confirm and continue",
+                "node management interface port",
+                "node management interface ip",
+                "enter node management",
+                "create a new cluster",
+                "join an existing cluster",
+                "create/join",
+                "welcome to the cluster setup wizard",
+                "::>",
+                "::*>",
+                "login:",
+            ]
+            _scan = ""
+            _deadline = time.monotonic() + max(30, int(timeout_sec))
+            _last_nudge = time.monotonic()
+            _last_msg = 0.0
+            while time.monotonic() < _deadline:
+                if _shutdown_event.is_set():
+                    return False
+                _out, _matched = direct_read_until_any(
+                    ch,
+                    _safe_resume_markers + _known_resume_stages,
+                    timeout=30,
+                    node_log=node_file,
+                    quiet=True,
+                    reconnect_ctx=_peer_reconnect_ctx,
+                )
+                _combined = f"{_out or ''}\n{_matched or ''}".lower()
+                if _combined.strip():
+                    _scan += "\n" + _combined
+                    if len(_scan) > 16384:
+                        _scan = _scan[-8192:]
+                if any(_sig in _scan for _sig in _safe_resume_markers):
+                    _slog(f"[{label}] Option 1 resume safety markers detected; continuing add flow")
+                    return True
+                if any(_sig in _scan for _sig in _known_resume_stages):
+                    _slog(
+                        f"[{label}] Option 1 reached known resume stage; continuing from live console state",
+                        prefix="WARN",
+                    )
+                    return True
+                _now = time.monotonic()
+                if (_now - _last_nudge) >= 30.0:
+                    with suppress(Exception):
+                        ch.send("\r")
+                    _last_nudge = _now
+                if (_now - _last_msg) >= 60.0:
+                    print(f"   ⏳ [{label}] Waiting for option-1 resume evidence...")
+                    _last_msg = _now
+            _slog(
+                f"[{label}] Option 1 selected but no safe resume markers/stage were detected",
+                prefix="ERROR",
+            )
+            return False
+
         if not _fast_skip_to_diskerase:
-            ch.send("4\r"); time.sleep(2)
-            _cleanup_known_hosts_after_boot_option(peer_bmc, "4", log=_session_log)
+            _boot_choice = "1" if _use_boot_option1 else "4"
+            ch.send(_boot_choice + "\r")
+            time.sleep(2)
+            _cleanup_known_hosts_after_boot_option(peer_bmc, _boot_choice, log=_session_log)
+            if _use_boot_option1:
+                print(f"   🔎 [{label}] Boot menu mismatch recovery: selected option 1 and validating resume evidence...")
+                if not _wait_for_boot_option1_resume_evidence():
+                    print(
+                        f"   ❌ [{label}] Option 1 did not produce safe resume evidence. "
+                        "Stopping this thread."
+                    )
+                    return False
+                # Option 1 path bypasses option-4 disk erase; continue from live stage.
+                _cp2_4_done = True
             _t_option4_sent = time.monotonic()
-            print(f"   ⏱️  [{label}] Option 4 sent at +{_t_option4_sent - _t_thread_start:.1f}s")
+            _choice_label = "Option 1" if _use_boot_option1 else "Option 4"
+            print(f"   ⏱️  [{label}] {_choice_label} sent at +{_t_option4_sent - _t_thread_start:.1f}s")
         _checkpoint_mark_phase("cp_2_3", node_id=_cp2_node)
         _run_optional_checkpoint_status_checks()
 
@@ -29581,6 +29665,237 @@ def _node_mgmt_ip_for_bmc(bmc_host: str) -> str:
             return _ip
     _cfg = _node_cfg_for(_bmc) or {}
     return str(_cfg.get("node_mgmt_ip") or "").strip()
+
+
+def _checkpoint_peer_resume_reports_post_option4(bmc_ip: str) -> bool:
+    _bmc = str(bmc_ip or "").strip()
+    if not (_checkpoint and _bmc):
+        return False
+    return any(
+        _checkpoint_phase_done_for_peer_resume(_phase, _bmc)
+        for _phase in ("cp_2_4", "cp_2_5", "cp_2_6", "peer_option4_done")
+    )
+
+
+def _checkpoint_reset_peer_post_option4_progress(peer_bmcs, *, log=None, mode_label=""):
+    _targets = [str(_b).strip() for _b in (peer_bmcs or []) if str(_b).strip()]
+    if not (_checkpoint and _targets):
+        return
+    _phase_ids = ("cp_2_4", "cp_2_5", "cp_2_6", "peer_option4_done")
+
+    def _mutate(data):
+        _node_phases = data.setdefault("node_phases", {})
+        _changed = False
+        for _phase_id in _phase_ids:
+            _per = _node_phases.get(_phase_id)
+            if not isinstance(_per, dict):
+                continue
+            for _bmc in _targets:
+                if _bmc in _per:
+                    _per.pop(_bmc, None)
+                    _changed = True
+            if not _per:
+                _node_phases.pop(_phase_id, None)
+                _changed = True
+        return _changed
+
+    try:
+        _checkpoint._save(mutator=_mutate)
+        if log:
+            log.log(
+                f"{mode_label}: cleared post-option4 checkpoint markers for {sorted(_targets)}",
+                prefix="WARN",
+            )
+    except Exception as _cp_clear_err:
+        if log:
+            log.log(
+                f"{mode_label}: failed to clear post-option4 checkpoint markers for "
+                f"{sorted(_targets)}: {_cp_clear_err}",
+                prefix="ERROR",
+            )
+
+
+def _probe_peer_console_resume_stage(peer_bmc: str, peer_user: str, peer_password: str, *, node_log=None):
+    _result = {
+        "stage": "unknown",
+        "at_boot_menu": False,
+        "past_option4_prompt": False,
+        "err": "",
+        "user": peer_user,
+        "password": peer_password,
+    }
+    _client = None
+    _ch = None
+    try:
+        _fb = _bmc_fallback_passwords(peer_bmc, {peer_bmc: peer_password})
+        _client, _user2, _pass2 = _ssh_connect_with_retry(
+            peer_bmc,
+            peer_user,
+            peer_password,
+            label=f"probe/{peer_bmc}",
+            max_attempts=2,
+            interactive=False,
+            fallback_passwords=_fb,
+        )
+        _result["user"] = _user2
+        _result["password"] = _pass2
+        _ch = _open_shell(_client)
+        if not _reach_bmc_prompt(
+            _ch,
+            timeout=15,
+            node_log=node_log,
+            takeover_msg=f"[probe/{peer_bmc}] Existing BMC session detected — auto-answering yes",
+        ):
+            _result["err"] = "BMC prompt not reached"
+            return _result
+
+        _state = {}
+        _already_loader = _already_at_loader(
+            _ch,
+            probe_timeout=12,
+            node_log=node_log,
+            label=f"probe/{peer_bmc}",
+            resuming=True,
+            out_state=_state,
+        )
+        _result["at_boot_menu"] = bool(_state.get("at_boot_menu"))
+        _result["past_option4_prompt"] = bool(_state.get("past_option4_prompt"))
+        if _result["at_boot_menu"]:
+            _result["stage"] = "boot_menu"
+            return _result
+        if _result["past_option4_prompt"]:
+            _result["stage"] = "post_option4"
+            return _result
+        if _already_loader:
+            _result["stage"] = "loader"
+            return _result
+
+        with suppress(Exception):
+            _ch.send("\r")
+        _probe_out, _probe_match = direct_read_until_any(
+            _ch,
+            [
+                "would you like to enable autosupport",
+                "enabling autosupport can significantly speed problem determination",
+                "type yes to confirm and continue",
+                "node management interface",
+                "create a new cluster",
+                "join an existing cluster",
+                "create/join",
+                "login:",
+                "::>",
+                "::*>",
+                "selection (1-",
+                "(1-9)?",
+                "(1-11)?",
+                "(1-12)?",
+                "loader-",
+                ">",
+            ],
+            timeout=20,
+            node_log=node_log,
+            quiet=True,
+        )
+        _combined = f"{_probe_out or ''}\n{_probe_match or ''}".lower()
+        if any(_sig in _combined for _sig in ("selection (1-", "(1-9)?", "(1-11)?", "(1-12)?")):
+            _result["stage"] = "boot_menu"
+            _result["at_boot_menu"] = True
+        elif "loader-" in _combined:
+            _result["stage"] = "loader"
+        elif any(_sig in _combined for _sig in ("would you like to enable autosupport", "type yes to confirm and continue")):
+            _result["stage"] = "autosupport"
+        elif any(_sig in _combined for _sig in ("node management interface", "create/join", "create a new cluster", "join an existing cluster")):
+            _result["stage"] = "wizard"
+        elif any(_sig in _combined for _sig in ("::>", "::*>", "login:")):
+            _result["stage"] = "ontap_shell"
+        else:
+            _result["stage"] = "unknown"
+        return _result
+    except Exception as _probe_err:
+        _result["err"] = str(_probe_err)
+        return _result
+    finally:
+        with suppress(Exception):
+            if _ch is not None:
+                _ch.close()
+        with suppress(Exception):
+            if _client is not None:
+                _client.close()
+
+
+def _preflight_resume_bootmenu_checkpoint_mismatch(peer_bmcs, default_bmc_user, bmc_passwords, *,
+                                                   mode_label="", log=None):
+    _targets = [str(_b).strip() for _b in (peer_bmcs or []) if str(_b).strip()]
+    _decision = {"abort": False, "option1_nodes": set(), "rerun_option4_nodes": set()}
+    if not (_checkpoint and _targets):
+        return _decision
+
+    _mismatch = []
+    for _bmc in _targets:
+        if not _checkpoint_peer_resume_reports_post_option4(_bmc):
+            continue
+        _creds = _peer_bmc_creds.get(_bmc) or {}
+        _u = _creds.get("user") or default_bmc_user or "admin"
+        if "password" in _creds and _creds.get("password") is not None:
+            _p = _creds.get("password")
+        else:
+            _p = bmc_passwords.get(_bmc, "")
+        _probe = _probe_peer_console_resume_stage(_bmc, _u, _p)
+        _peer_bmc_creds[_bmc] = {
+            "user": _probe.get("user") or _u,
+            "password": _probe.get("password") if _probe.get("password") is not None else _p,
+        }
+        if bool(_probe.get("at_boot_menu")):
+            _mismatch.append({
+                "bmc": _bmc,
+                "stage": str(_probe.get("stage") or "boot_menu"),
+                "err": str(_probe.get("err") or "").strip(),
+            })
+
+    if not _mismatch:
+        return _decision
+
+    print(
+        f"\n  ⚠️  {mode_label}: Detected checkpoint/state mismatch for {len(_mismatch)} node(s): "
+        "checkpoint says post-option4, but BMC is at boot menu."
+    )
+    for _row in _mismatch:
+        _extra = f" ({_row['err']})" if _row["err"] else ""
+        print(f"     - {_row['bmc']}: boot menu{_extra}")
+    if log:
+        log.log(
+            f"{mode_label}: checkpoint/state mismatch at boot menu for peers: "
+            f"{[r['bmc'] for r in _mismatch]}",
+            prefix="WARN",
+        )
+
+    print("  Choose recovery action:")
+    print("    1) Exit and troubleshoot manually")
+    print("    2) Re-run option 4 flow (clear post-option4 peer checkpoints)")
+    print("    3) Trust reinit and boot option 1 (validate resume evidence)")
+    _choice = _prompt_with_timeout(
+        "  Select [1/2/3]: ",
+        "1",
+        timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
+    ).strip().lower()
+    if _choice not in ("1", "2", "3"):
+        _choice = "1"
+
+    _mismatch_nodes = {str(_r["bmc"]).strip() for _r in _mismatch if str(_r.get("bmc") or "").strip()}
+    if _choice == "1":
+        _decision["abort"] = True
+        return _decision
+    if _choice == "2":
+        _checkpoint_reset_peer_post_option4_progress(
+            _mismatch_nodes,
+            log=log,
+            mode_label=mode_label,
+        )
+        _decision["rerun_option4_nodes"] = set(_mismatch_nodes)
+        return _decision
+
+    _decision["option1_nodes"] = set(_mismatch_nodes)
+    return _decision
 
 
 def _omit_nodes_by_number(peer_bmcs, mode_label="", log=None):
@@ -30165,10 +30480,22 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     _cluster_ips_out = {}   # peer_bmc -> cluster interface IP (populated by threads)
     _2b_peer_timings: "dict[str, dict]" = {}
     _2b_timings_lock = threading.Lock()
+    _2b_bootmenu_option1_nodes = set()
     _pending = list(peer_bmcs)
     _failed = []
 
     while _pending:
+        _preflight = _preflight_resume_bootmenu_checkpoint_mismatch(
+            _pending, bmc_user, bmc_passwords, mode_label="2.2", log=log
+        )
+        if _preflight.get("abort"):
+            print("\n  ❌ Mode 2.2 stopped by operator for manual troubleshooting.")
+            if log:
+                log.log("2.2: operator chose manual troubleshooting after checkpoint/BMC mismatch", prefix="ERROR")
+            return False
+        _2b_bootmenu_option1_nodes -= set(_preflight.get("rerun_option4_nodes") or set())
+        _2b_bootmenu_option1_nodes.update(_preflight.get("option1_nodes") or set())
+
         _set_checkpoint_test_parallel_scope(_pending)
         _n = len(_pending)
         _batch_results = [None] * _n
@@ -30187,6 +30514,7 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                         cluster_ips_out=_cluster_ips_out,
                         timings_record=_2b_peer_timings,
                         timings_lock=_2b_timings_lock,
+                        resume_bootmenu_option1_nodes=_2b_bootmenu_option1_nodes,
                     )
                 except (_InjectedCheckpointFailure, _ReturnToMenu):
                     _batch_results[_ri] = False
@@ -30212,6 +30540,30 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         _failed = [_pending[i] for i, r in enumerate(_batch_results) if not r]
 
         if not _failed:
+            break
+
+        _failed_set = set(_failed)
+        _pending_set = set(_pending)
+        _opt1_batch = _pending_set & set(_2b_bootmenu_option1_nodes)
+        if _opt1_batch and _failed_set == _opt1_batch:
+            print(
+                "\n  ❌ All option-1 trusted nodes failed resume-evidence validation."
+            )
+            _rerun_opt4 = _prompt_with_timeout(
+                "  Re-run option 4 flow for these node(s) now? [Y/n]: ",
+                "y",
+                timeout=60,
+            ).strip().lower()
+            if _rerun_opt4 in ("", "y", "yes"):
+                _checkpoint_reset_peer_post_option4_progress(
+                    _failed_set, log=log, mode_label="2.2"
+                )
+                _2b_bootmenu_option1_nodes -= _failed_set
+                _pending = list(_failed)
+                print(f"\n  🔁 Replaying option 4 flow for {len(_failed)} node(s)...")
+                continue
+            if log:
+                log.log("2.2: operator declined option-4 replay after option-1 validation failures", prefix="ERROR")
             break
 
         print(f"\n  ⚠️  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
@@ -30499,10 +30851,22 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
     _cluster_ips_out = {}   # peer_bmc -> cluster interface IP
     _2a_peer_timings: "dict[str, dict]" = {}
     _2a_timings_lock = threading.Lock()
+    _2a_bootmenu_option1_nodes = set()
     _pending = list(peer_bmcs)
     _failed = []
 
     while _pending:
+        _preflight = _preflight_resume_bootmenu_checkpoint_mismatch(
+            _pending, bmc_user, bmc_passwords, mode_label="2.1", log=log
+        )
+        if _preflight.get("abort"):
+            print("\n  ❌ Mode 2.1 stopped by operator for manual troubleshooting.")
+            if log:
+                log.log("2.1: operator chose manual troubleshooting after checkpoint/BMC mismatch", prefix="ERROR")
+            return False
+        _2a_bootmenu_option1_nodes -= set(_preflight.get("rerun_option4_nodes") or set())
+        _2a_bootmenu_option1_nodes.update(_preflight.get("option1_nodes") or set())
+
         _set_checkpoint_test_parallel_scope(_pending)
         _n = len(_pending)
         _batch_results = [None] * _n
@@ -30523,6 +30887,7 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                         cluster_ips_out=_cluster_ips_out,
                         timings_record=_2a_peer_timings,
                         timings_lock=_2a_timings_lock,
+                        resume_bootmenu_option1_nodes=_2a_bootmenu_option1_nodes,
                     )
                 except (_InjectedCheckpointFailure, _ReturnToMenu):
                     _batch_results[_ri] = False
@@ -30547,6 +30912,30 @@ def _run_2a_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
         _failed = [_pending[i] for i, r in enumerate(_batch_results) if not r]
 
         if not _failed:
+            break
+
+        _failed_set = set(_failed)
+        _pending_set = set(_pending)
+        _opt1_batch = _pending_set & set(_2a_bootmenu_option1_nodes)
+        if _opt1_batch and _failed_set == _opt1_batch:
+            print(
+                "\n  ❌ All option-1 trusted nodes failed resume-evidence validation."
+            )
+            _rerun_opt4 = _prompt_with_timeout(
+                "  Re-run option 4 flow for these node(s) now? [Y/n]: ",
+                "y",
+                timeout=60,
+            ).strip().lower()
+            if _rerun_opt4 in ("", "y", "yes"):
+                _checkpoint_reset_peer_post_option4_progress(
+                    _failed_set, log=log, mode_label="2.1"
+                )
+                _2a_bootmenu_option1_nodes -= _failed_set
+                _pending = list(_failed)
+                print(f"\n  🔁 Replaying option 4 flow for {len(_failed)} node(s)...")
+                continue
+            if log:
+                log.log("2.1: operator declined option-4 replay after option-1 validation failures", prefix="ERROR")
             break
 
         print(f"\n  ⚠️  {len(_failed)} node(s) did not complete: {', '.join(_failed)}")
@@ -31504,6 +31893,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                        if _pipeline else peer_bmcs)
     _m3_results = []
     _pipeline_failed = []
+    _m3_bootmenu_option1_nodes = set()
 
     _mode3_ok = True
     if _pipeline:
@@ -31531,6 +31921,18 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         _m3_pending = list(dict.fromkeys(_m3_pending + _pipeline_failed))
 
     while _m3_pending:
+        _preflight = _preflight_resume_bootmenu_checkpoint_mismatch(
+            _m3_pending, _peer_bmc_creds.get(_m3_pending[0], {}).get("user") if _m3_pending else "admin",
+            {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "") for ip in _m3_pending},
+            mode_label="mode 3 add/retry",
+            log=_session_log,
+        )
+        if _preflight.get("abort"):
+            _mode3_ok = False
+            break
+        _m3_bootmenu_option1_nodes -= set(_preflight.get("rerun_option4_nodes") or set())
+        _m3_bootmenu_option1_nodes.update(_preflight.get("option1_nodes") or set())
+
         _set_checkpoint_test_parallel_scope(_m3_pending)
         _n3 = len(_m3_pending)
         _m3_results = [None] * _n3
@@ -31547,6 +31949,7 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
                         timings_record=_m3_peer_timings,
                         timings_lock=_m3_timings_lock,
                         cluster_ips_out=_m3_cluster_ips_out,
+                        resume_bootmenu_option1_nodes=_m3_bootmenu_option1_nodes,
                     )
                 except (_InjectedCheckpointFailure, _ReturnToMenu):
                     _m3_results[_ri] = False
@@ -31573,6 +31976,27 @@ def add_peer_nodes_parallel(primary_channel, peer_bmcs, admin_password,
         _m3_failed = [_m3_pending[i] for i, r in enumerate(_m3_results) if not r]
 
         if not _m3_failed:
+            break
+
+        _m3_failed_set = set(_m3_failed)
+        _m3_pending_set = set(_m3_pending)
+        _m3_opt1_batch = _m3_pending_set & set(_m3_bootmenu_option1_nodes)
+        if _m3_opt1_batch and _m3_failed_set == _m3_opt1_batch:
+            print("\n❌ All option-1 trusted mode-3 peers failed resume-evidence validation.")
+            _rerun_opt4 = _prompt_with_timeout(
+                "  Re-run option 4 flow for these peer node(s) now? [Y/n]: ",
+                "y",
+                timeout=60,
+            ).strip().lower()
+            if _rerun_opt4 in ("", "y", "yes"):
+                _checkpoint_reset_peer_post_option4_progress(
+                    _m3_failed_set, log=_session_log, mode_label="mode 3"
+                )
+                _m3_bootmenu_option1_nodes -= _m3_failed_set
+                _m3_pending = _m3_failed
+                print(f"\n🔁 Replaying option 4 flow for {len(_m3_failed)} mode-3 peer node(s)...")
+                continue
+            _mode3_ok = False
             break
 
         print(f"\n⚠️  {len(_m3_failed)} node(s) did not complete: {', '.join(_m3_failed)}")
@@ -36689,6 +37113,24 @@ def _run_2c_resume():
 
     _session_log.start_phase("2.3 – Resume Node Add")
     threads = []
+    _2c_results = {}
+    _2c_bootmenu_option1_nodes = set()
+    if retry_bmc_list:
+        _preflight_2c = _preflight_resume_bootmenu_checkpoint_mismatch(
+            retry_bmc_list,
+            "admin",
+            {ip: (_peer_bmc_creds.get(ip) or {}).get("password", "") for ip in retry_bmc_list},
+            mode_label="2.3 resume",
+            log=_session_log,
+        )
+        if _preflight_2c.get("abort"):
+            print("\n  ❌ 2.3 resume stopped by operator for manual troubleshooting.")
+            _session_log.log(
+                "2.3: operator chose manual troubleshooting after checkpoint/BMC mismatch",
+                prefix="ERROR",
+            )
+            return False
+        _2c_bootmenu_option1_nodes.update(_preflight_2c.get("option1_nodes") or set())
     _set_checkpoint_test_parallel_scope(retry_bmc_list)
     for _idx, _bmc in enumerate(retry_bmc_list):
         _creds = _peer_bmc_creds.get(_bmc) or {}
@@ -36696,13 +37138,16 @@ def _run_2c_resume():
         _p = _creds.get("password") or ""
         def _run_2c(_addr=_bmc, _u2=_u, _p2=_p):
             try:
-                _add_peer_node_thread(
+                _ok = _add_peer_node_thread(
                     _addr, _u2, _p2, primary_channel, cluster_admin_password,
                     cluster_ips_out=_2c_cluster_ips_out,
                     timings_record=_2c_peer_timings,
                     timings_lock=_2c_timings_lock,
+                    resume_bootmenu_option1_nodes=_2c_bootmenu_option1_nodes,
                 )
+                _2c_results[_addr] = bool(_ok)
             except (_InjectedCheckpointFailure, _ReturnToMenu):
+                _2c_results[_addr] = False
                 return
         _t = threading.Thread(
             target=_run_2c,
@@ -36718,6 +37163,60 @@ def _run_2c_resume():
         if not _join_threads_with_deadline(threads, label="mode 2.3", log=_session_log):
             return False
         _raise_pending_checkpoint_failure()
+        _2c_failed = [ip for ip in retry_bmc_list if not _2c_results.get(ip, False)]
+        if _2c_failed:
+            _2c_failed_set = set(_2c_failed)
+            _2c_opt1_batch = set(retry_bmc_list) & set(_2c_bootmenu_option1_nodes)
+            if _2c_opt1_batch and _2c_failed_set == _2c_opt1_batch:
+                print("\n  ❌ All option-1 trusted 2.3 nodes failed resume-evidence validation.")
+                _rerun_opt4_2c = _prompt_with_timeout(
+                    "  Re-run option 4 flow for these node(s) now? [Y/n]: ",
+                    "y",
+                    timeout=60,
+                ).strip().lower()
+                if _rerun_opt4_2c in ("", "y", "yes"):
+                    _checkpoint_reset_peer_post_option4_progress(
+                        _2c_failed_set, log=_session_log, mode_label="2.3 resume"
+                    )
+                    _2c_bootmenu_option1_nodes -= _2c_failed_set
+                    _retry_threads = []
+                    _2c_results_retry = {}
+                    for _bmc in _2c_failed:
+                        _creds = _peer_bmc_creds.get(_bmc) or {}
+                        _u = _creds.get("user") or "admin"
+                        _p = _creds.get("password") or ""
+                        def _run_2c_retry(_addr=_bmc, _u2=_u, _p2=_p):
+                            try:
+                                _ok = _add_peer_node_thread(
+                                    _addr, _u2, _p2, primary_channel, cluster_admin_password,
+                                    cluster_ips_out=_2c_cluster_ips_out,
+                                    timings_record=_2c_peer_timings,
+                                    timings_lock=_2c_timings_lock,
+                                    resume_bootmenu_option1_nodes=_2c_bootmenu_option1_nodes,
+                                )
+                                _2c_results_retry[_addr] = bool(_ok)
+                            except (_InjectedCheckpointFailure, _ReturnToMenu):
+                                _2c_results_retry[_addr] = False
+                        _t_retry = threading.Thread(
+                            target=_run_2c_retry,
+                            daemon=True,
+                            name=f"2.3-resume-retry-{_bmc}",
+                        )
+                        _t_retry.start()
+                        _retry_threads.append(_t_retry)
+                    if not _join_threads_with_deadline(
+                        _retry_threads, label="mode 2.3 retry", log=_session_log
+                    ):
+                        return False
+                    _raise_pending_checkpoint_failure()
+                    _2c_failed = [ip for ip in _2c_failed if not _2c_results_retry.get(ip, False)]
+            if _2c_failed:
+                print(f"\n  ❌ 2.3 resume failed for node(s): {', '.join(_2c_failed)}")
+                _session_log.log(
+                    f"2.3: node replay failed: {_2c_failed}",
+                    prefix="ERROR",
+                )
+                return False
     else:
         print("\n  ✅ No nodes need option 4 replay; using checkpointed cluster IPs directly.")
 
