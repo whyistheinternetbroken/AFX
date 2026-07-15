@@ -552,6 +552,22 @@ class CheckpointManager:
             if v.get("done")
         ]
 
+    def clear_node_done(self, phase: str, ip: str) -> None:
+        """Un-mark a per-node phase so the node can be re-processed.
+
+        Used to invalidate stale checkpoint state, e.g. when a saved
+        cluster interface IP is no longer reachable and the node must
+        redo option 4 to capture a fresh IP.
+        """
+        def _mutate(data) -> bool:
+            _phase_data = data.get("node_phases", {}).get(phase, {})
+            if ip not in _phase_data:
+                return False
+            del _phase_data[ip]
+            return True
+
+        self._save(mutator=_mutate)
+
     def set_current_phase(self, phase: str, state: str = "in_progress",
                           node_ip: str = "", next_phase: str = "") -> None:
         """Record the run's current phase in the checkpoint file.
@@ -28534,7 +28550,7 @@ def _ordered_cluster_ips_for_add(cluster_ips_out, preferred_bmcs=None):
 
 
 def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
-                            node_timings_out=None):
+                            node_timings_out=None, failed_ips_out=None):
     """Add multiple nodes in parallel via ONTAP's ``cluster add-node`` command.
 
     Runs ``cluster add-node -cluster-ips IP1,IP2,...`` on the primary channel
@@ -28544,6 +28560,10 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     If ``node_timings_out`` is provided (dict), it is populated with
     ``{cluster_ip: elapsed_seconds}`` recording when each node first
     reported 'success' relative to when the add-node command was issued.
+
+    If ``failed_ips_out`` is provided (list), it is populated with any
+    cluster IPs that ONTAP reported as unreachable when the command failed
+    (e.g. "Failed to contact node using cluster IP address").
     """
     if not cluster_ips:
         return True
@@ -28634,6 +28654,19 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     )
     if _add_cmd_failed:
         print("\n  ❌ cluster add-node command failed before status polling.")
+        # Parse unreachable cluster IPs from the ONTAP error text so the
+        # caller can identify which saved IPs are stale and offer cleanup.
+        _bad_ips = re.findall(
+            r"failed to contact node using cluster ip address\s+([\d.]+)",
+            _add_out_l,
+        )
+        if _bad_ips:
+            for _bad_ip in _bad_ips:
+                print(f"  ⚠️  Unreachable cluster IP: {_bad_ip}")
+                print(f"     This saved IP may be stale if the node was rebooted since")
+                print(f"     option 4 ran — the link-local cluster IP changes on each boot.")
+            if failed_ips_out is not None:
+                failed_ips_out.extend(_bad_ips)
         if log:
             log.log(
                 "cluster add-node command failed before status polling; "
@@ -34874,6 +34907,51 @@ def _update_node_add_manifest_node(bmc, *, cluster_ip="", node_name=""):
             _slog(f"Could not update node-add manifest {_path}: {_e}", prefix="WARN")
 
 
+def _clear_manifest_cluster_ip(bmc):
+    """Clear the saved ``cluster_ip`` for *bmc* in all known node-add manifests.
+
+    Called when a saved cluster IP is confirmed stale (e.g. unreachable via
+    RPC during ``cluster add-node``), so the next 2.3 run will capture a
+    fresh IP rather than reusing the stale one.
+    """
+    _bmc = str(bmc or "").strip()
+    if not _bmc:
+        return
+    try:
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        _script_dir = os.getcwd()
+    _cfg_dir = os.path.join(_script_dir, "configs")
+    _pointer_path = os.path.join(_cfg_dir, "last_node_add_manifest.json")
+    _paths = []
+    if _last_node_add_manifest and os.path.isfile(_last_node_add_manifest):
+        _paths.append(_last_node_add_manifest)
+    if os.path.isfile(_pointer_path) and _pointer_path not in _paths:
+        _paths.append(_pointer_path)
+    for _path in _paths:
+        try:
+            with open(_path, "r", encoding="utf-8") as _f:
+                _data = json.load(_f)
+            _nodes = _data.get("nodes")
+            if not isinstance(_nodes, list):
+                continue
+            _changed = False
+            for _node in _nodes:
+                if not isinstance(_node, dict):
+                    continue
+                if str(_node.get("bmc") or "").strip() != _bmc:
+                    continue
+                if _node.get("cluster_ip"):
+                    _node["cluster_ip"] = ""
+                    _changed = True
+                break
+            if _changed:
+                with open(_path, "w", encoding="utf-8") as _f:
+                    json.dump(_data, _f, indent=2)
+        except Exception as _e:
+            _slog(f"Could not clear cluster_ip in manifest {_path}: {_e}", prefix="WARN")
+
+
 def _recover_cluster_ip_from_checkpoint_log(checkpoint, bmc):
     """Best-effort recovery of a peer cluster IP from the prior checkpoint log_dir.
 
@@ -37767,9 +37845,11 @@ def _run_2c_resume():
                 pass
         return False
     if primary_channel and _2c_ips:
+        _2c_failed_ips: "list[str]" = []
         _2c_add_ok = _cluster_add_nodes_bulk(
             primary_channel, _2c_ips, log=_session_log,
             node_timings_out=_2c_add_node_timings,
+            failed_ips_out=_2c_failed_ips,
         )
         if not _2c_add_ok:
             print("\n  ❌ cluster add-node did not complete for all requested nodes.")
@@ -37777,6 +37857,44 @@ def _run_2c_resume():
                 "2.3: cluster add-node did not complete for requested nodes",
                 prefix="ERROR",
             )
+            # If specific cluster IPs were unreachable, map them back to their
+            # BMC addresses and offer to clear the stale checkpoint state so
+            # the next 2.3 run will redo option 4 and capture fresh IPs.
+            if _2c_failed_ips:
+                _stale_bmc_by_ip = {}
+                for _bmc, _info in _2c_cluster_ips_out.items():
+                    _cip = str(_info.get("cluster_ip") or "").strip()
+                    if _cip in _2c_failed_ips:
+                        _stale_bmc_by_ip[_cip] = _bmc
+                if _stale_bmc_by_ip:
+                    print(
+                        "\n  ⚠️  The following nodes have stale saved cluster IPs "
+                        "(node was likely rebooted between runs):"
+                    )
+                    for _cip, _bmc in sorted(_stale_bmc_by_ip.items()):
+                        print(f"     BMC {_bmc}  →  cluster IP {_cip} (unreachable)")
+                    print(
+                        "\n     To fix: clear the peer_option4_done checkpoint for these nodes."
+                        "\n     The next 2.3 run will then redo option 4 and capture a fresh IP."
+                    )
+                    _clear_ans = input(
+                        "\n  Clear stale checkpoint state for these node(s)? [Y/n]: "
+                    ).strip().lower()
+                    if _clear_ans in ("", "y", "yes"):
+                        for _cip, _bmc in _stale_bmc_by_ip.items():
+                            with suppress(Exception):
+                                _cp2c.clear_node_done("peer_option4_done", _bmc)
+                            _clear_manifest_cluster_ip(_bmc)
+                            print(f"  ✅ Cleared stale checkpoint for BMC {_bmc}.")
+                            _session_log.log(
+                                f"2.3: cleared stale peer_option4_done + cluster_ip for {_bmc} "
+                                f"(unreachable IP {_cip})"
+                            )
+                        print(
+                            "\n  Stale checkpoint cleared. Re-run option 2.3 to "
+                            "redo option 4 and retry cluster add-node."
+                        )
+
     elif not _2c_ips:
         print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
         _session_log.log("2.3: no cluster IPs collected; skipping cluster add-node",
