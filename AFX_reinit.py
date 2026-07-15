@@ -22663,7 +22663,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
         try:
             if _pstate != "cluster":
                 return None, f"console state is '{_pstate}'"
-            _rows, _, _ = _cluster_show_node_status(_pch)
+            _rows, _, _ = _cluster_show_node_status(_pch, shell_lock=None)
             if _rows > 1:
                 return None, "node already reports multi-node cluster show"
             _node_mgmt_map = _get_cluster_node_mgmt_ips(_pch)
@@ -28220,7 +28220,7 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
     _cluster_rows = -1
     for _probe_attempt in (1, 2):
         try:
-            _cluster_rows, _, _ = _cluster_show_node_status(ch)
+            _cluster_rows, _, _ = _cluster_show_node_status(ch, shell_lock=None)
         except Exception as _cs_err:
             _slog(f"[{label}] cluster show probe failed before cluster-IP capture: {_cs_err}", prefix="WARN")
             _cluster_rows = -1
@@ -28955,7 +28955,7 @@ def _should_run_storage_failover_gate(node_count, *, label=""):
     return True
 
 
-def _cluster_show_node_status(channel):
+def _cluster_show_node_status(channel, shell_lock=_primary_shell_lock):
     """Run `cluster show` and return `(node_rows, all_true, has_warning)`.
 
     `all_true` is True only if every node row reports both Health and
@@ -28963,8 +28963,16 @@ def _cluster_show_node_status(channel):
     command output contains the word 'warning' (case-insensitive) — for
     example the post-join 'Cluster HA must be configured...' notice.
     Returns `(-1, False, False)` on parse failure.
+
+    Pass ``shell_lock=None`` when calling from a peer thread with its own
+    independent channel — the global lock is only needed to protect the
+    shared primary shell from concurrent access.
     """
-    with _primary_shell_lock:
+    if shell_lock is not None:
+        with shell_lock:
+            with _suppress_console():
+                out = _run_cluster_command(channel, "cluster show", timeout=30)
+    else:
         with _suppress_console():
             out = _run_cluster_command(channel, "cluster show", timeout=30)
     rows = 0
