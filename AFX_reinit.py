@@ -37857,9 +37857,11 @@ def _run_2c_resume():
                 "2.3: cluster add-node did not complete for requested nodes",
                 prefix="ERROR",
             )
-            # If specific cluster IPs were unreachable, map them back to their
-            # BMC addresses and offer to clear the stale checkpoint state so
-            # the next 2.3 run will redo option 4 and capture fresh IPs.
+            # If specific cluster IPs were unreachable, the node was likely
+            # rebooted since option 4 ran — link-local cluster IPs change on
+            # each boot.  Try to SSH into each stale node via its node-mgmt IP,
+            # re-query the current cluster interface IP, update state in-memory
+            # and in the manifest, then retry cluster add-node immediately.
             if _2c_failed_ips:
                 _stale_bmc_by_ip = {}
                 for _bmc, _info in _2c_cluster_ips_out.items():
@@ -37873,42 +37875,203 @@ def _run_2c_resume():
                     )
                     for _cip, _bmc in sorted(_stale_bmc_by_ip.items()):
                         print(f"     BMC {_bmc}  →  cluster IP {_cip} (unreachable)")
-                    print(
-                        "\n     To fix: clear the peer_option4_done checkpoint for these nodes."
-                        "\n     The next 2.3 run will then redo option 4 and capture a fresh IP."
+                    print("\n  🔄 Attempting to re-query fresh cluster IPs via node-mgmt SSH...")
+                    _session_log.log(
+                        "2.3: attempting cluster IP refresh via node-mgmt SSH for stale nodes"
                     )
-                    _clear_ans = input(
-                        "\n  Clear stale checkpoint state for these node(s)? [Y/n]: "
-                    ).strip().lower()
-                    if _clear_ans in ("", "y", "yes"):
-                        for _cip, _bmc in _stale_bmc_by_ip.items():
-                            with suppress(Exception):
-                                _cp2c.clear_node_done("peer_option4_done", _bmc)
-                            _clear_manifest_cluster_ip(_bmc)
-                            print(f"  ✅ Cleared stale checkpoint for BMC {_bmc}.")
+
+                    # Build BMC → node-mgmt IP lookup from manifest nodes
+                    _mgmt_ip_by_bmc = {}
+                    for _nd in nodes_to_retry:
+                        _b = str(_nd.get("bmc") or "").strip()
+                        _mip = str(_nd.get("node_mgmt_ip") or "").strip()
+                        if _b and _mip:
+                            _mgmt_ip_by_bmc[_b] = _mip
+
+                    _refresh_ok_bmcs = []
+                    _refresh_fail_bmcs = []
+                    for _cip, _bmc in _stale_bmc_by_ip.items():
+                        _mip = _mgmt_ip_by_bmc.get(_bmc, "")
+                        if not _mip:
+                            print(f"  ⚠️  BMC {_bmc}: no node-mgmt IP in manifest; cannot refresh.")
                             _session_log.log(
-                                f"2.3: cleared stale peer_option4_done + cluster_ip for {_bmc} "
-                                f"(unreachable IP {_cip})"
+                                f"2.3: no node-mgmt IP for {_bmc}; cannot refresh cluster IP",
+                                prefix="WARN",
                             )
+                            _refresh_fail_bmcs.append(_bmc)
+                            continue
+                        print(f"  🔌 [{_bmc}] Connecting to node-mgmt {_mip} to re-query cluster IP...")
+                        _session_log.log(f"2.3: connecting to {_mip} for cluster IP refresh")
+                        _refresh_client = None
+                        _refresh_ch = None
+                        _fresh_ip = ""
+                        try:
+                            _refresh_client = paramiko.SSHClient()
+                            _refresh_client.set_missing_host_key_policy(
+                                paramiko.AutoAddPolicy()
+                            )
+                            _refresh_client.connect(
+                                hostname=_mip,
+                                username=cluster_admin_user or "admin",
+                                password=cluster_admin_password,
+                                timeout=30,
+                                banner_timeout=45,
+                                auth_timeout=30,
+                                disabled_algorithms={"pubkeys": ["ssh-dss"]},
+                            )
+                            _refresh_ch = _refresh_client.invoke_shell(
+                                width=220, height=50
+                            )
+                            _refresh_ch.settimeout(30)
+                            time.sleep(1)
+                            drain_channel(_refresh_ch, seconds=0.5)
+                            # Run net int show to get fresh cluster IPs
+                            for _cmd in (
+                                "set -rows 0; net int show -role cluster -fields address",
+                                "net int show -role cluster -fields address",
+                            ):
+                                _refresh_ch.send(_cmd + "\r")
+                                time.sleep(0.3)
+                                _raw = ""
+                                _t0 = time.monotonic()
+                                while time.monotonic() - _t0 < 20:
+                                    if _refresh_ch.recv_ready():
+                                        _raw += _refresh_ch.recv(4096).decode(
+                                            "utf-8", errors="replace"
+                                        )
+                                        if _CLUSTER_PROMPT_RE.search(_raw[-200:]):
+                                            break
+                                    else:
+                                        time.sleep(0.1)
+                                # Parse any 169.254.x.x IP from the output
+                                _ips_found = re.findall(
+                                    r'\b(169\.254\.\d+\.\d+)\b', _raw
+                                )
+                                if _ips_found:
+                                    _fresh_ip = _ips_found[0]
+                                    break
+                        except Exception as _re:
+                            _session_log.log(
+                                f"2.3: node-mgmt SSH to {_mip} failed: {_re}",
+                                prefix="WARN",
+                            )
+                        finally:
+                            if _refresh_ch:
+                                with suppress(Exception):
+                                    _refresh_ch.close()
+                            if _refresh_client:
+                                with suppress(Exception):
+                                    _refresh_client.close()
+
+                        if _fresh_ip and _is_valid_ipv4(_fresh_ip):
+                            print(f"  ✅ [{_bmc}] Fresh cluster IP: {_fresh_ip}")
+                            _session_log.log(
+                                f"2.3: refreshed cluster IP for {_bmc}: "
+                                f"{_cip} → {_fresh_ip}"
+                            )
+                            # Update in-memory cluster IPs map
+                            _existing_info = _2c_cluster_ips_out.get(_bmc) or {}
+                            _2c_cluster_ips_out[_bmc] = {
+                                "cluster_ip": _fresh_ip,
+                                "node_name": _existing_info.get("node_name") or "",
+                                "bmc": _bmc,
+                            }
+                            _update_node_add_manifest_node(_bmc, cluster_ip=_fresh_ip)
+                            _refresh_ok_bmcs.append(_bmc)
+                        else:
+                            print(
+                                f"  ❌ [{_bmc}] Could not retrieve fresh cluster IP "
+                                f"from node-mgmt {_mip}."
+                            )
+                            _session_log.log(
+                                f"2.3: cluster IP refresh failed for {_bmc} via {_mip}",
+                                prefix="WARN",
+                            )
+                            _refresh_fail_bmcs.append(_bmc)
+
+                    if _refresh_ok_bmcs:
+                        # Rebuild the IP list with fresh IPs and retry add-node
+                        _2c_ips_retry = _ordered_cluster_entries_for_add(
+                            _2c_cluster_ips_out,
+                            preferred_bmcs=_2c_preferred_bmcs,
+                        )
                         print(
-                            "\n  Stale checkpoint cleared. Re-run option 2.3 to "
-                            "redo option 4 and retry cluster add-node."
+                            f"\n  🔄 Retrying cluster add-node with refreshed IPs..."
                         )
-                        _session_log.log(
-                            "2.3: stale checkpoint cleared; returning to menu for retry",
+                        _2c_add_node_timings_retry: "dict[str, float]" = {}
+                        _2c_failed_ips_retry: "list[str]" = []
+                        _2c_add_ok = _cluster_add_nodes_bulk(
+                            primary_channel,
+                            _2c_ips_retry,
+                            log=_session_log,
+                            node_timings_out=_2c_add_node_timings_retry,
+                            failed_ips_out=_2c_failed_ips_retry,
                         )
-                        _session_log.set_outcome(
-                            "PASS",
-                            "stale cluster IP checkpoint cleared — re-run option 2.3",
+                        _2c_add_node_timings.update(_2c_add_node_timings_retry)
+                        if _2c_add_ok:
+                            _session_log.log(
+                                "2.3: cluster add-node succeeded after cluster IP refresh"
+                            )
+                        else:
+                            _session_log.log(
+                                "2.3: cluster add-node still failed after cluster IP refresh",
+                                prefix="ERROR",
+                            )
+                            _2c_failed_ips = _2c_failed_ips_retry
+
+                    # If any nodes could not be refreshed, or add-node still
+                    # failed, offer the checkpoint-clear fallback for those nodes.
+                    _still_stale = {
+                        _cip: _bmc
+                        for _cip, _bmc in _stale_bmc_by_ip.items()
+                        if _bmc in _refresh_fail_bmcs
+                        or (
+                            not _2c_add_ok
+                            and _cip in (_2c_failed_ips or [])
                         )
-                        _session_log.end_phase(outcome="PASS")
-                        _session_log.record_completion(normal_exit=True)
-                        if hasattr(_session_log, "log_file") and _session_log.log_file:
-                            print(f"\n📝 Session log saved to: {_session_log.log_file}")
-                        if primary_client:
-                            with suppress(Exception):
-                                primary_client.close()
-                        raise _ReturnToMenu
+                    }
+                    if _still_stale and not _2c_add_ok:
+                        print(
+                            "\n  ⚠️  The following nodes still have unresolvable cluster IPs:"
+                        )
+                        for _cip, _bmc in sorted(_still_stale.items()):
+                            print(f"     BMC {_bmc}  →  cluster IP {_cip}")
+                        print(
+                            "\n     Clearing peer_option4_done will force option 4 to re-run"
+                            "\n     on the next 2.3 attempt, capturing a fresh cluster IP."
+                        )
+                        _clear_ans = input(
+                            "\n  Clear stale checkpoint state for these node(s)? [Y/n]: "
+                        ).strip().lower()
+                        if _clear_ans in ("", "y", "yes"):
+                            for _cip, _bmc in _still_stale.items():
+                                with suppress(Exception):
+                                    _cp2c.clear_node_done("peer_option4_done", _bmc)
+                                _clear_manifest_cluster_ip(_bmc)
+                                print(f"  ✅ Cleared stale checkpoint for BMC {_bmc}.")
+                                _session_log.log(
+                                    f"2.3: cleared stale peer_option4_done + cluster_ip "
+                                    f"for {_bmc} (unreachable IP {_cip})"
+                                )
+                            print(
+                                "\n  Stale checkpoint cleared. Re-run option 2.3 to "
+                                "redo option 4 and retry cluster add-node."
+                            )
+                            _session_log.log(
+                                "2.3: stale checkpoint cleared; returning to menu for retry",
+                            )
+                            _session_log.set_outcome(
+                                "PASS",
+                                "stale cluster IP checkpoint cleared — re-run option 2.3",
+                            )
+                            _session_log.end_phase(outcome="PASS")
+                            _session_log.record_completion(normal_exit=True)
+                            if hasattr(_session_log, "log_file") and _session_log.log_file:
+                                print(f"\n📝 Session log saved to: {_session_log.log_file}")
+                            if primary_client:
+                                with suppress(Exception):
+                                    primary_client.close()
+                            raise _ReturnToMenu
 
     elif not _2c_ips:
         print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
