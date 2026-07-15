@@ -26375,8 +26375,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             return False
         _which_l = str(_which or "").lower()
 
+    # _cluster_create_in_progress must be initialised here so it is always
+    # bound even when the node-management while-loop below does not execute
+    # (e.g. node-mgmt prompts were already answered inside auto_complete_init
+    # and _wait_for_wizard_start returned "Welcome to the cluster setup wizard").
+    _cluster_create_in_progress = (_which_l == "__cluster_create_in_progress__")
     _skip_create_steps = bool(
-        _which_l and (
+        (not _cluster_create_in_progress) and _which_l and (
             "cluster management interface" in _which_l
             or "dns domain name" in _which_l
             or "dns domain names" in _which_l
@@ -26389,6 +26394,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     _skip_to_cluster_name = bool(
         not _cluster_shell_resume_ready
         and not _skip_create_steps
+        and not _cluster_create_in_progress
         and "enter the cluster name" in _which_l
     )
     # If node management prompts are still pending (session resumed past them or they
