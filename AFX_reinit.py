@@ -37894,6 +37894,21 @@ def _run_2c_resume():
                             "\n  Stale checkpoint cleared. Re-run option 2.3 to "
                             "redo option 4 and retry cluster add-node."
                         )
+                        _session_log.log(
+                            "2.3: stale checkpoint cleared; returning to menu for retry",
+                        )
+                        _session_log.set_outcome(
+                            "PASS",
+                            "stale cluster IP checkpoint cleared — re-run option 2.3",
+                        )
+                        _session_log.end_phase(outcome="PASS")
+                        _session_log.record_completion(normal_exit=True)
+                        if hasattr(_session_log, "log_file") and _session_log.log_file:
+                            print(f"\n📝 Session log saved to: {_session_log.log_file}")
+                        if primary_client:
+                            with suppress(Exception):
+                                primary_client.close()
+                        raise _ReturnToMenu
 
     elif not _2c_ips:
         print("\n  ⚠️  No cluster IPs collected; skipping cluster add-node.")
