@@ -15925,7 +15925,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
         if _panic_sig in _scan:
             _recovered = _recover_from_panic()
             if not _recovered:
-                return False
+                return False, ""
             _deadline = time.monotonic() + max(30, int(timeout))
             _last_tick = time.monotonic()
             _active_t0 = _last_tick
@@ -15944,7 +15944,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
             channel.send("\r")
             if _session_log:
                 _session_log.log_sent("<Enter>")
-            return True
+            return True, _scan
         if _cluster_mgmt_port_trigger in _scan or _cluster_mgmt_ip_trigger in _scan:
             # Do not auto-send Enter here; the caller immediately drives the
             # management-interface wizard steps and must consume this prompt.
@@ -15953,7 +15953,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
                 "returning control without auto-advancing prompt",
                 prefix="INFO",
             )
-            return True
+            return True, _scan
         if _matched and str(_matched) in _cluster_prompt_triggers:
             _rows, _all_true, _has_warn = _cluster_show_node_status(channel)
             if _rows >= 1:
@@ -15962,7 +15962,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
                     "treating post-create stage as complete",
                     prefix="WARN",
                 )
-                return True
+                return True, _scan
 
         _heartbeat_seconds = _default_heartbeat_seconds
         if _active_idx >= 0 and _milestones[_active_idx][0] == "Mounting Root Volume.":
@@ -15992,7 +15992,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
     channel.send("\r")
     if _session_log:
         _session_log.log_sent("<Enter>")
-    return False
+    return False, ""
 
 
 def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
@@ -26070,6 +26070,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         )
         break
     _cluster_create_resumed_from_bmc = False
+    _post_create_prefetch = ""
     if _cluster_create_in_progress and (not _cluster_shell_resume_ready):
         _cluster_create_resumed_from_bmc = True
         _slog(
@@ -26087,7 +26088,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             f"\n⏳ {_wizard_pfx}Cluster create in progress — monitoring ONTAP milestones...{_elapsed_str()}"
         )
         print(f"   (Full console output: {_log_path})")
-        _post_prompt_ok_live = _wait_for_cluster_create_post_prompts(
+        _post_prompt_ok_live, _post_create_prefetch = _wait_for_cluster_create_post_prompts(
             channel,
             timeout=1800,
             node_log=node_log,
@@ -26166,7 +26167,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         )
         print(f"   (Full console output: {_log_path})")
         _slog("Cluster create started (skip-to-cluster-name path) - monitoring ONTAP progress milestones")
-        _post_prompt_ok_scn = _wait_for_cluster_create_post_prompts(
+        _post_prompt_ok_scn, _post_create_prefetch = _wait_for_cluster_create_post_prompts(
             channel,
             timeout=1800,
             node_log=node_log,
@@ -26441,7 +26442,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         )
         print(f"   (Full console output: {_log_path})")
         _slog("Cluster create started - monitoring ONTAP progress milestones")
-        _post_prompt_ok = _wait_for_cluster_create_post_prompts(
+        _post_prompt_ok, _post_create_prefetch = _wait_for_cluster_create_post_prompts(
             channel,
             timeout=1800,
             node_log=node_log,
@@ -26487,7 +26488,22 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             _session_log.log_sent(_resp if _resp else "<Enter>")
         time.sleep(0.5)
 
-    def _wizard_step_checkpoint_aware(cp_id, trigger, response, label, timeout):
+    def _wizard_step_checkpoint_aware(cp_id, trigger, response, label, timeout,
+                                      prefetched_prompt_text=""):
+        _prefetch_l = str(prefetched_prompt_text or "").lower()
+        _trigger_lower = str(trigger or "").lower()
+        if _trigger_lower and _trigger_lower in _prefetch_l:
+            _slog(
+                f"{cp_id}: consuming prefetched wizard prompt '{trigger}' captured by post-create monitor"
+            )
+            _wizard_send_value_with_default(
+                trigger,
+                response,
+                label,
+                prompt_text=str(prefetched_prompt_text or ""),
+            )
+            _cp_mark(cp_id)
+            return _prefetch_l.replace(_trigger_lower, "", 1)
         if _cp_done(cp_id):
             _slog(f"{cp_id} already complete; probing for replayed prompt '{trigger}'")
             with suppress(Exception):
@@ -26525,7 +26541,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     f"{cp_id} already complete; no known wizard prompt replayed; "
                     "skipping fallback send to avoid misaligned input"
                 )
-            return
+            return _prefetch_l
         _wait_and_send(
             channel,
             trigger,
@@ -26536,27 +26552,32 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             quiet=bool(node_log),
         )
         _cp_mark(cp_id)
+        return ""
 
-    _wizard_step_checkpoint_aware(
+    _wizard_prefetched_prompt_text = str(_post_create_prefetch or "")
+    _wizard_prefetched_prompt_text = _wizard_step_checkpoint_aware(
         "cp_1_7_6",
         "cluster management interface port",
         cc["mgmt_port"],
         f"Cluster mgmt port -> {cc['mgmt_port']}",
         timeout=900,
+        prefetched_prompt_text=_wizard_prefetched_prompt_text,
     )
-    _wizard_step_checkpoint_aware(
+    _wizard_prefetched_prompt_text = _wizard_step_checkpoint_aware(
         "cp_1_7_7",
         "cluster management interface ip address",
         cc["mgmt_ip"],
         f"Cluster mgmt IP -> {cc['mgmt_ip']}",
         timeout=600,
+        prefetched_prompt_text=_wizard_prefetched_prompt_text,
     )
-    _wizard_step_checkpoint_aware(
+    _wizard_prefetched_prompt_text = _wizard_step_checkpoint_aware(
         "cp_1_7_8",
         "cluster management interface netmask",
         cc["mgmt_netmask"],
         f"Cluster mgmt netmask -> {cc['mgmt_netmask']}",
         timeout=600,
+        prefetched_prompt_text=_wizard_prefetched_prompt_text,
     )
     # Send the cluster-management gateway and re-prompt on rejection.
     # ONTAP prints "not a valid gateway address" when the supplied value is
@@ -27314,9 +27335,19 @@ def _run_join_wizard(channel, label="join wizard", initial_buf: str = "",
         print(f"\n🔒 [{label}] Waiting for join lock...")
         _slog(f"[{label}] waiting to acquire _join_lock")
         with _join_lock:
-            _slog(f"[{label}] acquired _join_lock; sending 'join'")
-            _wait_and_send(channel, "do you want to create a new cluster or join",
-                           "join", f"[{label}] Create or join -> join", timeout=900)
+            if _is_create_join:
+                # The create/join prompt can already be present in _which from the
+                # initial wizard-start read. Sending directly avoids waiting for a
+                # prompt reprint that may never happen.
+                _slog(f"[{label}] acquired _join_lock; using prefetched create/join prompt to send 'join'")
+                channel.send("join\r")
+                if _session_log:
+                    _session_log.log_sent("join")
+                time.sleep(0.5)
+            else:
+                _slog(f"[{label}] acquired _join_lock; sending 'join'")
+                _wait_and_send(channel, "do you want to create a new cluster or join",
+                               "join", f"[{label}] Create or join -> join", timeout=900)
     else:
         print(f"\n✅ [{label}] Create/join prompt detected (no 'Press Enter' screen) – sending 'join'")
         _slog(f"[{label}] Sent 'join' at create/join prompt (Press Enter screen skipped)")
