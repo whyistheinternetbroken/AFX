@@ -10523,7 +10523,11 @@ def enter_system_console(channel, loader_message=True, force_takeover=True):
         return
 
     # Only issue "system console" from a BMC prompt.
-    if "bmc" in probe_lower or (probe_matched and probe_matched == ">"):
+    # Some SP/BMC consoles can return only CR/LF on probe; treat a blank probe
+    # as likely BMC and attempt console entry instead of skipping outright.
+    if ("bmc" in probe_lower
+            or (probe_matched and probe_matched == ">")
+            or not probe_out.strip()):
         print("✅ BMC prompt detected. Entering system console...")
         _slog("BMC prompt confirmed; sending 'system console'")
     else:
@@ -15134,6 +15138,20 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
     _last_loader_recovery = 0.0
     _loader_recovery_attempts = 0
 
+    def _detect_cluster_shell_resume_ready(_scan_text: str) -> bool:
+        _scan_l = str(_scan_text or "").lower()
+        if "::>" not in _scan_l and "::*>" not in _scan_l:
+            return False
+        _rows, _all_true, _has_warn = _cluster_show_node_status(channel)
+        if _rows >= 1:
+            _slog(
+                "Wizard-start wait detected active cluster shell with cluster show output; "
+                "resuming as already-configured cluster",
+                prefix="WARN",
+            )
+            return True
+        return False
+
     def _try_recover_from_login_prompt() -> bool:
         nonlocal output, output_lower, start, last_data, last_nudge
         nonlocal _last_login_recovery, _login_recovery_attempts
@@ -15441,6 +15459,8 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
     for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
         if trigger_lower in output_lower:
             return trigger
+    if _detect_cluster_shell_resume_ready(output_lower):
+        return "__cluster_shell_ready__"
     if _output_contains_cluster_create_progress(output_lower):
         return "__cluster_create_in_progress__"
 
@@ -15500,6 +15520,8 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                 _loader_recovered = _try_recover_from_loader_prompt()
                 if _loader_recovered:
                     return _loader_recovered
+            if _detect_cluster_shell_resume_ready(output_lower):
+                return "__cluster_shell_ready__"
             if (
                 "login:" in chunk.lower() and _has_real_cluster_login_prompt(output)
             ):
@@ -15552,6 +15574,8 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                     _recovered = _try_recover_from_login_prompt()
                     if _recovered:
                         return _recovered
+                elif _detect_cluster_shell_resume_ready(output_lower):
+                    return "__cluster_shell_ready__"
                 elif '(username "admin") password:' in output_lower:
                     # Wizard is asking to SET the admin password; send it directly.
                     _wizard_admin_pw = str((_cluster_config or {}).get("admin_password") or "").strip()
@@ -15608,6 +15632,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
     _license_trigger = "enter an additional license key"
     _cluster_mgmt_port_trigger = "cluster management interface port"
     _cluster_mgmt_ip_trigger = "cluster management interface ip address"
+    _cluster_prompt_triggers = ("::>", "::*>")
     _pfx = _node_pfx(node_label)
     _cluster_display = str(cluster_name or "").strip()
     _t0 = time.monotonic()
@@ -15671,6 +15696,9 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
                 _watch_tokens.append(__sig)
     if _panic_sig not in _watch_tokens:
         _watch_tokens.append(_panic_sig)
+    for _cp_sig in _cluster_prompt_triggers:
+        if _cp_sig not in _watch_tokens:
+            _watch_tokens.append(_cp_sig)
 
     def _prompt_continue_after_panic() -> bool:
         _ans = _prompt_with_timeout(
@@ -15916,6 +15944,15 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
             if _session_log:
                 _session_log.log_sent("<Enter>")
             return True
+        if _matched and str(_matched) in _cluster_prompt_triggers:
+            _rows, _all_true, _has_warn = _cluster_show_node_status(channel)
+            if _rows >= 1:
+                _slog(
+                    "Cluster-create monitor detected active cluster shell; "
+                    "treating post-create stage as complete",
+                    prefix="WARN",
+                )
+                return True
 
         _heartbeat_seconds = _default_heartbeat_seconds
         if _active_idx >= 0 and _milestones[_active_idx][0] == "Mounting Root Volume.":
@@ -17132,6 +17169,52 @@ def _apply_ntp_servers(channel, servers_override=None):
 
     if _session_log:
         _session_log.end_phase()
+
+
+def _apply_dns_configuration(channel, cc=None):
+    """Apply cluster DNS domains/servers from cluster config when missing."""
+    _cfg = cc or _cluster_config or {}
+    _dns_domains = str((_cfg or {}).get("dns_domains") or "").strip()
+    _dns_servers = str((_cfg or {}).get("dns_servers") or "").strip()
+    if not _dns_domains and not _dns_servers:
+        return
+
+    _dns_create_parts = ["dns create"]
+    _dns_modify_parts = ["dns modify"]
+    if _dns_domains:
+        _dns_create_parts.append(f"-domains {_dns_domains}")
+        _dns_modify_parts.append(f"-domains {_dns_domains}")
+    if _dns_servers:
+        _dns_create_parts.append(f"-name-servers {_dns_servers}")
+        _dns_modify_parts.append(f"-name-servers {_dns_servers}")
+    _dns_create_cmd = " ".join(_dns_create_parts)
+    _dns_modify_cmd = " ".join(_dns_modify_parts)
+
+    print("\n⏳ Configuring DNS settings...")
+    if _session_log:
+        _session_log.log(
+            f"DNS settings to configure: domains={_dns_domains or '<none>'}, "
+            f"servers={_dns_servers or '<none>'}"
+        )
+
+    try:
+        _slog(_dns_create_cmd)
+        _out = _run_cluster_command(channel, _dns_create_cmd, timeout=45)
+        _out_l = str(_out or "").lower()
+        if any(_w in _out_l for _w in ("error", "failed", "already exists", "duplicate")):
+            _slog(
+                "dns create reported existing/partial config; attempting dns modify",
+                prefix="WARN",
+            )
+            _out_mod = _run_cluster_command(channel, _dns_modify_cmd, timeout=45)
+            _out_mod_l = str(_out_mod or "").lower()
+            if any(_w in _out_mod_l for _w in ("error", "failed")):
+                raise RuntimeError(f"dns modify response indicates failure: {_out_mod[:200]}")
+        print("  ✅ DNS configuration applied.")
+    except Exception as _dns_e:
+        print(f"  ❌ DNS configuration failed: {_dns_e}")
+        if _session_log:
+            _session_log.log(f"DNS configuration error: {_dns_e}", prefix="ERROR")
 
 
 def _split_cluster_config_values(raw_value):
@@ -25790,6 +25873,24 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     def _cp_done(_cp_id: str) -> bool:
         return _checkpoint_phase_done(_cp_id, node_id=_primary_cp_node)
 
+    def _backfill_resume_checkpoints_from_cluster_shell():
+        """Persist checkpoint progress inferred from a verified active cluster shell."""
+        if not _checkpoint:
+            return
+        for _cp_seed in ("cp_1_7", "cp_1_7_5", "cp_1_7_6", "cp_1_7_7", "cp_1_7_8", "cp_1_7_9", "cp_1_7_10", "cp_1_7_11"):
+            if not _cp_done(_cp_seed):
+                _cp_mark(_cp_seed)
+        try:
+            _checkpoint.mark_done("cluster_formed")
+            _checkpoint.mark_done("primary_setup_done")
+            if _operation_mode == 3 and not _cp_done("cp_1_8"):
+                _cp_mark("cp_1_8", _alias="primary_setup_done")
+            _slog("Resume self-heal: backfilled cluster-shell checkpoints (cp_1_7..cp_1_8/global flags)")
+        except _InjectedCheckpointFailure:
+            raise
+        except Exception as _bf_e:
+            _slog(f"Resume self-heal checkpoint backfill warning: {_bf_e}", prefix="WARN")
+
     # On resume from any cp_1_7_* sub-checkpoint or later, reload persisted SSH and AutoSupport preferences.
     if _checkpoint and (_checkpoint_phase_done("cp_1_6", node_id=_primary_cp_node) or 
                         _checkpoint_phase_done("cp_1_7", node_id=_primary_cp_node)):
@@ -25854,10 +25955,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     if _cluster_shell_resume_ready:
         print(f"\n⏭️ {_wizard_pfx}Resume detected active cluster shell; skipping initial cluster-create wizard prompts.{_elapsed_str()}")
         _slog("Mode 1 resume: cluster shell already active; skipping create/join replay")
-        _cp_mark("cp_1_7")
-        for _cp_seed in ("cp_1_7_6", "cp_1_7_7", "cp_1_7_8", "cp_1_7_9", "cp_1_7_10", "cp_1_7_11"):
-            if not _cp_done(_cp_seed):
-                _cp_mark(_cp_seed)
+        _backfill_resume_checkpoints_from_cluster_shell()
     else:
         print(f"\n⏳ {_wizard_pfx}Cluster setup has begun...{_elapsed_str()}")
         _slog("Cluster setup wizard started")
@@ -26710,6 +26808,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     _cluster_shell_ready = _login_primary_cluster_shell(channel, cc.get("admin_password"))
     if _cluster_shell_ready:
         _cluster_cfg_probe = _probe_cluster_setup_configuration(channel, cc)
+        if _cluster_cfg_probe:
+            if _cluster_cfg_probe.get("dns_present") and not _cp_done("cp_1_7_10"):
+                _cp_mark("cp_1_7_10")
+                _slog("Resume self-heal: backfilled cp_1_7_10 from dns show state")
+            if _cluster_cfg_probe.get("ntp_present") and not _cp_done("cp_1_7_13"):
+                _cp_mark("cp_1_7_13")
+                _slog("Resume self-heal: backfilled cp_1_7_13 from ntp server show state")
         if not _cp_done("cp_1_7_12"):
             try:
                 _cp12_nodes = _cluster_show_node_count(channel)
@@ -26747,6 +26852,22 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             if _session_log:
                 _session_log.log(
                     "Cluster shell login failed for license application",
+                    prefix="WARN",
+                )
+
+    # Apply DNS settings if configured.
+    if cc.get("dns_domains") or cc.get("dns_servers"):
+        if _cluster_shell_ready or _login_primary_cluster_shell(channel, cc.get("admin_password")):
+            if _cluster_cfg_probe and _cluster_cfg_probe.get("dns_present"):
+                print("\n✅ DNS already configured (dns show); skipping DNS reconfiguration.")
+                _slog("Skipping DNS configuration because expected DNS values are already present")
+            else:
+                _apply_dns_configuration(channel, cc=cc)
+        else:
+            print("\n  ⚠️  Could not log in to cluster shell for DNS configuration.")
+            if _session_log:
+                _session_log.log(
+                    "Cluster shell login failed for DNS configuration",
                     prefix="WARN",
                 )
 
