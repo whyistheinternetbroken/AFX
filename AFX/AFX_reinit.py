@@ -15069,6 +15069,23 @@ _WIZARD_START_TRIGGERS = [
     "would you like to enable autosupport",
 ]
 
+_CLUSTER_CREATE_PROGRESS_TRIGGERS = [
+    "creating cluster",
+    "system start up",
+    "storage pod setup",
+    "updating volume location database",
+    "vifmgr.started",
+    "vifmgr.port.discovered",
+    "diskown.changingstoragepod",
+    "creating root aggregate",
+    "mounting root volume",
+    "creating data aggregate",
+    "cluster has been created",
+    "enter an additional license key",
+    "cluster management interface port",
+    "cluster management interface ip address",
+]
+
 _FATAL_BOOT_INTEGRITY_SIGS = [
     "sha256 checksum failure: varfs.tgz",
     "netapp_varfs: sha256 checksum failure detected in boot device",
@@ -15087,6 +15104,12 @@ def _output_contains_wizard_start(text: str) -> bool:
     _lower = str(text or "").lower()
     return any(_trigger in _lower for _trigger in _WIZARD_START_TRIGGERS)
 
+
+def _output_contains_cluster_create_progress(text: str) -> bool:
+    _lower = str(text or "").lower()
+    return any(_trigger in _lower for _trigger in _CLUSTER_CREATE_PROGRESS_TRIGGERS)
+
+
 def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: str = ""):
     """Wait for the ONTAP cluster-setup wizard to display its first prompt.
 
@@ -15096,6 +15119,8 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
     Returns the matched trigger string, or None on timeout.
     May also return "__loader_resume_declined__" when operator chooses to
     stop after a LOADER prompt is detected during mode-1 resume.
+    Returns "__cluster_create_in_progress__" when node output indicates the
+    cluster-create phase is already running (resume self-heal path).
     """
     triggers_lower = [t.lower() for t in _WIZARD_START_TRIGGERS]
     output = initial_buf or ""
@@ -15302,6 +15327,13 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                     last_data = time.monotonic()
                     last_nudge = last_data
                     return trigger
+            if _output_contains_cluster_create_progress(_ws_scan):
+                _slog(
+                    "Wizard-start recovery detected cluster-create progress already in flight; "
+                    "resuming from live BMC state",
+                    prefix="WARN",
+                )
+                return "__cluster_create_in_progress__"
             # 'login:' without a wizard trigger means setup isn't running yet.
             if "login:" in _ws_scan:
                 break
@@ -15409,6 +15441,8 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
     for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
         if trigger_lower in output_lower:
             return trigger
+    if _output_contains_cluster_create_progress(output_lower):
+        return "__cluster_create_in_progress__"
 
     while time.monotonic() - start < timeout:
         if _shutdown_event.is_set():
@@ -15488,6 +15522,13 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
             for trigger, trigger_lower in zip(_WIZARD_START_TRIGGERS, triggers_lower):
                 if trigger_lower in output_lower:
                     return trigger
+            if _output_contains_cluster_create_progress(output_lower):
+                _slog(
+                    "Wizard-start wait detected cluster-create progress already in flight; "
+                    "resuming from live BMC state",
+                    prefix="WARN",
+                )
+                return "__cluster_create_in_progress__"
             if len(output_lower) > 16384:
                 output_lower = output_lower[-8192:]
         else:
@@ -15521,6 +15562,13 @@ def _wait_for_wizard_start(channel, timeout=1800, node_log=None, initial_buf: st
                     output = ""
                     output_lower = ""
                     last_data = now
+                elif _output_contains_cluster_create_progress(output_lower):
+                    _slog(
+                        "Wizard-start idle monitor detected cluster-create progress already in flight; "
+                        "resuming from live BMC state",
+                        prefix="WARN",
+                    )
+                    return "__cluster_create_in_progress__"
                 else:
                     channel.send("\r")
                     _slog("No wizard prompt seen for 15s; sending CR to nudge")
@@ -25895,8 +25943,9 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 _session_log.set_outcome("FAIL", "wizard start timeout after node management")
             return False
         _which_l = str(_which or "").lower()
+        _cluster_create_in_progress = (_which_l == "__cluster_create_in_progress__")
         _skip_create_steps = bool(
-            _which_l and (
+            (not _cluster_create_in_progress) and _which_l and (
                 "cluster management interface" in _which_l
                 or "dns domain name" in _which_l
                 or "dns domain names" in _which_l
@@ -25907,9 +25956,49 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _skip_to_cluster_name = bool(
             not _cluster_shell_resume_ready
             and not _skip_create_steps
+            and not _cluster_create_in_progress
             and "enter the cluster name" in _which_l
         )
         break
+    _cluster_create_resumed_from_bmc = False
+    if _cluster_create_in_progress and (not _cluster_shell_resume_ready):
+        _cluster_create_resumed_from_bmc = True
+        _slog(
+            "Wizard-start probe indicates cluster-create is already in progress; "
+            "self-healing resume from live BMC state",
+            prefix="WARN",
+        )
+        print(
+            f"\n⏭️  {_wizard_pfx}Cluster create already in progress on console — "
+            f"skipping wizard create steps and resuming progress monitor...{_elapsed_str()}"
+        )
+        _cp_mark("cp_1_7")
+        _log_path = _session_log.log_file if _session_log else "the log file"
+        print(
+            f"\n⏳ {_wizard_pfx}Cluster create in progress — monitoring ONTAP milestones...{_elapsed_str()}"
+        )
+        print(f"   (Full console output: {_log_path})")
+        _post_prompt_ok_live = _wait_for_cluster_create_post_prompts(
+            channel,
+            timeout=1800,
+            node_log=node_log,
+            cluster_name=cc.get("name", ""),
+            node_label=primary_bmc or "",
+        )
+        if not _post_prompt_ok_live:
+            print("\n❌ Cluster create did not recover to post-create prompts.")
+            if _session_log:
+                _session_log.log(
+                    "Cluster create monitor failed (self-heal resume from live BMC state)",
+                    prefix="ERROR",
+                )
+                _session_log.set_outcome("FAIL", "cluster create monitor recovery failed (live BMC resume)")
+            return False
+        _cp_mark("cp_1_7_5")
+        print(
+            f"\n✅ {_wizard_pfx}Cluster create complete — continuing management network configuration...{_elapsed_str()}"
+        )
+        print(f"   (Full console output: {_log_path})")
     if _skip_create_steps and (not _cluster_shell_resume_ready):
         _slog("Wizard already at cluster management port; marking cp_1_7 and skipping create steps")
         print("\n⏭️ Wizard already at cluster management port; skipping to management interface configuration.")
@@ -25989,7 +26078,7 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             f"\n✅ {_wizard_pfx}Cluster create complete — continuing management network configuration...{_elapsed_str()}"
         )
         print(f"   (Full console output: {_log_path})")
-    if (not _skip_create_steps) and (not _cluster_shell_resume_ready) and (not _skip_to_cluster_name):
+    if (not _skip_create_steps) and (not _cluster_shell_resume_ready) and (not _skip_to_cluster_name) and (not _cluster_create_resumed_from_bmc):
         # Always send one Enter after wizard-start detection. In fast paths, the
         # create/join text can be present in residual output while ONTAP still
         # requires Enter to continue from the "Otherwise, press Enter..." gate.
@@ -26181,15 +26270,28 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             time.sleep(0.5)
         elif not _wizard_at_admin_pw:
             print(f"   ⏳ {_wizard_pfx}Waiting for cluster name / admin-password prompts...{_elapsed_str()}")
+        _cw_progress_seen = False
         _cw_deadline = time.monotonic() + 600
         while _cw_remain and not _shutdown_event.is_set() and time.monotonic() < _cw_deadline:
             _cw_out, _cw_m = direct_read_until_any(
                 channel,
-                list(_cw_remain.keys()),
+                list(_cw_remain.keys()) + list(_CLUSTER_CREATE_PROGRESS_TRIGGERS),
                 timeout=min(30, max(1, int(_cw_deadline - time.monotonic()))),
                 node_log=node_log, quiet=bool(node_log),
             )
             _cw_scan = (str(_cw_out or "") + "\n" + str(_cw_m or "")).lower()
+            if _output_contains_cluster_create_progress(_cw_scan):
+                _cw_progress_seen = True
+                _slog(
+                    "Create wizard: cluster-create progress detected while waiting for remaining prompts; "
+                    "assuming prompts were already satisfied and moving to progress monitor",
+                    prefix="WARN",
+                )
+                print(
+                    f"   ⏭️  {_wizard_pfx}Cluster-create progress detected — "
+                    f"resuming monitor from live console state...{_elapsed_str()}"
+                )
+                break
             _cw_key = next((k for k in list(_cw_remain.keys()) if k in _cw_scan), None)
             if _cw_key:
                 if "cluster name" in _cw_key:
@@ -26208,10 +26310,17 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     _session_log.log_sent("<hidden>" if _is_hide else _cw_val)
                 time.sleep(0.5)
         if _cw_remain:
-            _slog(
-                f"Create wizard: prompts not seen within timeout (may already be answered): {list(_cw_remain.keys())}",
-                prefix="WARN",
-            )
+            if _cw_progress_seen:
+                _slog(
+                    f"Create wizard: skipping missing prompt wait because cluster-create is already active: "
+                    f"{list(_cw_remain.keys())}",
+                    prefix="INFO",
+                )
+            else:
+                _slog(
+                    f"Create wizard: prompts not seen within timeout (may already be answered): {list(_cw_remain.keys())}",
+                    prefix="WARN",
+                )
 
         # After the cluster name is submitted, ONTAP begins the real cluster-create
         # work immediately. Mark cp_1_7 first so an exit-after-checkpoint run stops
