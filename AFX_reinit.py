@@ -13325,8 +13325,9 @@ def _verify_boot_dna(channel, node_log=None, node_label=""):
     confirm bootarg.init.dna is the supported value.
     Returns True if supported, False otherwise.
     """
-    print("\n🧬 Boot DNA check: verifying bootarg.init.dna...")
-    _slog("Verifying boot DNA via 'printenv'")
+    _nlabel = f" [{node_label}]" if node_label else ""
+    print(f"\n🧬 Boot DNA check{_nlabel}: verifying bootarg.init.dna...")
+    _slog("Verifying boot DNA via 'printenv'" + (f" for {node_label}" if node_label else ""))
 
     output = ""
     records = []
@@ -13393,12 +13394,12 @@ def _verify_boot_dna(channel, node_log=None, node_label=""):
         )
 
     if dna_value == _REQUIRED_BOOT_DNA:
-        print(f"   ✅ Boot DNA check passed: bootarg.init.dna={dna_value}")
+        print(f"   ✅ Boot DNA check passed{_nlabel}: bootarg.init.dna={dna_value}")
         _slog(f"Boot DNA verified: {dna_value}")
         _checkpoint_mark_boot_dna_verified(node_label=node_label, dna_value=dna_value)
         return True
 
-    _print_banner("❌ UNSUPPORTED BOOT DNA")
+    _print_banner("❌ UNSUPPORTED BOOT DNA" + _nlabel)
     if dna_value is None:
         print("  Could not determine the boot DNA from 'printenv'.")
     else:
@@ -33927,12 +33928,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     if _loader_env_stage_enabled is False:
         _slog("Skipping LOADER env backup/diff capture by operator request")
 
-        # Even when env backup/printenv capture is skipped, still run
-        # set-defaults and bootarg.init.dna verification.
-        _slog("Running: set-defaults")
-        direct_send_and_wait(channel, "set-defaults", "LOADER-",
-                             timeout=15, node_log=_env_log)
-
+        # Verify boot DNA BEFORE set-defaults (set-defaults clears bootarg.init.dna).
         _dna_already_verified = _checkpoint_boot_dna_is_verified(label)
         if _dna_already_verified:
             _slog(f"[{label}] bootarg.init.dna already verified in checkpoint; skipping re-check")
@@ -33952,6 +33948,10 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
             _slog(f"[{label}] unsupported boot DNA (non-interactive node path)", prefix="ERROR")
             return None
 
+        _slog("Running: set-defaults")
+        direct_send_and_wait(channel, "set-defaults", "LOADER-",
+                             timeout=15, node_log=_env_log)
+
         if _close_env_log and _env_log:
             with suppress(Exception):
                 _env_log.close()
@@ -33962,12 +33962,7 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
     pre_env = _loader_env_capture(channel, node_log=_env_log)
     _loader_env_save_to_file(pre_env, label, log_dir, prefix="loader_env_pre")
 
-    # Run set-defaults
-    _slog("Running: set-defaults")
-    direct_send_and_wait(channel, "set-defaults", "LOADER-",
-                         timeout=15, node_log=_env_log)
-
-    # Verify boot DNA (required in all modes).
+    # Verify boot DNA BEFORE set-defaults (set-defaults clears bootarg.init.dna).
     _dna_already_verified = _checkpoint_boot_dna_is_verified(label)
     if _dna_already_verified:
         _slog(f"[{label}] bootarg.init.dna already verified in checkpoint; skipping re-check")
@@ -33986,6 +33981,11 @@ def _loader_env_pre_post_prompt(channel, label, log_dir,
             sys.exit(1)
         _slog(f"[{label}] unsupported boot DNA (non-interactive node path)", prefix="ERROR")
         return None
+
+    # Run set-defaults
+    _slog("Running: set-defaults")
+    direct_send_and_wait(channel, "set-defaults", "LOADER-",
+                         timeout=15, node_log=_env_log)
 
     # Capture post-defaults env
     _slog("Capturing LOADER env (post set-defaults)")
