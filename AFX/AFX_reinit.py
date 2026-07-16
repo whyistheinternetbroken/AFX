@@ -2333,17 +2333,25 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
         return False
 
     _checkpoint_test_enabled = True
-    # When peer_only=True (mode 2/3 cp_2_x prompts), do not keep the global
-    # target active. Keeping it armed can unexpectedly fire on primary cp_1_x
-    # checkpoints while peers are still progressing through their mapped cp_2_x
-    # targets, which defeats per-node injection intent.
-    _checkpoint_test_target = ""
+    # When peer_only=True (mode 2/3), preserve any global primary target that was
+    # configured before per-node peer targets were set up.  The primary fires
+    # independently at its configured checkpoint via the `if not _node_target:`
+    # branch in _maybe_inject_checkpoint_failure; the mode-3 abort barrier then
+    # blocks peer cp_2_x checkpoints from advancing further.
+    # Only clear the global target when it was never set (empty) to avoid
+    # accidentally keeping a stale value from a previous configuration pass.
+    _primary_cp_target = str(_checkpoint_test_target or "").strip()
+    if peer_only and not _primary_cp_target:
+        _checkpoint_test_target = ""
     _checkpoint_test_mode_label = mode_name
     _checkpoint_test_targets_by_node = dict(_target_map)
-    _global_note = ""
+    _primary_note = (
+        f"; primary stops at '{_primary_cp_target}'"
+        if peer_only and _primary_cp_target else ""
+    )
     _slog(
         f"--test armed for mode {mode_name}: per-node checkpoints "
-        f"{dict(sorted(_target_map.items()))}{_global_note}"
+        f"{dict(sorted(_target_map.items()))}{_primary_note}"
     )
     print("  ✅ Per-node checkpoint failure injection configured:")
     for _nid in sorted(_target_map):
@@ -2352,7 +2360,10 @@ def _configure_per_node_checkpoint_injection(mode_name: str, options, node_ids,
         _cp_label = f"{_cp_id} {_cp_desc}".strip()
         print(f"     - {_nid}: {_cp_label}")
     if peer_only:
-        print("  ℹ️  Primary global checkpoint injection is disabled for this per-node run.")
+        if _primary_cp_target:
+            print(f"  ℹ️  Primary will stop at '{_primary_cp_target}' (fires independently; peers interrupted at that point).")
+        else:
+            print("  ℹ️  Primary runs to completion; failure fires after all peer targets are reached.")
     print("  ℹ️  Failure fires after all targeted nodes reach their configured checkpoints.")
     return True
 
@@ -27843,33 +27854,108 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             continue
         break
     if _cluster_rows < 1:
-        print(f"\n   ⚠️  [{label}] cluster show did not report an active cluster; running cluster setup...")
-        _slog(f"[{label}] cluster show rows={_cluster_rows}; running cluster setup recovery", prefix="WARN")
-        ch.send("cluster setup\r")
-        _wiz_start = _wait_for_wizard_start(ch, timeout=300, node_log=node_log)
-        if not _wiz_start:
-            print(f"   ❌ [{label}] Could not enter cluster setup after login recovery.")
-            _slog(f"[{label}] cluster setup recovery failed (no wizard start)", prefix="ERROR")
-            return None
-        if not _run_join_wizard(
-            ch,
-            label=f"{label}/resume-recovery",
-            initial_buf=str(_wiz_start or ""),
-            checkpoint_node_id=str(peer_bmc or "").strip(),
-            join_existing_cluster=False,
-            node_log=node_log,
-        ):
-            print(f"   ❌ [{label}] Cluster setup recovery did not reach CLI recovery point.")
-            _slog(f"[{label}] cluster setup recovery CLI recovery failed", prefix="ERROR")
-            return None
-        if not _login_primary_cluster_shell(ch, admin_password):
-            print(f"   ❌ [{label}] Could not re-enter cluster shell after setup recovery.")
-            _slog(f"[{label}] cluster setup recovery login failed", prefix="ERROR")
-            return None
+        # Before running cluster setup, verify that node management is already
+        # correctly configured and that a cluster LIF exists.  If both checks
+        # pass we can skip the join wizard entirely and proceed to IP capture.
+        _skip_setup_wizard = False
+        try:
+            _cfg_bmc_s = str(peer_bmc or "").strip()
+            _cfg_mgmt  = _node_mgmt_by_bmc.get(_cfg_bmc_s) or {}
+            _cfg_nmi   = str(_cfg_mgmt.get("node_mgmt_ip") or _cfg_mgmt.get("ip") or "").strip()
+            _cfg_port  = str(
+                _cfg_mgmt.get("node_mgmt_port") or _cfg_mgmt.get("port") or "e0M"
+            ).strip()
+            _cfg_gw    = str(
+                _cfg_mgmt.get("node_mgmt_gateway") or _cfg_mgmt.get("gateway") or ""
+            ).strip()
+            if _cfg_nmi:
+                def _quick_cmd_check(_cmd, _timeout=20):
+                    ch.send(_cmd + "\r")
+                    _buf = ""
+                    _t0 = time.monotonic()
+                    while time.monotonic() - _t0 < _timeout:
+                        if ch.recv_ready():
+                            _chunk = ch.recv(4096).decode("utf-8", errors="replace")
+                            if node_log:
+                                _par_write(node_log, _chunk)
+                            _buf += _chunk
+                            if "::>" in _buf or "::*>" in _buf:
+                                break
+                        else:
+                            time.sleep(0.1)
+                    return _buf
+
+                _nmi_buf   = _quick_cmd_check(
+                    "set -rows 0; net int show -role node-mgmt -fields address,netmask,port"
+                )
+                _clus_buf  = _quick_cmd_check(
+                    "set -rows 0; net int show -role cluster -fields address"
+                )
+                _route_buf = _quick_cmd_check("route show")
+
+                _clus_ips_found = re.findall(r'\b(169\.254\.\d+\.\d+)\b', _clus_buf)
+                _nmi_ip_ok      = _cfg_nmi in _nmi_buf
+                _nmi_port_ok    = _cfg_port.lower() in _nmi_buf.lower()
+                _route_ok       = not _cfg_gw or _cfg_gw in _route_buf
+
+                _slog(
+                    f"[{label}] node-mgmt pre-check: "
+                    f"nmi_ip={_nmi_ip_ok}, nmi_port={_nmi_port_ok}, "
+                    f"route_ok={_route_ok}, cluster_lif={bool(_clus_ips_found)}",
+                    prefix="INFO",
+                )
+                if _nmi_ip_ok and _nmi_port_ok and _route_ok and _clus_ips_found:
+                    _skip_setup_wizard = True
+                    print(
+                        f"\n   ✅ [{label}] Node management verified "
+                        f"({_cfg_nmi} on {_cfg_port}); cluster interface exists "
+                        f"({_clus_ips_found[0]}) — skipping cluster setup wizard."
+                    )
+                else:
+                    print(
+                        f"\n   ℹ️  [{label}] Node management check: "
+                        f"nmi_ip={_nmi_ip_ok}, nmi_port={_nmi_port_ok}, "
+                        f"route_ok={_route_ok}, "
+                        f"cluster_lif={'yes' if _clus_ips_found else 'no'}"
+                    )
+        except Exception as _mgmt_chk_err:
+            _slog(
+                f"[{label}] node-mgmt pre-check failed: {_mgmt_chk_err}; "
+                "proceeding with cluster setup",
+                prefix="WARN",
+            )
+
+        if not _skip_setup_wizard:
+            print(f"\n   ⚠️  [{label}] cluster show did not report an active cluster; running cluster setup...")
+            _slog(f"[{label}] cluster show rows={_cluster_rows}; running cluster setup recovery", prefix="WARN")
+            ch.send("cluster setup\r")
+            _wiz_start = _wait_for_wizard_start(ch, timeout=300, node_log=node_log)
+            if not _wiz_start:
+                print(f"   ❌ [{label}] Could not enter cluster setup after login recovery.")
+                _slog(f"[{label}] cluster setup recovery failed (no wizard start)", prefix="ERROR")
+                return None
+            if not _run_join_wizard(
+                ch,
+                label=f"{label}/resume-recovery",
+                initial_buf=str(_wiz_start or ""),
+                checkpoint_node_id=str(peer_bmc or "").strip(),
+                join_existing_cluster=False,
+                node_log=node_log,
+            ):
+                print(f"   ❌ [{label}] Cluster setup recovery did not reach CLI recovery point.")
+                _slog(f"[{label}] cluster setup recovery CLI recovery failed", prefix="ERROR")
+                return None
+            if not _login_primary_cluster_shell(ch, admin_password):
+                print(f"   ❌ [{label}] Could not re-enter cluster shell after setup recovery.")
+                _slog(f"[{label}] cluster setup recovery login failed", prefix="ERROR")
+                return None
         # Resume hardening: after exiting setup for bulk add-node, some nodes can
         # still report no local cluster briefly even though cluster interfaces are up.
         # Proceed directly to cluster-IP capture to avoid spurious re-probe warnings.
-        print(f"   ℹ️  [{label}] cluster setup recovery complete; proceeding with cluster-IP capture.")
+        if _skip_setup_wizard:
+            print(f"   ℹ️  [{label}] Node management already configured; proceeding with cluster-IP capture.")
+        else:
+            print(f"   ℹ️  [{label}] cluster setup recovery complete; proceeding with cluster-IP capture.")
         _slog(f"[{label}] cluster setup recovery complete; proceeding with cluster-IP capture", prefix="INFO")
 
     def _capture_cluster_netint(_cmd):
@@ -37000,17 +37086,16 @@ def _run_2c_resume():
                         f"(evidence: {_nd.get('resume_evidence')})"
                     )
         if _fallback_staged or _fallback_unknown:
-            print("\n  ❌ Safe fallback stop.")
-            print("     Option 2.3 will not retry blindly and will not synthesize")
-            print("     cp_2_7 / peer_joined without ONTAP confirmation.")
-            print("     Restore cluster management SSH, verify the peers above,")
-            print("     then rerun option 2.3.")
+            _ambig_bmcs = ", ".join(
+                _nd.get("bmc") or "?"
+                for _nd in (_fallback_staged + _fallback_unknown)
+            )
             _session_log.log(
-                "2.3: cluster shell unavailable with ambiguous fallback state; "
-                "aborting per non-destructive fallback",
+                f"2.3: cluster SSH unavailable "
+                f"({_cluster_shell_unavailable_reason or 'no channel'}); "
+                f"staged/unknown peers will be included in retry list: {_ambig_bmcs}",
                 prefix="WARN",
             )
-            return False
 
     # ── 4. Determine which nodes are already in the cluster ───────────────
     if primary_channel:
@@ -37045,7 +37130,13 @@ def _run_2c_resume():
                 nodes_to_retry.append(_nd)
     elif _fallback_summary is not None:
         nodes_already = [dict(_nd) for _nd in (_fallback_summary.get("already_joined") or [])]
-        nodes_to_retry = [dict(_nd) for _nd in (_fallback_summary.get("pending_cluster_add") or [])]
+        nodes_to_retry = [
+            dict(_nd) for _nd in (
+                list(_fallback_summary.get("pending_cluster_add") or [])
+                + list(_fallback_summary.get("staged_without_cluster_ip") or [])
+                + list(_fallback_summary.get("pre_stage_or_unknown") or [])
+            )
+        ]
     else:
         nodes_to_retry = [dict(_nd) for _nd in manifest_nodes]
 
@@ -37126,65 +37217,44 @@ def _run_2c_resume():
         for _e in _saved_cluster_entries
         if str(_e.get("bmc") or "").strip()
     }
-    _nodes_ready_for_add = []
-    _nodes_needing_replay = []
-    if not primary_channel and _fallback_summary is not None:
-        _nodes_ready_for_add = [dict(_nd) for _nd in nodes_to_retry]
-    else:
-        for _nd in nodes_to_retry:
-            _bmc = str(_nd.get("bmc") or "").strip()
-            _peer_opt4_done = bool(
-                _cp2c_loaded
-                and _bmc
-                and _cp2c.is_node_done("peer_option4_done", _bmc)
-                and not _cp2c.is_node_done("peer_joined", _bmc)
+    # Classify nodes: fast-resume (peer_option4_done, skip option 4, drive to
+    # cp_2_6 for a FRESH cluster IP) vs full-replay (option 4 from scratch).
+    # Both categories go through _add_peer_node_thread so all nodes reach
+    # cp_2_6 with a verified cluster IP before cluster add-node runs.
+    _nodes_fast_resume  = []   # have peer_option4_done; skip option 4, fresh IP at cp_2_6
+    _nodes_needing_replay = []  # full option 4 replay needed
+    for _nd in nodes_to_retry:
+        _bmc = str(_nd.get("bmc") or "").strip()
+        _peer_opt4_done = bool(
+            _cp2c_loaded
+            and _bmc
+            and _cp2c.is_node_done("peer_option4_done", _bmc)
+            and not _cp2c.is_node_done("peer_joined", _bmc)
+        )
+        if _peer_opt4_done:
+            _nodes_fast_resume.append(_nd)
+            _session_log.log(
+                f"2.3: {_bmc} has peer_option4_done — resuming from cp_2_4 for fresh cluster IP"
             )
-            if not _peer_opt4_done:
-                _nodes_needing_replay.append(_nd)
-                continue
+        else:
+            _nodes_needing_replay.append(_nd)
 
-            _saved_ip = str(_nd.get("cluster_ip") or "").strip()
-            _saved_node = str(_nd.get("node_name") or "").strip()
-            if not _is_valid_ipv4(_saved_ip):
-                _saved = _saved_cluster_by_bmc.get(_bmc) or {}
-                _saved_ip = str(_saved.get("cluster_ip") or "").strip()
-                _saved_node = _saved_node or str(_saved.get("node_name") or "").strip()
-            if not _is_valid_ipv4(_saved_ip):
-                _saved_ip = _recover_cluster_ip_from_checkpoint_log(_cp2c, _bmc)
-                if _is_valid_ipv4(_saved_ip):
-                    _session_log.log(
-                        f"2.3: recovered cluster IP for {_bmc} from checkpoint log_dir -> {_saved_ip}"
-                    )
-                    _update_node_add_manifest_node(_bmc, cluster_ip=_saved_ip, node_name=_saved_node)
-                    _record_cluster_ip_manifest_entry(
-                        _saved_ip,
-                        node_name=_saved_node,
-                        bmc=_bmc,
-                        source="2.3 checkpoint log recovery",
-                    )
-
-            if _is_valid_ipv4(_saved_ip):
-                _nodes_ready_for_add.append(_nd)
-                _session_log.log(
-                    f"2.3: checkpoint reuse for {_bmc} -> cluster_ip={_saved_ip}"
-                )
-            else:
-                _nodes_needing_replay.append(_nd)
-                _session_log.log(
-                    f"2.3: {_bmc} marked peer_option4_done but no saved cluster IP was found; "
-                    "replaying reinit path",
-                    prefix="WARN",
-                )
-
-    if _nodes_ready_for_add:
-        print(f"\n  Checkpoint-ready for cluster add-node only ({len(_nodes_ready_for_add)}):")
-        for _nd in _nodes_ready_for_add:
+    if _nodes_fast_resume:
+        print(
+            f"\n  Resuming from option 4 complete — will capture fresh cluster IP"
+            f" ({len(_nodes_fast_resume)}):"
+        )
+        for _nd in _nodes_fast_resume:
             _bmc = str(_nd.get("bmc") or "").strip()
-            _saved = _saved_cluster_by_bmc.get(_bmc) or {}
-            _saved_ip = str(_nd.get("cluster_ip") or _saved.get("cluster_ip") or "?").strip()
-            _saved_node = str(_nd.get("node_name") or _saved.get("node_name") or "").strip()
-            _label = _saved_node or _bmc
-            print(f"    ✅ {_label}: {_saved_ip}")
+            _nip = _nd.get("node_mgmt_ip") or "?"
+            print(f"    ⏭️  BMC {_bmc}  (node-mgmt {_nip})")
+
+    if _nodes_needing_replay and _nodes_fast_resume:
+        print(f"\n  Nodes that need to catch up ({len(_nodes_needing_replay)}):")
+        for _nd in _nodes_needing_replay:
+            _bmc = str(_nd.get("bmc") or "").strip()
+            print(f"    🧵 [peer/{_bmc}]")
+        print("\n  Other nodes will proceed once all nodes are at the same checkpoint.")
 
     # ── 8. Seed in-memory state from manifest and launch threads ──────────
     # Populate credential + node-mgmt caches so _add_peer_node_thread can
@@ -37195,19 +37265,9 @@ def _run_2c_resume():
 
     retry_bmc_list = []
     _2c_cluster_ips_out = {}
-    for _nd in _nodes_ready_for_add:
-        _bmc = str(_nd.get("bmc") or "").strip()
-        _saved = _saved_cluster_by_bmc.get(_bmc) or {}
-        _saved_ip = str(_nd.get("cluster_ip") or _saved.get("cluster_ip") or "").strip()
-        _saved_node = str(_nd.get("node_name") or _saved.get("node_name") or "").strip()
-        if _is_valid_ipv4(_saved_ip):
-            _2c_cluster_ips_out[_bmc] = {
-                "cluster_ip": _saved_ip,
-                "node_name": _saved_node,
-                "bmc": _bmc,
-            }
-
-    for _nd in _nodes_needing_replay:
+    # Both fast-resume and full-replay nodes run through _add_peer_node_thread
+    # so every node reaches cp_2_6 with a freshly captured cluster IP.
+    for _nd in (_nodes_fast_resume + _nodes_needing_replay):
         _bmc = (_nd.get("bmc") or "").strip()
         if not _bmc:
             continue
@@ -37233,7 +37293,7 @@ def _run_2c_resume():
         retry_bmc_list.append(_bmc)
         _session_log.log(f"2.3: will retry BMC {_bmc} (user={_bu})")
 
-    if not retry_bmc_list and not _2c_cluster_ips_out:
+    if not retry_bmc_list:
         print("  ❌ No valid BMC IPs to retry. Aborting.")
         _session_log.log("2.3: no valid BMCs to retry", prefix="ERROR")
         if primary_client:
@@ -37296,7 +37356,8 @@ def _run_2c_resume():
         print(f"  ▶️  [{_bmc}] Thread started.")
 
     if _n2c:
-        print(f"\n  ⏳ Waiting for {_n2c} node(s) to complete...")
+        _waiting_label = "catch up" if (_nodes_needing_replay and _nodes_fast_resume) else "complete"
+        print(f"\n  ⏳ Waiting for {_n2c} node(s) to {_waiting_label}...")
         if not _join_threads_with_deadline(threads, label="mode 2.3", log=_session_log):
             return False
         _raise_pending_checkpoint_failure()
