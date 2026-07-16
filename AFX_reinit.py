@@ -28277,7 +28277,7 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
                     return _buf
 
                 _nmi_buf   = _quick_cmd_check(
-                    "set -rows 0; net int show -role node-mgmt -fields address,netmask,port"
+                    "set -rows 0; net int show -role node-mgmt -fields address,netmask,home-port"
                 )
                 _clus_buf  = _quick_cmd_check(
                     "set -rows 0; net int show -role cluster -fields address"
@@ -43774,7 +43774,12 @@ def main():
                 except Exception:
                     pass
                 sys.stdout = _real_stdout
-            
+
+            # Clear the shutdown event so the next run (resume or fresh) starts
+            # with a clean state.  Without this, _recv_loop immediately returns
+            # on any subsequent run because _shutdown_event.is_set() is True.
+            _shutdown_event.clear()
+
             print("\n  \u21a9\ufe0f  Returning to main menu...\n")
             _resume_autodispatch = False
             continue
