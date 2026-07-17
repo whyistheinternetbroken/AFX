@@ -187,7 +187,7 @@ def _log_wait_timeout_throttled(timeout: int, look_for_list, elapsed: float) -> 
 # Set at AUTOBOOT detection so every status line that follows shows how far
 # into the reinit sequence the node is.
 _reinit_t0: "float | None" = None   # time.monotonic() when reinit started
-_reinit_label: str = ""             # BMC IP or node identifier
+_reinit_label = ""             # BMC IP or node identifier
 
 
 def _elapsed_str() -> str:
@@ -1158,7 +1158,7 @@ def _format_checkpoint_mode(mode: str) -> str:
 
 # Module-level checkpoint instance (initialised by _run_4b_standalone on each
 # run; may be loaded from disk on resume).
-_checkpoint: "CheckpointManager | None" = None
+_checkpoint = None
 
 
 # Boot-menu detection signatures shared by all wait-for-boot-menu callers.
@@ -1264,7 +1264,7 @@ _mode3_pipeline_state = None
 # Peer node log paths: {ip: log_file_path} for nodes being added during
 # cluster setup.  Populated by _run_4b_standalone; read in
 # _run_cluster_setup_wizard to display log paths at the node-add transition.
-_peer_log_paths: dict = {}
+_peer_log_paths = {}
 
 # Mode 2.2: tracks BMC hosts that have already been added in the current run so
 # they are not offered again when prompting for the next node to add.
@@ -1281,7 +1281,7 @@ _netboot_static_ip = False
 
 # Path to the most recently written node-add manifest file (set by
 # _write_node_add_manifest). Used by option 2.3 to locate the last run.
-_last_node_add_manifest: str = ""
+_last_node_add_manifest = ""
 _cluster_ip_manifest_lock = threading.Lock()
 _cluster_interface_log_lock = threading.Lock()
 _cluster_interface_log_file = None
@@ -1292,11 +1292,11 @@ _checkpoint_test_enabled = False
 _checkpoint_test_target = ""
 _checkpoint_test_mode_label = ""
 _checkpoint_test_consumed = False
-_pending_checkpoint_test_failure: "Exception | None" = None
+_pending_checkpoint_test_failure = None
 _checkpoint_test_failure_handled = False   # set when 1977 handler already printed/raised
-_checkpoint_test_parallel_expected_nodes: "set[str]" = set()
-_checkpoint_test_parallel_seen_nodes: "set[str]" = set()
-_checkpoint_test_targets_by_node: "dict[str, str]" = {}
+_checkpoint_test_parallel_expected_nodes = set()
+_checkpoint_test_parallel_seen_nodes = set()
+_checkpoint_test_targets_by_node = {}
 _checkpoint_test_mode3_abort_phase = ""
 _checkpoint_test_lock = threading.Lock()
 # Barrier event for per-node mixed-target injection: nodes that reach their
@@ -1308,7 +1308,7 @@ _checkpoint_io_lock = threading.RLock()
 # Set to True by _run_4b_standalone when the operator selected a reinit
 # sub-mode (1.1/1.2/3).  Read by main() to decide whether to offer the
 # post-completion script runner after a successful 4.2 run.
-_4b_did_reinit: bool = False
+_4b_did_reinit = False
 
 # Set to True when the operator requests passwordless SSH setup during 1.1/1.2.
 _setup_passwordless_ssh = False
@@ -1660,7 +1660,7 @@ class RunContext:
 # Module-level RunContext instance, instantiated by main() once CLI/config
 # parsing is complete. Stays ``None`` until then so any code that runs
 # during module import doesn't accidentally see a half-built context.
-_run_context: "RunContext | None" = None
+_run_context = None
 
 
 def _ctx_sync_from_globals() -> None:
@@ -5320,7 +5320,7 @@ class SessionLogger:
 _session_log = None
 # Choices logged before _session_log exists are buffered here and flushed
 # into the choices log once a session log is created.
-_pre_session_choices: list = []
+_pre_session_choices = []
 
 
 def _write_crash_trace(exc_type, exc_value, exc_tb, context="Unhandled exception"):
@@ -7957,19 +7957,19 @@ _prevent_bios_fw_update = True
 #   None  -> not decided yet (interactive prompt where applicable)
 #   True  -> run check
 #   False -> skip check
-_bootarg_check_enabled: "bool | None" = None
+_bootarg_check_enabled = None
 
 # Tri-state for the entire LOADER env backup/printenv stage:
 #   None  -> not decided yet (interactive prompt where applicable)
 #   True  -> run pre/post printenv capture + bootarg check + diff flow
 #   False -> skip that stage entirely
-_loader_env_stage_enabled: "bool | None" = None
+_loader_env_stage_enabled = None
 
 # Tri-state operator choice for AUTOBOOT handling after set-defaults:
 #   None  -> not asked yet
 #   True  -> force "setenv AUTOBOOT true" in LOADER command stage
 #   False -> leave AUTOBOOT unchanged
-_force_autoboot_true: "bool | None" = None
+_force_autoboot_true = None
 _force_autoboot_lock = threading.Lock()
 
 _shutdown_event = threading.Event()
