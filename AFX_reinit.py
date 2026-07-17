@@ -31555,6 +31555,21 @@ def _run_2b_parallel_add(peer_bmcs, bmc_user, bmc_passwords, log):
                                         if isinstance(_config_data, dict) else None)
                                     or ""),
         )
+    else:
+        print("\n  ❌ Cluster management SSH is unavailable.")
+        print("     Mode 2.2 requires a live cluster shell to run cluster add-node.")
+        print("     Restore cluster management SSH, then rerun mode 2.2 or use option 2.3 resume.")
+        if log:
+            log.log(
+                "2.2: cluster shell unavailable before peer workflow; aborting before node add",
+                prefix="ERROR",
+            )
+        if primary_client:
+            try:
+                primary_client.close()
+            except Exception:
+                pass
+        return False
 
     # ── 4. Spawn one thread per peer ────────────────────────────────────────
     if log:
