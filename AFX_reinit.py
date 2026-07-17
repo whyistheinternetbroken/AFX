@@ -28175,12 +28175,23 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
         _slog(f"[{label}] reusing existing cluster IP: {_existing_ip}")
         return _existing_ip
 
+    def _send_or_abort(_payload, _desc):
+        try:
+            ch.send(_payload)
+        except OSError as _send_err:
+            print(f"   ⚠️  [{label}] Channel closed while {_desc}; aborting cluster-IP capture.")
+            _slog(f"[{label}] channel closed while {_desc}: {_send_err}", prefix="WARN")
+            return False
+        return True
+
     print(f"\n🛑 [{label}] Aborting cluster wizard (Ctrl+C)...")
     _slog(f"[{label}] sending Ctrl+C to abort cluster wizard")
     for _ in range(5):
-        ch.send("\x03")
+        if not _send_or_abort("\x03", "sending Ctrl+C"):
+            return None
         time.sleep(0.3)
-    ch.send("\r")
+    if not _send_or_abort("\r", "sending CR after Ctrl+C"):
+        return None
     time.sleep(0.5)
 
     _out, _matched = direct_read_until_any(
@@ -28203,16 +28214,19 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
                 _slog(f"[{label}] no real login/shell after Ctrl+C", prefix="WARN")
                 return None
         print(f"\n⏳ [{label}] Logging in as admin...")
-        ch.send("admin\r")
+        if not _send_or_abort("admin\r", "sending admin username"):
+            return None
         _pw_out, _pw_matched = direct_read_until_any(
             ch, ["password:", "::>", "::*>", "login:"], timeout=30, node_log=node_log)
         if _pw_matched and "password:" in _pw_matched.lower():
-            ch.send((admin_password or "") + "\r")
+            if not _send_or_abort((admin_password or "") + "\r", "sending admin password"):
+                return None
             _shell_out, _shell_matched = direct_read_until_any(
                 ch, ["::>", "::*>", "login:", "password:"], timeout=60, node_log=node_log)
             if _shell_matched and "password:" in str(_shell_matched).lower():
                 # Some nodes require one more CR before prompt stabilizes.
-                ch.send("\r")
+                if not _send_or_abort("\r", "sending CR for prompt stabilization"):
+                    return None
                 _shell_out2, _shell_matched2 = direct_read_until_any(
                     ch, ["::>", "::*>", "login:"], timeout=30, node_log=node_log
                 )
@@ -28261,7 +28275,8 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
             ).strip()
             if _cfg_nmi:
                 def _quick_cmd_check(_cmd, _timeout=20):
-                    ch.send(_cmd + "\r")
+                    if not _send_or_abort(_cmd + "\r", f"running command '{_cmd}'"):
+                        return ""
                     _buf = ""
                     _t0 = time.monotonic()
                     while time.monotonic() - _t0 < _timeout:
@@ -28319,7 +28334,8 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
         if not _skip_setup_wizard:
             print(f"\n   ⚠️  [{label}] cluster show did not report an active cluster; running cluster setup...")
             _slog(f"[{label}] cluster show rows={_cluster_rows}; running cluster setup recovery", prefix="WARN")
-            ch.send("cluster setup\r")
+            if not _send_or_abort("cluster setup\r", "starting cluster setup recovery"):
+                return None
             _wiz_start = _wait_for_wizard_start(ch, timeout=300, node_log=node_log)
             if not _wiz_start:
                 print(f"   ❌ [{label}] Could not enter cluster setup after login recovery.")
@@ -28352,7 +28368,8 @@ def _abort_wizard_get_cluster_ip(ch, label, admin_password,
     def _capture_cluster_netint(_cmd):
         _slog(f"[{label}] running {_cmd}")
         _cluster_interface_log_write(f"[{label}] >>> {_cmd}")
-        ch.send(_cmd + "\r")
+        if not _send_or_abort(_cmd + "\r", f"running command '{_cmd}'"):
+            return ""
         time.sleep(1)
         _buf = ""
         _s = time.monotonic()
