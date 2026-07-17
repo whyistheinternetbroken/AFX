@@ -6995,6 +6995,13 @@ def select_operation_mode():
                     for _idx, _cp in enumerate(_all_checkpoints, 1):
                         _cp_mode_i = str(_cp.mode or "").strip()
                         _cp_age_i = ""
+                        _cp_path_i = str(getattr(_cp, "path", "") or "").strip()
+                        _cp_file_i = os.path.basename(_cp_path_i).lower()
+                        _cp_kind_i = (
+                            "active checkpoint"
+                            if _cp_file_i == str(CheckpointManager.CHECKPOINT_FILE).lower()
+                            else "backup checkpoint"
+                        )
                         try:
                             _cp_dt_i = datetime.fromisoformat(_cp.created)
                             _cp_mins_i = int((datetime.now() - _cp_dt_i).total_seconds() // 60)
@@ -7006,7 +7013,10 @@ def select_operation_mode():
                         _bmc_i = ", ".join(_cp.bmc_ips[:3])
                         if len(_cp.bmc_ips) > 3:
                             _bmc_i += f" (+{len(_cp.bmc_ips) - 3} more)"
-                        print(f"  {_idx}. [{_cp_age_i}] option {_menu_opt_i} | {_format_checkpoint_mode(_cp_mode_i)}")
+                        print(
+                            f"  {_idx}. [{_cp_age_i}] option {_menu_opt_i} | "
+                            f"{_format_checkpoint_mode(_cp_mode_i)} | {_cp_kind_i}"
+                        )
                         print(f"       Stage   : {_stage_i}")
                         if _bmc_i:
                             print(f"       Nodes   : {_bmc_i}")
