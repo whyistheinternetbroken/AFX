@@ -15980,19 +15980,37 @@ def _wait_and_send(channel, trigger, response, label, timeout=900,
     if not quiet:
         print(f"\n⏳ Waiting for: {label}...")
     _slog(f"Waiting for: {label}")
-    direct_send_and_wait(
+    _wait_output = direct_send_and_wait(
         channel, "", trigger, timeout=timeout, check_bmc_drop=True,
         node_log=node_log, reconnect_ctx=reconnect_ctx,
     )
+    _trigger_l = str(trigger or "").strip().lower()
+    if _trigger_l and _trigger_l not in str(_wait_output or "").lower():
+        _slog(
+            f"{label}: prompt '{trigger}' not seen before timeout; "
+            "skipping response send to avoid misaligned wizard input",
+            prefix="WARN",
+        )
+        return False
     if response is None:
         response = ""
-    channel.send(response + "\r")
+    _send_ch = (
+        reconnect_ctx.get("channel")
+        if (isinstance(reconnect_ctx, dict) and reconnect_ctx.get("channel") is not None)
+        else channel
+    )
+    try:
+        _send_ch.send(response + "\r")
+    except OSError as _send_err:
+        _slog(f"{label}: channel closed while sending response: {_send_err}", prefix="WARN")
+        return False
     if _session_log:
         if hide_in_log:
             _session_log.log(f"[{label}] sent <hidden>")
         else:
             _session_log.log_sent(response if response else "<Enter>")
     time.sleep(0.5)
+    return True
 
 
 def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
