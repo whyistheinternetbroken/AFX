@@ -507,6 +507,41 @@ class CheckpointManager:
             self._data = {}
         return _removed
 
+    @classmethod
+    def clear_backup_checkpoints(cls, mode: "str | int | None" = None) -> int:
+        """Delete archived backup checkpoints.
+
+        Active checkpoint (``afx_checkpoint.json``) is preserved.
+        When ``mode`` is provided, only backups matching that mode are removed.
+        """
+        _removed = 0
+        _target_mode = None if mode is None else str(mode).strip()
+        try:
+            _script_dir = os.path.dirname(os.path.abspath(__file__))
+        except NameError:
+            _script_dir = os.getcwd()
+        _cp_dir = os.path.join(_script_dir, cls.CHECKPOINT_DIR)
+        with _checkpoint_io_lock:
+            if os.path.isdir(_cp_dir):
+                for _fname in os.listdir(_cp_dir):
+                    if not (_fname.startswith("afx_checkpoint_") and _fname.endswith(".json")):
+                        continue
+                    _fpath = os.path.join(_cp_dir, _fname)
+                    if _target_mode is not None:
+                        try:
+                            with open(_fpath, "r", encoding="utf-8") as _fh:
+                                _payload = json.load(_fh) or {}
+                        except Exception:
+                            continue
+                        if str(_payload.get("mode", "")).strip() != _target_mode:
+                            continue
+                    try:
+                        os.remove(_fpath)
+                        _removed += 1
+                    except Exception:
+                        pass
+        return _removed
+
     @property
     def path(self) -> str:
         """Return the checkpoint file path."""
@@ -7061,14 +7096,26 @@ def select_operation_mode():
                         if _bmc_i:
                             print(f"       Nodes   : {_bmc_i}")
                     print("  0. Skip (do not resume)")
+                    print("  B. Clear stale backup checkpoints")
                     print("=" * 60)
                     _cp_start = None
                     while True:
                         _cp_sel = _prompt_with_timeout(
-                            f"  Select checkpoint to resume [1-{len(_all_checkpoints)}] (Enter=1, 0=skip): ",
+                            f"  Select checkpoint to resume [1-{len(_all_checkpoints)}] (Enter=1, 0=skip, B=clear backups): ",
                             default="1",
                             timeout=_DEFAULT_INTERACTIVE_TIMEOUT,
                         ).strip()
+                        if str(_cp_sel or "").strip().lower() in ("b", "backup", "backups"):
+                            _removed_backups = CheckpointManager.clear_backup_checkpoints()
+                            if _removed_backups:
+                                print(f"  ✅ Cleared {_removed_backups} backup checkpoint file(s).")
+                            else:
+                                print("  ℹ️  No backup checkpoints found to clear.")
+                            _all_checkpoints = CheckpointManager.list_all()
+                            if not _all_checkpoints:
+                                _cp_start = None
+                                break
+                            continue
                         if _cp_sel in ("", "1") or _cp_sel == "0":
                             if _cp_sel == "0":
                                 _cp_start = None
@@ -7082,7 +7129,9 @@ def select_operation_mode():
                                 break
                         except ValueError:
                             pass
-                        print(f"  Please enter a number between 0 and {len(_all_checkpoints)}.")
+                        print(
+                            f"  Please enter a number between 0 and {len(_all_checkpoints)}, or B."
+                        )
                     print("")
                     if _cp_start is not None:
                         _cp_mode = str(_cp_start.mode or "").strip()
@@ -32537,7 +32586,11 @@ def _option3_finalize(ctx, cluster_mgmt_ip):
     if checkpoint:
         try:
             checkpoint.mark_done("option3_complete")
-            checkpoint.clear()
+            _removed_cp = checkpoint.clear_all_for_mode(mode=checkpoint.mode or "3")
+            _slog(
+                f"checkpoint: cleared after mode 3 complete "
+                f"({_removed_cp} file(s) removed)"
+            )
         except _InjectedCheckpointFailure:
             raise
         except Exception:
@@ -38032,8 +38085,11 @@ def _run_2c_resume():
         _session_log.record_completion(normal_exit=True)
         # Clear stale checkpoint so next run starts fresh.
         try:
-            _checkpoint.clear()
-            _session_log.log("checkpoint: cleared after all nodes confirmed joined")
+            _removed_cp = _checkpoint.clear_all_for_mode(mode=_checkpoint.mode or "2")
+            _session_log.log(
+                f"checkpoint: cleared after all nodes confirmed joined "
+                f"({_removed_cp} file(s) removed)"
+            )
         except Exception:
             pass
         if hasattr(_session_log, "log_file"):
@@ -38918,8 +38974,11 @@ def main():
                 ok = _run_2c_resume()
                 if ok and _checkpoint:
                     try:
-                        _checkpoint.clear()
-                        _slog("checkpoint: cleared after mode 2.3 complete")
+                        _removed_cp = _checkpoint.clear_all_for_mode(mode=_checkpoint.mode or "2")
+                        _slog(
+                            f"checkpoint: cleared after mode 2.3 complete "
+                            f"({_removed_cp} file(s) removed)"
+                        )
                     except Exception:
                         pass
                 if _session_log:
@@ -39013,7 +39072,13 @@ def main():
                 ok = _run_4b_standalone(_session_log, resuming=_resuming)
                 _session_log.record_completion(normal_exit=ok)
                 if ok:
-                    _checkpoint.clear()
+                    _removed_cp = _checkpoint.clear_all_for_mode(
+                        mode=(_checkpoint.mode or "4.2")
+                    )
+                    _slog(
+                        f"checkpoint: cleared after mode 4.2 complete "
+                        f"({_removed_cp} file(s) removed)"
+                    )
                     if _session_log and hasattr(_session_log, "log_dir"):
                         _archive_node_add_manifests_to_log_dir(
                             _session_log.log_dir, reason="4.2: reinit/add success"
@@ -39029,7 +39094,13 @@ def main():
                 ok = _run_4b_standalone(_session_log, resuming=False, install_only=True)
                 _session_log.record_completion(normal_exit=ok)
                 if ok:
-                    _checkpoint.clear()
+                    _removed_cp = _checkpoint.clear_all_for_mode(
+                        mode=(_checkpoint.mode or "4.3")
+                    )
+                    _slog(
+                        f"checkpoint: cleared after mode 4.3 complete "
+                        f"({_removed_cp} file(s) removed)"
+                    )
                 print(f"\n\U0001f4dd Session log saved to: {_session_log.log_file}")
                 sys.exit(0 if ok else 1)
 

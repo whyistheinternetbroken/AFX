@@ -326,7 +326,7 @@ The script presents a menu at startup. Enter the number corresponding to the des
 
 | Mode | Short Name | Description |
 |---|---|---|
-| **1** | Create single node cluster | Initializes the first node in an ONTAP AFX cluster and creates a new cluster. Boots to LOADER, sets `destroy-all-storage-pods` flag, selects boot menu option 9 (Clean System Configuration). Drives the full ONTAP cluster setup wizard automatically using values from config file or prompts. Clears the checkpoint file on completion. When complete, prompts whether to run **2.1**, **2.2**, or return to the main menu (**N**). |
+| **1** | Create single node cluster | Initializes the first node in an ONTAP AFX cluster and creates a new cluster. Boots to LOADER, sets `destroy-all-storage-pods` flag, selects boot menu option 9 (Clean System Configuration). Drives the full ONTAP cluster setup wizard automatically using values from config file or prompts. Clears active + backup checkpoints for mode 1 on completion. When complete, prompts whether to run **2.1**, **2.2**, or return to the main menu (**N**). |
 | **2.1** | Add Node to Cluster (interactive) | Boots to LOADER, selects boot menu option 4 (Initialize and configure system). Operator completes the node-join wizard. In multi-node runs, supports numbered omit selection and auto-skips nodes already in cluster. Per-node credential collection can use password groups, and BMC auth attempts include silent fallback (including blank password). |
 | **2.2** | Add Node to Cluster (automated) | Same as 2.1, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel, numbered omit selection, and auto-skips nodes already in cluster. In this flow, "primary BMC" is used as the default credential context (use `PRIMARY` to reuse that password; blank means an actual blank password), not as a unique controller after parallel add starts. Per-node credential collection can use password groups, and BMC auth attempts include silent fallback (including blank password). |
 | **2.3** | Resume Node Additions | Resumes interrupted node-join operations from the last successful checkpoint. Use when a previous mode 2.2 or mode 3 run was interrupted before all secondary nodes completed. Run `--checkpoint-status` to inspect the checkpoint state before resuming. |
@@ -512,7 +512,7 @@ The script uses a **single live checkpoint file**:
 
 - **Path**: `checkpoints/afx_checkpoint.json`
 - **Age limit**: checkpoints older than 72 hours are ignored
-- **Cleanup**: the file is removed on successful completion
+- **Cleanup**: successful completion clears both the active checkpoint and archived backups for that mode
 
 The file contains both:
 
