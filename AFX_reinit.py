@@ -42118,13 +42118,13 @@ def main():
                         else:
                             print("    (none found in config)")
 
+                        _extra_num = 1
                         _add_more = _prompt(
                             "\n  Add additional nodes? [y/N]: ", "n"
                         ).strip().lower()
                         if _add_more == "y":
                             print("\n  Enter details for each additional node.")
                             print("  Press Enter on blank BMC to finish.")
-                            _extra_num = 1
                             while True:
                                 _ex_bmc = _prompt(
                                     f"\n    Extra node {_extra_num} — BMC IP/hostname (blank to finish): "
