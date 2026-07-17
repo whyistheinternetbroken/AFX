@@ -7947,7 +7947,7 @@ _diag_mode = False
 
 # List of validated "bootarg.name.variable <value>" strings to inject at LOADER
 # when _diag_mode is True. Populated by _load_diag_bootargs().
-_diag_bootargs: list = []
+_diag_bootargs = []
 
 # When True, LOADER config includes "setenv AUTO_FW_UPDATE false" to prevent
 # BIOS firmware auto-updates during boot flows.
