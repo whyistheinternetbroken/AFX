@@ -5793,6 +5793,182 @@ def _checkpoint_apply_manual_resume_target(cp, target_phase_id: str) -> bool:
     return True
 
 
+def _checkpoint_create_override_restore_snapshot(cp) -> dict:
+    """Create a restorable snapshot of the current active checkpoint state."""
+    if not cp:
+        return {}
+    _snapshot = {}
+    _ts_str = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
+    _snap_path = os.path.join(
+        os.path.dirname(cp.path),
+        f"afx_checkpoint_{_ts_str}_pre_override.json",
+    )
+    with _checkpoint_io_lock:
+        with cp._data_lock:
+            _payload = copy.deepcopy(cp._data)
+        with open(_snap_path, "w", encoding="utf-8") as _sf:
+            json.dump(_payload, _sf, indent=2)
+            _sf.write("\n")
+    _snapshot["path"] = _snap_path
+    _snapshot["mode"] = str(getattr(cp, "mode", "") or "").strip()
+    _snapshot["resume_phase_id"] = str(_checkpoint_resume_phase_id(cp) or "").strip()
+    _snapshot["resume_stage"] = str(_checkpoint_resume_stage_label(cp) or "").strip()
+    _snapshot["created"] = datetime.now().isoformat()
+    return _snapshot
+
+
+def _checkpoint_record_override_restore_candidate(cp, snapshot_meta: dict) -> bool:
+    if not cp or not isinstance(snapshot_meta, dict):
+        return False
+    _snap_path = str(snapshot_meta.get("path") or "").strip()
+    if not _snap_path or not os.path.isfile(_snap_path):
+        return False
+
+    def _mutate(data) -> bool:
+        _meta = data.setdefault("meta", {})
+        _existing = list(_meta.get("override_restore_candidates") or [])
+        _clean = []
+        _seen = set()
+        for _entry in [snapshot_meta] + _existing:
+            if not isinstance(_entry, dict):
+                continue
+            _p = str(_entry.get("path") or "").strip()
+            if not _p or _p in _seen:
+                continue
+            _seen.add(_p)
+            _clean.append({
+                "path": _p,
+                "mode": str(_entry.get("mode") or "").strip(),
+                "resume_phase_id": str(_entry.get("resume_phase_id") or "").strip(),
+                "resume_stage": str(_entry.get("resume_stage") or "").strip(),
+                "created": str(_entry.get("created") or "").strip(),
+            })
+            if len(_clean) >= 8:
+                break
+        _meta["override_restore_candidates"] = _clean
+        return True
+
+    return bool(cp._save(mutator=_mutate))
+
+
+def _checkpoint_restore_from_snapshot(cp, snapshot_path: str) -> bool:
+    if not cp:
+        return False
+    _src = str(snapshot_path or "").strip()
+    if not _src or not os.path.isfile(_src):
+        return False
+    try:
+        with open(_src, "r", encoding="utf-8") as _sf:
+            _data = json.load(_sf)
+    except Exception as _err:
+        _slog(f"Override restore snapshot read failed: {_src} ({_err})", prefix="WARN")
+        return False
+    if not isinstance(_data, dict) or _data.get("version") != 1:
+        _slog(f"Override restore snapshot invalid checkpoint payload: {_src}", prefix="WARN")
+        return False
+    try:
+        with _checkpoint_io_lock:
+            _tmp = (
+                f"{cp.path}.{os.getpid()}."
+                f"{threading.get_ident()}.{time.time_ns()}.tmp"
+            )
+            with open(_tmp, "w", encoding="utf-8") as _tf:
+                json.dump(_data, _tf, indent=2)
+                _tf.write("\n")
+            os.replace(_tmp, cp.path)
+    except Exception as _err:
+        _slog(f"Override restore checkpoint write failed: {_err}", prefix="WARN")
+        return False
+    return bool(cp.load())
+
+
+def _checkpoint_offer_override_restore_choice(cp) -> bool:
+    """Offer restoring from override backup snapshots when available."""
+    if not cp:
+        return False
+    _meta = dict(getattr(cp, "_data", {}).get("meta") or {})
+    _raw_candidates = list(_meta.get("override_restore_candidates") or [])
+    _candidates = []
+    _seen_paths = set()
+    for _entry in _raw_candidates:
+        if not isinstance(_entry, dict):
+            continue
+        _p = str(_entry.get("path") or "").strip()
+        if not _p or _p in _seen_paths or (not os.path.isfile(_p)):
+            continue
+        _seen_paths.add(_p)
+        _resume_phase = str(_entry.get("resume_phase_id") or "").strip()
+        _resume_stage = str(_entry.get("resume_stage") or "").strip()
+        if (not _resume_phase) or (not _resume_stage):
+            try:
+                _snap_cp = CheckpointManager(path=_p)
+                if _snap_cp.load():
+                    if not _resume_phase:
+                        _resume_phase = str(_checkpoint_resume_phase_id(_snap_cp) or "").strip()
+                    if not _resume_stage:
+                        _resume_stage = str(_checkpoint_resume_stage_label(_snap_cp) or "").strip()
+            except Exception:
+                pass
+        _candidates.append({
+            "path": _p,
+            "resume_phase_id": _resume_phase,
+            "resume_stage": _resume_stage,
+        })
+    if not _candidates:
+        return False
+
+    _current_phase = str(_checkpoint_resume_phase_id(cp) or "").strip()
+    _current_stage = str(_checkpoint_resume_stage_label(cp) or "").strip()
+    _options = []
+    for _entry in _candidates:
+        _phase = str(_entry.get("resume_phase_id") or "").strip()
+        _stage = str(_entry.get("resume_stage") or "").strip()
+        _label = _stage or _phase or "Unknown stage"
+        _options.append(("restore", _entry, _label))
+    _options.append(("current", None, _current_stage or _current_phase or "Current stage"))
+
+    print("\n" + "=" * 60)
+    print("  🔁 Resume override backup detected")
+    print("=" * 60)
+    for _idx, (_kind, _entry, _label) in enumerate(_options, 1):
+        if _kind == "restore":
+            _phase = str((_entry or {}).get("resume_phase_id") or "").strip()
+            _phase_text = f" ({_phase})" if _phase else ""
+            print(f"  {_idx}) Previous stage: {_label}{_phase_text}")
+        else:
+            print(f"  {_idx}) Resume stage  : {_label}")
+    print("=" * 60)
+
+    while True:
+        _sel = _prompt(
+            f"  Resume from 1-{len(_options)} or type N for none: ",
+            "",
+        ).strip().lower()
+        if _sel in ("n", "no"):
+            return False
+        if not _sel:
+            print(f"  Please enter a number between 1 and {len(_options)}, or N.")
+            continue
+        if not _sel.isdigit():
+            print(f"  Please enter a number between 1 and {len(_options)}, or N.")
+            continue
+        _pick = int(_sel)
+        if _pick < 1 or _pick > len(_options):
+            print(f"  Please enter a number between 1 and {len(_options)}, or N.")
+            continue
+        _kind, _entry, _label = _options[_pick - 1]
+        if _kind == "current":
+            return False
+        _path = str((_entry or {}).get("path") or "").strip()
+        if not _checkpoint_restore_from_snapshot(cp, _path):
+            print("  ❌ Failed to restore the selected backup checkpoint.")
+            _slog(f"Override restore failed for snapshot: {_path}", prefix="ERROR")
+            return False
+        print(f"  ✅ Restored previous checkpoint stage: {_label}")
+        _slog(f"Restored checkpoint from override backup: {_path}")
+        return True
+
+
 def _checkpoint_mode_choice_to_value(choice: str) -> str:
     _c = str(choice or "").strip().lower()
     if _c in ("1", "mode1"):
@@ -6089,8 +6265,28 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
     if _node_applied:
         print(f"     Applied {_node_applied} per-node override(s) from config file.")
 
+    _restored_from_backup = _checkpoint_offer_override_restore_choice(cp)
     _detected_next = _checkpoint_resume_phase_id(cp)
     _display_default = _detected_next or "(first checkpoint)"
+    _override_backup_meta = {}
+    _override_backup_recorded = False
+
+    def _ensure_override_backup() -> bool:
+        nonlocal _override_backup_meta, _override_backup_recorded
+        if _override_backup_recorded:
+            return True
+        if not _override_backup_meta:
+            try:
+                _override_backup_meta = _checkpoint_create_override_restore_snapshot(cp)
+            except Exception as _snap_err:
+                _slog(f"Failed creating override restore snapshot: {_snap_err}", prefix="WARN")
+                _override_backup_meta = {}
+        if not _override_backup_meta:
+            return False
+        if _checkpoint_record_override_restore_candidate(cp, _override_backup_meta):
+            _override_backup_recorded = True
+            return True
+        return False
 
     # ── Multi-node path: nodes at different stages ────────────────────────
     _groups = _per_node_next_checkpoint_groups(cp, _mode_key)
@@ -6111,11 +6307,29 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
             print(f"       Nodes: {_node_str}")
             while True:
                 _sel = _prompt(
-                    f"     Override [Enter=keep {_grp_cp_id}, number 1-{len(_peer_seq)}, or cp_id]: ",
+                    f"     Override [Enter=keep {_grp_cp_id}, B=restore previous, "
+                    f"number 1-{len(_peer_seq)}, or cp_id]: ",
                     "",
                 ).strip().lower()
                 if not _sel:
                     break
+                if _sel in ("b", "back"):
+                    if not _override_backup_meta:
+                        print("     ℹ️  No override has been applied in this prompt yet.")
+                        continue
+                    if _checkpoint_restore_from_snapshot(
+                        cp,
+                        str(_override_backup_meta.get("path") or "").strip(),
+                    ):
+                        _restored_stage = str(_override_backup_meta.get("resume_stage") or "").strip()
+                        print(
+                            f"     ✅ Restored previous checkpoint stage: "
+                            f"{_restored_stage or '(unknown)'}"
+                        )
+                        _slog("Resume override prompt: restored previous checkpoint via B")
+                        return False
+                    print("     ❌ Could not restore the previous checkpoint snapshot.")
+                    return False
                 _target = ""
                 if _sel.isdigit():
                     _pick = int(_sel)
@@ -6139,6 +6353,10 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
                 if _confirm not in ("y", "yes"):
                     print("     Override not applied. Choose another or press Enter to keep.")
                     continue
+                if not _ensure_override_backup():
+                    print("     ❌ Could not create checkpoint backup for restore. Override cancelled.")
+                    _slog("Resume override cancelled: failed to create restore backup", prefix="ERROR")
+                    continue
                 for _bmc in _grp_bmcs:
                     _set_node_phase_target(cp, _bmc, 2, _target)
                     if _mode_key == 3:
@@ -6155,11 +6373,31 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
         if _any_overridden:
             _new_stage = _checkpoint_resume_stage_label(cp)
             print(f"     Updated overall next stage: {_new_stage}")
+            _post = _prompt(
+                "     Press Enter to continue, or type B to restore previous checkpoint: ",
+                "",
+            ).strip().lower()
+            if _post in ("b", "back") and _override_backup_meta:
+                if _checkpoint_restore_from_snapshot(
+                    cp,
+                    str(_override_backup_meta.get("path") or "").strip(),
+                ):
+                    _restored_stage = str(_override_backup_meta.get("resume_stage") or "").strip()
+                    print(
+                        f"     ✅ Restored previous checkpoint stage: "
+                        f"{_restored_stage or '(unknown)'}"
+                    )
+                    _slog("Resume override prompt: restored previous checkpoint via post-apply B")
+                    return False
+                print("     ❌ Could not restore the previous checkpoint snapshot.")
+                return False
         return _any_overridden
 
     # ── Single-group path: all nodes at same stage (or single-node mode) ──
     print("     Resume controls : Press Enter to use detected stage, or pick a checkpoint below.")
     print(f"     Detected next   : {_display_default}")
+    if _restored_from_backup:
+        print("     ℹ️  Loaded a previous override backup before this selection.")
 
     _first_pending = ""
     for _cp_id, __ in _checkpoint_seq:
@@ -6190,10 +6428,27 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
     _id_lookup = {_cp_id.lower(): _cp_id for _cp_id, __ in _checkpoint_seq}
     while True:
         _sel = _prompt(
-            "     Override start checkpoint [Enter=detected, number, or cp_id]: ",
+            "     Override start checkpoint [Enter=detected, B=restore previous, number, or cp_id]: ",
             "",
         ).strip().lower()
         if not _sel:
+            return False
+        if _sel in ("b", "back"):
+            if not _override_backup_meta:
+                print("     ℹ️  No override has been applied in this prompt yet.")
+                continue
+            if _checkpoint_restore_from_snapshot(
+                cp,
+                str(_override_backup_meta.get("path") or "").strip(),
+            ):
+                _restored_stage = str(_override_backup_meta.get("resume_stage") or "").strip()
+                print(
+                    f"     ✅ Restored previous checkpoint stage: "
+                    f"{_restored_stage or '(unknown)'}"
+                )
+                _slog("Resume override prompt: restored previous checkpoint via B")
+                return False
+            print("     ❌ Could not restore the previous checkpoint snapshot.")
             return False
         _target = ""
         if _sel.isdigit():
@@ -6217,10 +6472,32 @@ def _prompt_checkpoint_resume_target_override(cp) -> bool:
         if _confirm not in ("y", "yes"):
             print("     Override not applied. Choose another checkpoint or press Enter to keep detected stage.")
             continue
+        if not _ensure_override_backup():
+            print("     ❌ Could not create checkpoint backup for restore. Override cancelled.")
+            _slog("Resume override cancelled: failed to create restore backup", prefix="ERROR")
+            continue
         if _checkpoint_apply_manual_resume_target(cp, _target):
             _new_stage = _checkpoint_resume_stage_label(cp)
             print(f"     Manual checkpoint override applied: next stage is {_new_stage} ({_target}).")
             _slog(f"Manual checkpoint override applied: target={_target}, mode={cp.mode}")
+            _post = _prompt(
+                "     Press Enter to continue, or type B to restore previous checkpoint: ",
+                "",
+            ).strip().lower()
+            if _post in ("b", "back") and _override_backup_meta:
+                if _checkpoint_restore_from_snapshot(
+                    cp,
+                    str(_override_backup_meta.get("path") or "").strip(),
+                ):
+                    _restored_stage = str(_override_backup_meta.get("resume_stage") or "").strip()
+                    print(
+                        f"     ✅ Restored previous checkpoint stage: "
+                        f"{_restored_stage or '(unknown)'}"
+                    )
+                    _slog("Resume override prompt: restored previous checkpoint via post-apply B")
+                    return False
+                print("     ❌ Could not restore the previous checkpoint snapshot.")
+                return False
             return True
         print("     ⚠️  Could not apply manual checkpoint override.")
         return False
