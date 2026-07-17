@@ -5,7 +5,7 @@ import AFX_reinit
 
 
 class PrimaryPostCreateLifRouteFixRootTests(unittest.TestCase):
-    def test_fixes_cluster_mgmt_port_and_missing_default_route(self):
+    def test_fixes_cluster_mgmt_port_route_and_missing_dns_ntp(self):
         issued = []
 
         lif_instance_output = """
@@ -40,6 +40,9 @@ Home Port: e0M
             "mgmt_port": "e0M",
             "mgmt_netmask": "255.255.255.0",
             "mgmt_gateway": "192.168.0.1",
+            "dns_domains": "example.local",
+            "dns_servers": "192.168.0.53",
+            "ntp_servers": "192.168.0.10,192.168.0.11",
         }
 
         with mock.patch.object(AFX_reinit, "_login_primary_cluster_shell", return_value=True), \
@@ -63,6 +66,15 @@ Home Port: e0M
                 "route create -vserver oam-nvlts -destination 0.0.0.0/0 -gateway 192.168.0.1" in c
                 for c in issued
             )
+        )
+        self.assertTrue(
+            any("dns create -domains example.local -name-servers 192.168.0.53" in c for c in issued)
+        )
+        self.assertTrue(
+            any("ntp server create -server 192.168.0.10" in c for c in issued)
+        )
+        self.assertTrue(
+            any("ntp server create -server 192.168.0.11" in c for c in issued)
         )
 
 

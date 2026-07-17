@@ -28832,8 +28832,56 @@ def _verify_primary_mgmt_lifs_and_route(channel, cc, primary_bmc=None) -> None:
         else:
             print("  ⚠️  Cannot validate/create default route: cluster name unavailable.")
 
+    _dns_expect = _split_cluster_config_values((cc or {}).get("dns_domains"))
+    _dns_expect += [
+        _v for _v in _split_cluster_config_values((cc or {}).get("dns_servers"))
+        if _v not in _dns_expect
+    ]
+    _ntp_expect = _split_cluster_config_values((cc or {}).get("ntp_servers"))
+    try:
+        _dns_out = _run_cluster_command(channel, "set -rows 0; dns show", timeout=45)
+        _dns_l = str(_dns_out or "").lower()
+        _dns_present = (not _dns_expect) or all(_v in _dns_l for _v in _dns_expect)
+    except Exception as _dns_chk_err:
+        _dns_present = False
+        print(f"  ⚠️  DNS verification failed: {_dns_chk_err}")
+        if _session_log:
+            _session_log.log(
+                f"Primary post-create DNS verification failed: {_dns_chk_err}",
+                prefix="WARN",
+            )
+
+    try:
+        _ntp_out = _run_cluster_command(channel, "set -rows 0; ntp server show", timeout=45)
+        _ntp_l = str(_ntp_out or "").lower()
+        _ntp_missing = [_v for _v in _ntp_expect if _v not in _ntp_l]
+        _ntp_present = (len(_ntp_missing) == 0)
+    except Exception as _ntp_chk_err:
+        _ntp_missing = list(_ntp_expect)
+        _ntp_present = False
+        print(f"  ⚠️  NTP verification failed: {_ntp_chk_err}")
+        if _session_log:
+            _session_log.log(
+                f"Primary post-create NTP verification failed: {_ntp_chk_err}",
+                prefix="WARN",
+            )
+
+    if _dns_expect:
+        if _dns_present:
+            print("  ✅ DNS configuration matches expected values.")
+        else:
+            print("  🔧 DNS settings missing/incomplete; applying configuration...")
+            _apply_dns_configuration(channel, cc=cc)
+
+    if _ntp_expect:
+        if _ntp_present:
+            print("  ✅ NTP configuration matches expected servers.")
+        elif _ntp_missing:
+            print(f"  🔧 Missing NTP server(s): {', '.join(_ntp_missing)} — applying...")
+            _apply_ntp_servers(channel, servers_override=_ntp_missing)
+
     if _session_log:
-        _session_log.log("Primary post-create LIF/route verification completed")
+        _session_log.log("Primary post-create LIF/route/DNS/NTP verification completed")
 
 
 def _abort_wizard_get_cluster_ip(ch, label, admin_password,
