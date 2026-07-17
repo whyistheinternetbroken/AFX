@@ -22,6 +22,7 @@ revision labels rather than strict [SemVer](https://semver.org/).
 
 ### Fixed
 - **Stale backup checkpoint cleanup.** Successful mode completion paths that clear checkpoints now remove archived backup checkpoint files for that mode as well, and the startup resume picker now includes a `B` action to clear stale backup checkpoints on demand.
+- **Mode 2.2 test-injection prompt flow.** `--test` in option 2.2 now skips the initial global checkpoint picker and defers directly to per-node checkpoint injection once the secondary-node list is known.
 - **Long option 4 wait visibility.** Primary-node option 4 automation now surfaces a clear "started" state, periodic progress heartbeat, and explicit completion message before AutoSupport handling instead of leaving the console silent during the longest reinit wait.
 - **Per-node mode-2 checkpoint progression.** Node-add resume now evaluates `cp_2_*` completion per node so failures in one node no longer incorrectly force all nodes through the same checkpoint stage.
 - **Mode 2 `cp_2_7` resume re-entry.** If target nodes are already joined when resuming at `cp_2_7`/`cp_2_8`, the script now runs final health verification and marks `cp_2_8` complete instead of re-running `cluster add-node`.

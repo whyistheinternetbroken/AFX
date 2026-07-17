@@ -2424,7 +2424,10 @@ def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node
     if _checkpoint_test_targets_by_node:
         return
     _global_target = str(_checkpoint_test_target or "").strip()
-    if not _global_target:
+    _deferred_mode2_per_node = bool(
+        operation_mode == 2 and bool(globals().get("_auto_add")) and not _global_target
+    )
+    if not _global_target and not _deferred_mode2_per_node:
         return
     _nodes = []
     for _nid in (node_ids or []):
@@ -2462,10 +2465,16 @@ def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node
         _resume_cp_for_override = None
 
     print(f"\n  🧪 {len(_nodes)} secondary nodes detected — configuring per-node checkpoint injection.")
-    print(f"  Global checkpoint '{_global_target}' will be replaced by per-node config below.")
+    if _global_target:
+        print(f"  Global checkpoint '{_global_target}' will be replaced by per-node config below.")
+    else:
+        print("  No global checkpoint target is set for this mode; choose per-node targets below.")
     if _peer_only:
         print("  (Only peer checkpoints (cp_2_x) are shown — cp_1_x applies to the primary node only.)")
-    print("  (Press Enter at a node prompt to keep the global target for that node, 0 to skip it.)")
+    if _global_target:
+        print("  (Press Enter at a node prompt to keep the global target for that node, 0 to skip it.)")
+    else:
+        print("  (Press Enter at a node prompt to use that node's minimum eligible checkpoint, 0 to skip it.)")
 
     if _configure_per_node_checkpoint_injection(
         _mode_name,
@@ -2476,15 +2485,19 @@ def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node
     ):
         return
 
-    _slog(
-        f"--test mode {_mode_name}: keeping global checkpoint "
-        f"'{_global_target}' across {len(_nodes)} nodes",
-        prefix="INFO",
-    )
-    print(
-        f"  ℹ️  Keeping global checkpoint '{_global_target}' for all nodes "
-        "for this run."
-    )
+    if _global_target:
+        _slog(
+            f"--test mode {_mode_name}: keeping global checkpoint "
+            f"'{_global_target}' across {len(_nodes)} nodes",
+            prefix="INFO",
+        )
+        print(
+            f"  ℹ️  Keeping global checkpoint '{_global_target}' for all nodes "
+            "for this run."
+        )
+    else:
+        _clear_checkpoint_test_config()
+        print("  ✅ Checkpoint failure injection disabled for this run.")
 
 
 def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> None:
@@ -2499,6 +2512,17 @@ def _configure_checkpoint_test_for_mode(operation_mode: int, enabled: bool) -> N
     global _checkpoint_test_targets_by_node
     _clear_checkpoint_test_config()
     if not enabled:
+        return
+    # Mode 2.2 uses per-node checkpoint injection once the secondary-node list is
+    # known (after config/manual node selection). Skip the global checkpoint prompt.
+    if operation_mode == 2 and bool(globals().get("_auto_add")):
+        _checkpoint_test_enabled = True
+        _checkpoint_test_target = ""
+        _checkpoint_test_mode_label = _checkpoint_test_mode_name(operation_mode)
+        _checkpoint_test_targets_by_node = {}
+        _print_banner(f"🧪 Test failure injection ({_checkpoint_test_mode_label})")
+        print("\n  Mode 2.2 uses per-node checkpoint failure injection.")
+        print("  Node-specific checkpoint prompts will be shown after node selection.")
         return
 
     _options = list(_CHECKPOINT_TEST_OPTIONS.get(operation_mode) or [])
