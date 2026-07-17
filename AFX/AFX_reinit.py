@@ -2415,6 +2415,10 @@ def _maybe_offer_per_node_checkpoint_injection_upgrade(operation_mode: int, node
     global _checkpoint_test_mode_label, _checkpoint_test_targets_by_node
     if operation_mode not in (2, 3, 42, 43):
         return
+    # Mode 2 per-node checkpoint injection is only intended for 2.2
+    # (automatic add-node). For 2.1 keep the single global target.
+    if operation_mode == 2 and not bool(globals().get("_auto_add")):
+        return
     if not _checkpoint_test_enabled:
         return
     if _checkpoint_test_targets_by_node:
