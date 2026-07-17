@@ -27341,6 +27341,8 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
     _cluster_cfg_probe = None
     _cluster_shell_ready = _login_primary_cluster_shell(channel, cc.get("admin_password"))
     if _cluster_shell_ready:
+        _verify_primary_mgmt_lifs_and_route(channel, cc, primary_bmc=primary_bmc)
+        _cluster_shell_ready = _login_primary_cluster_shell(channel, cc.get("admin_password"))
         _cluster_cfg_probe = _probe_cluster_setup_configuration(channel, cc)
         if _cluster_cfg_probe:
             if _cluster_cfg_probe.get("dns_present") and not _cp_done("cp_1_7_10"):
@@ -28178,6 +28180,221 @@ def _login_primary_cluster_shell(channel, admin_password):
     channel.send((admin_password or "") + "\r")
     out, matched = direct_read_until_any(channel, ["::>", "::*>", "login:"], timeout=20)
     return bool(matched and ("::>" in matched or "::*>" in matched))
+
+
+def _enter_system_console_for_primary_shell(channel) -> bool:
+    """If ``channel`` is at a BMC prompt, enter system console.
+
+    Returns True when console attach reached a cluster-login/shell context.
+    """
+    drain_channel(channel, seconds=0.5)
+    channel.send("\r")
+    _out, _matched = direct_read_until_any(
+        channel, ["::>", "::*>", "login:", ">"], timeout=15
+    )
+    _combo = (_out or "") + (_matched or "")
+    if "::>" in _combo or "::*>" in _combo or ("login:" in str(_matched or "").lower()):
+        return True
+    if not _reach_bmc_prompt(channel, timeout=15):
+        return False
+    channel.send("system console\r")
+    _sc_out, _sc_matched = direct_read_until_any(
+        channel, ["::>", "::*>", "login:", "y/n"], timeout=25
+    )
+    if _sc_matched and "y/n" in str(_sc_matched).lower():
+        channel.send("y\r")
+        _sc_out2, _sc_matched = direct_read_until_any(
+            channel, ["::>", "::*>", "login:"], timeout=20
+        )
+        _sc_out = (_sc_out or "") + (_sc_out2 or "")
+    _sc_combo = (_sc_out or "") + (_sc_matched or "")
+    return bool(
+        "::>" in _sc_combo
+        or "::*>" in _sc_combo
+        or ("login:" in str(_sc_matched or "").lower())
+    )
+
+
+def _verify_primary_mgmt_lifs_and_route(channel, cc, primary_bmc=None) -> None:
+    """Verify/fix cluster-mgmt and primary node-mgmt LIF settings after create.
+
+    Uses the existing BMC system-console channel and cluster admin login to:
+      - validate node-mgmt / cluster-mgmt LIF address, netmask, and home-port
+      - validate default route presence
+      - repair cluster_mgmt home-port and missing default route when needed
+    """
+    _cluster_name = str((cc or {}).get("name") or "").strip()
+    _clus_ip = str((cc or {}).get("mgmt_ip") or "").strip()
+    _clus_port = str((cc or {}).get("mgmt_port") or "").strip()
+    _clus_mask = str((cc or {}).get("mgmt_netmask") or "").strip()
+    _clus_gw = str((cc or {}).get("mgmt_gateway") or "").strip()
+    _node_cfg = _resolve_node_mgmt_config(primary_bmc)
+    _node_ip = str(_node_cfg.get("ip") or "").strip()
+    _node_port = str(_node_cfg.get("port") or "").strip()
+    _node_mask = str(_node_cfg.get("netmask") or "").strip()
+
+    _admin_pw = (cc or {}).get("admin_password")
+    if not _login_primary_cluster_shell(channel, _admin_pw):
+        if not _enter_system_console_for_primary_shell(channel):
+            print("\n  ⚠️  Could not enter system console to verify primary LIF settings.")
+            if _session_log:
+                _session_log.log(
+                    "Primary post-create LIF verification skipped: unable to enter system console",
+                    prefix="WARN",
+                )
+            return
+        if not _login_primary_cluster_shell(channel, _admin_pw):
+            print("\n  ⚠️  Could not log in to cluster shell for primary LIF verification.")
+            if _session_log:
+                _session_log.log(
+                    "Primary post-create LIF verification skipped: cluster shell login failed",
+                    prefix="WARN",
+                )
+            return
+
+    print("\n🔎 Verifying primary cluster/node management LIF configuration...")
+    _slog("Primary post-create verification: checking net int show and route show")
+    try:
+        _lif_out = _run_cluster_command(
+            channel,
+            "set -rows 0; net int show -role node-mgmt,cluster-mgmt "
+            "-fields role,address,home-port,netmask -instance",
+            timeout=60,
+        )
+        _route_out = _run_cluster_command(
+            channel,
+            f"set -rows 0; route show -vserver {_cluster_name}" if _cluster_name else "set -rows 0; route show",
+            timeout=45,
+        )
+    except Exception as _verify_err:
+        print(f"  ⚠️  Primary LIF/route verification command failed: {_verify_err}")
+        if _session_log:
+            _session_log.log(
+                f"Primary post-create LIF/route verification failed: {_verify_err}",
+                prefix="WARN",
+            )
+        return
+
+    _rows = _parse_network_interfaces(_lif_out)
+    _cluster_rows = [r for r in _rows if "cluster-mgmt" in str(r.get("role") or "").lower()]
+    _node_rows = [r for r in _rows if "node-mgmt" in str(r.get("role") or "").lower()]
+    _target_node_row = None
+    if _node_ip:
+        for _r in _node_rows:
+            if str(_r.get("address") or "").strip() == _node_ip:
+                _target_node_row = _r
+                break
+    if _target_node_row is None and _node_rows:
+        _target_node_row = _node_rows[0]
+
+    _cluster_row = None
+    if _clus_ip:
+        for _r in _cluster_rows:
+            if str(_r.get("address") or "").strip() == _clus_ip:
+                _cluster_row = _r
+                break
+    if _cluster_row is None and _cluster_rows:
+        _cluster_row = _cluster_rows[0]
+
+    _cluster_port_ok = (not _clus_port) or (
+        _cluster_row and str(_cluster_row.get("home-port") or "").strip().lower() == _clus_port.lower()
+    )
+    _cluster_ip_ok = (not _clus_ip) or (
+        _cluster_row and str(_cluster_row.get("address") or "").strip() == _clus_ip
+    )
+    _cluster_mask_ok = (not _clus_mask) or (
+        _cluster_row and str(_cluster_row.get("netmask") or "").strip() == _clus_mask
+    )
+    _node_port_ok = (not _node_port) or (
+        _target_node_row and str(_target_node_row.get("home-port") or "").strip().lower() == _node_port.lower()
+    )
+    _node_ip_ok = (not _node_ip) or (
+        _target_node_row and str(_target_node_row.get("address") or "").strip() == _node_ip
+    )
+    _node_mask_ok = (not _node_mask) or (
+        _target_node_row and str(_target_node_row.get("netmask") or "").strip() == _node_mask
+    )
+
+    if _cluster_ip_ok and _cluster_mask_ok and _cluster_port_ok:
+        print("  ✅ Cluster management LIF matches expected config.")
+    else:
+        print(
+            "  ⚠️  Cluster management LIF mismatch: "
+            f"ip_ok={bool(_cluster_ip_ok)}, netmask_ok={bool(_cluster_mask_ok)}, port_ok={bool(_cluster_port_ok)}"
+        )
+
+    if _node_ip_ok and _node_mask_ok and _node_port_ok:
+        print("  ✅ Primary node management LIF matches expected config.")
+    else:
+        print(
+            "  ⚠️  Primary node management LIF mismatch: "
+            f"ip_ok={bool(_node_ip_ok)}, netmask_ok={bool(_node_mask_ok)}, port_ok={bool(_node_port_ok)}"
+        )
+
+    if (not _cluster_port_ok) and _cluster_name and _clus_port:
+        _lif_name = str((_cluster_row or {}).get("lif") or "cluster_mgmt").strip() or "cluster_mgmt"
+        print(f"  🔧 Fixing cluster management LIF port: {_lif_name} -> {_clus_port}")
+        try:
+            _run_cluster_command(
+                channel,
+                f"net int modify -vserver {_cluster_name} -lif {_lif_name} -home-port {_clus_port}",
+                timeout=45,
+            )
+            print("  ✅ Cluster management LIF port updated.")
+            if _session_log:
+                _session_log.log(
+                    f"Primary post-create fix: net int modify -vserver {_cluster_name} "
+                    f"-lif {_lif_name} -home-port {_clus_port}"
+                )
+        except Exception as _mod_err:
+            print(f"  ⚠️  Failed to update cluster management LIF port: {_mod_err}")
+            if _session_log:
+                _session_log.log(
+                    f"Primary post-create fix failed (cluster_mgmt home-port): {_mod_err}",
+                    prefix="WARN",
+                )
+
+    _default_route_gateway = ""
+    if _cluster_name:
+        try:
+            _def_out = _run_cluster_command(
+                channel,
+                f"set -rows 0; route show -vserver {_cluster_name} -destination 0.0.0.0/0 -fields gateway",
+                timeout=30,
+            )
+            _default_route_gateway = str(_parse_matching_gateway(_def_out, clus_mgmt_ip=_clus_ip) or "").strip()
+        except Exception:
+            _default_route_gateway = ""
+
+    if _clus_gw:
+        if _default_route_gateway:
+            print(f"  ✅ Default route present (gateway {_default_route_gateway}).")
+        elif _cluster_name:
+            print(f"  🔧 Default route missing; creating via gateway {_clus_gw}...")
+            try:
+                _run_cluster_command(
+                    channel,
+                    f"route create -vserver {_cluster_name} -destination 0.0.0.0/0 -gateway {_clus_gw}",
+                    timeout=45,
+                )
+                print("  ✅ Default route created.")
+                if _session_log:
+                    _session_log.log(
+                        f"Primary post-create fix: route create -vserver {_cluster_name} "
+                        f"-destination 0.0.0.0/0 -gateway {_clus_gw}"
+                    )
+            except Exception as _route_err:
+                print(f"  ⚠️  Failed to create default route: {_route_err}")
+                if _session_log:
+                    _session_log.log(
+                        f"Primary post-create fix failed (route create): {_route_err}",
+                        prefix="WARN",
+                    )
+        else:
+            print("  ⚠️  Cannot validate/create default route: cluster name unavailable.")
+
+    if _session_log:
+        _session_log.log("Primary post-create LIF/route verification completed")
 
 
 def _abort_wizard_get_cluster_ip(ch, label, admin_password,
