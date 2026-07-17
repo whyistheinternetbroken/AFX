@@ -27254,6 +27254,11 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         _resp = "" if response is None else str(response)
         _prompt_lower = str(prompt_text or "").lower()
         _trigger_lower = str(trigger or "").lower()
+        _wizard_channel = (
+            _primary_bmc_reconnect_ctx.get("channel")
+            if (_primary_bmc_reconnect_ctx and _primary_bmc_reconnect_ctx.get("channel") is not None)
+            else channel
+        )
         _default_val = ""
         if _trigger_lower:
             _m = re.search(
@@ -27263,13 +27268,13 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
             if _m:
                 _default_val = (_m.group(1) or "").strip()
         if _default_val and _resp.strip().lower() == _default_val.lower():
-            channel.send("\r")
+            _wizard_channel.send("\r")
             _slog(f"{label}: prompt default matches config ('{_default_val}'); sending <Enter>")
             if _session_log:
                 _session_log.log_sent("<Enter> (accepted prompt default)")
             time.sleep(0.5)
             return
-        channel.send(_resp + "\r")
+        _wizard_channel.send(_resp + "\r")
         if _session_log:
             _session_log.log_sent(_resp if _resp else "<Enter>")
         time.sleep(0.5)
@@ -27328,16 +27333,47 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                     "skipping fallback send to avoid misaligned input"
                 )
             return _prefetch_l
-        _wait_and_send(
+        _step_wait_out, _step_wait_match = direct_read_until_any(
             channel,
-            trigger,
-            response,
-            label,
+            [
+                trigger,
+                "cluster management interface ip address",
+                "cluster management interface netmask",
+                "cluster management interface default gateway",
+                "dns domain name",
+                "dns domain names",
+                "where is the controller located",
+                "login:",
+                "::>",
+                "::*>",
+            ],
             timeout=timeout,
             node_log=node_log,
             quiet=bool(node_log),
+            check_bmc_drop=True,
         )
-        _cp_mark(cp_id)
+        _step_wait_combined = (_step_wait_out or "") + (_step_wait_match or "")
+        _step_wait_lower = _step_wait_combined.lower()
+        if _step_wait_match and trigger in _step_wait_lower:
+            _wizard_send_value_with_default(
+                trigger,
+                response,
+                label,
+                prompt_text=_step_wait_combined,
+            )
+            _cp_mark(cp_id)
+            return ""
+        if _step_wait_match:
+            _slog(
+                f"{cp_id}: wizard already advanced to '{_step_wait_match}' without replaying '{trigger}'; "
+                "marking this step complete to continue from live console state"
+            )
+            _cp_mark(cp_id)
+            return _step_wait_lower
+        _slog(
+            f"{cp_id}: timeout waiting for '{trigger}' or downstream prompts; leaving step incomplete",
+            prefix="WARN",
+        )
         return ""
 
     _wizard_prefetched_prompt_text = str(_post_create_prefetch or "")
