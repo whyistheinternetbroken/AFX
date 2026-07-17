@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 7/13/2026
+**Updated:** 7/17/2026
 
 ---
 
@@ -25,6 +25,7 @@ The script automates the following core tasks:
 - Selects the appropriate boot menu option
 - Drives the ONTAP cluster setup wizard in fully automated mode
 - Emits live Option 4 / cluster-create progress milestones during long waits
+- Verifies and remediates primary post-create cluster-mgmt/node-mgmt LIFs, route, DNS, and NTP
 - Adds peer nodes to an existing cluster (sequentially or in parallel)
 - Manages ONTAP software upgrades via rolling takeover/giveback
 - Installs ONTAP via netboot
@@ -1667,6 +1668,7 @@ current `[Unreleased]` working set.
 | **Parallel checkpoint parity for modes 3 / 4.2 / 4.3** | Mode 3 and parallel 4.2/4.3 workflows now keep per-node checkpoint/test-injection behavior aligned even when nodes diverge by stage. Resume logic honors per-node progress instead of collapsing mixed-stage parallel work into one global checkpoint state. |
 | **Checkpoint list CLI** | Added `--checkpoint-list` so operators can print the valid checkpoint IDs by mode before configuring `--test` or resume exercises. |
 | **Cluster-create progress milestones** | New-cluster workflows now print explicit progress lines when cluster setup begins, when option 4 node initialization starts/completes, and as ONTAP advances through VIF manager startup, storage-pod ownership, volume-location updates, zeroing, aggregate creation, and final cluster creation. |
+| **Primary post-create network remediation** | After primary cluster creation (modes 1 and 3), the script validates cluster-mgmt/node-mgmt LIF address+netmask+home-port, default route, DNS, and NTP from system console context and automatically repairs mismatches/missing settings from config values. |
 | **Mode 3 join-status visibility** | During bulk `cluster add-node`, the primary console now prints per-node join status transitions (for example, pending/in-progress/success rows from `cluster add-node-status`) instead of only periodic "waiting" heartbeats. |
 | **LOADER boot-menu recovery hardening** | Boot-menu recovery no longer depends on AUTOBOOT override state; if a node sits at LOADER too long, the script now runs the LOADER recovery path consistently and retries `boot_ontap menu`. |
 | **Boot integrity fail-fast in boot-menu waits** | Boot-menu wait loops now abort immediately when fatal signatures are detected (for example `SHA256 checksum failure: varfs.tgz` or `/dev/nvrd1` restore failures), preventing indefinite CR-nudge loops on unrecoverable nodes. |
