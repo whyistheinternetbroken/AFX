@@ -22,6 +22,7 @@ revision labels rather than strict [SemVer](https://semver.org/).
 - **Parallel checkpoint coverage extended beyond mode 2.** Multi-node checkpoint targeting and mixed-stage resume handling now stay aligned across mode 3 peer adds and parallel mode 4.2/4.3 runs instead of assuming one shared stage for every node.
 
 ### Fixed
+- **Duplicate script tree removed.** Retired the mirrored `AFX/AFX_reinit.py` copy and its mirror-only parity test so the project maintains a single authoritative script at the repository root (`AFX_reinit.py`).
 - **Stale backup checkpoint cleanup.** Successful mode completion paths that clear checkpoints now remove archived backup checkpoint files for that mode as well, and the startup resume picker now includes a `B` action to clear stale backup checkpoints on demand.
 - **Mode 2.2 test-injection prompt flow.** `--test` in option 2.2 now skips the initial global checkpoint picker and defers directly to per-node checkpoint injection once the secondary-node list is known.
 - **Mode 2.2 cluster-shell requirement.** Option 2.2 now hard-stops before node-add workflow when cluster management SSH is unavailable, preventing false-success runs where `cluster add-node` was skipped.
