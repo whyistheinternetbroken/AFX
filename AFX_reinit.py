@@ -1,11 +1,9 @@
 ﻿#!/usr/bin/env python3
 # PYTHON_ARGCOMPLETE_OK
 
-# OPT (phase 2): PEP 563 deferred evaluation of annotations. Lets us add
-# type hints freely without paying runtime cost, and without worrying about
-# forward references to names defined later in the module. Must precede any
-# real imports per Python's __future__-statement rules.
-from __future__ import annotations
+# NOTE: Keep this script compatible with Python 3.6.x. The module uses string
+# annotations where needed instead of relying on `from __future__ import
+# annotations` (not available on Python 3.6).
 
 # ---------------------------------------------------------------------------
 # Suppress CryptographyDeprecationWarning BEFORE any other imports
@@ -3800,7 +3798,7 @@ def _augment_role_label_with_ip(label: str = "", mode=None) -> str:
     return _lbl
 
 
-def _display_ontap_node_label(nodename: str, node_mgmt_by_name: dict | None = None) -> str:
+def _display_ontap_node_label(nodename: str, node_mgmt_by_name: "dict | None" = None) -> str:
     """Return primary / secondary-## for an ONTAP node name when possible."""
     _name = str(nodename or "").strip()
     _ip = ""
@@ -8247,8 +8245,8 @@ def _resolve_ssh_log_file() -> str:
 
 
 def _log_ssh_event(host: str, username: str, label: str, event: str,
-                   attempt: int | None = None, details: str = "",
-                   reconnect: bool = False, phase: str | None = None) -> None:
+                   attempt: "int | None" = None, details: str = "",
+                   reconnect: bool = False, phase: "str | None" = None) -> None:
     """Append one SSH connection event to the dedicated SSH log file."""
     try:
         with _ssh_log_lock:
@@ -8934,7 +8932,7 @@ def _ssh_connect_with_retry(host: str, username: str, password: str,
         if _fb is not None and (username, _fb) not in _attempt_queue:
             _attempt_queue.append((username, _fb))
     _queue_idx = 0  # index into _attempt_queue for silent fallback phase
-    def _ssh_event(event: str, attempt: int | None = None, details: str = ""):
+    def _ssh_event(event: str, attempt: "int | None" = None, details: str = ""):
         _log_ssh_event(
             host, username, label, event,
             attempt=attempt, details=details, reconnect=is_reconnect
@@ -10343,7 +10341,7 @@ def _script_path_for_completion() -> str:
         return os.path.abspath(sys.argv[0] or "AFX_reinit.py")
 
 
-def _completion_hook_line(script_path: str | None = None) -> str:
+def _completion_hook_line(script_path: "str | None" = None) -> str:
     _path = script_path or _script_path_for_completion()
     return f'eval "$(register-python-argcomplete {shlex.quote(_path)})"'
 
@@ -10353,7 +10351,7 @@ def _completion_rc_paths() -> "list[str]":
     return [os.path.join(_home, ".bashrc"), os.path.join(_home, ".zshrc")]
 
 
-def _completion_hook_present(script_path: str | None = None) -> bool:
+def _completion_hook_present(script_path: "str | None" = None) -> bool:
     _script = script_path or _script_path_for_completion()
     _script_base = os.path.basename(_script)
     for _rc in _completion_rc_paths():
@@ -14741,7 +14739,7 @@ def _is_valid_port(value):
     return bool(value) and bool(_PORT_RE.match(value.strip()))
 
 
-def _is_valid_ipv4(value: str | None) -> bool:
+def _is_valid_ipv4(value: "str | None") -> bool:
     """Return True iff ``value`` is a dotted-quad IPv4 address with no
     leading-zero octets. Delegates to :mod:`ipaddress` for the core
     validation and adds the leading-zero check (which
@@ -14786,7 +14784,7 @@ def _prompt_validated(label, default, validator, error_hint):
         print(f"    \u26A0\uFE0F  Invalid value '{value}'. {error_hint}")
 
 
-def _first_ipv4_in(text: str | None) -> str | None:
+def _first_ipv4_in(text: "str | None") -> "str | None":
     """Return the first valid IPv4 address found in `text`, or None."""
     if not text:
         return None
@@ -29525,7 +29523,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     start = time.monotonic()
     _already_succeeded: set = set()
     _requested_ips = {str(_ip).strip() for _ip in [r["cluster_ip"] for r in _rows] if str(_ip).strip()}
-    _last_status_by_ip: dict[str, tuple[str, str]] = {}
+    _last_status_by_ip: "dict[str, tuple[str, str]]" = {}
     _printed_waiting_for_status = False
 
     while time.monotonic() - start < total_timeout:
