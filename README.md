@@ -377,6 +377,103 @@ Notes:
 
 ---
 
+## Manual Mode 3 Procedure (Primary, then Secondary Nodes)
+
+Use this when you want to perform the same workflow as mode 3 manually from the console.
+
+### Required input values (prepare before starting)
+
+| Input | Primary | Secondary |
+|---|---|---|
+| BMC IP | Required | Required (per node) |
+| BMC username/password | Required | Required (per node, can be same as primary) |
+| Node-mgmt port | Required | Required (per node) |
+| Node-mgmt IP | Required | Required (per node) |
+| Node-mgmt netmask | Required | Required (per node) |
+| Node-mgmt gateway | Required | Required (per node) |
+| Cluster name | Required | N/A |
+| Cluster-mgmt port | Required | N/A |
+| Cluster-mgmt IP | Required | N/A |
+| Cluster-mgmt netmask | Required | N/A |
+| Cluster-mgmt gateway | Required | N/A |
+| DNS domains | Required (if used in your environment) | N/A |
+| DNS name servers | Required (if used in your environment) | N/A |
+| NTP servers | Required (if used in your environment) | N/A |
+| Admin password | Required | Used when aborting local wizard/login prompts |
+| Cluster LIF IP (169.254.x.x) | N/A | Capture for each node, then pass to `cluster add-node -cluster-ips` |
+
+### Primary node (cluster create path)
+
+1. Connect to the primary BMC and open console:
+   ```bash
+   ssh <bmc_user>@<PRIMARY_BMC_IP>
+   system console
+   system reset
+   ```
+2. At `LOADER>`, run:
+   ```text
+   set-defaults
+   setenv bootarg.destroy.all.storage.pods true
+   setenv bootarg.init.unjoined true
+   setenv AUTO_FW_UPDATE false                 # optional policy
+   setenv AUTOBOOT true                        # optional policy
+   setenv raid.use-physical-zeroing? true|false
+   saveenv
+   boot_ontap menu
+   ```
+3. In boot menu, run option 9 flow as required by your process, return to boot menu, then run option 4.
+4. Confirm destructive erase prompts with `yes`.
+5. Complete cluster setup prompts (node-mgmt, licenses, cluster-mgmt, DNS, location, storage failover, NTP, passwordless SSH, AutoSupport).
+6. From `::>`, verify post-create state:
+   ```text
+   set -rows 0; net int show -role node-mgmt,cluster-mgmt -fields role,address,home-port,netmask -instance
+   set -rows 0; route show -vserver <CLUSTER_NAME>
+   set -rows 0; dns show
+   set -rows 0; ntp server show
+   ```
+
+### Secondary nodes (prepare each node for join)
+
+Repeat these steps for each secondary node:
+
+1. Connect to secondary BMC and open console:
+   ```bash
+   ssh <bmc_user>@<SECONDARY_BMC_IP>
+   system console
+   system reset
+   ```
+2. At `LOADER>`, run (**do not set destroy-all-storage-pods on secondaries**):
+   ```text
+   set-defaults
+   setenv bootarg.init.unjoined true
+   setenv AUTO_FW_UPDATE false                 # optional policy
+   setenv AUTOBOOT true                        # optional policy
+   setenv raid.use-physical-zeroing? true|false
+   saveenv
+   boot_ontap menu
+   ```
+3. In boot menu, run option 4 and answer destructive prompts with `yes`.
+4. Complete node-mgmt prompts.
+5. Abort local wizard and capture cluster LIF IP:
+   ```text
+   ^C
+   set -rows 0; net int show -role cluster -fields address
+   ```
+
+### Join secondaries from primary cluster shell
+
+On the primary `::>` shell:
+
+```text
+cluster add-node -cluster-ips <IP1>,<IP2>,<IP3>
+cluster add-node-status
+cluster show
+```
+
+Repeat `cluster add-node-status` until each target node reports successful join and `cluster show` health/eligibility is true.
+
+---
+
 ## Experimental Features and Work-in-Progress Notes
 
 Some capabilities are marked **experimental** and are still being refined.
