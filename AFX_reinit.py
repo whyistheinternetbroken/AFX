@@ -471,6 +471,42 @@ class CheckpointManager:
         with self._data_lock:
             self._data = {}
 
+    def clear_all_for_mode(self, mode: "str | int | None" = None) -> int:
+        """Delete active/archived checkpoint files for a given mode.
+
+        When ``mode`` is None, all checkpoint files are removed.
+        Returns the number of files removed.
+        """
+        _removed = 0
+        _target_mode = None if mode is None else str(mode).strip()
+        try:
+            _script_dir = os.path.dirname(os.path.abspath(__file__))
+        except NameError:
+            _script_dir = os.getcwd()
+        _cp_dir = os.path.join(_script_dir, self.CHECKPOINT_DIR)
+        with _checkpoint_io_lock:
+            if os.path.isdir(_cp_dir):
+                for _fname in os.listdir(_cp_dir):
+                    if not (_fname.startswith("afx_checkpoint") and _fname.endswith(".json")):
+                        continue
+                    _fpath = os.path.join(_cp_dir, _fname)
+                    if _target_mode is not None:
+                        try:
+                            with open(_fpath, "r", encoding="utf-8") as _fh:
+                                _payload = json.load(_fh) or {}
+                        except Exception:
+                            continue
+                        if str(_payload.get("mode", "")).strip() != _target_mode:
+                            continue
+                    try:
+                        os.remove(_fpath)
+                        _removed += 1
+                    except Exception:
+                        pass
+        with self._data_lock:
+            self._data = {}
+        return _removed
+
     @property
     def path(self) -> str:
         """Return the checkpoint file path."""
@@ -27846,8 +27882,11 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
         if _checkpoint:
             try:
                 if _auto_setup:
-                    _checkpoint.clear()
-                    _slog("checkpoint: cleared after mode 1 complete")
+                    _removed_cp = _checkpoint.clear_all_for_mode(mode=1)
+                    _slog(
+                        f"checkpoint: cleared after mode 1 complete "
+                        f"({_removed_cp} file(s) removed)"
+                    )
                 else:
                     _checkpoint.mark_done("cp_1_8")
                     _slog("checkpoint: cp_1_8 saved")
