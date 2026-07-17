@@ -27112,7 +27112,14 @@ def _run_cluster_setup_wizard(channel, primary_bmc=None, initial_buf: str = "",
                 on_cp_1_7_9_done.set()
                 _slog("primary cp_1_7_9 reached; signalling peer workers for cluster IP capture")
     else:
-        _slog("cp_1_7_9 already complete; skipping cluster management gateway prompt")
+        _gw_recheck = _wizard_step_checkpoint_aware(
+            "cp_1_7_9",
+            "cluster management interface default gateway",
+            cc["mgmt_gateway"],
+            f"Cluster mgmt gateway -> {cc['mgmt_gateway']}",
+            timeout=600,
+            prefetched_prompt_text=_wizard_prefetched_prompt_text,
+        )
         if on_cp_1_7_9_done is not None and not on_cp_1_7_9_done.is_set():
             on_cp_1_7_9_done.set()
             _slog("cp_1_7_9 already done; signalling peer workers immediately")
