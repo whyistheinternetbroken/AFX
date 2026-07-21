@@ -105,6 +105,67 @@ class FirmwareUpdateLoaderWaitRootTests(unittest.TestCase):
         self.assertTrue(sent)
         self.assertIn("y\r", ch.sent)
 
+    def test_option4_node_add_flow_handles_battery_warning_and_continues(self):
+        ch = _FakeChannel([])
+        battery_warning = (
+            "WARNING: One or more batteries are experiencing a critical failure\n"
+            "Status of batteries unknown\n"
+            "To ignore this failure and boot the system in a mode\n"
+            "where data loss might occur, press 'c' followed by 'Enter'\n"
+        )
+        nvram_warning = (
+            "CAUTION: Using this controller without NVRAM\n"
+            "battery backup coupled with a power\n"
+            "failure condition CAN CAUSE DATA LOSS.\n"
+            "Are you sure you want to continue (y or n)?\n"
+        )
+        read_results = iter([
+            ("", None),  # pre-probe
+            (
+                "this will erase all the data on the disks",
+                "this will erase all the data on the disks",
+            ),  # zero-disks stage sees erase prompt first
+            (battery_warning, None),  # type-yes wait sees battery warning
+            (nvram_warning, None),    # then sees NVRAM caution
+            (
+                "type yes to confirm and continue",
+                "type yes to confirm and continue",
+            ),  # finally gets confirmation prompt
+        ])
+
+        old_shutdown = AFX_reinit._shutdown_event
+        old_checkpoint = AFX_reinit._checkpoint
+        old_enable_asup = AFX_reinit._enable_autosupport
+        old_session_log = AFX_reinit._session_log
+        try:
+            AFX_reinit._shutdown_event = threading.Event()
+            AFX_reinit._checkpoint = None
+            AFX_reinit._enable_autosupport = True
+            AFX_reinit._session_log = None
+            with mock.patch.object(
+                AFX_reinit,
+                "direct_read_until_any",
+                side_effect=lambda *_a, **_k: next(read_results),
+            ), mock.patch("AFX_reinit.time.sleep", return_value=None), \
+                 mock.patch("builtins.print"), \
+                 mock.patch.object(AFX_reinit, "_ts_print"):
+                AFX_reinit._auto_answer_disk_erase_prompts(
+                    ch,
+                    node_log=None,
+                    label="192.168.0.97",
+                    is_node_add=True,
+                    reconnect_ctx=None,
+                )
+        finally:
+            AFX_reinit._shutdown_event = old_shutdown
+            AFX_reinit._checkpoint = old_checkpoint
+            AFX_reinit._enable_autosupport = old_enable_asup
+            AFX_reinit._session_log = old_session_log
+
+        self.assertIn("c\r", ch.sent)
+        self.assertIn("y\r", ch.sent)
+        self.assertGreaterEqual(ch.sent.count("yes\r"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

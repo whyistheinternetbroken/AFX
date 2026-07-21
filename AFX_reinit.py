@@ -752,6 +752,8 @@ class CheckpointManager:
         lines.append("Per-node phases:")
         def _display_ip(_node_id: str) -> str:
             _raw = str(_node_id or "").strip()
+            if _raw == _MODE3_PRIMARY_CHECKPOINT_NODE:
+                return str((bmc_ips or [""])[0] or "").strip()
             if _raw.startswith("node_peer:"):
                 return str(_raw.split(":", 1)[1] or "").strip()
             return _raw
@@ -765,8 +767,40 @@ class CheckpointManager:
             _per = node_phases.get(_phase_name, {}) or {}
             if bool(_per.get(_ip, {}).get("done")):
                 return True
+            if _ip == (bmc_ips[0] if bmc_ips else ""):
+                if bool(_per.get(_MODE3_PRIMARY_CHECKPOINT_NODE, {}).get("done")):
+                    return True
             _peer_key = _mode3_peer_checkpoint_node(_ip)
             return bool(_per.get(_peer_key, {}).get("done"))
+
+        def _format_node_phase_display(_phase_name: str) -> str:
+            _name = str(_phase_name or "").strip()
+            if not _name.startswith("cp_"):
+                return _name
+            _desc = _checkpoint_phase_description(_name)
+            return f"{_name} - {_desc}" if _desc else _name
+
+        def _ordered_node_ips(_ips: "list[str]") -> "list[str]":
+            _primary = bmc_ips[0] if bmc_ips else ""
+            _ordered = []
+            if _primary and _primary in _ips:
+                _ordered.append(_primary)
+            for _ip in bmc_ips[1:]:
+                if _ip in _ips and _ip not in _ordered:
+                    _ordered.append(_ip)
+            for _ip in sorted(_ips):
+                if _ip not in _ordered:
+                    _ordered.append(_ip)
+            return _ordered
+
+        def _role_scoped_phase_names(_ip: str, _all_phase_names: "list[str]") -> "list[str]":
+            _primary = bmc_ips[0] if bmc_ips else ""
+            if _mode_raw in ("3", "4.2-3"):
+                if _ip == _primary:
+                    return [p for p in _all_phase_names if str(p).startswith("cp_1_")]
+                if _ip in bmc_ips:
+                    return [p for p in _all_phase_names if str(p).startswith("cp_2_")]
+            return list(_all_phase_names)
         _synthetic_done_by_ip = {}
         if bmc_ips:
             _primary_done = []
@@ -783,7 +817,7 @@ class CheckpointManager:
             lines.append("  (none recorded)")
         else:
             # Build a phase x ip matrix so each node's progress is easy to scan.
-            all_ips = _all_ips or list(bmc_ips)
+            all_ips = _ordered_node_ips(_all_ips or list(bmc_ips))
             phase_names = list(node_phases.keys())
             _phase_done_counts = {
                 _phase: sum(
@@ -812,16 +846,17 @@ class CheckpointManager:
                 and not bool(phases.get("cluster_formed", {}).get("done"))
             )
             for ip in all_ips:
+                _ip_phase_names = _role_scoped_phase_names(ip, phase_names)
                 completed = [
-                    p for p in phase_names
+                    p for p in _ip_phase_names
                     if _node_phase_done_for_display(p, ip)
                 ]
                 display_done = completed + [
                     _p for _p in _synthetic_done_by_ip.get(ip, [])
                     if _p not in completed
                 ]
-                pending = [p for p in phase_names if p not in completed]
-                _all_known_node_phases_done = bool(phase_names) and not pending
+                pending = [p for p in _ip_phase_names if p not in completed]
+                _all_known_node_phases_done = bool(_ip_phase_names) and not pending
                 if (_wizard_waiting_mode3 and _all_known_node_phases_done
                         and "reinit_loader" in completed):
                     if ip == _primary_ip:
@@ -856,16 +891,16 @@ class CheckpointManager:
                     node_next = "(none)"
                 else:
                     node_current = "(not started)"
-                    node_next = phase_names[0] if phase_names else "(none)"
+                    node_next = _ip_phase_names[0] if _ip_phase_names else "(none)"
                 if ip == _primary_ip:
-                    _role_label = "primary"
+                    _role_label = "primary_node"
                 elif ip in bmc_ips:
-                    _role_label = f"secondary-{bmc_ips.index(ip):02d}"
+                    _role_label = "secondary_node"
                 else:
                     _role_label = "node"
                 lines.append(f"  [{_role_label} | {ip}]")
-                lines.append(f"      current : {node_current}")
-                lines.append(f"      next    : {node_next}")
+                lines.append(f"      current : {_format_node_phase_display(node_current)}")
+                lines.append(f"      next    : {_format_node_phase_display(node_next)}")
                 lines.append(f"      done    : {', '.join(display_done) or '(none)'}")
                 if pending:
                     lines.append(f"      pending : {', '.join(pending)}")
@@ -4805,7 +4840,28 @@ class SessionLogger:
                 self._warnings.append((now_str, message))
             self._file.write(f"[{self._ts_with_elapsed()}] [{prefix}] {message}\n")
 
-    def log_console(self, data):
+    @staticmethod
+    def _extract_peer_ip_from_text(text: str) -> str:
+        _m = re.search(r"(?:^|\[)(?:peer|node_peer)[/:]([^\]\s]+)\]?", str(text or ""))
+        return _m.group(1).strip() if _m else ""
+
+    def log_console(self, data, source_label: str = ""):
+        _peer_ip = (
+            self._extract_peer_ip_from_text(source_label)
+            or self._extract_peer_ip_from_text(data)
+        )
+        if _peer_ip:
+            _entry = None
+            with self._peer_logs_lock:
+                _entry = self._peer_logs.get(_peer_ip)
+            if _entry is None:
+                self.open_peer_log(_peer_ip)
+                with self._peer_logs_lock:
+                    _entry = self._peer_logs.get(_peer_ip)
+            if _entry:
+                with suppress(Exception):
+                    _entry["file"].write(data)
+                    return
         with self._lock:
             if self._closed or self._file.closed:
                 return
@@ -9435,7 +9491,7 @@ def keepalive_loop(client):
 # Direct channel I/O
 # ---------------------------------------------------------------------------
 
-def _reclaim_system_console(channel, node_log=None):
+def _reclaim_system_console(channel, node_log=None, source_label=""):
     """Re-enter system console after an unexpected drop to the BMC prompt
     or a session-preemption notice.
     Auto-answers 'y' to any existing-session takeover question.
@@ -9457,7 +9513,7 @@ def _reclaim_system_console(channel, node_log=None):
             if node_log:
                 _par_write(node_log, chunk)
             if _session_log:
-                _session_log.log_console(chunk)
+                _session_log.log_console(chunk, source_label=source_label)
             _pre_lower = _pre_buf.lower()
             if (_LOADER_PROMPT_RE.search(_pre_buf)
                     or any(s in _pre_lower for s in ("loader-", "::>", "::*>", "selection", "autoboot", "login:"))):
@@ -9479,7 +9535,7 @@ def _reclaim_system_console(channel, node_log=None):
             if node_log:
                 _par_write(node_log, chunk)
             if _session_log:
-                _session_log.log_console(chunk)
+                _session_log.log_console(chunk, source_label=source_label)
             buf_lower = buf.lower()
             if "y/n" in buf_lower:
                 print("⚠️  Existing console session – auto-disconnecting (y)...")
@@ -9616,6 +9672,9 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
     last_cr_nudge = time.monotonic()
     last_silence_reconnect_attempt = 0.0
 
+    _source_label = ""
+    if reconnect_ctx:
+        _source_label = str(reconnect_ctx.get("label") or "")
     if reconnect_ctx and reconnect_ctx.get("channel") is not None:
         channel = reconnect_ctx.get("channel")
 
@@ -9636,12 +9695,12 @@ def _recv_loop(channel, matchers, timeout=15, node_log=None, check_bmc_drop=Fals
                 sys.stdout.write(chunk)
                 sys.stdout.flush()
             if _session_log:
-                _session_log.log_console(chunk)
+                _session_log.log_console(chunk, source_label=_source_label)
             if check_bmc_drop and _looks_like_bmc_drop(chunk):
                 if not _pause_allows_reconnect("BMC drop detected"):
                     continue
                 _rc_t = time.monotonic()
-                _reclaim_system_console(channel, node_log=node_log)
+                _reclaim_system_console(channel, node_log=node_log, source_label=_source_label)
                 start_time += time.monotonic() - _rc_t
                 last_console_data = time.monotonic()
                 last_keepalive_send = 0.0
@@ -13033,7 +13092,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
                     sys.stdout.write(chunk)
                     sys.stdout.flush()
                 if _session_log:
-                    _session_log.log_console(chunk)
+                    _session_log.log_console(chunk, source_label=f"peer/{host}")
                 _buf_lower = buf.lower()
                 _maybe_handle_battery_boot_warning(
                     ch,
@@ -16959,6 +17018,8 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
     """
     _node_add = (_operation_mode == 2) if is_node_add is None else bool(is_node_add)
     _pfx = _node_pfx(label)
+    _battery_warn_state = {}
+    _battery_warn_scan = ""
 
     def _raise_if_fatal_boot_integrity(_text: str, _stage: str):
         _reason = _fatal_boot_integrity_reason(_text)
@@ -17099,6 +17160,23 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
         if "qat provider init started." in _reinit_progress_scan:
             _emit_option4_progress("Initializing QAT acceleration...", "qat")
 
+    def _handle_option4_battery_warnings(_text: str):
+        nonlocal _battery_warn_scan
+        if not _text:
+            return
+        _battery_warn_scan += "\n" + str(_text)
+        if len(_battery_warn_scan) > 16384:
+            _battery_warn_scan = _battery_warn_scan[-8192:]
+        _maybe_handle_battery_boot_warning(
+            channel,
+            _battery_warn_scan,
+            label=label,
+            node_log=node_log,
+            state=_battery_warn_state,
+        )
+
+    _handle_option4_battery_warnings(_preprobe_out)
+
     def _start_option4_reinit_reporter():
         nonlocal _reinit_wait_ev, _reinit_stage_label, _reinit_stage_t0
         if _reinit_wait_ev is not None:
@@ -17169,6 +17247,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     quiet=_node_add,
                     reconnect_ctx=reconnect_ctx,
                 )
+                _handle_option4_battery_warnings(_out)
                 _raise_if_fatal_boot_integrity(_out, lbl)
                 if _out:
                     _accumulated += _out.lower()
@@ -17251,6 +17330,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     quiet=False,
                     reconnect_ctx=reconnect_ctx,
                 )
+                _handle_option4_battery_warnings(_out)
                 _raise_if_fatal_boot_integrity(_out, lbl)
                 _consume_option4_progress(_out)
                 if _matched and str(_matched).lower() == trigger.lower():
@@ -17293,6 +17373,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             _out = direct_send_and_wait(channel, "", trigger, timeout=1800, auto_respond=resp,
                                         check_bmc_drop=True, quiet=_node_add, node_log=node_log,
                                         reconnect_ctx=reconnect_ctx)
+            _handle_option4_battery_warnings(_out)
             _raise_if_fatal_boot_integrity(_out, lbl)
             if lbl == "erase data confirmation" and not _node_add:
                 _start_option4_reinit_reporter()
@@ -31280,6 +31361,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
             _wipe_seen = False
             _autoboot_seen_wipe = False
             _asup_answered = False
+            _battery_state_wipe = {}
             _node_mgmt_sigs = [
                 "node management interface port",
                 "node management interface ip",
@@ -31299,6 +31381,13 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     if node_file:
                         _par_write(node_file, _wc)
                     _wcl = _wipe_buf.lower()
+                    _maybe_handle_battery_boot_warning(
+                        ch,
+                        _wipe_buf,
+                        label=label,
+                        node_log=node_file,
+                        state=_battery_state_wipe,
+                    )
                     if (not _asup_answered) and (
                         "type yes to confirm and continue" in _wcl
                         or "enabling autosupport can significantly speed problem determination" in _wcl
