@@ -11416,6 +11416,47 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
     return False
 
 
+def _already_at_loader_with_recheck(
+    channel,
+    *,
+    label="",
+    node_log=None,
+    resuming=False,
+    out_state=None,
+    first_probe_timeout=25,
+    second_probe_timeout=45,
+):
+    """Probe twice before allowing a destructive reset path to proceed.
+
+    The first probe handles the common fast path. The second probe covers
+    slow-to-repaint consoles so nodes already at LOADER are not reset
+    unnecessarily.
+    """
+    _state = out_state if isinstance(out_state, dict) else None
+    _at_loader = _already_at_loader(
+        channel,
+        probe_timeout=first_probe_timeout,
+        node_log=node_log,
+        label=label,
+        resuming=resuming,
+        out_state=_state,
+    )
+    if _at_loader:
+        return True
+
+    _label = f"[{label}] " if label else ""
+    _ts_print(f"  ⏳ {_label}LOADER not confirmed yet; re-checking before reset...")
+    _at_loader = _already_at_loader(
+        channel,
+        probe_timeout=second_probe_timeout,
+        node_log=node_log,
+        label=label,
+        resuming=resuming,
+        out_state=_state,
+    )
+    return bool(_at_loader)
+
+
 def _probe_console_prompt_state(channel, *, node_log=None, selection_sigs=None, timeout=8):
     """Probe the current console prompt after sending Enter.
 
@@ -12570,7 +12611,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
         # Check if already at LOADER before issuing system reset.
         try:
             _probe_state = {}
-            if _already_at_loader(
+            if _already_at_loader_with_recheck(
                 ch, label=host, node_log=node_log, out_state=_probe_state,
             ):
                 if session_store is not None:
@@ -19043,15 +19084,12 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
             client.close()
             return None, None, "ssh"
 
-        # Check if already at LOADER before issuing system reset.
-        # Run a second, longer probe before reset to avoid unnecessary reboots
+        # Check if already at LOADER before issuing system reset. Use a
+        # second longer probe before reset to avoid unnecessary reboots
         # when the console is slow to repaint LOADER after attach/takeover.
-        _at_loader = _already_at_loader(ch, probe_timeout=25, label=host, node_log=node_log)
-        if not _at_loader:
-            print(f"  ⏳ [{host}] LOADER not confirmed yet; re-checking before reset...")
-            _at_loader = _already_at_loader(
-                ch, probe_timeout=45, label=host, node_log=node_log
-            )
+        _at_loader = _already_at_loader_with_recheck(
+            ch, label=host, node_log=node_log
+        )
         if not _at_loader:
             # system reset (auto-confirm if prompted).
             direct_send_and_wait(ch, "system reset", "y/n", timeout=10,
@@ -20742,7 +20780,9 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                     ch.send("\r")
                 time.sleep(0.2)
                 # Check if already at LOADER; skip system reset if so.
-                if _already_at_loader(ch, probe_timeout=25, label=ip, node_log=nf):
+                if _already_at_loader_with_recheck(
+                    ch, label=ip, node_log=nf
+                ):
                     _already_loader = True
                     if log:
                         log.log(f"[{ip}] already at LOADER – system reset skipped")
@@ -43492,7 +43532,7 @@ def main():
                     def _mode1_primary_loader_worker():
                         try:
                             _is_resuming = bool(_latest_primary_checkpoint_done(_checkpoint)[0])
-                            _primary_loader_result[0] = _already_at_loader(
+                            _primary_loader_result[0] = _already_at_loader_with_recheck(
                                 channel, label=sp_host, resuming=_is_resuming
                             )
                         except RuntimeError:
@@ -43616,7 +43656,7 @@ def main():
                     def _primary_loader_worker():
                         try:
                             _is_resuming = bool(_latest_primary_checkpoint_done(_checkpoint)[0])
-                            _primary_loader_result[0] = _already_at_loader(
+                            _primary_loader_result[0] = _already_at_loader_with_recheck(
                                 channel, label=sp_host, resuming=_is_resuming
                             )
                         except RuntimeError:
@@ -44190,7 +44230,7 @@ def main():
                         and other_sps
                         and _operation_mode in (1, 3)
                         and not _mode3_skip_presets
-                    else _already_at_loader(channel, label=sp_host)
+                    else _already_at_loader_with_recheck(channel, label=sp_host)
                 )
             if _at_loader or _checkpoint_1_done:
                 # Node is already sitting at LOADER — nothing to reset.
@@ -44424,7 +44464,7 @@ def main():
                 collect_node_mgmt_per_bmc(sp_host, [])
 
                 _session_log.start_phase(f"System Reset ({sp_host})")
-                if _already_at_loader(channel, label=sp_host):
+                if _already_at_loader_with_recheck(channel, label=sp_host):
                     _session_log.log(f"[{sp_host}] Already at LOADER – system reset skipped")
                     _session_log.end_phase()
                     _session_log.start_phase(f"Enter System Console ({sp_host})")
