@@ -37534,6 +37534,7 @@ def _run_5m_node_repair_mode():
             pass
         return
 
+    _5m_pass = ""
     _5m_cached_pw = _cred_lookup("cluster", _5m_mgmt_ip, _5m_user)
     if _5m_cached_pw is not None:
         print(f"  🔑 Using cached credentials for {_5m_user}@{_5m_mgmt_ip}.")
@@ -37982,6 +37983,7 @@ def _run_5_14_cluster_join_status():
             pass
         return
 
+    _5_14_pass = ""
     _5_14_cached_pw = _cred_lookup("cluster", _mgmt_ip, _5_14_user)
     if _5_14_cached_pw is not None:
         print(f"  🔑 Using cached credentials for {_5_14_user}@{_mgmt_ip}.")
