@@ -11167,6 +11167,150 @@ def enter_system_console(channel, loader_message=True, force_takeover=True):
 # LOADER-check helper — probe before deciding to system reset
 # ---------------------------------------------------------------------------
 
+_FW_UPDATE_COMPLETE_TOKEN = "firmware update complete"
+
+
+def _looks_like_firmware_update_progress(text):
+    """Heuristic detector for firmware-update progress streams.
+
+    Firmware updates often emit long mixed runs of '.', '+', and '-' with little
+    other text. Detect that stream pattern so reset/LOADER wait paths can pause
+    and let firmware complete.
+    """
+    _txt = str(text or "")
+    if not _txt:
+        return False
+    _low = _txt.lower()
+    if "firmware is being updated" in _low:
+        return True
+    _only = "".join(ch for ch in _txt if ch in ".+-")
+    if len(_only) < 120:
+        return False
+    _dots = _only.count(".")
+    _plus = _only.count("+")
+    _dash = _only.count("-")
+    _total = _dots + _plus + _dash
+    if _total < 120:
+        return False
+    if _dots < 10 or _plus < 10:
+        return False
+    return ((_dots + _plus) / float(_total)) >= 0.35
+
+
+def _wait_for_firmware_update_then_loader(
+    channel,
+    *,
+    label="",
+    node_log=None,
+    poll_interval=120,
+    firmware_timeout=21600,
+    reboot_timeout=3600,
+    status_cb=None,
+):
+    """Wait for firmware update completion and return the node to LOADER.
+
+    Behavior:
+      1) Emits an operator notice that firmware is updating.
+      2) Polls every *poll_interval* seconds for completion markers.
+      3) After "Firmware update complete", waits for reboot, interrupts
+         AUTOBOOT, and confirms LOADER prompt again.
+    Returns True when LOADER is confirmed, otherwise False.
+    """
+    _pfx = f"[{label}] " if label else ""
+
+    def _emit(msg):
+        if status_cb:
+            status_cb(msg)
+        else:
+            _ts_print(msg)
+        if _session_log:
+            _session_log.log(msg.strip())
+
+    def _recv_chunk():
+        if not channel.recv_ready():
+            return ""
+        _chunk = channel.recv(4096).decode("utf-8", errors="replace")
+        if node_log:
+            _par_write(node_log, _chunk)
+        elif _session_log:
+            _session_log.log_console(_chunk)
+        return _chunk
+
+    _emit(
+        f"  ⚠️  {_pfx}Firmware update appears active. Script will continue automatically after it finishes."
+    )
+    _emit(f"  ⏳ {_pfx}Polling firmware status every {int(poll_interval)}s...")
+
+    _buf = ""
+    _fw_deadline = time.monotonic() + max(60, int(firmware_timeout))
+    _next_poll = time.monotonic() + max(15, int(poll_interval))
+    _fw_complete = False
+
+    while time.monotonic() < _fw_deadline:
+        if _shutdown_event.is_set():
+            return False
+        _chunk = _recv_chunk()
+        if _chunk:
+            _buf += _chunk
+            _low = _buf.lower()
+            if _LOADER_PROMPT_RE.search(_buf) or "loader-" in _low:
+                _emit(f"  ✅ {_pfx}LOADER prompt detected; continuing.")
+                return True
+            if _FW_UPDATE_COMPLETE_TOKEN in _low:
+                _fw_complete = True
+                _emit(f"  ✅ {_pfx}Firmware update complete detected.")
+                break
+            if len(_buf) > 32768:
+                _buf = _buf[-16384:]
+        else:
+            time.sleep(0.1)
+
+        if time.monotonic() >= _next_poll:
+            _emit(f"  ⏳ {_pfx}Firmware still updating; checking again in {int(poll_interval)}s...")
+            with suppress(Exception):
+                channel.send("\r")
+            _next_poll = time.monotonic() + max(15, int(poll_interval))
+
+    if not _fw_complete:
+        _emit(f"  ⚠️  {_pfx}Timed out waiting for firmware update completion marker.")
+        return False
+
+    _emit(f"  ⏳ {_pfx}Waiting for post-update reboot and intercepting AUTOBOOT...")
+    _boot_deadline = time.monotonic() + max(60, int(reboot_timeout))
+    _boot_buf = ""
+    _next_nudge = time.monotonic() + 15
+    while time.monotonic() < _boot_deadline:
+        if _shutdown_event.is_set():
+            return False
+        _chunk = _recv_chunk()
+        if _chunk:
+            _boot_buf += _chunk
+            _boot_low = _boot_buf.lower()
+            if "starting autoboot press ctrl-c to abort" in _boot_low:
+                _emit(f"  🛑 {_pfx}AUTOBOOT detected after firmware update; sending Ctrl+C...")
+                for _ in range(6):
+                    with suppress(Exception):
+                        channel.send("\x03")
+                    time.sleep(0.3)
+                _boot_buf = ""
+                continue
+            if _LOADER_PROMPT_RE.search(_boot_buf) or "loader-" in _boot_low:
+                _emit(f"  ✅ {_pfx}Returned to LOADER after firmware update.")
+                return True
+            if len(_boot_buf) > 32768:
+                _boot_buf = _boot_buf[-16384:]
+        else:
+            time.sleep(0.1)
+
+        if time.monotonic() >= _next_nudge:
+            with suppress(Exception):
+                channel.send("\r")
+            _next_nudge = time.monotonic() + 15
+
+    _emit(f"  ⚠️  {_pfx}Timed out waiting to return to LOADER after firmware update.")
+    return False
+
+
 def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resuming=False, out_state=None):
     """Probe for an existing LOADER prompt, entering system console only from BMC.
 
@@ -11227,6 +11371,17 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
     if _LOADER_PROMPT_RE.search(_probe) or "LOADER-" in _probe.upper():
         _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
         return True
+    if _looks_like_firmware_update_progress(_probe):
+        _tprint(
+            f"  ⚠️  {pfx}Firmware update progress detected while probing console state."
+        )
+        if _wait_for_firmware_update_then_loader(
+            channel,
+            label=label,
+            node_log=node_log,
+            status_cb=_tprint,
+        ):
+            return True
     if _looks_like_post_option4_prompt(_probe):
         if out_state is not None:
             out_state["past_option4_prompt"] = True
@@ -11283,6 +11438,19 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
                     f"  ⚠️  {pfx}Console takeover did not attach; staying at BMC prompt."
                 )
                 return False
+            if _looks_like_firmware_update_progress(buf):
+                _tprint(
+                    f"  ⚠️  {pfx}Firmware update progress detected while waiting for LOADER."
+                )
+                if _wait_for_firmware_update_then_loader(
+                    channel,
+                    label=label,
+                    node_log=node_log,
+                    status_cb=_tprint,
+                ):
+                    return True
+                buf = ""
+                continue
             if _LOADER_PROMPT_RE.search(buf) or "LOADER-" in buf.upper():
                 loader_found = True
                 break
@@ -11327,6 +11495,17 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
         _tail_lower = str((_tail_out or "") + "\n" + (_tail_match or "")).lower()
         if _LOADER_PROMPT_RE.search(_tail_lower) or "loader-" in _tail_lower:
             loader_found = True
+        elif _looks_like_firmware_update_progress(_tail_lower):
+            _tprint(
+                f"  ⚠️  {pfx}Firmware update progress detected during final LOADER probe."
+            )
+            if _wait_for_firmware_update_then_loader(
+                channel,
+                label=label,
+                node_log=node_log,
+                status_cb=_tprint,
+            ):
+                return True
         elif any(s in _tail_lower for s in ("selection (1-", "(1-9)?", "(1-11)?", "(1-12)?", "boot menu")):
             if out_state is not None:
                 out_state["at_boot_menu"] = True
@@ -12751,6 +12930,16 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
                 if _session_log:
                     _session_log.log_console(chunk)
                 _buf_lower = buf.lower()
+                if _looks_like_firmware_update_progress(buf):
+                    _tprint(f"\n⚠️  [{host}] Firmware update progress detected while waiting for LOADER.")
+                    if _wait_for_firmware_update_then_loader(
+                        ch, label=host, node_log=node_log, status_cb=_tprint
+                    ):
+                        loader_seen = True
+                        break
+                    buf = ""
+                    start = time.monotonic()
+                    continue
                 if "starting autoboot press ctrl-c to abort" in _buf_lower:
                     _tprint(f"\n🛑 [{host}] AUTOBOOT detected; sending Ctrl+C...")
                     _slog(f"[{host}] AUTOBOOT detected; sending Ctrl+C")
@@ -19140,6 +19329,16 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
                 else:
                     sys.stdout.write(chunk)
                     sys.stdout.flush()
+                if _looks_like_firmware_update_progress(buf):
+                    print(f"  ⚠️  [{host}] Firmware update progress detected while waiting for LOADER.")
+                    if _wait_for_firmware_update_then_loader(
+                        ch, label=host, node_log=node_log
+                    ):
+                        loader_seen = True
+                        break
+                    buf = ""
+                    start = time.monotonic()
+                    continue
                 if "starting autoboot press ctrl-c to abort" in buf.lower():
                     print(f"  🛑 [{host}] AUTOBOOT detected – sending Ctrl+C...")
                     if node_log:
@@ -20847,6 +21046,15 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         buf += chunk
                         if nf:
                             _par_write(nf, chunk)
+                        if _looks_like_firmware_update_progress(buf):
+                            if _wait_for_firmware_update_then_loader(
+                                ch, label=ip, node_log=nf, status_cb=_status
+                            ):
+                                found = True
+                                break
+                            buf = ""
+                            start = time.monotonic()
+                            continue
                         if "starting autoboot press ctrl-c to abort" in buf.lower():
                             _status(f"  🛑 [{ip}] Interrupting AUTOBOOT...")
                             if log:
@@ -30437,6 +30645,16 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     buf = ""
                     time.sleep(0.5)
                     continue
+                if _looks_like_firmware_update_progress(buf):
+                    print(f"   ⚠️  [{label}] Firmware update progress detected while waiting for LOADER.")
+                    if _wait_for_firmware_update_then_loader(
+                        ch, label=label, node_log=node_file
+                    ):
+                        loader_seen = True
+                        break
+                    buf = ""
+                    start = time.monotonic()
+                    continue
                 if "starting autoboot press ctrl-c to abort" in buf.lower():
                     for _ in range(5):
                         ch.send("\x03"); time.sleep(0.3)
@@ -30642,6 +30860,20 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 if _session_log:
                     _session_log.log_console(f"[{label}] {chunk}")
                 out_lower += chunk.lower()
+                if _looks_like_firmware_update_progress(out_lower):
+                    print(f"   ⚠️  [{label}] Firmware update progress detected during boot-menu wait.")
+                    if _wait_for_firmware_update_then_loader(
+                        ch, label=label, node_log=node_file
+                    ):
+                        with suppress(Exception):
+                            ch.send("boot_ontap menu\r")
+                        time.sleep(1)
+                        out_lower = ""
+                        s = time.monotonic()
+                    else:
+                        out_lower = ""
+                        s = time.monotonic()
+                    continue
                 fatal_reason = _fatal_boot_integrity_reason(out_lower)
                 if fatal_reason:
                     print(
@@ -33071,6 +33303,15 @@ def _netboot_peers_parallel(peer_bmcs, pkg_url, version, log=None):
                     if _node_log:
                         _par_write(_node_log, chunk)
                     _lbuf = _buf.lower()
+                    if _looks_like_firmware_update_progress(_buf):
+                        if _wait_for_firmware_update_then_loader(
+                            ch, label=_label, node_log=_node_log
+                        ):
+                            _loader_seen = True
+                            break
+                        _buf = ""
+                        _start = time.monotonic()
+                        continue
                     if "starting autoboot press ctrl-c to abort" in _lbuf:
                         for _ in range(6):
                             ch.send("\x03")
@@ -35436,6 +35677,19 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                 sys.stdout.flush()
                 if _session_log:
                     _session_log.log_console(chunk)
+
+                if _looks_like_firmware_update_progress(output_buffer):
+                    print(f"\n⚠️  [{sp_host}] Firmware update progress detected while waiting for LOADER.")
+                    if _wait_for_firmware_update_then_loader(
+                        channel, label=sp_host
+                    ):
+                        _slog("LOADER restored after firmware update")
+                        _checkpoint_reconcile_runtime_stage("cp_1_1", context="firmware update wait")
+                        handle_loader_commands(channel, client, sp_host, sp_user, sp_pass)
+                        break
+                    output_buffer = ""
+                    _last_data = time.monotonic()
+                    continue
 
                 if "starting autoboot press ctrl-c to abort" in output_buffer.lower():
                     global _reinit_t0, _reinit_label
