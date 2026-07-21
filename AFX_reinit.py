@@ -11170,6 +11170,8 @@ def enter_system_console(channel, loader_message=True, force_takeover=True):
 _FW_UPDATE_COMPLETE_TOKEN = "firmware update complete"
 _BATTERY_WARN_MAIN_TOKEN = "one or more batteries are experiencing a critical failure"
 _BATTERY_WARN_ACK_TOKEN = "press 'c' followed by 'enter'"
+_NVRAM_CAUTION_MAIN_TOKEN = "using this controller without nvram"
+_NVRAM_CAUTION_CONFIRM_TOKEN = "are you sure you want to continue (y or n)?"
 
 
 def _looks_like_firmware_update_progress(text):
@@ -11341,9 +11343,32 @@ def _maybe_handle_battery_boot_warning(
 ):
     """Detect critical battery boot warning and auto-acknowledge with 'c'+Enter."""
     _st = state if isinstance(state, dict) else {}
+    _low = str(text or "").lower()
+    if (
+        not _st.get("nvram_ack_sent")
+        and _NVRAM_CAUTION_MAIN_TOKEN in _low
+        and _NVRAM_CAUTION_CONFIRM_TOKEN in _low
+    ):
+        _pfx = f"[{label}] " if label else ""
+        _msg = (
+            f"  ⚠️  {_pfx}NVRAM battery caution prompt detected; sending 'y' to continue boot."
+        )
+        if status_cb:
+            status_cb(_msg)
+        else:
+            _ts_print(_msg)
+        if _session_log:
+            _session_log.log(_msg.strip(), prefix="WARN")
+            _session_log.log_sent("y (ack NVRAM battery caution)")
+        if node_log:
+            _par_write(node_log, "\n>>> y (ack NVRAM battery caution)\n")
+        with suppress(Exception):
+            channel.send("y\r")
+        _st["nvram_ack_sent"] = True
+        return True
+
     if _st.get("battery_ack_sent"):
         return False
-    _low = str(text or "").lower()
     if _BATTERY_WARN_MAIN_TOKEN not in _low and _BATTERY_WARN_ACK_TOKEN not in _low:
         return False
     if _BATTERY_WARN_MAIN_TOKEN not in _low or _BATTERY_WARN_ACK_TOKEN not in _low:

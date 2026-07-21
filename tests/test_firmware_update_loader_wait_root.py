@@ -86,6 +86,25 @@ class FirmwareUpdateLoaderWaitRootTests(unittest.TestCase):
         )
         self.assertFalse(sent_again)
 
+    def test_nvram_caution_is_acknowledged_with_y_enter(self):
+        ch = _FakeChannel([])
+        state = {"battery_ack_sent": True}
+        warning = (
+            "CAUTION: Using this controller without NVRAM\n"
+            "battery backup coupled with a power\n"
+            "failure condition CAN CAUSE DATA LOSS.\n"
+            "Are you sure you want to continue (y or n)?\n"
+        )
+        sent = AFX_reinit._maybe_handle_battery_boot_warning(
+            ch,
+            warning,
+            label="10.0.0.12",
+            status_cb=lambda _msg: None,
+            state=state,
+        )
+        self.assertTrue(sent)
+        self.assertIn("y\r", ch.sent)
+
 
 if __name__ == "__main__":
     unittest.main()
