@@ -11168,6 +11168,8 @@ def enter_system_console(channel, loader_message=True, force_takeover=True):
 # ---------------------------------------------------------------------------
 
 _FW_UPDATE_COMPLETE_TOKEN = "firmware update complete"
+_BATTERY_WARN_MAIN_TOKEN = "one or more batteries are experiencing a critical failure"
+_BATTERY_WARN_ACK_TOKEN = "press 'c' followed by 'enter'"
 
 
 def _looks_like_firmware_update_progress(text):
@@ -11242,6 +11244,7 @@ def _wait_for_firmware_update_then_loader(
     _emit(f"  ⏳ {_pfx}Polling firmware status every {int(poll_interval)}s...")
 
     _buf = ""
+    _battery_state = {}
     _fw_deadline = time.monotonic() + max(60, int(firmware_timeout))
     _next_poll = time.monotonic() + max(15, int(poll_interval))
     _fw_complete = False
@@ -11252,6 +11255,14 @@ def _wait_for_firmware_update_then_loader(
         _chunk = _recv_chunk()
         if _chunk:
             _buf += _chunk
+            _maybe_handle_battery_boot_warning(
+                channel,
+                _buf,
+                label=label,
+                node_log=node_log,
+                status_cb=_emit,
+                state=_battery_state,
+            )
             _low = _buf.lower()
             if _LOADER_PROMPT_RE.search(_buf) or "loader-" in _low:
                 _emit(f"  ✅ {_pfx}LOADER prompt detected; continuing.")
@@ -11285,6 +11296,14 @@ def _wait_for_firmware_update_then_loader(
         _chunk = _recv_chunk()
         if _chunk:
             _boot_buf += _chunk
+            _maybe_handle_battery_boot_warning(
+                channel,
+                _boot_buf,
+                label=label,
+                node_log=node_log,
+                status_cb=_emit,
+                state=_battery_state,
+            )
             _boot_low = _boot_buf.lower()
             if "starting autoboot press ctrl-c to abort" in _boot_low:
                 _emit(f"  🛑 {_pfx}AUTOBOOT detected after firmware update; sending Ctrl+C...")
@@ -11309,6 +11328,44 @@ def _wait_for_firmware_update_then_loader(
 
     _emit(f"  ⚠️  {_pfx}Timed out waiting to return to LOADER after firmware update.")
     return False
+
+
+def _maybe_handle_battery_boot_warning(
+    channel,
+    text,
+    *,
+    label="",
+    node_log=None,
+    status_cb=None,
+    state=None,
+):
+    """Detect critical battery boot warning and auto-acknowledge with 'c'+Enter."""
+    _st = state if isinstance(state, dict) else {}
+    if _st.get("battery_ack_sent"):
+        return False
+    _low = str(text or "").lower()
+    if _BATTERY_WARN_MAIN_TOKEN not in _low and _BATTERY_WARN_ACK_TOKEN not in _low:
+        return False
+    if _BATTERY_WARN_MAIN_TOKEN not in _low or _BATTERY_WARN_ACK_TOKEN not in _low:
+        return False
+
+    _pfx = f"[{label}] " if label else ""
+    _msg = (
+        f"  ⚠️  {_pfx}Critical battery warning detected; sending 'c' to continue boot."
+    )
+    if status_cb:
+        status_cb(_msg)
+    else:
+        _ts_print(_msg)
+    if _session_log:
+        _session_log.log(_msg.strip(), prefix="WARN")
+        _session_log.log_sent("c (ack critical battery warning)")
+    if node_log:
+        _par_write(node_log, "\n>>> c (ack critical battery warning)\n")
+    with suppress(Exception):
+        channel.send("c\r")
+    _st["battery_ack_sent"] = True
+    return True
 
 
 def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resuming=False, out_state=None):
@@ -11363,10 +11420,15 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
             )
         )
 
+    _battery_state = {}
+
     # Hit Enter first so any existing prompt echoes back.
     channel.send("\r")
     time.sleep(0.3)
     _probe = drain_channel(channel, seconds=0.7, node_log=node_log, quiet=True)
+    _maybe_handle_battery_boot_warning(
+        channel, _probe, label=label, node_log=node_log, status_cb=_tprint, state=_battery_state
+    )
 
     if _LOADER_PROMPT_RE.search(_probe) or "LOADER-" in _probe.upper():
         _tprint(f"  ✅ {pfx}Already at LOADER prompt — skipping system reset.")
@@ -11421,6 +11483,9 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
         if channel.recv_ready():
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
             buf += chunk
+            _maybe_handle_battery_boot_warning(
+                channel, buf, label=label, node_log=node_log, status_cb=_tprint, state=_battery_state
+            )
             if node_log:
                 _par_write(node_log, chunk)
             elif _session_log:
@@ -11493,6 +11558,14 @@ def _already_at_loader(channel, probe_timeout=10, node_log=None, label="", resum
             quiet=True,
         )
         _tail_lower = str((_tail_out or "") + "\n" + (_tail_match or "")).lower()
+        _maybe_handle_battery_boot_warning(
+            channel,
+            _tail_lower,
+            label=label,
+            node_log=node_log,
+            status_cb=_tprint,
+            state=_battery_state,
+        )
         if _LOADER_PROMPT_RE.search(_tail_lower) or "loader-" in _tail_lower:
             loader_found = True
         elif _looks_like_firmware_update_progress(_tail_lower):
@@ -12916,6 +12989,7 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
         start = time.monotonic()
         loader_seen = False
         _login_recovery_attempts = 0
+        _battery_state = {}
         while time.monotonic() - start < timeout:
             if _shutdown_event.is_set():
                 break
@@ -12930,6 +13004,14 @@ def reset_peer_to_loader(host, username, password, timeout=600, node_log=None,
                 if _session_log:
                     _session_log.log_console(chunk)
                 _buf_lower = buf.lower()
+                _maybe_handle_battery_boot_warning(
+                    ch,
+                    buf,
+                    label=host,
+                    node_log=node_log,
+                    status_cb=_tprint,
+                    state=_battery_state,
+                )
                 if _looks_like_firmware_update_progress(buf):
                     _tprint(f"\n⚠️  [{host}] Firmware update progress detected while waiting for LOADER.")
                     if _wait_for_firmware_update_then_loader(
@@ -19312,6 +19394,7 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
         buf = ""
         start = time.monotonic()
         loader_seen = False
+        _battery_state = {}
         _next_progress = start + 30
         while time.monotonic() - start < timeout:
             if _shutdown_event.is_set():
@@ -19329,6 +19412,13 @@ def _bmc_reach_loader(host, username, password, timeout=600, node_log=None,
                 else:
                     sys.stdout.write(chunk)
                     sys.stdout.flush()
+                _maybe_handle_battery_boot_warning(
+                    ch,
+                    buf,
+                    label=host,
+                    node_log=node_log,
+                    state=_battery_state,
+                )
                 if _looks_like_firmware_update_progress(buf):
                     print(f"  ⚠️  [{host}] Firmware update progress detected while waiting for LOADER.")
                     if _wait_for_firmware_update_then_loader(
@@ -21038,6 +21128,7 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                 buf = ""
                 start = time.monotonic()
                 found = False
+                _battery_state = {}
                 while time.monotonic() - start < 600:
                     if _shutdown_event.is_set():
                         break
@@ -21046,6 +21137,14 @@ def _run_4b_standalone(log, resuming: bool = False, install_only: bool = False):
                         buf += chunk
                         if nf:
                             _par_write(nf, chunk)
+                        _maybe_handle_battery_boot_warning(
+                            ch,
+                            buf,
+                            label=ip,
+                            node_log=nf,
+                            status_cb=_status,
+                            state=_battery_state,
+                        )
                         if _looks_like_firmware_update_progress(buf):
                             if _wait_for_firmware_update_then_loader(
                                 ch, label=ip, node_log=nf, status_cb=_status
@@ -30620,6 +30719,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         last_recv = start
         last_keepalive = start
         last_nudge = start
+        _battery_state = {}
         loader_seen = bool(_already_loader) or _fast_skip_to_diskerase
         if not loader_seen:
             ch.send("\r")
@@ -30636,6 +30736,13 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                     _par_write(node_file, chunk)
                 if _session_log:
                     _session_log.log_console(f"[{label}] {chunk}")
+                _maybe_handle_battery_boot_warning(
+                    ch,
+                    buf,
+                    label=label,
+                    node_log=node_file,
+                    state=_battery_state,
+                )
                 if "y/n" in buf.lower():
                     # Some BMCs re-emit a takeover prompt mid-stream after
                     # reconnects; always auto-accept in 2.1/2.2 worker mode.
@@ -30845,6 +30952,7 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
         seen_menu = False
         loader_recovery_attempted = False
         boot_wait_extension = 0
+        _battery_state_bm = {}
         if _fast_skip_to_diskerase:
             seen_menu = True  # already past boot menu; skip wait
         while not _fast_skip_to_diskerase and time.monotonic() - s < (1200 + boot_wait_extension):
@@ -30860,6 +30968,13 @@ def _add_peer_node_thread(peer_bmc, peer_user, peer_password, primary_channel,
                 if _session_log:
                     _session_log.log_console(f"[{label}] {chunk}")
                 out_lower += chunk.lower()
+                _maybe_handle_battery_boot_warning(
+                    ch,
+                    out_lower,
+                    label=label,
+                    node_log=node_file,
+                    state=_battery_state_bm,
+                )
                 if _looks_like_firmware_update_progress(out_lower):
                     print(f"   ⚠️  [{label}] Firmware update progress detected during boot-menu wait.")
                     if _wait_for_firmware_update_then_loader(
@@ -33294,6 +33409,7 @@ def _netboot_peers_parallel(peer_bmcs, pkg_url, version, log=None):
             _loader_seen = _already_loader
             _start = time.monotonic()
             _buf = ""
+            _battery_state = {}
             while not _loader_seen and (time.monotonic() - _start < 600):
                 if _shutdown_event.is_set():
                     break
@@ -33303,6 +33419,13 @@ def _netboot_peers_parallel(peer_bmcs, pkg_url, version, log=None):
                     if _node_log:
                         _par_write(_node_log, chunk)
                     _lbuf = _buf.lower()
+                    _maybe_handle_battery_boot_warning(
+                        ch,
+                        _buf,
+                        label=_label,
+                        node_log=_node_log,
+                        state=_battery_state,
+                    )
                     if _looks_like_firmware_update_progress(_buf):
                         if _wait_for_firmware_update_then_loader(
                             ch, label=_label, node_log=_node_log
@@ -35624,6 +35747,7 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
     _last_data = time.monotonic()
     _BMC_IDLE_TIMEOUT = 60  # seconds of no console data before reconnecting
     _boot_menu_sigs = ("selection (1-", "(1-9)?", "(1-11)?", "(1-12)?")
+    _battery_state = {}
     _monitor_reconnect_notice_state = {
         "reconnect_notice_limit": _BMC_RECONNECT_NOTICE_LIMIT,
         "reconnect_notice_streak": 0,
@@ -35677,6 +35801,13 @@ def monitor_for_autoboot_and_loader(channel, client, sp_host, sp_user, sp_pass):
                 sys.stdout.flush()
                 if _session_log:
                     _session_log.log_console(chunk)
+
+                _maybe_handle_battery_boot_warning(
+                    channel,
+                    output_buffer,
+                    label=sp_host,
+                    state=_battery_state,
+                )
 
                 if _looks_like_firmware_update_progress(output_buffer):
                     print(f"\n⚠️  [{sp_host}] Firmware update progress detected while waiting for LOADER.")

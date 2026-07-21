@@ -58,6 +58,34 @@ class FirmwareUpdateLoaderWaitRootTests(unittest.TestCase):
         finally:
             AFX_reinit._shutdown_event = old_shutdown
 
+    def test_battery_warning_is_acknowledged_with_c_enter(self):
+        ch = _FakeChannel([])
+        state = {}
+        warning = (
+            "WARNING: One or more batteries are experiencing a critical failure\n"
+            "Status of batteries unknown\n"
+            "To ignore this failure and boot the system in a mode\n"
+            "where data loss might occur, press 'c' followed by 'Enter'\n"
+        )
+        sent = AFX_reinit._maybe_handle_battery_boot_warning(
+            ch,
+            warning,
+            label="10.0.0.11",
+            status_cb=lambda _msg: None,
+            state=state,
+        )
+        self.assertTrue(sent)
+        self.assertIn("c\r", ch.sent)
+        # Re-processing same warning should not send again for the same state.
+        sent_again = AFX_reinit._maybe_handle_battery_boot_warning(
+            ch,
+            warning,
+            label="10.0.0.11",
+            status_cb=lambda _msg: None,
+            state=state,
+        )
+        self.assertFalse(sent_again)
+
 
 if __name__ == "__main__":
     unittest.main()
