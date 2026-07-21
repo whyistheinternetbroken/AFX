@@ -547,7 +547,8 @@ revision labels rather than strict [SemVer](https://semver.org/).
   cluster-interface IP per node. Once all parallel threads complete, the primary
   node issues a single `cluster add-node -cluster-ips IP1,IP2,...` command that
   adds all peers simultaneously. Progress is monitored with
-  `cluster add-node-status` polled every 120 seconds (up to 15 minutes).
+  `cluster add-node-status` polled every 120 seconds with a timeout budget
+  that scales by node count (2.5 min/node, minimum 25 minutes).
 - **Per-node milestone timing in session summary (modes 2a, 2b, 3, 4b).** The
   parallel peer phase now emits five timestamped sub-rows per node: LOADER
   reached, Option 4 sent, disk erase done, node-mgmt applied, and cluster IP

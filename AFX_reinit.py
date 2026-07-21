@@ -29875,7 +29875,8 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     """Add multiple nodes in parallel via ONTAP's ``cluster add-node`` command.
 
     Runs ``cluster add-node -cluster-ips IP1,IP2,...`` on the primary channel
-    then polls ``cluster add-node-status`` every 120 s for up to 15 minutes.
+    then polls ``cluster add-node-status`` every 120 s using a timeout budget
+    that scales by node count (2.5 min/node, minimum 25 min).
     Returns True when all nodes report 'success', False on timeout.
 
     If ``node_timings_out`` is provided (dict), it is populated with
@@ -30008,7 +30009,17 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
     if _session_log and hasattr(_session_log, "log_file") and _session_log.log_file:
         print(f"     📝 BMC log: {_session_log.log_file}")
 
-    total_timeout = max(900, len(_rows) * 150)   # 2.5 min/node, min 15 min
+    total_timeout = max(1500, len(_rows) * 150)   # 2.5 min/node, min 25 min
+    _timeout_minutes = (total_timeout + 59) // 60
+    print(
+        f"  ⏱️ Join status timeout budget: {_timeout_minutes} minute(s) "
+        f"for {len(_rows)} node(s) (2.5 min/node, minimum 25 min)."
+    )
+    if log:
+        log.log(
+            f"cluster add-node status timeout budget: {total_timeout}s "
+            f"({_timeout_minutes} minute(s)) for {len(_rows)} node(s)"
+        )
     poll_interval = 120   # 2 minutes
     start = time.monotonic()
     _already_succeeded: set = set()
@@ -30243,7 +30254,7 @@ def _cluster_add_nodes_bulk(primary_channel, cluster_ips, log=None,
               f"({elapsed}s elapsed, up to {remaining}s remaining)...")
 
     print(f"\n  ⚠️  cluster add-node did not complete for all "
-          f"{len(cluster_ips)} node(s) within 15 minutes.")
+          f"{len(cluster_ips)} node(s) within {_timeout_minutes} minutes.")
     if log:
         log.log("cluster add-node: timeout waiting for success status", prefix="ERROR")
     return False
