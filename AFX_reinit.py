@@ -17084,6 +17084,7 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
 
     _start_idx = 0
     _erase_answered = False  # set when "erase all data" prompt answered during zero-disks wait
+    _type_yes_answered = False  # set when "type yes to confirm and continue" is answered early
     _preprobe_sigs = [t for t, _, __ in _prompt_sequence] + [
         "welcome to the cluster setup wizard",
     ]
@@ -17212,6 +17213,9 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
             _reinit_wait_ev = None
 
     for trigger, resp, lbl in _prompt_sequence[_start_idx:]:
+        if lbl == "type-yes confirmation" and _type_yes_answered:
+            _slog("type-yes confirmation already answered earlier; skipping")
+            continue
         if lbl == "erase data confirmation" and _erase_answered:
             _slog("erase data confirmation already answered during zero-disks wait; skipping")
             continue
@@ -17238,9 +17242,11 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                 _remaining = max(1, int(_deadline - time.monotonic()))
                 _wait = min(60, _remaining)
                 _erase_sig = "this will erase all the data on the disks"
+                _type_yes_sig = "type yes to confirm and continue"
+                _wizard_sig = "welcome to the cluster setup wizard"
                 _out, _matched = direct_read_until_any(
                     channel,
-                    [trigger, _erase_sig] + _menu_sigs,
+                    [trigger, _erase_sig, _type_yes_sig, _wizard_sig] + _menu_sigs,
                     timeout=_wait,
                     node_log=node_log,
                     check_bmc_drop=True,
@@ -17282,6 +17288,30 @@ def _auto_answer_disk_erase_prompts(channel, node_log=None, label="",
                     _start_option4_reinit_reporter()
                     _answered = True
                     _erase_answered = True
+                    break
+                if _matched and _type_yes_sig in (_matched or "").lower():
+                    _slog(
+                        "Type-yes prompt appeared before zero-disks/erase prompts; "
+                        "auto-answering 'yes' and skipping remaining disk-erase confirmations",
+                        prefix="WARN",
+                    )
+                    time.sleep(0.3)
+                    channel.send("yes\r")
+                    if _session_log:
+                        _session_log.log_sent("yes")
+                    _answered = True
+                    _erase_answered = True
+                    _type_yes_answered = True
+                    break
+                if _matched and _wizard_sig in (_matched or "").lower():
+                    _slog(
+                        "Cluster setup wizard detected before zero-disks/erase/type-yes prompts; "
+                        "continuing without replaying disk-erase confirmations",
+                        prefix="WARN",
+                    )
+                    _answered = True
+                    _erase_answered = True
+                    _type_yes_answered = True
                     break
                 if _matched and _matched.lower() in _menu_sigs:
                     _boot_menu_seen = True

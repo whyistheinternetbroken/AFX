@@ -166,6 +166,51 @@ class FirmwareUpdateLoaderWaitRootTests(unittest.TestCase):
         self.assertIn("y\r", ch.sent)
         self.assertGreaterEqual(ch.sent.count("yes\r"), 2)
 
+    def test_option4_node_add_flow_handles_type_yes_before_zero_disks(self):
+        ch = _FakeChannel([])
+        read_results = iter([
+            ("", None),  # pre-probe
+            (
+                "Type yes to confirm and continue {yes}:",
+                "type yes to confirm and continue",
+            ),  # zero-disks stage sees type-yes early
+            (
+                "Welcome to the cluster setup wizard.",
+                "welcome to the cluster setup wizard",
+            ),  # type-yes stage fast-advances
+        ])
+
+        old_shutdown = AFX_reinit._shutdown_event
+        old_checkpoint = AFX_reinit._checkpoint
+        old_enable_asup = AFX_reinit._enable_autosupport
+        old_session_log = AFX_reinit._session_log
+        try:
+            AFX_reinit._shutdown_event = threading.Event()
+            AFX_reinit._checkpoint = None
+            AFX_reinit._enable_autosupport = True
+            AFX_reinit._session_log = None
+            with mock.patch.object(
+                AFX_reinit,
+                "direct_read_until_any",
+                side_effect=lambda *_a, **_k: next(read_results),
+            ), mock.patch("AFX_reinit.time.sleep", return_value=None), \
+                 mock.patch("builtins.print"), \
+                 mock.patch.object(AFX_reinit, "_ts_print"):
+                AFX_reinit._auto_answer_disk_erase_prompts(
+                    ch,
+                    node_log=None,
+                    label="192.168.0.97",
+                    is_node_add=True,
+                    reconnect_ctx=None,
+                )
+        finally:
+            AFX_reinit._shutdown_event = old_shutdown
+            AFX_reinit._checkpoint = old_checkpoint
+            AFX_reinit._enable_autosupport = old_enable_asup
+            AFX_reinit._session_log = old_session_log
+
+        self.assertIn("yes\r", ch.sent)
+
 
 if __name__ == "__main__":
     unittest.main()
