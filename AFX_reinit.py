@@ -3038,6 +3038,7 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
     if timeout <= 0:
         return _prompt(prompt, default=default)
 
+    global _operator_prompt_active
     _strict_yn = _prompt_is_yes_no(prompt)
     _yn_default_to = ""
     if _strict_yn:
@@ -3045,6 +3046,8 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
         if _yn_m_to:
             _yn_default_to = "y" if _yn_m_to.group(1).isupper() else "n"
     _deadline = time.monotonic() + timeout
+    with _operator_prompt_active_lock:
+        _operator_prompt_active += 1
     try:
         while True:
             _remaining = _deadline - time.monotonic()
@@ -3106,6 +3109,9 @@ def _prompt_with_timeout(prompt: str, default: str = "", timeout: int = 0) -> st
             return val
     except (EOFError, KeyboardInterrupt):
         return default
+    finally:
+        with _operator_prompt_active_lock:
+            _operator_prompt_active = max(0, _operator_prompt_active - 1)
 
 
 # ── Interactive-prompt wait-time tracker ────────────────────────────────────
@@ -16675,6 +16681,11 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
         )
         return bool(_wizard_seen)
 
+    def _abort_after_panic_operator_choice(_msg: str) -> None:
+        _slog(_msg, prefix="WARN")
+        print(f"\n↩️  {_msg}")
+        raise _ReturnToMenu()
+
     def _recover_from_panic() -> bool:
         print(f"   ⚠️  {_pfx}Node panic detected. Node rebooting.{_elapsed_str()}")
         _slog("Node panic detected during cluster-create progress monitor", prefix="WARN")
@@ -16731,8 +16742,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
             if _is_boot_menu:
                 if not _prompt_continue_after_panic():
                     _msg = "Operator chose to exit after panic/reboot for troubleshooting."
-                    _slog(_msg, prefix="WARN")
-                    raise RuntimeError(_msg)
+                    _abort_after_panic_operator_choice(_msg)
                 print(f"   ⏳ {_pfx}Continuing reboot from boot menu...{_elapsed_str()}")
                 with suppress(Exception):
                     channel.send("1\r")
@@ -16744,8 +16754,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
             if "::>" in _scan_local or "::*>" in _scan_local:
                 if not _prompt_continue_after_panic():
                     _msg = "Operator chose to exit after panic/reboot for troubleshooting."
-                    _slog(_msg, prefix="WARN")
-                    raise RuntimeError(_msg)
+                    _abort_after_panic_operator_choice(_msg)
                 if not _run_cluster_create_retry_then_setup():
                     _msg = "Unable to restart cluster setup after panic recovery."
                     _slog(_msg, prefix="ERROR")
@@ -16771,8 +16780,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
                 if "::>" in _lp_scan or "::*>" in _lp_scan:
                     if not _prompt_continue_after_panic():
                         _msg = "Operator chose to exit after panic/reboot for troubleshooting."
-                        _slog(_msg, prefix="WARN")
-                        raise RuntimeError(_msg)
+                        _abort_after_panic_operator_choice(_msg)
                     with suppress(Exception):
                         channel.send("cluster setup\r")
                     if _session_log:
@@ -16794,8 +16802,7 @@ def _wait_for_cluster_create_post_prompts(channel, timeout=1800, node_log=None,
                             "Operator chose to exit after password-gated panic recovery. "
                             "Recommended manual recovery: set diag -c off; cluster create -retry true"
                         )
-                        _slog(_msg, prefix="WARN")
-                        raise RuntimeError(_msg)
+                        _abort_after_panic_operator_choice(_msg)
                     _pw = getpass.getpass("  Enter cluster admin password for panic recovery: ")
                     with suppress(Exception):
                         channel.send((_pw or "") + "\r")
