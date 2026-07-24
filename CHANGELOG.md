@@ -15,6 +15,7 @@ revision labels rather than strict [SemVer](https://semver.org/).
 - **Primary post-create network verification/remediation.** After primary cluster creation, the script now verifies cluster-mgmt/node-mgmt LIF address+netmask+home-port, default route, DNS, and NTP from the BMC/system-console shell, auto-fixing a mismatched `cluster_mgmt` home-port, creating a missing `0.0.0.0/0` route, and reapplying DNS/NTP settings from config when missing.
 
 ### Changed
+- **Version metadata updated.** `SCRIPT_VERSION` is now `1.2.1`, and README now documents the latest revision header as `AFX_reinit.py v1.2.1`.
 - **README timing documentation.** Added an observed option 1 sample timeline, plus physical-zeroing notes derived from the uploaded session log so operators can estimate where long waits normally occur.
 - **Node-add resume status-stage UX.** Mode 2 resume now suppresses the already-joined confirmation at `cp_2_7`/`cp_2_8` status-only stages and prints a resume-specific banner (`Resuming node add process for N nodes...`).
 - **Checkpoint docs refreshed for actual runtime model.** README checkpoint documentation now reflects the live `checkpoints/afx_checkpoint.json` structure (global + per-node phase maps), `cp_2_8` semantics, and per-node multi-node resume behavior.

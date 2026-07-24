@@ -1,6 +1,6 @@
 # AFX Cluster Reinit Script
 
-**Latest version:** `AFX_reinit.py`  
+**Latest version:** `AFX_reinit.py v1.2.1`  
 **Updated:** 7/24/2026
 
 ---
@@ -208,8 +208,7 @@ The table below compares estimated total wall-clock time for a full end-to-end c
 
 ### Observed Option 1 Timeline (sample run)
 
-The timeline below is based on the uploaded run log:
-`logs/20260708_113403_option1/1-bmc_session_20260708_113403.log`
+The sample timeline below is based on an successful run.
 
 | Elapsed | Approx. local time | Milestone |
 |---|---|---|

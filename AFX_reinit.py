@@ -62,7 +62,7 @@ _COMPLETION_BLOCK_START = "# >>> AFX_reinit argcomplete >>>"
 _COMPLETION_BLOCK_END = "# <<< AFX_reinit argcomplete <<<"
 _completion_startup_warning_shown = False
 
-SCRIPT_VERSION = "1.2"
+SCRIPT_VERSION = "1.2.1"
 
 try:
     _DEFAULT_INTERACTIVE_TIMEOUT = max(
