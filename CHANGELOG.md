@@ -20,8 +20,16 @@ revision labels rather than strict [SemVer](https://semver.org/).
 - **Checkpoint docs refreshed for actual runtime model.** README checkpoint documentation now reflects the live `checkpoints/afx_checkpoint.json` structure (global + per-node phase maps), `cp_2_8` semantics, and per-node multi-node resume behavior.
 - **Checkpoint test prompt clarity.** `--test` checkpoint injection menus now explicitly document that pressing Enter with no value runs with injection disabled (`0`), matching existing runtime behavior.
 - **Parallel checkpoint coverage extended beyond mode 2.** Multi-node checkpoint targeting and mixed-stage resume handling now stay aligned across mode 3 peer adds and parallel mode 4.2/4.3 runs instead of assuming one shared stage for every node.
+- **Node-add timeout floor and progress visibility.** Bulk `cluster add-node` wait logic now enforces a higher minimum timeout and clearer scaling/heartbeat output so large-node joins are less likely to time out prematurely without operator context.
 
 ### Fixed
+- **4.1 poll-channel send logging crash.** Fixed a `NameError` in takeover/giveback command send paths when retrying through the SFO poll channel by using in-scope command variables and explicit channel labels.
+- **Mode 5.12/5.14 credential-cache precheck crash.** Utility flows now initialize password/cache variables before cache-lookup checks so startup does not fail on first-run or empty-cache paths.
+- **Option 2.2 early confirmation handling.** Automated node-add flows now detect and answer early `Type yes to confirm` prompts during option-4 join steps.
+- **LOADER wait firmware/battery prompt handling.** Boot wait loops now recognize firmware-update progress text and auto-acknowledge battery caution/critical prompts that previously caused hangs.
+- **Primary LOADER reset loop avoidance.** Reinit paths now skip redundant resets when the node is already at `LOADER>`.
+- **Panic-path main-flow stability.** Panic-related exits now return controlled failure state without crashing the top-level run loop.
+- **Peer warning/checkpoint status consistency.** Peer warning handling and checkpoint node-status reporting now stay consistent during mixed-stage progress.
 - **Duplicate script tree removed.** Retired the mirrored `AFX/AFX_reinit.py` copy and its mirror-only parity test so the project maintains a single authoritative script at the repository root (`AFX_reinit.py`).
 - **Stale backup checkpoint cleanup.** Successful mode completion paths that clear checkpoints now remove archived backup checkpoint files for that mode as well, and the startup resume picker now includes a `B` action to clear stale backup checkpoints on demand.
 - **Mode 2.2 test-injection prompt flow.** `--test` in option 2.2 now skips the initial global checkpoint picker and defers directly to per-node checkpoint injection once the secondary-node list is known.

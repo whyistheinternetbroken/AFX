@@ -1,7 +1,7 @@
 # AFX Cluster Reinit Script
 
 **Latest version:** `AFX_reinit.py`  
-**Updated:** 7/17/2026
+**Updated:** 7/24/2026
 
 ---
 
@@ -28,6 +28,7 @@ The script automates the following core tasks:
 - Verifies and remediates primary post-create cluster-mgmt/node-mgmt LIFs, route, DNS, and NTP
 - Adds peer nodes to an existing cluster (sequentially or in parallel)
 - Manages ONTAP software upgrades via rolling takeover/giveback
+- Handles long-boot firmware/battery prompts and related warning banners automatically
 - Installs ONTAP via netboot
 - Configures passwordless SSH access to cluster management
 - Creates and saves cluster configuration backups
@@ -332,7 +333,7 @@ The script presents a menu at startup. Enter the number corresponding to the des
 | **2.2** | Add Node to Cluster (automated) | Same as 2.1, but drives the node-join wizard automatically. Supports adding multiple secondary nodes in parallel, numbered omit selection, and auto-skips nodes already in cluster. In this flow, "primary BMC" is used as the default credential context (use `PRIMARY` to reuse that password; blank means an actual blank password), not as a unique controller after parallel add starts. Per-node credential collection can use password groups, and BMC auth attempts include silent fallback (including blank password). |
 | **2.3** | Resume Node Additions | Resumes interrupted node-join operations from the last successful checkpoint. Use when a previous mode 2.2 or mode 3 run was interrupted before all secondary nodes completed. Run `--checkpoint-status` to inspect the checkpoint state before resuming. |
 | **3** | End-to-End Auto Reinit | Runs mode 1 on the primary node, then runs mode 2.2 on all secondary nodes in parallel. Fully unattended with a config file. Peer-credential collection supports password groups, and peer BMC connect/reconnect paths use silent fallback credentials (including blank password). **Option 3 is reinit-only and assumes ONTAP is already at the target version; use 4.2 or 4.3 for image installs.** |
-| **4.1** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. See [Why 4.1 uses the BMC](#why-41-uses-the-bmc). |
+| **4.1** | ONTAP Upgrade | Performs a rolling upgrade of both nodes via automated takeover, software update, and giveback sequence. See [Why 4.1 prefers cluster-mgmt SSH (with BMC fallback)](#why-41-prefers-cluster-mgmt-ssh-with-bmc-fallback). |
 | **4.2** | Netboot Install + Optional Reinit | Runs netboot image install, then can continue into reinit flow (1/3) when selected. |
 | **4.3** | Netboot Install Only | Runs the same netboot image install path as 4.2, then stops before reinit, cluster create, or node add steps. |
 | **5.1** | License Install | Installs ONTAP licenses on an existing cluster. |
@@ -556,46 +557,27 @@ cluster:
 4. Asks `Apply corrections? [y/N]` before making any changes.
 5. Runs a final verification pass and prints corrected node names.
 
-Use 5m when you need to repair names after a partial run, or on a cluster that
+Use 5.12 when you need to repair names after a partial run, or on a cluster that
 was built without the script.
 
 ---
 
-### Why 4.1 uses the BMC
+### Why 4.1 prefers cluster-mgmt SSH (with BMC fallback)
 
-The upgrade workflow drives the cluster through the BMC console rather
-than a plain SSH session to a cluster management LIF. The BMC is the
-only path that survives every phase of the upgrade:
+The 4.1 upgrade path now runs ONTAP commands over direct SSH to the
+cluster-management LIF, and keeps a BMC/console fallback only for recovery.
 
-1. **Console session is reboot / takeover / giveback proof.** `system console`
-   over the BMC is serial-over-LAN, so the session stays attached to a
-   node's CPU even when its management LIF migrates to the partner, the
-   node reboots into the new image, or it stops at the `LOADER>` prompt.
-   An SSH session to a cluster-mgmt LIF would drop the instant the LIF
-   moved or the hosting node rebooted — exactly when visibility matters
-   most.
-2. **Visibility into LOADER and panics.** If a new image fails to boot,
-   the LOADER (or panic) prompt only appears on the console. Network
-   management is gone at that point.
-3. **Cluster login bootstrap.** When the script first attaches, the
-   cluster LIFs may be unreachable (pre-reinit, post-reboot, mid-
-   takeover). The BMC always answers, and the cluster shell can be
-   reached through `system console` without depending on cluster
-   networking being healthy.
-4. **Free credential reuse.** The reinit workflow already collected BMC
-   credentials and stored them in the reinit config file. 4.1 picks those
-   up from the file via a numbered picker and reuses the same
-   user/password for the cluster login, eliminating extra prompts in the
-   common case.
-
-The parallel image-install path added in this version is an
-optimization layered on top: once the cluster shell is up and the
-node-management LIFs are reachable, the actual `system image update`
-commands are plain cluster CLI calls that parallelize well over a
-direct SSH to each node's management IP (pulled from the reinit
-config). The BMC remains the lifeline for login,
-`promoted-dev-update`, and the rolling takeover/giveback steps where
-the cluster LIF is in flux.
+1. **Primary command path is the cluster-mgmt LIF.** Upgrade actions
+   (`system image update`, takeover/giveback, health/version checks) run on
+   the ONTAP CLI over SSH for cleaner output and lower console noise.
+2. **A dedicated poll channel tracks takeover/giveback state.** During SFO
+   transitions, 4.1 opens a separate `sfo-poll/<cluster-mgmt-ip>` SSH channel
+   and reconnects automatically if the LIF is migrating.
+3. **BMC remains the safety net.** If direct SSH is unavailable or drops at a
+   bad time, the workflow can still continue through the console path rather
+   than failing immediately.
+4. **Credential reuse is preserved.** Existing config/session credentials are
+   reused where possible, so upgrade runs do not add unnecessary prompts.
 
 ---
 
@@ -1761,6 +1743,11 @@ current `[Unreleased]` working set.
 
 | Feature | Description |
 |---|---|
+| **4.1 SFO send-command fallback hardening** | During takeover/giveback transitions, command send/retry logging now uses explicit primary/poll channel labels and avoids undefined-variable crashes when the primary channel drops and execution switches to the poll channel. |
+| **Mode 2.2 early `Type yes` prompt handling** | Node-add automation now handles the early ONTAP `Type yes to confirm` prompt path during option-4 flows so secondary nodes do not stall waiting for manual confirmation. |
+| **LOADER wait hardening for firmware + battery prompts** | Boot-monitor loops now recognize firmware-update progress text and auto-ack battery caution/critical prompts, preventing false timeouts during long hardware initialization windows. |
+| **Primary reset skip when LOADER already detected** | Reinit/netboot paths now skip redundant `system reset` calls when a node is already at `LOADER>`, reducing avoidable reboot cycles and shortening retry loops. |
+| **Mode 5.12 / 5.14 credential-init fix** | Node-name/LIF repair and node-join-status utilities now initialize credential-cache variables before reuse checks, preventing pre-check cache lookup crashes. |
 | **Per-node node-add checkpoint resume hardening** | Multi-node node-add flows now persist and evaluate checkpoint state per node, including independent `cp_2_4`-`cp_2_7` progression, `cp_2_8` finalization without redundant re-add when nodes are already joined, and per-node `--test` checkpoint-failure injection for divergence validation. |
 | **Parallel checkpoint parity for modes 3 / 4.2 / 4.3** | Mode 3 and parallel 4.2/4.3 workflows now keep per-node checkpoint/test-injection behavior aligned even when nodes diverge by stage. Resume logic honors per-node progress instead of collapsing mixed-stage parallel work into one global checkpoint state. |
 | **Checkpoint list CLI** | Added `--checkpoint-list` so operators can print the valid checkpoint IDs by mode before configuring `--test` or resume exercises. |
