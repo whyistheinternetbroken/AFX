@@ -26321,7 +26321,10 @@ def _run_ontap_upgrade(log):
                 has dropped (e.g., cluster-mgmt LIF migrated during failover),
                 falls back to the poll channel which auto-reconnects.
                 """
-                def _do_send(ch):
+                _primary_label = "sfo-primary"
+                _poll_label = f"sfo-poll/{_sfo_poll_ip}" if _sfo_poll_ip else "sfo-poll"
+
+                def _do_send(ch, channel_label):
                     with _suppress_console():
                         drain_channel(ch, seconds=0.3)
                         ch.send(cmd + "\r")
@@ -26344,12 +26347,14 @@ def _run_ontap_upgrade(log):
                                     break
                             time.sleep(0.2)
                     if _buf:
-                            _cluster_interface_log_write(f"[{label}] <<< {_cmd}", _buf)
+                        _cluster_interface_log_write(
+                            f"[{channel_label}] <<< {cmd}", _buf
+                        )
                     return _buf
 
                 _out = ""
                 try:
-                    _out = _do_send(_cl_ch)
+                    _out = _do_send(_cl_ch, _primary_label)
                 except Exception as _sc_err:
                     # _cl_ch may have dropped when the cluster-mgmt LIF
                     # migrated during the takeover.  The poll channel
@@ -26361,7 +26366,7 @@ def _run_ontap_upgrade(log):
                                 f"({_sc_err}); retrying via poll channel",
                                 prefix="WARN",
                             )
-                        _out = _do_send(_poll_channel[0])
+                        _out = _do_send(_poll_channel[0], _poll_label)
                     elif log:
                         log.log(
                             f"_send_cmd: channel error ({_sc_err}), "
