@@ -381,6 +381,8 @@ Notes:
 
 Use this when you want to perform the same workflow as mode 3 manually from the console.
 
+> **Note:** Before starting, bring **all** nodes to the `LOADER>` prompt (for example via BMC `system console` + interrupt AUTOBOOT, or script option **5.99**). Do not begin primary create or peer Option 4 until every target node is at LOADER.
+
 ### Required input values (prepare before starting)
 
 | Input | Primary | Secondary |
